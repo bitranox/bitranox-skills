@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """Stop + PostToolUse hook: act at the context limit before the harness compacts the session.
 
-Two modes (`context_mode`). COMPACT, the default: shortly before the harness auto-compacts, ask the
-session to save a checkpoint (OPEN-WORK.md plus handover.md) and keep working; compact-resume.py
-hands the checkpoint back after the compaction. The harness compacts about 33k tokens below
-CLAUDE_CODE_AUTO_COMPACT_WINDOW (measured, see _HARNESS_RESERVE), so that variable must hold the
-context limit, and the request says so when it does not. The request goes out on PostToolUse as
-well as on Stop, because a long autonomous turn can pass both the save point and the compaction
-without stopping once - probe-verified on 2.1.310, where five compactions ran inside one turn and
-the turn carried on after each. HANDOVER: offer a handover plus /clear at the limit instead (Stop
-only), as before compact mode existed; everything below about rot and thresholds applies to both.
+Shortly before the harness auto-compacts, it asks the session to save a checkpoint (OPEN-WORK.md
+plus handover.md) and keep working; compact-resume.py hands the checkpoint back after the
+compaction. The harness compacts about 33k tokens below CLAUDE_CODE_AUTO_COMPACT_WINDOW (measured,
+see _HARNESS_RESERVE), so that variable must hold the context limit, and the request says so when
+it does not. The request goes out on PostToolUse as well as on Stop, because a long autonomous turn
+can pass both the save point and the compaction without stopping once - probe-verified on 2.1.310,
+where five compactions ran inside one turn and the turn carried on after each. A handover the user
+asks for is the meta-context-watcher skill's business, not this hook's; a stored `context_mode`
+setting is not read, so every install behaves this way.
 
 A long session gets worse before it gets full, and nothing says so. Chroma's 2025 study measured
 accuracy falling from roughly 300-400k tokens on a 1M window and from about 50k on a 200k one, with
@@ -43,8 +43,8 @@ its `claude -p` modelUsage reports contextWindow 1000000, and its transcripts ca
 200K.
 
 A family the TABLE has not met - a gateway model like glm-5.3 behind ANTHROPIC_BASE_URL - must not
-land on the 200K default, because that errs LARGE for a model actually running 1M: the ask fires at
-140K and then the misconfigured check sees 200K < 1M so nothing catches the stale default either -
+land on the 200K default, because that errs LARGE for a model actually running 1M: the request fires
+far too early and then the misconfigured check sees 200K < 1M so nothing catches the stale default either -
 the silent-inert failure this hook exists to prevent. For exactly that case Claude Code defines
 `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (model-config docs, "correct the window for a gateway or custom
 model id"): the launcher declares the real window because the API advertises none. Probe-verified
@@ -73,21 +73,25 @@ When the measured context exceeds the window in use, that IS reported rather tha
 threshold nothing can cross is indistinguishable from a watcher that works. It catches an
 over-large explicit knob; it cannot catch an over-large assumption, per the paragraph above.
 
-THE THRESHOLD is min(percentage of the window, absolute cap), because the two research findings
-disagree on a big window and both are worth honouring. The percentage leg keeps a cushion below
-auto-compact so there is room to actually write the handover; the absolute leg catches the case the
-percentage misses entirely - a 1M session sailing past the measured rot onset while only 40% full.
+THE LIMIT is min(percentage of the window, absolute cap), because the two research findings
+disagree on a big window and both are worth honouring. It is the value CLAUDE_CODE_AUTO_COMPACT_WINDOW
+should hold. The percentage leg keeps the compaction a cushion below the window; the absolute leg
+catches the case the percentage misses entirely - a 1M session sailing past the measured rot onset
+while only 40% full. The save point sits far enough below the resulting compaction point that the
+checkpoint can be written before the compaction arrives (_SAVE_MARGIN_MIN).
 
-PROVENANCE OF THE 400k CAP, stated plainly because it gates an interruption: it is one published
-finding (Chroma's 2025 context-rot study, which measured accuracy falling from roughly 300-400k on a
-1M window) read second-hand from a summary, not something measured here. It is wrong in the safe
-direction - too low means asking early, which costs a decline - and the knob exists to move it.
+PROVENANCE OF THE 400k CAP, stated plainly because it decides when a session compacts: it is one
+published finding (Chroma's 2025 context-rot study, which measured accuracy falling from roughly
+300-400k on a 1M window) read second-hand from a summary, not something measured here. It is wrong
+in the safe direction - too low means an earlier checkpoint and compaction, never a session working
+on past the rot onset - and the knob exists to move it.
 
-RE-ASKS are spaced by 10% of the window rather than happening once. A decline at 40% is "not yet",
-not "never", and by 90% the question has changed from "quality is drifting" to "the harness is about
-to discard detail". Yields entirely when a post-compaction nap is already owed: the Stop gate
-refuses to stop on that obligation and stacking a second block would make the two fight over the
-same turn. Fail-open on every error path - a broken watcher must never wedge a turn.
+A REPEAT request is spaced by 10% of the window. A reading back below the save point means the
+harness compacted, so the request re-arms and the next crossing asks for a fresh checkpoint; above
+it, a repeat refreshes the checkpoint only when the harness is not compacting. A Stop yields entirely
+when a post-compaction nap is already owed: the Stop gate refuses to stop on that obligation and
+stacking a second block would make the two fight over the same turn. Fail-open on every error path -
+a broken watcher must never wedge a turn.
 
 Pure standard library, ASCII only; launched via run-python.sh so it works on Windows too.
 """
@@ -145,7 +149,7 @@ def window_for_model(model_id, environ=None) -> int:
     never override a measured family window. An UNKNOWN family (a gateway model id the table has
     not met) reads that variable when the caller passes an environment mapping, because the
     launcher set it precisely to declare this model's window; only when even that is absent does it
-    fall back to 200K, which errs SMALL on purpose: too small asks early and costs a decline, while
+    fall back to 200K, which errs SMALL on purpose: too small only asks for a checkpoint early, while
     too large sets a threshold the session can never reach and the hook goes silently inert - the
     failure this whole check exists to prevent.
     """
@@ -262,10 +266,10 @@ def context_tokens(transcript_path, tail_bytes=_TAIL_BYTES):
 
 
 def threshold(window, pct, cap):
-    """The token count at which a handover is offered. PURE.
+    """The context limit: the token count the harness should compact at. PURE.
 
     Whichever leg bites first. The result is floored at 1 so a zero or negative knob cannot make a
-    reading of 0 tokens count as crossed. The floor does NOT stop an early ask: a knob at 0 or 1
+    reading of 0 tokens count as crossed. The floor does NOT stop an early request: a knob at 0 or 1
     still asks on the first measured turn, because that is what such a setting asks for. Bounding
     the knobs to sensible values is the settings CLI's job (it accepts 1..100 and >= 1), and a
     higher clamp here would silently override a value that tool accepted.
@@ -275,30 +279,6 @@ def threshold(window, pct, cap):
         return max(1, min(by_pct, int(cap)))
     except (TypeError, ValueError):
         return None
-
-
-def verdict(tokens, window, pct, cap):
-    """('quiet'|'offer'|'misconfigured', detail dict). PURE - all the arithmetic, no IO.
-
-    `misconfigured` is a real answer, not an error: measuring more context than the window is
-    supposed to hold means `context_window` is wrong (a 1M model left on the 200k default), and
-    saying so is the difference between a watcher that reports and one that silently never fires.
-    """
-    limit = threshold(window, pct, cap)
-    if tokens is None or limit is None:
-        return "quiet", {}
-    detail = {"tokens": tokens, "window": int(window), "limit": limit,
-              "pct": int(pct), "cap": int(cap)}
-    if tokens > int(window):
-        return "misconfigured", detail
-    if tokens >= limit:
-        return "offer", detail
-    return "quiet", detail
-
-
-def context_mode(cfg) -> str:
-    """'handover' only when configured so; anything else, missing or misspelt, is 'compact'. PURE."""
-    return "handover" if str(cfg.get("context_mode") or "").strip().lower() == "handover" else "compact"
 
 
 def harness_window(environ) -> int:
@@ -329,7 +309,12 @@ def save_point(compact_at) -> int:
 
 
 def compact_verdict(tokens, window, pct, cap, harness):
-    """('quiet'|'save'|'misconfigured', detail) for compact mode. PURE."""
+    """('quiet'|'save'|'misconfigured', detail dict). PURE - all the arithmetic, no IO.
+
+    `misconfigured` is a real answer, not an error: measuring more context than the window is
+    supposed to hold means `context_window` is wrong (a 1M model left on the 200k default), and
+    saying so is the difference between a watcher that reports and one that silently never fires.
+    """
     limit = threshold(window, pct, cap)
     if tokens is None or limit is None:
         return "quiet", {}
@@ -352,9 +337,10 @@ def _asked_flag(session):
 def _misconfigured_flag(session):
     """The misconfigured notice's OWN once-per-session latch.
 
-    Kept apart from `_asked_flag` because the two answer different questions. When the notice read
-    "has this session been told anything" off the offer's flag, an earlier offer silenced it for
-    the rest of the session - exactly when a reading past the window proves the window wrong.
+    Kept apart from `_asked_flag` because the two answer different questions: reading "has this
+    session been told anything" off the request's flag would let an earlier checkpoint request
+    silence the notice for the rest of the session - exactly when a reading past the window proves
+    the window wrong.
     """
     return sig.touched_file(session).with_suffix(".handover-misconfigured")
 
@@ -396,9 +382,9 @@ def mark_asked(session, tokens) -> None:
 def due(tokens, limit, window, last_asked) -> bool:
     """True when this reading earns an ask. PURE.
 
-    The first ask is the threshold. After that, a decline is "not yet" rather than "never", so the
-    next one waits until context has grown another 1/10th of the window - by which point the
-    question has genuinely changed rather than being the same one repeated.
+    The first ask is the threshold. After that, a reading still above it asks again only once
+    context has grown another 1/10th of the window - by which point a fresh checkpoint holds
+    genuinely more than the last one rather than the same state written twice.
     """
     if tokens < limit:
         return False
@@ -429,7 +415,7 @@ def handover_tracking(proj) -> str:
     "tracked" (git holds its history), "untracked" (it exists but git has no copy: gitignored,
     never added, or no repository at all), "absent" (nothing to overwrite), or "unknown" (git
     could not be asked). It is a per-repo fact - some repos gitignore the file, others commit it -
-    so the offer tests it instead of asserting either. Never raises.
+    so the save request tests it instead of asserting either. Never raises.
     """
     try:
         rc, top = _git(proj, "rev-parse", "--show-toplevel")
@@ -463,32 +449,20 @@ _OVERWRITE_WARNING = {
 }
 
 
-def _offer(detail, tracking="unknown") -> str:
-    text = (
-        "This session is carrying %(tokens)s tokens of context, past the %(limit)s at which a "
-        "handover is worth writing (%(pct)s%% of a %(window)s window, %(source)s, capped at "
-        "%(cap)s). Quality degrades well before the window fills, and the harness will not compact "
-        "until about 83%% - at which point it DISCARDS working detail rather than preserving it."
-        "\n\n"
-        "Ask the user whether to write `handover.md` now and start a fresh session. If they agree, "
-        "invoke bitranox:meta-context-watcher, which says what the file must contain. If they "
-        "decline, carry on - the next ask waits until context has grown another tenth of the "
-        "window, so declining costs one interruption, not a stream of them."
-    ) % {k: format(v, ",") if isinstance(v, int) and k != "pct" else v for k, v in detail.items()}
-    warning = _OVERWRITE_WARNING.get(tracking)
-    return text + "\n\n" + warning if warning else text
-
-
 def _save(detail, tracking="unknown") -> str:
     fill = {k: format(v, ",") if isinstance(v, int) and k != "pct" else v for k, v in detail.items()}
     text = (
         "This session is carrying %(tokens)s tokens of context. The harness auto-compacts at about "
         "%(compact_at)s, and a compaction keeps only a summary of the working detail. Save a "
         "checkpoint NOW, then keep working:\n\n"
-        "1. Invoke bitranox:meta-context-watcher and follow its checkpoint procedure (compact "
-        "mode): carry every unfinished item and every unmet user request into `OPEN-WORK.md`, and "
+        "1. Invoke bitranox:meta-context-watcher and follow its checkpoint procedure: carry"
+        " every unfinished item and every unmet user request into `OPEN-WORK.md`, and "
         "write `handover.md` - in flight, decisions, the exact next action, and `## Lessons for the "
-        "next nap`. Commit nothing just for this.\n"
+        "next nap`. Replace the whole file with the Write tool, never append to it: a first line "
+        "still reading `# STALE` from an earlier hand-back keeps the new checkpoint from being "
+        "handed back, and a file written through Bash is found only at the root of the repo you "
+        "are in. "
+        "Commit nothing just for this.\n"
         "2. Then CONTINUE the task you were on. Do not stop, do not ask the user, and do not tell "
         "them to /clear: the compaction follows automatically, and the checkpoint is handed back "
         "to you right after it."
@@ -524,7 +498,7 @@ def resolve_window(cfg, model=None, environ=None):
     An explicit `context_window` wins - the escape hatch for a model the table has not met.
     Otherwise the family decides; an unknown family takes what the launcher declared in
     `CLAUDE_CODE_MAX_CONTEXT_TOKENS` ("declared"), and failing that the 200K default. The label
-    records which leg answered, which the offer message quotes.
+    records which leg answered, which the misconfigured notice quotes.
     """
     explicit = cfg.get("context_window") or 0
     try:
@@ -549,23 +523,42 @@ def _family_known(model_id) -> bool:
     return any(mid.startswith(prefix) for prefix, _window in _FAMILY_WINDOWS)
 
 
+def is_subagent_event(event) -> bool:
+    """True when a subagent fired this event: it names an `agent_id`, or its transcript is one. PURE.
+
+    The second form covers an event whose `transcript_path` already points at a subagent's own
+    `agent-<id>.jsonl`, the shape sha-literal-nudge also accepts.
+    """
+    if event.get("agent_id"):
+        return True
+    return pathlib.Path(str(event.get("transcript_path") or "")).name.startswith("agent-")
+
+
 def decide(event, cfg):
     """The text for this Stop or PostToolUse event, or None to stay quiet. IMPURE (reads).
 
-    On Stop the caller turns it into a block reason, on PostToolUse into additionalContext.
-    PostToolUse speaks only in compact mode: a long autonomous turn can pass both the save point
+    On Stop the caller turns it into a block reason, on PostToolUse into additionalContext. Both
+    events carry the same checkpoint request: a long autonomous turn can pass both the save point
     and the compaction without ever stopping, so a Stop-only request would arrive after the
-    compaction it was meant to precede.
+    compaction it was meant to precede. `cfg` is read for `nudges`, `context_window` and the two
+    `context_handover_*` knobs only; any other key, a stored `context_mode` included, changes
+    nothing.
 
     `stop_hook_active` means a Stop hook already kept this turn going. Blocking that continuation
     again would stack a second interruption on one turn and spend the consecutive-block budget, so
     it stays quiet and marks nothing; the next ordinary Stop asks instead.
+
+    A subagent's tool call fires this hook too, with the MAIN session's `session_id` and
+    `transcript_path` plus its own `agent_id`. Answering it would hand the main session's request
+    to the subagent, and the session's asked flag would then hold the main session silent until
+    another tenth of the window: measured in one session, three compaction cycles lost their
+    request this way while subagents ran past the save point. So a subagent's event is quiet and
+    marks nothing, and the main session's next tool call or Stop asks.
     """
     on_stop = (event.get("hook_event_name") or "Stop") == "Stop"
-    mode = context_mode(cfg)
-    if not on_stop and mode != "compact":
-        return None
     if on_stop and event.get("stop_hook_active"):
+        return None
+    if is_subagent_event(event):
         return None
     session = str(event.get("session_id") or "")
     transcript = event.get("transcript_path") or ""
@@ -587,26 +580,11 @@ def decide(event, cfg):
     tokens, model = read_session(transcript)
     window, source = resolve_window(cfg, model, os.environ)
     pct, cap = cfg.get("context_handover_pct", 70), cfg.get("context_handover_cap", 400000)
-    if mode == "compact":
-        return _decide_compact(session, proj, tokens, window, source, pct, cap)
-    state, detail = verdict(tokens, window, pct, cap)
-    if not detail:
-        return None
-    detail["source"] = source
-    if state == "misconfigured":
-        if already_reported(session):
-            return None
-        mark_reported(session)
-        return _misconfigured(detail)
-    if state == "offer" and due(tokens, detail["limit"], window, asked_at(session)):
-        mark_asked(session, tokens)
-        # Asked only here, on the rare turn that offers, so an ordinary Stop never pays for git.
-        return _offer(detail, handover_tracking(proj))
-    return None
+    return _decide_compact(session, proj, tokens, window, source, pct, cap)
 
 
 def _decide_compact(session, proj, tokens, window, source, pct, cap):
-    """Compact mode: request a checkpoint once per crossing of the save point. IMPURE.
+    """Request a checkpoint once per crossing of the save point. IMPURE.
 
     A reading back BELOW the save point after a request means the harness compacted, so the request
     re-arms and the next crossing asks for a fresh checkpoint. Above it, `due` spaces repeats by a
@@ -630,6 +608,7 @@ def _decide_compact(session, proj, tokens, window, source, pct, cap):
         return None
     mark_asked(session, tokens)
     sig.mark_checkpoint_asked(session)
+    # Asked only here, on the rare turn that requests a save, so an ordinary turn never pays for git.
     return _save(detail, handover_tracking(proj))
 
 

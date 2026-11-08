@@ -52,14 +52,14 @@ from abprofile import SANDBOX_BWRAP_KINDS, SANDBOX_MISSING, SKELETON, Profile, P
 from abstream import OPUS_PREFIX, SYNTHETIC_REASON_PREFIX
 
 __all__ = [
-    "DEFAULT_CREDENTIALS",
-    "DEFAULT_SKILLS_REPO",
     "OPUS_PREFIX",
     "WEIGHTS",
     "JournalError",
     "RunContext",
     "RunRefused",
     "build_parser",
+    "default_credentials",
+    "default_skills_repo",
     "load_journal",
     "main",
     "record",
@@ -67,10 +67,21 @@ __all__ = [
 ]
 
 LoginCheck = Callable[[Path], str]
-DEFAULT_CREDENTIALS = Path.home() / ".claude" / ".credentials.json"
-DEFAULT_SKILLS_REPO = Path.home() / ".claude" / "plugins" / "marketplaces" / "bitranox-skills"  # the clone every install has
 WEIGHTS = {"correctness": 0.30, "task_coverage": 0.25, "tests": 0.20, "beyond_plan_fixes": 0.10,
            "readability": 0.10, "scope_creep": 0.05}
+
+
+def default_credentials() -> Path:
+    """The login `run` checks and installs from when --credentials is not given: the one in the
+    user's Claude config dir (abarm.user_config_dir, which follows CLAUDE_CONFIG_DIR). Per call."""
+    return abarm.user_config_dir() / ".credentials.json"
+
+
+def default_skills_repo() -> Path:
+    """The marketplace clone every install has, in the user's Claude config dir. Per call."""
+    return abarm.user_config_dir() / "plugins" / "marketplaces" / "bitranox-skills"
+
+
 PREREG_SKELETON = """# Pre-registration
 
 ## Question
@@ -113,7 +124,8 @@ PAUSE_EXPIRY = "a login that expires before the arm's deadline"
 # A seal refuses a PREREG.md still holding a skeleton placeholder; a bare "<" ("cost < 0.10") is prose.
 PLACEHOLDER_RE = re.compile(r"<[^>\n]+>")
 EPILOG = """[run] sandbox in abtest.toml: "bwrap" runs each live session in a bubblewrap sandbox (writable:
-its worktree, home, config dir, the repo's .git; real home hidden); "bwrap-host-proc" is the same with the
+its worktree, home, config dir, the repo's .git; real home hidden; the repo's other worktree
+registrations read-only, so an arm's git worktree prune or add cannot touch them); "bwrap-host-proc" is the same with the
 host's /proc read-only (an LXC container); "none" opts out, recorded per arm.
 
 [[variant]] remove_skill = true (no dir, no markers): a bare arm, the plugin without the skill under test.
@@ -266,6 +278,26 @@ def _run_branches(repo: Path, run_id: str) -> list[str]:
     if proc.returncode != 0:
         raise RunRefused(f"cannot list the branches of {repo}: {proc.stderr.strip()}")
     return proc.stdout.split()
+
+
+def _arm_made_worktrees(repo: Path, run_dir: Path) -> list[tuple[Path, str | None]]:
+    """The worktrees of repo registered under run_dir/arms, with each one's branch (None: detached).
+
+    An arm can register a worktree of its own in its home (a parallel node: arms/<label>/home/wt/
+    node-8), outside the abx-<run>-<label> namespace and its abx/<run>/ branches. The path under
+    the run's own arms dir is what says the run made it; a worktree anywhere else is never listed.
+    """
+    proc = git(repo, "worktree", "list", "--porcelain")
+    if proc.returncode != 0:
+        raise RunRefused(f"cannot list the worktrees of {repo}: {proc.stderr.strip()}")
+    arms = (run_dir / "arms").resolve()
+    found: list[tuple[Path, str | None]] = []
+    for block in proc.stdout.split("\n\n"):
+        fields = dict(line.split(" ", 1) for line in block.splitlines() if " " in line)
+        path = Path(fields["worktree"]) if "worktree" in fields else None
+        if path is not None and path.resolve().is_relative_to(arms):
+            found.append((path, fields.get("branch", "").removeprefix("refs/heads/") or None))
+    return found
 
 
 def _refuse_run_id_collision(repo: Path, run_id: str) -> None:
@@ -697,7 +729,8 @@ def _context(args: argparse.Namespace, run_dir: Path, profile: Profile,
     if not args.stop_grace_s > 0:
         raise RunRefused("--stop-grace-s must be above 0")
     return RunContext(run_dir=run_dir, profile=profile, tasks=_arm_tasks(run_dir, profile),
-                      credentials=Path(args.credentials).expanduser(), skills_repo=Path(args.skills_repo).expanduser(),
+                      credentials=Path(args.credentials).expanduser() if args.credentials else default_credentials(),
+                      skills_repo=Path(args.skills_repo).expanduser() if args.skills_repo else default_skills_repo(),
                       dry_run=args.dry_run, max_turns=args.max_turns, stop_grace_s=args.stop_grace_s,
                       sealed_suite=sealed_suite)
 
@@ -1027,7 +1060,8 @@ def cmd_prune_run(args: argparse.Namespace) -> int:
     """Prune every arm worktree of the run, then delete its branches.
 
     Every config dir left under arms/ (a hard-killed arm's, with its credentials copy) is deleted
-    first, its transcripts kept. An arm whose worktree git no longer lists but whose <ws>.githooks
+    first, its transcripts kept. A worktree an arm registered itself under arms/ (a parallel node's)
+    is removed by exact path with its branch. An arm whose worktree git no longer lists but whose <ws>.githooks
     is left (the user removed a locked worktree by hand with `worktree remove -f -f`) is pruned
     too: that removes the hooks dir and unsets the extension the harness set. The `.claude/worktrees/` line of the
     workpiece's info/exclude is removed only when the journal says the harness added it.
@@ -1044,7 +1078,14 @@ def cmd_prune_run(args: argparse.Namespace) -> int:
             abarm.prune(ws, repo, profile.floor.cache_paths)
         except abarm.ArmError as exc:
             errors.append(f"{ws}: {exc}")
-    refs = _run_branches(repo, run_id)
+    own_refs: list[str] = []
+    for path, branch in _arm_made_worktrees(repo, run_dir):
+        # remove by exact path, never `git worktree prune`: that drops every stale registration
+        if git(repo, "worktree", "remove", "--force", str(path)).returncode != 0:
+            errors.append(f"{path}: worktree remove failed")
+        elif branch:
+            own_refs.append(branch)
+    refs = [*_run_branches(repo, run_id), *own_refs]
     deleted = [b for b in refs if git(repo, "branch", "-D", b).returncode == 0]
     errors += [f"branch {b} could not be deleted" for b in refs if b not in deleted]
     skipped = [f"frozen checkout {p} is left (release it from the skills repo)" for p in sorted((run_dir / "frozen").glob("*"))]
@@ -1071,8 +1112,10 @@ class _Parser(argparse.ArgumentParser):
 def _add_run_options(sp: argparse.ArgumentParser) -> None:
     sp.add_argument("--dry-run", action="store_true", help="everything but the paid claude -p step")
     sp.add_argument("--only", help="run only this arm name (C or a variant name)")
-    sp.add_argument("--credentials", default=str(DEFAULT_CREDENTIALS))
-    sp.add_argument("--skills-repo", default=str(DEFAULT_SKILLS_REPO))
+    sp.add_argument("--credentials", default=None,
+                    help="the login file (default <Claude config dir>/.credentials.json)")
+    sp.add_argument("--skills-repo", default=None,
+                    help="the bitranox-skills clone (default <Claude config dir>/plugins/marketplaces/bitranox-skills)")
     sp.add_argument("--max-turns", type=int, default=400)
     sp.add_argument("--stop-grace-s", type=float, default=float(abarm.STOP_GRACE_S),
                     help="seconds a session's process group gets between SIGTERM and SIGKILL when it is ended")

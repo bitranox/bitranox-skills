@@ -57,6 +57,7 @@ from datetime import date, datetime, UTC
 from pathlib import Path
 from typing import Any
 
+from _claude_config import projects_dir
 from _cli_envelope import EXIT_ERROR, EXIT_NO, EXIT_YES, EnvelopeArgumentParser, emit, guarded
 
 try:                                                     # pragma: no cover - speed, not behaviour
@@ -73,7 +74,6 @@ __all__ = [
     "stop_signature",
 ]
 
-DEFAULT_ROOT = "~/.claude/projects"
 DEFAULT_EXCLUDE_CWD = r"[/\\]bitranox-skills(?:[/\\]|$)"
 WORK = "work"
 CATEGORIES = ("memory", "handover", "skills-detour")
@@ -370,7 +370,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap = EnvelopeArgumentParser(prog="instrument_share", envelope_command="instrument_share",
                                 description="Share of session time spent on instrumentation, per "
                                             "ISO week and per trigger.")
-    ap.add_argument("--root", default=DEFAULT_ROOT, help="transcript corpus [%(default)s]")
+    # Built per call, so the default follows CLAUDE_CONFIG_DIR as Claude Code's own does.
+    ap.add_argument("--root", default=str(projects_dir()), help="transcript corpus [%(default)s]")
     ap.add_argument("--since", help="first day counted, YYYY-MM-DD (UTC)")
     ap.add_argument("--until", help="first day NOT counted, YYYY-MM-DD (UTC)")
     ap.add_argument("--max-gap", type=float, default=5.0,

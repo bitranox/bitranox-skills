@@ -28,21 +28,11 @@ Your approach:
 
 ## Always Flag: Unbounded Memory and Unsafe Input
 
-Independent of the cache/regex pipeline, these are first-class findings (usually SEVERE):
-
-- **Unbounded memory growth.** Code that reads big files, huge database result sets, or huge
-  log files fully into memory - or accumulates an unbounded list/dict/string - instead of
-  streaming, iterating, chunking, or paginating. Require bounded memory (generators, `iter`
-  chunks, server-side cursors, line-by-line/`io` streaming, pagination). Only neglect this when
-  the dataset is provably and safely bounded (small, fixed size); then materializing is fine.
-- **Unsafe / unbounded input.** Input that is not size-bounded or sanitized: unbounded length,
-  unvalidated types, and unhandled encoding or arbitrary characters (non-ASCII, emoji, CJK,
-  control characters, binary data). Adversarial input must not blow up time or memory (ReDoS,
-  quadratic blow-ups, OOM). Inputs must be bounded, validated, and the handling tested.
-- **Untrusted structured input.** Structured data (a dict, JSON, a deserialized payload) used
-  without parsing or validating its structure - assuming keys, types, or shape that may be
-  missing or wrong. Require a parse/validation step at the boundary, unless the project has
-  deliberately accepted skipping it.
+The language-neutral checklist (unbounded memory, unbounded or unsafe input, untrusted structured
+input, quadratic work, N+1 calls, per-item I/O) and the measurement method live in
+`bitranox:coding-performance-review`: load it alongside this skill. Step 4f below is this
+skill's Python scanner for the unbounded-memory item; the Python remedies are generators, `iter`
+chunks, server-side cursors, line-by-line or `io` streaming, and pagination.
 
 ## Purpose
 
@@ -52,16 +42,16 @@ Systematically identify performance issues  -  caching opportunities, uncompiled
 
 Use the Read tool to load referenced files for full details.
 
-| Tool                          | File                           | Purpose                                                    |
-|-------------------------------|--------------------------------|------------------------------------------------------------|
-| Pure function finder (AST)    | find_cache_candidates.py       | Detect pure, expensive functions via AST analysis          |
-| Hotspot profiler              | find_hotspots.py               | Find frequently-called functions from cProfile data        |
-| Candidate prioritizer         | prioritize_cache_candidates.py | Cross-reference pure functions with hotspots               |
-| Cache profiling template      | profile_with_cache_template.py | Before/after profiling with lru_cache monkey-patch         |
-| Uncompiled regex finder (AST) | find_uncompiled_regex.py       | Flag re.match/search/findall with string literal patterns  |
-| Unbounded memory finder (AST) | find_unbounded_memory.py       | Flag whole-file/DB/log reads that materialize large data   |
-| Performance claims extractor  | validate_perf_claims.py        | Extract claims from a diff; YOU validate each by profiling |
-| Before/after comparator       | compare_performance.py         | Git-based before/after test-suite timing comparison        |
+| Tool                          | File                                                 | Purpose                                                    |
+|-------------------------------|------------------------------------------------------|------------------------------------------------------------|
+| Pure function finder (AST)    | find_cache_candidates.py                             | Detect pure, expensive functions via AST analysis          |
+| Hotspot profiler              | find_hotspots.py                                     | Find frequently-called functions from cProfile data        |
+| Candidate prioritizer         | prioritize_cache_candidates.py                       | Cross-reference pure functions with hotspots               |
+| Cache profiling template      | profile_with_cache_template.py                       | Before/after profiling with lru_cache monkey-patch         |
+| Uncompiled regex finder (AST) | find_uncompiled_regex.py                             | Flag re.match/search/findall with string literal patterns  |
+| Unbounded memory finder (AST) | find_unbounded_memory.py                             | Flag whole-file/DB/log reads that materialize large data   |
+| Performance claims extractor  | ../coding-performance-review/validate_perf_claims.py | Extract claims from a diff; YOU validate each by profiling |
+| Before/after comparator       | compare_performance.py                               | Git-based before/after test-suite timing comparison        |
 
 ## Workflow
 
@@ -88,13 +78,16 @@ Step 5 (Merge & sort) -> Step 6 (Present one-by-one) ->
 When invoked to vet a performance claim in a diff rather than hunt for new ones, skip the
 discovery steps and use the two checker tools directly:
 
-- `validate_perf_claims.py <diff_file>` - EXTRACTS the "Nx faster / N% faster / twice as
+- `python3 ../coding-performance-review/validate_perf_claims.py <diff_file>` (path relative to
+  this skill's directory) - EXTRACTS the "Nx faster / N% faster / twice as
   fast" style claim phrases from the diff's ADDED lines and prints each with its `path:line`.
   It does no profiling and reaches no verdict: YOU check each against a real profiled run and
   report the unproven or contradicted ones.
 - `compare_performance.py` - stash the working changes (untracked files too), time the test
   suite on the previous commit, restore the branch and the changes, time again, and report
-  the measured delta as before/after evidence. Exit 2 means there is no valid comparison: a
+  the delta. It times each arm once, one after the other, so one run is a single sample, not
+  evidence: repeat it until each arm has at least three runs, alternating, before quoting a
+  delta (the generic method's interleaving rule). Exit 2 means there is no valid comparison: a
   suite run failed, there is no previous commit, git is missing, or a git step failed; never
   quote its numbers then. If stderr says the repository was NOT restored, run the git commands it prints
   first: they name the branch to check out and the sha of the stash holding your uncommitted
@@ -103,12 +96,8 @@ discovery steps and use the two checker tools directly:
   commands. If it says PART of your changes was re-applied, it prints no command to run: the
   stash still holds all of them, and the rest is restored by hand.
 
-When the defect you are fixing already has a recorded BEFORE figure (a backlog item, an issue, a
-saved profile), run your probe or test against the UNFIXED code first and require it to land within
-an order of magnitude of that figure before you trust your AFTER number. A probe that hits an early
-return is fast in both arms, so the fix looks enormous while the slow path never ran. If BEFORE is
-far too fast, count calls into the hot function to find the guard that returns early, and leave a
-comment in the test saying why its input has that shape.
+Before trusting an AFTER figure, follow the method in `bitranox:coding-performance-review`:
+reproduce the recorded BEFORE figure with the same probe, interleave the arms and pin the core.
 
 Report findings with measured numbers from the real test suite; never accept a claim on
 synthetic benchmarks.
@@ -324,7 +313,7 @@ if [ "${#python_files[@]}" -gt 0 ]; then
 fi
 ```
 
-Every `re.match(r'...', ...)` inside a function body should become a module-level `_RE = re.compile(r'...')` with `_RE.match(...)` at the call site. This avoids recompilation on every call.
+Every `re.match(r'...', ...)` inside a function body should become a module-level `_RE = re.compile(r'...')` with `_RE.match(...)` at the call site. The call does not recompile each time: the `re` module caches compiled patterns (512 by default), so it pays a cache lookup, measured at 240 ns against 130 ns compiled for a small match on Python 3.14. That is worth removing on a hot path. It turns into a real recompile on every call only when more distinct patterns cycle through than the cache holds.
 
 #### 4c: Profile to Find Hot Functions
 
@@ -448,9 +437,11 @@ Parse the six output files from Step 4. Output format reference:
 
 Classify each finding by severity:
 
-- **SEVERE**: Unbounded memory / unsafe input (source confirmed able to grow unbounded) OR uncompiled regex in a hot function (in both regex + hotspots) OR harmful existing cache
-- **MEDIUM**: Priority cache candidate (confirmed by profiling) OR uncompiled regex in non-hot function OR ineffective existing cache
-- **MINOR**: Cache candidate NOT confirmed by profiling
+- **SEVERE**: Unbounded memory / unsafe input (source confirmed able to grow unbounded) OR harmful existing cache
+- **MEDIUM**: Priority cache candidate (confirmed by profiling) OR uncompiled regex in a hot function (in both regex + hotspots) OR ineffective existing cache
+- **MINOR**: Cache candidate NOT confirmed by profiling OR uncompiled regex in a non-hot function
+
+These follow the scale in `bitranox:coding-performance-review`: SEVERE can exhaust memory or time on real input, MEDIUM costs measurably on a hot path, MINOR is cheap to fix but not shown to be hot. More distinct patterns than the `re` cache holds (512 by default) recompile on every call: that stays MEDIUM, with the recompile named as the cost. A pattern built from untrusted input is reported instead as ONE SEVERE unsafe-input finding (catastrophic backtracking), whatever the count, with any recompile cost named inside it rather than filed as a second MEDIUM.
 
 Re-assess accepted items from Step 1 against ground truth (see Step 1): RESPECT them by default (do not present), but reclassify one as a propose-first "Reconsider" finding when concrete ground truth shows its premise no longer holds. Sort findings SEVERE -> MEDIUM -> MINOR.
 
@@ -606,5 +597,4 @@ After running the test suite, report:
 - **ONE issue at a time**  -  never batch-present
 - **ALWAYS audit existing caches**  -  verify they're still effective, propose removal if not
 - **RESPECT prior decisions by default, but RE-ASSESS them**  -  re-open an accepted item (propose-first) only when ground truth shows its premise no longer holds; never silently skip one that ground truth now contradicts
-- **ALWAYS flag unbounded memory**  -  big files / huge DB results / huge logfiles must stream, not load whole
-- **ALWAYS flag unsafe input**  -  bound length, sanitize types/encoding (non-ASCII/emoji/CJK/binary), test it
+- **ALWAYS walk the generic checklist**  -  unbounded memory and unsafe input first (bitranox:coding-performance-review)

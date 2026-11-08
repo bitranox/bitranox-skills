@@ -1,4 +1,5 @@
 """abtest CLI: init, seal, run (dry and fake-live), score, prune-run, resume; through the fake claude."""
+import importlib.util
 import json
 import os
 import shutil
@@ -631,6 +632,25 @@ def test_prune_run_keeps_a_stale_registration_that_is_not_the_runs(tmp_path, scr
     assert str(foreign) in L.git(scratch_repo, "worktree", "list", "--porcelain").stdout
 
 
+def test_prune_run_removes_a_worktree_the_arm_registered_under_its_own_home(tmp_path, scratch_repo, skills_repo,
+                                                                          fake_claude_path, monkeypatch):
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    env, creds = _env(fake_claude_path, tmp_path)
+    _use_env(monkeypatch, env)
+    assert T.main(["seal", str(run_dir)]) == 0
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--dry-run")) == 0
+    own = run_dir / "arms" / "r1-C" / "home" / "wt" / "node-8"
+    assert L.git(scratch_repo, "worktree", "add", "-q", "-b", "node-8", str(own)).returncode == 0
+    foreign = tmp_path / "users-worktree"
+    assert L.git(scratch_repo, "worktree", "add", "-q", "-b", "users-topic", str(foreign)).returncode == 0
+    assert T.main(["prune-run", str(run_dir)]) == 0
+    listed = L.git(scratch_repo, "worktree", "list", "--porcelain").stdout
+    assert str(own) not in listed and not own.exists(), "the arm's own worktree stays registered"
+    assert L.git(scratch_repo, "branch", "--list", "node-8").stdout.strip() == ""
+    assert str(foreign) in listed, "a worktree outside the run's arms dir was touched"
+    assert L.git(scratch_repo, "branch", "--list", "users-topic").stdout.strip() != ""
+
+
 def _exclude_text(repo):
     path = repo / ".git" / "info" / "exclude"
     return path.read_text(encoding="utf-8") if path.is_file() else None
@@ -1211,10 +1231,15 @@ def test_a_bwrap_run_starts_the_session_inside_the_sandbox_argv(tmp_path, scratc
     arm = run_dir / "arms" / "r1-C"
     pairs = list(zip(session, session[1:], session[2:], strict=False))
     rw = [(s, d) for flag, s, d in pairs if flag == "--bind"]
-    assert rw == [(str(p), str(p)) for p in (ws, arm / "home", arm / "cfg", (scratch_repo / ".git").resolve())]
+    common = (scratch_repo / ".git").resolve()
+    own_entry = common / "worktrees" / ws.name
+    assert rw == [(str(p), str(p)) for p in (ws, arm / "home", arm / "cfg", common, own_entry)]
+    registry = str(common / "worktrees")
+    assert session.index(registry) < session.index(str(own_entry)), "the arm's own entry is re-bound last"
     assert ("--tmpfs", str(Path.home())) in list(zip(session, session[1:], strict=False))
     ro = [s for flag, s, _ in pairs if flag == "--ro-bind"]
     assert str(scratch_repo) in ro and any(Path(s).parent == run_dir / "frozen" for s in ro), ro
+    assert registry in ro, "the repo's worktree registry is read-only in the sandbox"
     chdir = session.index("--chdir")
     assert session[chdir + 1] == str(ws) and session[chdir + 2:chdir + 4] == ["claude", "-p"]
     rows = [r for r in L.read_jsonl(run_dir / "journal.jsonl") if r["step"] == "arm"]
@@ -1352,3 +1377,36 @@ def test_run_refuses_a_prompt_whose_sha_differs_from_the_seal_row(tmp_path, scra
     capsys.readouterr()
     assert T.main(_run_args(run_dir, creds, skills_repo, "--dry-run", "--only", "C", "--json")) == 2
     assert "the prompt of arm Vbare (task-bare.md) differs from the seal" in json.loads(capsys.readouterr().out)["data"]["error"]
+
+
+def _moved_config(tmp_path, monkeypatch):
+    """HOME at tmp/home, CLAUDE_CONFIG_DIR at tmp/arm: (home, arm)."""
+    home, arm = tmp_path / "home", tmp_path / "arm"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(arm))
+    return home, arm
+
+
+def test_the_default_login_and_skills_clone_follow_claude_config_dir(tmp_path, monkeypatch):
+    _, arm = _moved_config(tmp_path, monkeypatch)
+    assert T.default_credentials() == arm / ".credentials.json"
+    assert T.default_skills_repo() == arm / "plugins" / "marketplaces" / "bitranox-skills"
+    args = T.build_parser().parse_args(["run", str(tmp_path / "run")])
+    assert (args.credentials, args.skills_repo) == (None, None)    # resolved per run, not at build
+
+
+def test_user_config_dir_answers_like_the_plugin_rule(tmp_path, monkeypatch):
+    # abarm keeps a copy of hooks/claude_paths.config_dir(); pin the two to the same answers.
+    hooks = Path(__file__).resolve().parents[3] / "hooks" / "claude_paths.py"
+    spec = importlib.util.spec_from_file_location("_claude_paths_for_parity", hooks)
+    rule = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rule)
+    home, arm = _moved_config(tmp_path, monkeypatch)
+    for value in (str(arm), "", "   ", None):
+        if value is None:
+            monkeypatch.delenv("CLAUDE_CONFIG_DIR")
+        else:
+            monkeypatch.setenv("CLAUDE_CONFIG_DIR", value)
+        assert A.user_config_dir() == rule.config_dir(), value
+    assert A.user_config_dir() == home / ".claude"

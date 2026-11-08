@@ -85,7 +85,7 @@ Use the Read tool to load the file identified as relevant for full details.
 | **All 33 events** - SessionStart, Setup, InstructionsLoaded, UserPromptSubmit, UserPromptExpansion, MessageDisplay, PreToolUse, PermissionRequest, PostToolUse, PostToolUseFailure, PostToolBatch, PermissionDenied, Notification, SubagentStart, SubagentStop, TaskCreated, TaskCompleted, Stop, StopFailure, TeammateIdle, ConfigChange, CwdChanged, DirectoryAdded, FileChanged, WorktreeCreate, WorktreeRemove, PreCompact, PostCompact, PreModelSwitch, PostModelSwitch, SessionEnd, Elicitation, ElicitationResult | `references/events.md`        |
 | **Configuration** - hook locations and precedence, matcher patterns and the exact-match vs regex rule, MCP tool matchers, the five handler types, common fields, `if` and Bash pattern matching, exec form vs shell form, HTTP and MCP tool and prompt fields, path placeholders, hooks in skill and subagent frontmatter, `/hooks`, `disableAllHooks`                                                                                                                                                                   | `references/configuration.md` |
 | **I/O contract** - common input fields, exit codes 0/2/other, timeouts, `onFailure` (block when a hook fails), exit-code-2-per-event table, HTTP response handling, JSON output, `continue`, `stopReason`, `systemMessage`, `terminalSequence`, `additionalContext`, decision control per event, `updatedInput` and `updatedToolOutput`, reading typed prompts and skill bodies out of the transcript, subagent transcripts, same-message sibling calls                                                                  | `references/io-contract.md`   |
-| **Authoring** - which handler types each event supports, prompt and agent response schema and `continueOnBlock`, async and `asyncRewake`, testing a hook from stdin, `claude --debug`, traps, no dependency provisioning and the lazy-import degrade, security and workspace trust, Windows PowerShell, environment variables, probing `AskUserQuestion` interactively, write guards and the shell, launchers, value vs structure, prose intent matchers                                                                 | `references/authoring.md`     |
+| **Authoring** - which handler types each event supports, prompt and agent response schema and `continueOnBlock`, async and `asyncRewake`, testing a hook from stdin, `claude --debug`, traps, no dependency provisioning and the lazy-import degrade, the `Decisions:` block in the module docstring, security and workspace trust, Windows PowerShell, environment variables, probing `AskUserQuestion` interactively, write guards and the shell, launchers, value vs structure, prose intent matchers                 | `references/authoring.md`     |
 
 Upstream, for detail beyond these files: <https://code.claude.com/docs/en/hooks.md> (reference) and
 <https://code.claude.com/docs/en/hooks-guide.md> (guide). Both serve raw markdown.
@@ -102,6 +102,11 @@ Upstream, for detail beyond these files: <https://code.claude.com/docs/en/hooks.
    `SessionStart` and `Setup` take just `command` and `mcp_tool`, and `Setup` always skips its `mcp_tool` hooks.
 5. **How does it answer?** `exit 2`, or exit 0 with JSON. Not both by accident.
 6. **What happens when it breaks?** Decide deliberately, because a hook's failure mode is its real behaviour.
+7. **What has this hook already decided?** Before you change a matcher, a rule or a threshold,
+   read the `Decisions:` block in the module docstring and the tests it names; record what your
+   change settles there, each decision naming the test that pins it (or why no test can) and each
+   rejected alternative as a `- Rejected:` entry. The block's form is in
+   `references/authoring.md`, "Record a decision in the module docstring".
 
 ## The five that bite hardest
 

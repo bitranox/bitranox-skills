@@ -62,6 +62,33 @@ For the modern Python pick behind each, see `bitranox:coding-python-use-modern-l
 - **Health-check, evict, replace.** Probe a member before/while using it; drop a faulty, flaky, or
   slow one and pull in a fresh one. Track per-member success/failure and evict on a failure ratio,
   not just on a hard-dead connection.
+- **Answers from untrusted peers (proxies, mirrors, other nodes) can choose a value, never stop,
+  ban or discard.** Three rules, one root cause: a lying peer gets whatever power its answer is
+  given.
+  1. A first-contact value every later step trusts (object size, ETag or identity, whether Range
+     works) comes from two independent paths that agree (all that answered, with a warning when
+     only one did), never from the first reply: one lying peer otherwise switches the mode,
+     plants a wrong size, or plants an identity that gets every honest peer banned. When the
+     answers disagree, ask further paths; a value no two paths agree on is not chosen, and the
+     run ends as a plain failure naming the answers. A value chosen this way is still only a
+     working value; a trusted check (a hash, the record below) catches a wrong one later.
+  2. Never write a PERMANENT shared ban on an answer the ORIGIN could have produced (a 404, an
+     identity change, a TLS certificate, a CONNECT refused with a status): one origin event then
+     bans the whole pool for every later job. Measured: one ETag change banned 6 of 6 clean
+     proxies, a CONNECT 502 banned 4 of 4. Evict for this run only, and ban only a peer that gave
+     no answer at all: the TCP connection to the peer itself refused, failed or timed out. A
+     peer that answers with a status, even one refusing CONNECT, did answer.
+  3. Never build a hard stop ("the origin changed, abort") or a refusal of saved progress from
+     peers AGREEING: peers that lie alike (page-injecting free proxies all answering 200 with the
+     same page) fake agreement, and tightening the rule only moves the hole (two, then three
+     agreeing liars stopped healthy runs, 3 of 3). Let agreement only evict the peers that
+     disagree. When the job resumes from its own record that was verified when written (a
+     manifest, a checkpoint), trust that record over a fresh vote, and "disagree" means
+     disagreeing with the RECORD, however many peers outvote it: never refuse the record or
+     tell the user to delete saved progress. A real change of the remote object then shows up
+     in the trusted check (the hash no longer matches) and ends as a plain failure whose
+     message names the grouped answers and says how to start over: that advice is right here
+     because a trusted check failed, never because peers outvoted the record.
 - **Maintain a pool at a target size with margin.** Keep ~100% spare so the fast healthy members
   carry the load and the rest are warm backup; rotate so no single member is hammered. Worked
   example: `bitranox:net-rotating-proxies` (right-sized, speed-weighted pick, evict-on-failure).
@@ -168,4 +195,5 @@ these two first.
 | Trusting a cached endpoint / host list          | Rediscover and re-validate each run                                           |
 | Hammering a dependency that keeps failing       | Circuit breaker: fail fast while OPEN, probe on HALF-OPEN                     |
 | Silent degradation (partial result looks whole) | Partial result + explicit warning + non-zero exit                             |
+| Letting untrusted peers' answers stop or ban    | Peers may pick a value; stop, ban or discard only on a trusted check          |
 | No headroom / concurrency / size checks         | Bound concurrency, memory, payload; check disk/CPU before a heavy step        |

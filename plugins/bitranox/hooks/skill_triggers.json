@@ -67,6 +67,25 @@
   "boundary-parsing",
   "coding-python-enforce-data-architecture-strict"
  ],
+ "coding-performance-review": [
+  "slow",
+  "profile",
+  "benchmark",
+  "review",
+  "performance",
+  "optimising",
+  "speedup",
+  "noise",
+  "latency",
+  "throughput",
+  "queries",
+  "unbounded",
+  "memory",
+  "loops",
+  "per-item",
+  "coding-python-performance-review",
+  "coding-rust-performance-review"
+ ],
  "coding-python-clean-architecture": [
   "structuring",
   "python",
@@ -363,6 +382,24 @@
   "review",
   "non-io",
   "non-constant-time"
+ ],
+ "coding-rust-performance-review": [
+  "rust",
+  "slow",
+  "performance",
+  "benchmark",
+  "criterion",
+  "flamegraph",
+  "samply",
+  "perf",
+  "heaptrack",
+  "dhat",
+  "clones",
+  "with_capacity",
+  "spawn_blocking",
+  "await",
+  "release-profile",
+  "codegen-units"
  ],
  "compuse-bash": [
   "running",

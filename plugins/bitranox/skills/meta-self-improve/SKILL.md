@@ -169,6 +169,18 @@ fires only while releasing, which loads the release skill: no fact. A
 quoting rule for ANY self-authored shell text binds far more than git commits: a fact too. A fact
 beside a queued skill fix is otherwise a duplicate that outlives the fix.
 
+Before queueing against `skill:<name>` (cases 1 and 2), read that skill's declined list:
+`python3 <plugin>/hooks/skill_decisions.py show <name> --skill-dir <plugin>/skills/<name>
+--kind rejected,removed --full`. `<name>` is the skill's directory name, the same one `--target`
+takes (`compuse-git`, no plugin prefix), and `<plugin>` is `<checkout>/plugins/bitranox`, where
+`<checkout>` is the root of the marketplace checkout, when the session has one (it holds entries
+newer than the installed copy), else the installed plugin directory (see "Resolving `<plugin>`"
+under step 4); empty output means
+nothing was declined. When the lesson re-proposes a listed entry, queue it only with
+a `--why` that answers that entry's `reopen_if` and names its id; otherwise drop the candidate (do
+not queue it) and say so in the report (step 7). A queue `drop` does not stop a reworded lesson
+being queued again; the ledger entry is what the next session reads.
+
 | Kind                                                                                            | Home                                                                                                                                           |
 |-------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------|
 | User correction or working-style directive ("from now on...", "always/never...")                | a `feedback` memory AND, if it must bind future sessions, a CLAUDE.md guardrail line                                                           |
@@ -299,6 +311,24 @@ PLACE-HERE line) before calling the placement wrong.
   disproven or stale. Select by `--match`, never `--index`: an index shifts under the previous
   close, so two closes from one listing destroy the wrong entry. A delivered contribution recorded
   as rejected tells every later reader the work was not done.
+  To count closed entries, run `contrib_queue.py shipped` or `contrib_queue.py rejected`; never
+  count the lines of `<hash>.contrib-rejected.jsonl`. Despite its name, that file holds EVERY
+  closed entry, shipped ones included, and only each record's `outcome` field tells them apart:
+  `ship` writes `shipped`, `drop` writes `rejected`, and `rejected` lists every record whose
+  outcome is not `shipped`, an older record with no outcome included.
+  When a skill-targeted entry is dropped as disproven, or declined for a reason that will still
+  hold next time, also record it as a `rejected` entry in that skill's ledger in the source repo:
+  from the marketplace checkout (never the installed plugin copy), write the entry to a JSON file
+  and, with `<checkout>` (the checkout's root) as the working directory, run
+  `python3 <checkout>/plugins/bitranox/hooks/skill_decisions.py add --from-file <file>`: `add`
+  finds the skills from the working directory's repo. The entry
+  carries `skill` (the directory name), `"kind": "rejected"`, `"origin": "authored"`, a `topic`,
+  the proposal, stated plainly, as `decision`, the drop reason as `why`, what would reopen it
+  as `reopen_if`, `evidence` (`{"tier": ..., "text": ...}`, tier `measured`, `user`, `argued` or
+  `inherited`) and empty `anchors`, `supersedes` and `refs` lists; each field is defined in
+  `bitranox:meta-skill-writer`, Step 0b. A close because the entry already shipped or duplicates
+  another entry records nothing. Without a checkout, the `drop --reason` is the only record:
+  write no ledger entry, and say so in the report (step 7).
   **A contribution that lands in ANOTHER repo is still shipped** (a private repo, the local
   toolbox, a user command): close it in the same pass that verifies the landing, because the queue
   never sees that repo's commit. Close it against the queue it was FILED in, not the repo it
@@ -322,11 +352,13 @@ Compose the entry per the specs in references/memory-backend.md:
   (the engine adds the frontmatter frame).
 
 **Resolving `<plugin>`**, used in every command in this skill: it is the installed plugin
-directory. Inside a HOOK, Claude Code exports it as `$CLAUDE_PLUGIN_ROOT`. **In an ordinary
-session that variable is NOT set** - derive the path instead from the base directory this skill
-announces when it is invoked, dropping the trailing `/skills/meta-self-improve`. Never hardcode a
-version directory: the cache holds one per installed version, so a pasted path silently targets an
-old copy after the next bump. In the source repo the same path is `plugins/bitranox`.
+directory, except that step 2's ledger `show` and step 3b's ledger `add` read the marketplace
+checkout (`<checkout>/plugins/bitranox`) when the session has one. Inside a HOOK, Claude Code
+exports it as `$CLAUDE_PLUGIN_ROOT`. **In an ordinary session that variable is NOT set** - derive
+the path instead from the base directory this skill announces when it is invoked, dropping the
+trailing `/skills/meta-self-improve`. Never hardcode a version directory: the cache holds one per
+installed version, so a pasted path silently targets an old copy after the next bump. In the source
+repo the same path is `plugins/bitranox`.
 
 Then ONE engine call per fact, and REQUIRE its success line (the printed slug):
 

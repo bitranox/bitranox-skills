@@ -31,6 +31,7 @@ import json
 import sys
 from pathlib import Path
 
+import claude_paths
 from self_improve_signals import git_scoped as _git
 from self_improve_signals import main_checkout_root, project_slug
 
@@ -63,7 +64,7 @@ def log_path(cwd):
     root = main_checkout_root(cwd) if cwd else None
     if root is not None and ensure_excluded(root):
         return root / LOG_NAME
-    audit = Path.home() / ".claude" / "self-improve-audit"
+    audit = claude_paths.audit_dir()
     return audit / (project_slug(str(cwd or "unknown")) + "." + LOG_NAME)
 
 

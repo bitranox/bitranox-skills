@@ -65,6 +65,7 @@ import re
 import sys
 from pathlib import Path
 
+from _claude_config import projects_dir
 from _cli_envelope import EXIT_ERROR, EnvelopeArgumentParser, emit, guarded
 
 try:                                                     # fast path when available (uv run installs it)
@@ -559,7 +560,9 @@ def _parse(argv):
         description="Replay real Bash commands through a guard predicate; report rate AND precision.")
     ap.add_argument("--module", required=True, help="path to the .py holding the predicate")
     ap.add_argument("--func", default="notice", help="predicate name in that module (default: notice)")
-    ap.add_argument("--root", default="~/.claude/projects", help="corpus dir or a single .jsonl")
+    # Built per call, so the default follows CLAUDE_CONFIG_DIR as Claude Code's own does.
+    ap.add_argument("--root", default=str(projects_dir()),
+                    help="corpus dir or a single .jsonl (default %(default)s)")
     ap.add_argument("--tool", default="Bash", help="tool_use name to replay (default: Bash)")
     ap.add_argument("--field", default=None,
                     help="input field handed to the predicate instead of the tool's written "

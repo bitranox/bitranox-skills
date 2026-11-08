@@ -19,9 +19,12 @@ without error until the next re-render of that level drops it.
 
 `bx:pin` is a WRITE-PERMISSION gate, not just render-ordering advice: an
 ordinary `add` targeting an already-pinned slug raises `PinnedEntry` before any write (see
-`add_or_update_entry`); the only way through is the separate `amend-pinned` verb. The movers (`move`,
+`upsert_entry`); the only way through is the separate `amend-pinned` verb. The movers (`move`,
 `relocate`, `rename`) are unaffected - they carry pin through untouched, never refuse. All output is
 ASCII (` - ` separators, never an em dash).
+
+The pin gate's recorded decision (the rejected `bx:owner=human` partition it replaced) is in the
+`Decisions` block of `upsert_entry`'s docstring.
 
 Pure standard library; cross-platform (pathlib, UTF-8, the O_EXCL lock in self_improve_signals).
 """
@@ -369,7 +372,18 @@ def upsert_entry(proj, title, hook, body="", type_=None, pin=False,
 
     Under BITRANOX_MEMORY_WRITES=off it raises `sig.MemoryWritesOff` as its first statement, before
     the lock is taken and before anything is read: this is the entry write path the skill scripts
-    (reconcile, migrate) call directly, so a guard on the CLI verbs alone left it open."""
+    (reconcile, migrate) call directly, so a guard on the CLI verbs alone left it open.
+
+    Decisions:
+        - Rejected: a `bx:owner=human` partition on the pointer line, refusing an autonomous
+          overwrite of a "human-owned" fact (53c54a85, reverted c59cb953). Why: every fact in the
+          store is written by a model, so "human-owned" only ever labelled the model's own write,
+          and `bx:pin` already marks exactly the facts that need protecting; the pin gate above
+          replaced it (f1278a93). Evidence: argued: the review recorded in f1278a93, which also
+          found the movers silently stripped the owner marker. Reopen if: facts start being
+          written by a person rather than a model, and a pin cannot express which of them must
+          not be overwritten.
+          Pinned by: tests/test_memory_pin_gate.py::test_add_refuses_a_pinned_target_and_leaves_the_original_hook_on_disk"""
     sig.refuse_if_memory_writes_off()
     proj = os.path.abspath(str(proj))
     _require_known_type(type_)

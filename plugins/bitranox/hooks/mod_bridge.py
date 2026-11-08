@@ -46,13 +46,27 @@ def _backlog_list(inp, cwd):
     return data
 
 
+def _where(data, path, cwd):
+    # The caller reports the change to a person who may look at another copy of the file: name the
+    # one written, and in a linked worktree say the main checkout's copy does not have it yet.
+    data["path"] = str(path)
+    main = ow.main_checkout_of(cwd)
+    if main is not None:
+        data["note"] = ("written in a linked worktree; %s does not have this change until the "
+                        "commit reaches the main checkout" % (main / ow.FILENAME))
+    return data
+
+
 def _backlog_add(inp, cwd):
-    return ow.add_item(ow.backlog_path(cwd), inp.get("rank"), inp.get("origin"), inp.get("what"),
-                       inp.get("size"), inp.get("open"), inp.get("next"), raised=inp.get("raised"))
+    path = ow.backlog_path(cwd)
+    return _where(ow.add_item(path, inp.get("rank"), inp.get("origin"), inp.get("what"),
+                              inp.get("size"), inp.get("open"), inp.get("next"),
+                              raised=inp.get("raised")), path, cwd)
 
 
 def _backlog_close(inp, cwd):
-    return ow.close_item(ow.backlog_path(cwd), inp.get("rank"), inp.get("reason"))
+    path = ow.backlog_path(cwd)
+    return _where(ow.close_item(path, inp.get("rank"), inp.get("reason")), path, cwd)
 
 
 def _optional_text(inp, name):

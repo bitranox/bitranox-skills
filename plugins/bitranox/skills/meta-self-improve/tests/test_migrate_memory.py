@@ -579,3 +579,11 @@ def test_a_cp1252_console_survives_a_slug_it_cannot_encode(env):
                        env=child, capture_output=True, encoding="utf-8", errors="replace")
     assert r.returncode == 2, r.stderr
     assert "UnicodeEncodeError" not in r.stderr
+
+
+def test_the_native_stores_are_read_from_claude_config_dir(tmp_path, monkeypatch):
+    home, arm = tmp_path / "home", tmp_path / "arm"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(arm))
+    assert M._projects_dir() == arm / "projects"

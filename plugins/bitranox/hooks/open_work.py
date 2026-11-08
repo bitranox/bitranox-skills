@@ -148,6 +148,27 @@ def backlog_path(cwd):
     return Path(r.stdout.strip()) / FILENAME
 
 
+def main_checkout_of(cwd):
+    """The main checkout when `cwd` is inside a LINKED worktree, else None.
+
+    A linked worktree carries its own OPEN-WORK.md, and a line written there is not in the main
+    checkout's copy until the commit reaches it - a reader looking there finds nothing. The main
+    checkout is the directory holding the common git dir; a bare or unusual layout (common dir not
+    named .git) answers None rather than guessing."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env["LC_ALL"] = "C"
+    r = subprocess.run(["git", "-C", str(cwd), "rev-parse", "--path-format=absolute",
+                        "--git-dir", "--git-common-dir"],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
+    parts = r.stdout.split("\n")
+    if r.returncode != 0 or len(parts) < 2:
+        return None
+    git_dir, common = Path(parts[0].strip()), Path(parts[1].strip())
+    if git_dir == common or common.name != ".git":
+        return None
+    return common.parent
+
+
 _RAISED_RX = re.compile(r"(\d{4})-(\d{2})-(\d{2})\??", re.ASCII)
 
 

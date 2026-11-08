@@ -195,7 +195,9 @@ SCRIPT = pathlib.Path(__file__).resolve().parent.parent / "scripts" / "transcrip
 
 
 def _cli(home, *args, env_extra=None):
-    env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home)}
+    # An ambient CLAUDE_CONFIG_DIR (an A/B arm, a sandbox) would move the index away from HOME.
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDE_CONFIG_DIR"}
+    env.update({"HOME": str(home), "USERPROFILE": str(home)})
     env.update(env_extra or {})
     return subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True,
                           env=env, check=False)
@@ -433,11 +435,37 @@ def test_a_sqlite_error_mid_index_exits_2(tmp_path, monkeypatch, capsys):
     def locked(*_a, **_k):
         raise sqlite3.OperationalError("database is locked")
 
-    # The configured locations are the tool's external edge; the failure is injected at the
-    # per-file insert, where a locked or full database surfaces mid-run.
-    monkeypatch.setattr(ti, "DB_PATH", tmp_path / "idx.db")
-    monkeypatch.setattr(ti, "ROOT", projects)
+    # The locations come from CLAUDE_CONFIG_DIR, the tool's real seam; the failure is injected at
+    # the per-file insert, where a locked or full database surfaces mid-run.
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
     monkeypatch.setattr(ti, "_index_file", locked)
     rc = ti.main(["index"])
     assert rc == 2
     assert "database is locked" in capsys.readouterr().err
+
+
+# ---- the config dir follows CLAUDE_CONFIG_DIR, as Claude Code's own does ----
+
+def test_paths_follow_claude_config_dir_and_never_fall_back_to_home(tmp_path, monkeypatch):
+    home, arm = tmp_path / "home", tmp_path / "arm"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(arm))
+    assert ti.db_path() == arm / "transcript-index.db"
+    assert ti.projects_root() == arm / "projects"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "  ")              # blank counts as unset
+    assert ti.projects_root() == home / ".claude" / "projects"
+
+
+def test_cli_indexes_the_moved_config_dir(tmp_path):
+    home, arm = tmp_path / "home", tmp_path / "arm"
+    _write_transcript(home / ".claude" / "projects", "-proj-h", [
+        {"type": "user", "message": {"content": "homeonlyword"}}])
+    _write_transcript(arm / "projects", "-proj-a", [
+        {"type": "user", "message": {"content": "armonlyword"}}])
+    extra = {"CLAUDE_CONFIG_DIR": str(arm)}
+    assert _cli(home, "index", env_extra=extra).returncode == 0
+    assert (arm / "transcript-index.db").is_file()
+    assert not (home / ".claude" / "transcript-index.db").exists()
+    assert _cli(home, "search", "armonlyword", env_extra=extra).returncode == 0
+    assert _cli(home, "search", "homeonlyword", env_extra=extra).returncode == 1

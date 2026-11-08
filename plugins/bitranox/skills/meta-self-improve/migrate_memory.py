@@ -47,20 +47,21 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "hooks"))
+import claude_paths                      # noqa: E402
 import self_improve_signals as sig       # noqa: E402
 import memory_engine as ME               # noqa: E402
 import reconcile_memory_index as R       # noqa: E402
 
 def _projects_dir():
-    return Path.home() / ".claude" / "projects"
+    return claude_paths.config_dir() / "projects"
 
 
 def _backups_dir():
-    return Path.home() / ".claude" / "self-improve-audit" / "backups"
+    return claude_paths.audit_dir() / "backups"
 
 
 def _parked_dir():
-    return Path.home() / ".claude" / "self-improve-audit" / "migration-unresolved"
+    return claude_paths.audit_dir() / "migration-unresolved"
 
 
 # ---- slug -> path resolution (filesystem-guided; `/` and `.` both encode to `-`) ---------------

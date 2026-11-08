@@ -951,3 +951,11 @@ def test_a_non_ascii_path_in_a_message_does_not_crash_a_cp1252_console(tmp_path)
     assert proc.returncode == 2, proc.stderr
     assert b"Traceback" not in proc.stderr
     assert b"BROKEN" in proc.stdout
+
+
+def test_the_default_cache_dir_follows_claude_config_dir(tmp_path, monkeypatch):
+    home, arm = tmp_path / "home", tmp_path / "arm"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(arm))
+    assert H.default_cache_dir() == arm / "bitranox-hookdoc"

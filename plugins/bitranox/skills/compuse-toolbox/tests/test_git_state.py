@@ -293,7 +293,7 @@ def test_main_error_path_exits_nonzero_and_does_not_crash(tmp_path, capsys):
 
 def test_main_survives_none_branch(monkeypatch, capsys):
     # regression: a repo whose parsed branch is None must not crash the f-string formatting
-    monkeypatch.setattr(G, "git_state", lambda repo: {
+    monkeypatch.setattr(G, "git_state", lambda repo, fetch=False: {
         "repo": repo, "branch": None, "upstream": None, "ahead": 0, "behind": 0,
         "dirty": 0, "staged": [], "in_sync": False,
     })
@@ -552,3 +552,109 @@ def test_a_crash_under_json_is_exit_2_with_an_envelope(tmp_path, monkeypatch, ca
     payload = json.loads(cap.out)
     assert payload["ok"] is False and "classifier broke" in payload["error"]
     assert "Traceback" not in cap.err
+
+
+# --- an upstream of another name, and --fetch --------------------------------------------------
+# A branch cut from origin/master and pushed without -u keeps origin/master as its upstream, so
+# porcelain's ahead/behind (which is against @{u}) counts the topic commits as unpushed although
+# origin/<branch> holds them.
+
+
+def _foreign(tmp_path, push=True):
+    """A clone whose `feat` was cut from origin/<base> (one topic commit), pushed without -u.
+
+    Returns (clone, base): base is git's default branch name here (init.defaultBranch)."""
+    _origin, clone = _origin_and_clone(tmp_path)
+    base = next(b for b in _git(clone, "branch", "--format=%(refname:short)").stdout.split()
+                if b != "feat")
+    _git(clone, "checkout", "-q", base)
+    _git(clone, "push", "-q", "-u", "origin", base)
+    _git(clone, "branch", "-q", "-D", "feat")
+    _git(clone, "push", "-q", "origin", "--delete", "feat")
+    _git(clone, "fetch", "-q", "--prune")
+    _git(clone, "checkout", "-q", "-b", "feat", "origin/" + base)
+    (clone / "t.md").write_text("t\n", encoding="utf-8")
+    _commit(clone, "t.md", message="topic")
+    if push:
+        _git(clone, "push", "-q", "origin", "feat")
+    return clone, base
+
+
+def test_a_foreign_upstream_whose_namesake_equals_head_is_in_sync_but_flagged(tmp_path, capsys):
+    clone, base = _foreign(tmp_path)
+    s = G.git_state(clone)
+    assert s["upstream"] == "origin/" + base and s["foreign_upstream"] is True
+    assert s["own_upstream"] == "origin/feat" and s["own_exists"] is True
+    assert (s["own_ahead"], s["own_behind"]) == (0, 0)
+    assert s["in_sync"] is True
+    assert G.main([str(clone)]) == 0
+    out = capsys.readouterr().out
+    assert "upstream origin/%s is not origin/feat" % base in out
+
+
+def test_a_foreign_upstream_with_no_namesake_is_out_of_sync(tmp_path, capsys):
+    clone, _base = _foreign(tmp_path, push=False)
+    s = G.git_state(clone)
+    assert s["foreign_upstream"] is True and s["own_exists"] is False
+    assert s["in_sync"] is False
+    assert G.main([str(clone)]) == 1
+    out = capsys.readouterr().out
+    assert "origin/feat" in out and "absent" in out
+
+
+def test_a_foreign_upstream_is_counted_against_the_namesake(tmp_path, capsys):
+    clone, _base = _foreign(tmp_path)
+    (clone / "u.md").write_text("u\n", encoding="utf-8")
+    _commit(clone, "u.md", message="unpushed")
+    s = G.git_state(clone)
+    assert (s["own_ahead"], s["own_behind"]) == (1, 0) and s["in_sync"] is False
+    assert G.main([str(clone), "--json"]) == 1
+    [repo] = json.loads(capsys.readouterr().out)["data"]["repos"]
+    assert repo["own_ahead"] == 1 and repo["foreign_upstream"] is True
+
+
+def test_a_matching_upstream_is_not_foreign(tmp_path):
+    """Control: `push -u` set origin/feat, so nothing is flagged and the counts are porcelain's."""
+    _origin, clone = _origin_and_clone(tmp_path)
+    s = G.git_state(clone)
+    assert s["upstream"] == "origin/feat" and s["foreign_upstream"] is False
+    assert s["in_sync"] is True
+
+
+def _advance_origin(origin, tmp_path):
+    other = tmp_path / "other"
+    _git(tmp_path, "clone", "-q", "-b", "feat", str(origin), str(other))
+    (other / "o.md").write_text("o\n", encoding="utf-8")
+    _commit(other, "o.md", message="elsewhere")
+    _git(other, "push", "-q", "origin", "feat")
+
+
+def test_without_fetch_the_counts_are_stale_and_say_so(tmp_path, capsys):
+    origin, clone = _origin_and_clone(tmp_path)
+    _advance_origin(origin, tmp_path)
+    assert G.main([str(clone)]) == 0                      # stale: origin moved, clone not fetched
+    assert "last fetch" in capsys.readouterr().err
+
+
+def test_fetch_refreshes_the_counts(tmp_path, capsys):
+    origin, clone = _origin_and_clone(tmp_path)
+    _advance_origin(origin, tmp_path)
+    assert G.main([str(clone), "--fetch"]) == 1
+    captured = capsys.readouterr()
+    assert "behind 1" in captured.out and "last fetch" not in captured.err
+
+
+def test_a_failed_fetch_is_exit_2_and_named(tmp_path, capsys):
+    origin, clone = _origin_and_clone(tmp_path)
+    origin.rename(tmp_path / "moved.git")
+    assert G.main([str(clone), "--fetch", "--json"]) == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False and payload["data"]["fetched"] is True
+    [repo] = payload["data"]["repos"]
+    assert repo["fetch_error"]
+
+
+def test_json_says_whether_it_fetched(tmp_path, capsys):
+    _origin, clone = _origin_and_clone(tmp_path)
+    G.main([str(clone), "--json"])
+    assert json.loads(capsys.readouterr().out)["data"]["fetched"] is False

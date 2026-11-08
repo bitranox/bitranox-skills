@@ -342,6 +342,40 @@ A third option exists and is usually the wrong trade: make the command `uv run -
 723 metadata resolve the dependencies. That makes `uv` a hard prerequisite for your hook to run at all, and pays
 a resolve step per invocation - cached, but not free, and on `PreToolUse` it is every tool call.
 
+## Record a decision in the module docstring
+
+When a hook or jig settles a choice a later editor could plausibly undo (a rule tightened or
+loosened, an alternative tried and dropped, a threshold picked from a measurement), record it in
+the module docstring, in a block headed `Decisions:`:
+
+```text
+Decisions:
+    - <what the code does, one sentence>. Why: <the reason>. Evidence: <measured | user |
+      argued | inherited>: <where it came from>. Reopen if: <the condition that would change it>.
+      Pinned by: <tests/test_file.py::test_name>
+    - Rejected: <the alternative not taken>. Why: ... Reopen if: ...
+```
+
+Pin each decision with a test that fails when the decision is reverted, and name that test in the
+block; a decision with no test says `Pinned by: none - <why no test can hold it>`. A skill's
+SKILL.md text uses the per-skill ledger instead (`bitranox:meta-skill-writer`, Step 0b); code
+gets no ledger file.
+
+**Read the block, and the tests it names, before you change a matcher, a rule or a threshold.** A
+change that reverses an entry (tightens what an entry loosened, adopts a `Rejected:` alternative)
+is made only when you can say what met its `Reopen if:`. Then rewrite that entry instead of adding
+one that contradicts it, put that answer in its `Why:`, and keep a test that fails on the behaviour
+you replaced: a narrowing keeps a test for what must still match. The form you replaced stays in
+the block as a `- Rejected:` entry beside it. When the decision you reverse has no entry (it
+predates the block, or only a commit records it), recover its reason from that commit and the
+tests it added, write it into a `- Rejected:` entry naming the commit as its source, and reverse
+it only when you can say why that reason no longer holds. A matcher that lives in
+`hooks.json`, which takes no comments, is recorded in the docstring of the script it launches. The
+block states what the code does now and why, with no history narrative: a commit is named only as
+the source of a reason, and a commit message alone is no record, because the next editor reads
+the module, not the log. Figures a
+replay produced (the escalation section of SKILL.md) go in the entry's `Evidence:`.
+
 ## Security
 
 > Command hooks execute with your full user permissions. They can modify, delete or read anything your account

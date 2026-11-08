@@ -11,6 +11,11 @@ Rules for consistently formatted, readable markdown tables. Misaligned tables ar
 
 **A `reformat-md-tables` PostToolUse hook auto-realigns tables in every `*.md` file on each Write/Edit**, so tables Claude writes stay aligned with no manual step, unless the checkout opted out with `git config bitranox.reformatMdTables false`. To bulk-reformat a tree by hand or in CI, run this skill's `reformat_tables.py -r <dir>` (see Programmatic Reformatting below).
 
+**After the hook realigns a table, re-Read it before the next Edit of that table.** Realigning
+rewrites the padding of every row, so a second Edit whose `old_string` was copied from an earlier
+Read of a row fails with "String to replace not found". Read the file (or its rows) again and copy
+`old_string` from that.
+
 ## Rules
 
 ### 1. Pad all cells to column width

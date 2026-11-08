@@ -59,7 +59,8 @@ _TAIL_BYTES = 1_000_000
 
 # The Claude Code configuration files this rule covers, matched on a path SEGMENT rather than
 # anchored, because `file_path` is always absolute and its prefix varies per machine and per
-# project. `.claude.json` is the user-level file that sits directly in the home directory.
+# project. `.claude.json` is the user-level file: in the home directory, or inside
+# CLAUDE_CONFIG_DIR when that is set; the unanchored segment match covers both.
 _CONFIG_PATHS = re.compile(
     r"(?:^|/)(?:\.claude/settings(?:\.local)?\.json"
     r"|\.claude\.json"

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """SessionStart hook: after a compaction, put the saved checkpoint back in front of the model.
 
-In compact mode the context watcher asks the session to save a checkpoint (`handover.md` plus
+The context watcher asks the session to save a checkpoint (`handover.md` plus
 `OPEN-WORK.md`) shortly before the harness auto-compacts, and the session then keeps working. The
 compaction summary keeps the gist and loses the working detail, so this hook re-injects the
 checkpoint the session wrote, and the work resumes from saved state rather than from the summary.
@@ -26,6 +26,14 @@ into a nested repo, was reported as "no checkpoint" (measured: 23 of 106 checkpo
 the request, across real transcripts). The cwd candidate stays because a checkpoint written through
 Bash never reaches touched-paths.
 
+WHICH NAMES. `handover.md`, and a touched file whose name ENDS in `-handover.md` that carries the
+line `## Lessons for the next nap` (the heading the meta-context-watcher skill requires in every
+checkpoint). Sessions with a worktree outside any repo improvise names such as
+`~/wt-vmxnet3-handover.md` (43 writes of three such names across 5497 transcripts, 2026-11-08), and
+an exact-name rule never hands those back. The heading keeps out other files that share the suffix:
+the one such file in that corpus was a skill checklist without it. `handover.prev.md`, the backup of
+an earlier checkpoint, does not end in `-handover.md` and so never counts, heading or not.
+
 WHY its own hook rather than a branch of session-start.py: that hook's essentials are held under a
 small byte ceiling so they always land inline, and a checkpoint can be several KB. The harness inlines
 an additionalContext up to 10,000 characters and replaces anything larger with a 2,000-character
@@ -46,6 +54,10 @@ import self_improve_signals as sig
 #: Below the harness's 10,000-character inline limit, with room for the framing around the body.
 MAX_CONTEXT_CHARS = 9000
 _STALE_PREFIX = "# STALE"
+_CHECKPOINT_NAME = "handover.md"
+_IMPROVISED_SUFFIX = "-handover.md"
+#: A file with an improvised name counts only when one of its lines is exactly this heading.
+_CHECKPOINT_HEADING = "## Lessons for the next nap"
 
 _RESUME = (
     "<BITRANOX-COMPACT-RESUME>\n"
@@ -84,7 +96,8 @@ def fresh_checkpoint(path, asked_at):
     """The checkpoint text when it is this session's latest, else None. IMPURE (reads).
 
     Latest means written at or after the save request and not yet marked read. A request time of 0
-    means this session was never asked, so no file can be its checkpoint.
+    means this session was never asked, so no file can be its checkpoint. A file with an improvised
+    name must also carry the checkpoint heading (see WHICH NAMES).
     """
     if asked_at <= 0:
         return None
@@ -96,7 +109,20 @@ def fresh_checkpoint(path, asked_at):
         return None
     if not text.strip() or text.lstrip().startswith(_STALE_PREFIX):
         return None
+    if Path(path).name != _CHECKPOINT_NAME and not has_checkpoint_heading(text):
+        return None
     return text
+
+
+def is_checkpoint_name(name) -> bool:
+    """True for `handover.md` and for an improvised `<anything>-handover.md`. PURE."""
+    return name == _CHECKPOINT_NAME or (
+        name.endswith(_IMPROVISED_SUFFIX) and len(name) > len(_IMPROVISED_SUFFIX))
+
+
+def has_checkpoint_heading(text) -> bool:
+    """True when a line of `text` is exactly the checkpoint heading. PURE."""
+    return any(line.rstrip() == _CHECKPOINT_HEADING for line in text.splitlines())
 
 
 def resume_context(path, text, today):
@@ -128,10 +154,10 @@ def build(event, today=None):
 
 def candidates(cwd, session):
     """Every path that may hold this session's checkpoint, the cwd's repo root first. IMPURE."""
-    paths = [repo_root(cwd) / "handover.md"]
+    paths = [repo_root(cwd) / _CHECKPOINT_NAME]
     for touched in sig.read_touched_paths(session):
         p = Path(touched)
-        if p.name == "handover.md" and p not in paths:
+        if is_checkpoint_name(p.name) and p not in paths:
             paths.append(p)
     return paths
 

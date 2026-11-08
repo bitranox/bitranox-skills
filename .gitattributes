@@ -12,6 +12,8 @@ plugins/bitranox/skills/process-agents-subagent-driven-development/scripts/* tex
 plugins/bitranox/skills/meta-skill-ab-test/tests/fakes/* text eol=lf
 # The fake claude replays these streams byte for byte; a CRLF checkout would change every line.
 plugins/bitranox/skills/meta-skill-ab-test/tests/fixtures/*.jsonl text eol=lf
+# A skill's decision ledger is append-only JSON Lines: union keeps both branches' appended lines.
+plugins/bitranox/skills/*/.skillwriter/decisions.jsonl text eol=lf merge=union
 # git hooks are extensionless bash scripts: a CRLF checkout makes the shebang read `bash\r`,
 # so git's run of the hook fails before the gate starts.
 githooks/* text eol=lf

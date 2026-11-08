@@ -375,14 +375,52 @@ _STDLIB_SHIM = ("import os, runpy, sys; sys.modules['orjson'] = None; script = s
                 "sys.argv = sys.argv[1:]; runpy.run_path(script, run_name='__main__')")
 
 
-def _run_backend(backend, args, stdin=b""):
+def _run_backend(backend, args, stdin=b"", preexec_fn=None):
     if backend == "orjson":
         pytest.importorskip("orjson", reason="the orjson arm needs orjson installed")
         cmd = [sys.executable, str(SCRIPT), *args]
     else:
         cmd = [sys.executable, "-c", _STDLIB_SHIM, str(SCRIPT), *args]
     return subprocess.run(cmd, input=stdin, capture_output=True,
-                          env={**os.environ, "PYTHONUTF8": "1"})
+                          env={**os.environ, "PYTHONUTF8": "1"}, preexec_fn=preexec_fn)
+
+
+_CHILD_STACK = 8 << 20
+# 1,000,000 levels, not 100,000: the macOS runner's smaller C frames fit 100,000 levels into the
+# 8 MiB child stack and decoded them (3.15), so the depth must overflow 8 MiB on every frame size.
+_DEEP = 1_000_000
+_DEEP_LINE = '{"x":' + "[" * _DEEP + "]" * _DEEP + '}'
+
+
+def _bounded_stack():
+    """A preexec_fn giving the child an 8 MiB stack, or None where there is no rlimit (Windows).
+
+    From Python 3.14 the stdlib decoder's depth limit is the thread's real stack, and the GitHub
+    Linux and macOS runners run with an unlimited one: there a million levels decode, the explicit
+    depth check refuses them instead, and the RecursionError branch of `_loads` is never reached
+    while the test passes either way. The child's stack is sized from the rlimit at exec.
+    """
+    if os.name != "posix":
+        return None
+    import resource  # noqa: PLC0415 - POSIX-only module
+
+    def bound():
+        hard = resource.getrlimit(resource.RLIMIT_STACK)[1]
+        soft = _CHILD_STACK if hard == resource.RLIM_INFINITY else min(_CHILD_STACK, hard)
+        resource.setrlimit(resource.RLIMIT_STACK, (soft, hard))
+    return bound
+
+
+def test_a_bounded_child_stack_makes_the_stdlib_decoder_raise_recursionerror(tmp_path):
+    """The premise of the deep-nesting test below, checked on this runner: without it that test
+    exercises the depth check twice and the RecursionError branch never."""
+    p = tmp_path / "deep.json"
+    p.write_text(_DEEP_LINE, encoding="utf-8")
+    probe = ("import json, sys\ntry:\n    json.loads(open(sys.argv[1], encoding='utf-8').read())\n"
+             "except RecursionError:\n    print('RecursionError')\nelse:\n    print('decoded')\n")
+    out = subprocess.run([sys.executable, "-c", probe, str(p)], capture_output=True, text=True,
+                         preexec_fn=_bounded_stack())
+    assert out.stdout.strip() == "RecursionError", (out.stdout, out.stderr)
 
 
 @pytest.mark.parametrize("backend", ["stdlib", "orjson"])
@@ -402,9 +440,9 @@ def test_a_non_standard_constant_is_unparseable_and_its_string_prints_bare(tmp_p
 @pytest.mark.parametrize("backend", ["stdlib", "orjson"])
 def test_absurdly_deep_nesting_is_an_unparseable_line_not_a_traceback(tmp_path, backend):
     p = tmp_path / "deep.jsonl"
-    p.write_text('{"x":' + "[" * 100000 + "]" * 100000 + '}\n{"x":"ok"}\n', encoding="utf-8")
+    p.write_text(_DEEP_LINE + '\n{"x":"ok"}\n', encoding="utf-8")
     for extra in ([], ["--count"]):
-        proc = _run_backend(backend, [str(p), "--field", "x", *extra])
+        proc = _run_backend(backend, [str(p), "--field", "x", *extra], preexec_fn=_bounded_stack())
         assert proc.returncode == 0, proc.stderr
         assert b"Traceback" not in proc.stderr
         assert proc.stdout.decode("utf-8").split()[-1] == "ok"

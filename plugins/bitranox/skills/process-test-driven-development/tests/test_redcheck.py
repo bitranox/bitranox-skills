@@ -502,6 +502,75 @@ def test_boilerplate_still_does_not_flag_at_the_wider_cutoff() -> None:
     assert not result.inherited, f"false positive on boilerplate: {result.inherited}"
 
 
+# A memory INDEX is one document that names nearly every topic its store covers, so it holds
+# almost any rare term a scenario uses. Counted per document, it shares four or more with
+# nearly every scenario and reads as prior coverage every time.
+SPONGE_TERMS = ("ledgerbook", "cargokit", "dispatcher", "checklister", "subagentry", "workzone")
+SPONGE_SCENARIO = """
+    You are working through a plan. Step three asks the dispatcher to open the ledgerbook for
+    each cargokit, and the checklister wants every subagentry run inside its own workzone.
+    Which step do you take first?
+"""
+
+
+def _corpus_with_a_long_index() -> list[tuple[str, str]]:
+    """200 short notes with private vocabulary, nine notes that each mention TWO of the
+    scenario's terms in passing, one long index naming 3000 topics plus all six terms, and one
+    short note that actually uses all six. Every scenario term ends up in 5 of 211 documents
+    (2.4%), well inside the rarity cutoff, so only the document's own size tells the index
+    from the note."""
+    corpus = [(f"facts/note-{i}.md", " ".join(f"tok{i}q{k}" for k in range(20)))
+              for i in range(200)]
+    for i in range(9):
+        pair = (SPONGE_TERMS[i % 6], SPONGE_TERMS[(i + 1) % 6])
+        corpus.append((f"facts/chatter-{i}.md",
+                       " ".join(f"chat{i}q{k}" for k in range(18)) + " " + " ".join(pair)))
+    index = " ".join(f"topic{j}entry" for j in range(3000)) + " " + " ".join(SPONGE_TERMS)
+    corpus.append(("CLAUDE.local.md", index))
+    corpus.append(("facts/the-real-lesson.md",
+                   " ".join(f"real{k}word" for k in range(15)) + " " + " ".join(SPONGE_TERMS)))
+    return corpus
+
+
+def test_the_long_index_fixture_shares_enough_rare_terms_to_pass_the_count() -> None:
+    """Guard the fixture: the index must clear the shared-term COUNT on its own, or the test
+    below passes for the old reason and proves nothing about document size."""
+    corpus = _corpus_with_a_long_index()
+    documents = [(label, R.distinctive_terms(text)) for label, text in corpus]
+    frequency: dict[str, int] = {}
+    for _, terms in documents:
+        for term in terms:
+            frequency[term] = frequency.get(term, 0) + 1
+    shared = R.distinctive_terms(SPONGE_SCENARIO) & dict(documents)["CLAUDE.local.md"]
+    assert set(SPONGE_TERMS) <= shared
+    assert all(frequency[t] <= int(len(corpus) * R.RARITY_MAX_FRACTION) for t in SPONGE_TERMS)
+
+
+def test_a_long_index_naming_every_topic_is_not_prior_coverage() -> None:
+    """A document that holds almost every term is expected to hold the scenario's too, so
+    sharing them is no evidence: each shared term is weighted by how unlikely a document of
+    THAT size is to contain it."""
+    result = R.audit(SPONGE_SCENARIO, corpus=_corpus_with_a_long_index())
+    labels = [hit.label for hit in result.inherited]
+    assert "CLAUDE.local.md" not in labels, f"the index matched on size alone: {result.inherited}"
+
+
+def test_a_short_note_with_the_same_terms_still_flags() -> None:
+    """The positive control in the same corpus: the same six terms in an ordinary-sized
+    document are still evidence, so the size weighting has not switched the check off."""
+    result = R.audit(SPONGE_SCENARIO, corpus=_corpus_with_a_long_index())
+    labels = [hit.label for hit in result.inherited]
+    assert "facts/the-real-lesson.md" in labels, f"size weighting too strict: {result.inherited}"
+
+
+def test_a_hit_reports_its_weighted_evidence() -> None:
+    """The JSON names the weighted evidence beside the raw count, so a reader can see how far
+    over the bar a hit sits."""
+    hit = R.audit(SPONGE_SCENARIO, corpus=_corpus_with_a_long_index()).as_dict()["inherited"][0]
+    assert hit["label"] == "facts/the-real-lesson.md"
+    assert hit["evidence"] > hit["evidence_needed"] > 0
+
+
 def test_rarity_cutoff_is_tunable_per_corpus() -> None:
     """The right cutoff depends on corpus shape, so it must not need a source edit to change."""
     corpus = _corpus_shaped_like_a_real_cascade()

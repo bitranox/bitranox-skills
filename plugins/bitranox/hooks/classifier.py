@@ -51,6 +51,7 @@ _HOOKS_DIR = Path(__file__).resolve().parent
 if str(_HOOKS_DIR) not in sys.path:
     sys.path.insert(0, str(_HOOKS_DIR))
 
+import claude_paths  # noqa: E402
 import secret_patterns  # noqa: E402
 import skill_frontmatter  # noqa: E402
 import transcript_turns  # noqa: E402
@@ -754,7 +755,7 @@ def recall_questions():
 # ---- shadow: the hook side -----------------------------------------------------------------
 
 def _audit_dir():
-    return Path.home() / ".claude" / "self-improve-audit"
+    return claude_paths.audit_dir()
 
 
 def _transcript_location(transcript):

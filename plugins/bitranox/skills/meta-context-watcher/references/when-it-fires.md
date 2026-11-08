@@ -4,7 +4,7 @@ A hook measures context from the transcript's last recorded usage - the real per
 not an estimate. The context limit is `min(context_handover_pct of the window,
 context_handover_cap)`.
 
-In compact mode the limit is the value `CLAUDE_CODE_AUTO_COMPACT_WINDOW` should hold, set in the
+The limit is the value `CLAUDE_CODE_AUTO_COMPACT_WINDOW` should hold, set in the
 `env` block of `~/.claude/settings.json`. The harness compacts about 33k tokens below that value
 (measured on Claude Code 2.1.310), and the hook asks for the checkpoint about a tenth (at least
 40k) before that point. It asks on `PostToolUse` as well as on `Stop`, because a long autonomous
@@ -12,8 +12,6 @@ turn can pass the whole stretch without stopping once. When the variable is unse
 the limit, the request says so: tell the user once and offer to set it through the update-config
 skill. After a compaction the reading falls below the save point, and the next crossing asks for a
 fresh checkpoint.
-
-In handover mode the hook blocks on `Stop` once context crosses the limit.
 
 The window comes from the model family on the transcript's most recent assistant record, so nothing
 needs configuring for a known family. A model id no family table knows - a gateway model such as
@@ -27,8 +25,8 @@ from another model cannot override a measured family window.
 Its warning about the overwrite asks git whether `handover.md` is tracked in the repo it fires in
 and says which case applies, because some repos commit the file and others ignore it.
 
-In handover mode, declining is not permanent: the next ask waits until context has grown another
-tenth of the window, because a decline at 40% is "not yet" while 90% is a different question.
+Above the save point, a repeat request waits until context has grown another tenth of the window,
+so the fresh checkpoint holds more than the last one rather than the same state written twice.
 
 If it ever reports measuring MORE context than the window, the detection failed - set
 `context_window` explicitly via `bitranox:meta-memory-settings`. That is reported rather than

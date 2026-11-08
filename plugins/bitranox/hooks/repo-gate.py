@@ -31,7 +31,7 @@ Checks:
                     with at least one test_*.py (demos/ and examples/ are exempt).
   2. pytest       - the test suite passes (hook mode: the fast hooks/tests; CI: all).
   3. json-valid   - plugin.json, marketplace.json, hooks.json all parse.
-  4. lf-endings   - no tracked *.py/*.sh/*.json contains a CRLF.
+  4. lf-endings   - no tracked *.py/*.sh/*.json/*.jsonl contains a CRLF.
   5. version-bump - HOOK MODE ONLY (maintainer pre-commit): if anything under plugins/
                     changed vs origin/master, plugin.json version must differ. Skipped in
                     CI: bumping is a merge/release decision, not a contributor's PR gate.
@@ -61,6 +61,13 @@ Checks:
                     on the marketplace and the plugin, and `claude plugin test` for the mod's
                     TypeScript tests. Local in practice: where `claude` is not on PATH (a CI
                     runner) it is skipped with a printed reason (`check_claude_plugin`).
+  9. skill-decisions - BOTH MODES: a skill's `.skillwriter/decisions.jsonl` holds its text. The
+                    hook and the pre-push read each skill the change touches at what it ships
+                    and refuse a live rule anchor gone from its Markdown, a ledger line present
+                    at the fork point changed or removed, or a ledger that does not parse
+                    (`check_skill_decisions`); CI checks every ledger in the checkout
+                    (`check_all_skill_decisions`) and runs the per-change check at HEAD, which
+                    on a pull request also judges the append-only half.
 
 The collaborators the gate reaches beyond its arguments - the mirror pair table, the pytest run,
 the claude check, the PATH lookup - arrive as one `GateParts` bundle, so a caller can replace them.
@@ -90,8 +97,11 @@ if str(_HOOKS_DIR) not in sys.path:
     sys.path.insert(0, str(_HOOKS_DIR))
 
 import harness_checks as hc  # noqa: E402
+import mirrored_skills  # noqa: E402
 import shell_text  # noqa: E402
 import secret_patterns  # noqa: E402
+import skill_decisions  # noqa: E402
+import skill_frontmatter  # noqa: E402
 
 # git commit / git push / gh pr create detection lives in `shell_text` now: a second hook asks the
 # same question for its own reason (a commit is when work concludes, which is when the
@@ -216,39 +226,45 @@ def check_json_valid(root):
 
 
 #: The file kinds `.gitattributes` pins to `eol=lf`, and so the ones the LF check reads.
-_LF_SUFFIXES = (".py", ".sh", ".json")
+_LF_SUFFIXES = (".py", ".sh", ".json", ".jsonl")
 #: Index and tree modes of a regular file; a symlink's blob is its target and a gitlink has none.
 _REGULAR_MODES = frozenset({"100644", "100755"})
 
 
-def _listed_blobs(root, args, env=None):
-    """(rc, [(sha, path)]) of the LF-checked regular files `ls-files -s` or `ls-tree -r` lists."""
+def _lf_checked(rel):
+    return rel.endswith(_LF_SUFFIXES)
+
+
+def _listed_blobs(root, args, env=None, keep=_lf_checked):
+    """(rc, [(sha, path)]) of the regular files `ls-files -s` or `ls-tree -r` lists whose path
+    ``keep`` accepts (default: the LF-checked suffixes)."""
     rc, rows = _git_paths(root, *args, env=env)
     found = []
     for row in rows:
         meta, _, rel = row.partition("\t")
         fields = meta.split()
-        if len(fields) == 3 and fields[0] in _REGULAR_MODES and rel.endswith(_LF_SUFFIXES):
+        if len(fields) == 3 and fields[0] in _REGULAR_MODES and keep(rel):
             found.append((fields[2] if args[0] == "ls-tree" else fields[1], rel))
     return rc, list(dict.fromkeys(found))     # an unmerged path is listed once per stage
 
 
-def _shipped_blobs(root, stage):
+def _shipped_blobs(root, stage, keep=_lf_checked):
     """(rc, [(sha, path)]) of the blobs a commit or push at ``stage`` ships: HEAD's on a push, the
     index's on a commit, and the selection's on a commit that takes files from disk itself
-    (`CommitSelection`; the index when git cannot build it, as `shipped_files` does)."""
+    (`CommitSelection`; the index when git cannot build it, as `shipped_files` does). Only paths
+    ``keep`` accepts are listed."""
     if not _is_commit(stage):
-        return _listed_blobs(root, ("ls-tree", "-r", "HEAD"))
+        return _listed_blobs(root, ("ls-tree", "-r", "HEAD"), keep=keep)
     if isinstance(stage, CommitSelection):
         with _selection_index(root, stage) as env:
             if env is not None:
-                return _listed_blobs(root, ("ls-files", "-s"), env=env)
-    return _listed_blobs(root, ("ls-files", "-s"))
+                return _listed_blobs(root, ("ls-files", "-s"), env=env, keep=keep)
+    return _listed_blobs(root, ("ls-files", "-s"), keep=keep)
 
 
-def _blobs_with_crlf(root, blobs):
-    """The paths among ``blobs`` whose blob holds a CRLF, read in ONE `git cat-file --batch`; None
-    when git cannot read them."""
+def _read_blobs(root, blobs):
+    """The bytes of each ``(sha, path)`` in ``blobs``, in order, read in ONE `git cat-file
+    --batch`; None when git cannot read them all."""
     if not blobs:
         return []
     try:
@@ -258,17 +274,24 @@ def _blobs_with_crlf(root, blobs):
         return None
     if out.returncode != 0:
         return None
-    data, at, crlf = out.stdout, 0, []
-    for _sha, rel in blobs:
+    data, at, contents = out.stdout, 0, []
+    for _blob in blobs:
         end = data.find(b"\n", at)
         header = data[at:end].split()
         if end < 0 or len(header) != 3:
             return None                      # `<sha> missing`, or output this reader cannot follow
         size = int(header[2])
-        if b"\r\n" in data[end + 1:end + 1 + size]:
-            crlf.append(rel)
+        contents.append(data[end + 1:end + 1 + size])
         at = end + 1 + size + 1
-    return crlf
+    return contents
+
+
+def _blobs_with_crlf(root, blobs):
+    """The paths among ``blobs`` whose blob holds a CRLF; None when git cannot read them."""
+    contents = _read_blobs(root, blobs)
+    if contents is None:
+        return None
+    return [rel for (_sha, rel), data in zip(blobs, contents, strict=True) if b"\r\n" in data]
 
 
 def check_lf_endings(root, stage=None):
@@ -412,20 +435,92 @@ def _plugin_version_pair(root):
     return old_v, new_v
 
 
-def check_version_bumped(root):
-    pair = _plugin_version_pair(root)
-    if pair is None:
-        return []  # no origin/master reference available -> skip, do not block
-    old_v, new_v = pair
-    _, changed = _git_paths(root, "diff", "--name-only", "origin/master", "--", "plugins/bitranox")
-    _, untracked = _git_paths(root, "ls-files", "--others", "--exclude-standard", "plugins/bitranox")
-    plugin_changed = bool(changed) or bool(untracked)
-    if not plugin_changed:
+_PLUGIN_DIR = "plugins/bitranox"
+_PLUGIN_JSON = _PLUGIN_DIR + "/.claude-plugin/plugin.json"
+
+
+def _version_in(data):
+    """The `version` a plugin.json's bytes name, or None when they do not parse as one."""
+    try:
+        return json.loads(data).get("version")
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _git_version(root, commit):
+    """The plugin.json version at ``commit``, or None."""
+    rc, blob, _ = _git(root, "show", f"{commit}:{_PLUGIN_JSON}")
+    return None if rc else _version_in(blob)
+
+
+def _shipped_plugin_change(root, stage, base):
+    """(plugins/ paths ``stage`` ships changed since ``base``, the plugin.json version it ships),
+    or None when git cannot say. Only what the commit or push carries counts: an unstaged edit
+    or an untracked file is no part of it (a `CommitSelection` is staged by git first)."""
+    def diff_and_version(env=None):
+        if _is_commit(stage):
+            rc, changed = _git_paths(root, "diff", "--cached", "--name-only", "--no-renames", base,
+                                     "--", _PLUGIN_DIR, env=env)
+        else:
+            rc, changed = _git_paths(root, "diff", "--name-only", "--no-renames", base, "HEAD",
+                                     "--", _PLUGIN_DIR)
+        rc_v, blobs = _shipped_blobs(root, stage, keep=lambda rel: rel == _PLUGIN_JSON)
+        contents = _read_blobs(root, blobs) if rc_v == 0 else None
+        if rc or not contents:
+            return None
+        return changed, _version_in(contents[0])
+
+    if isinstance(stage, CommitSelection):
+        with _selection_index(root, stage) as env:
+            if env is not None:
+                return diff_and_version(env)
+        stage = STAGE_INDEX
+    return diff_and_version()
+
+
+def check_version_bumped(root, stage=None):
+    """Does this change ship a plugin version an installed clone will see move?
+
+    The marketplace updates by `git pull` and an install moves only when plugin.json's version
+    does, so the question is asked of what ``stage`` ships (default the index; HEAD on a push):
+
+    * TRIGGER - did it change anything under plugins/bitranox since the FORK POINT with
+      origin/master? Not since origin's tip: in a checkout behind origin the tip's own later
+      plugins/ changes are no part of this change, and diffing against the tip refused a commit
+      for a bump it did not need ([99]).
+    * BUMPED - is its version different from the fork point's? Compared with the tip only, an
+      unbumped change in a behind checkout passed as soon as origin had moved the number.
+    * NOT REUSED - is its version different from origin's tip? A number origin already published
+      is one installs already have, so the change would never reach them.
+
+    In a checkout that is not behind, fork point and tip are one commit and the last two collapse
+    into one comparison. Earlier unpushed commits count (the diff and the version are taken across
+    the whole unpushed range), so a commit stacked on an earlier bump rides it. Any reading git
+    cannot answer skips rather than blocks.
+    """
+    stage = STAGE_INDEX if stage is None else stage
+    base = _merge_base(root)
+    if base is None:
+        return []  # no origin/master to fork from -> skip, do not block
+    shipped = _shipped_plugin_change(root, stage, base)
+    if shipped is None:
         return []
-    if new_v == old_v:
+    changed, new_v = shipped
+    if not changed or new_v is None:
+        return []
+    base_v, tip_v = _git_version(root, base), _git_version(root, "origin/master")
+    if new_v == base_v:
         return [
-            f"plugins/ changed but plugin.json version is still {new_v} (== origin/master).",
+            f"plugins/ changed but plugin.json version is still {new_v} (== the fork point with "
+            "origin/master).",
             "Bump the version (the marketplace is append-only; updates ship via a version bump).",
+        ]
+    if new_v == tip_v:
+        return [
+            f"plugin.json version {new_v} is the one origin/master already published - installs "
+            "that have it will not see this change.",
+            "Merge origin/master and bump from its version "
+            "(uv run plugins/bitranox/hooks/bump_version.py --part patch ...).",
         ]
     return []
 
@@ -1036,17 +1131,55 @@ _SKILLS_DIR = "plugins/bitranox/skills"
 _SKILL_MD_RX = re.compile(r"^%s/([^/]+)/SKILL\.md$" % re.escape(_SKILLS_DIR))
 
 
+def _merge_base(root):
+    """The commit HEAD forked from origin/master, or None when there is none to diff from.
+
+    None covers more than a missing ref: an unborn HEAD, and a HEAD that shares no history with
+    origin/master (unrelated histories, a shallow clone cut above the fork point), have no
+    merge-base either. `_changed_vs_origin` then returns None and both checks reading it pass
+    with nothing to judge, rather than guess a base that would list paths that are not ours.
+    """
+    rc, out, _ = _git(root, "merge-base", "HEAD", "origin/master")
+    sha = out.strip()
+    return sha if rc == 0 and sha else None
+
+
 def _changed_vs_origin(root):
-    """Worktree+index+untracked paths changed vs origin/master (the maintainer pre-commit view)."""
-    rc, _, _ = _git(root, "rev-parse", "--verify", "origin/master")
-    if rc != 0:
+    """Worktree+index+untracked paths changed since HEAD forked from origin/master.
+
+    The base is the merge-base, not origin's tip: diffed against the tip, a checkout that is
+    behind lists every path origin gained since as its own change, and a check that reads those
+    paths judges a peer's pushed work as this commit's.
+    """
+    base = _merge_base(root)
+    if base is None:
         return None
-    # `diff origin/master` compares the WORKING TREE, so a staged change whose working copy was
+    # `diff <base>` compares the WORKING TREE, so a staged change whose working copy was
     # reverted afterwards was missing - yet that staged text is exactly what the commit carries.
-    _, changed = _git_paths(root, "diff", "--name-only", "origin/master")
-    _, staged = _git_paths(root, "diff", "--cached", "--name-only", "origin/master")
+    # --no-renames: with git's default rename detection a move lists only its NEW path, so the
+    # skill a ledger was moved out of would be no candidate and its removal would pass unjudged.
+    _, changed = _git_paths(root, "diff", "--name-only", "--no-renames", base)
+    _, staged = _git_paths(root, "diff", "--cached", "--name-only", "--no-renames", base)
     _, untracked = _git_paths(root, "ls-files", "--others", "--exclude-standard")
     return list(dict.fromkeys(changed + staged + untracked))
+
+
+def _shipping_candidates(root, stage):
+    """The paths a change at ``stage`` may ship a change to since the merge-base, or None.
+
+    `_changed_vs_origin`, and on a push also the paths its commits change (`_pushed_changes`): a
+    change committed and then reverted in both the index and the working copy is invisible to the
+    merge-base diff, yet HEAD ships it. A commit needs no such half, even one whose command also
+    pushes: what it carries is the index, and a path whose index text differs from the fork point
+    is already in the merge-base diff, which lists both ends of a move (`--no-renames`). None
+    when there is no merge-base to diff from. A superset:
+    each check still reads what the stage ships before judging a path.
+    """
+    changed = _changed_vs_origin(root)
+    if changed is None or _is_commit(stage):
+        return changed
+    rc, pushed = _pushed_changes(root)
+    return changed if rc else list(dict.fromkeys(changed + pushed))
 
 
 def _table_rows(lines, tool):
@@ -1116,37 +1249,62 @@ def table_padding_problem(old, new, tool):
     return None
 
 
-def _origin_text(root, rel):
-    """The origin/master text of `rel` as a checkout here would write it, or None."""
-    data = _checked_out_bytes(root, "origin/master", rel)
+def _merge_base_text(root, rel):
+    """The text of `rel` at the merge-base as a checkout here would write it, or None.
+
+    The fork point, not origin's tip: the candidate list is diffed from the merge-base, and in a
+    checkout behind origin the tip can hold origin's own later edit of the same SKILL.md, which a
+    re-pad of the fork point's text would then read as a changed line.
+    """
+    base = _merge_base(root)
+    data = None if base is None else _checked_out_bytes(root, base, rel)
     return None if data is None else data.decode("utf-8", errors="replace")
 
 
-def table_repad_problem(root, rel, read_original=None):
+def _would_reformat(tool, data):
+    """True when the formatter would rewrite the SKILL.md bytes ``data``.
+
+    `reformat_file` is the only public check and it takes a path, so the bytes go through a scratch
+    file: its private line-level helper skips the BOM and CR handling the path reader does, and a
+    second copy of that handling would drift from the hook that rewrites the file.
+    """
+    with tempfile.TemporaryDirectory(prefix="repo-gate-repad-") as scratch:
+        path = Path(scratch) / "SKILL.md"
+        path.write_bytes(data)
+        return tool.reformat_file(path, check_only=True)
+
+
+def table_repad_problem(root, rel, shipped, read_original=None):
     """Why the changed SKILL.md `rel` is NOT a waivable table re-pad, or None when it is.
 
     The waiver exists because the reformat-md-tables hook rewrites a non-canonical table in every
     fresh worktree, and the checklist requirement then fires for a skill nobody edited. It is
-    granted on a proof, never on a judgement: padding only against origin/master (see
-    `table_padding_problem`), and canonical per the shipped formatter, so the hook will not
-    rewrite it again.
+    granted on a proof, never on a judgement: padding only against the merge-base text (see
+    `table_padding_problem`, `_merge_base_text`), and canonical per the shipped formatter, so the
+    hook will not rewrite it again. Both halves judge ``shipped``, the bytes the change carries
+    (None when it carries no SKILL.md), never the file on disk, which may hold an edit nobody
+    staged. ``read_original(rel)`` replaces the merge-base reader, so tests need no remote.
     """
     tool = _table_checker(root)
     if tool is None:
         return "the table formatter is not shipped here, so a re-pad cannot be proven"
-    old = (read_original or (lambda path: _origin_text(root, path)))(rel)
+    old = (read_original or (lambda path: _merge_base_text(root, path)))(rel)
     if old is None:
-        return "it has no origin/master version to compare against"
+        return "it has no version at its merge-base with origin/master to compare against"
+    if shipped is None:
+        return "this change deletes it"
     try:
-        with open(root / rel, encoding="utf-8", newline="") as handle:
-            new = handle.read()
-    except (OSError, UnicodeDecodeError):
-        return "it cannot be read"
+        new = shipped.decode("utf-8")
+    except UnicodeDecodeError:
+        return "it is not valid UTF-8 as this change ships it"
     problem = table_padding_problem(old, new, tool)
     if problem:
         return problem
-    if tool.reformat_file(root / rel, check_only=True):
-        return "its tables are not in the canonical form reformat_tables writes"
+    try:
+        if _would_reformat(tool, shipped):
+            return "its tables are not in the canonical form reformat_tables writes"
+    except OSError:
+        return "the formatter could not check it"
     return None
 
 
@@ -1156,90 +1314,317 @@ _OPEN_TASK = re.compile(r"^[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+\[ \](?:[ \t]|$)")
 _FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 
 
+#: The checklist line stating what a skill change decided (D4): the ledger ids it recorded, or
+#: `none - <reason>`. It may be indented and stand in a list item, ticked or not (`- Decisions:`,
+#: `1. Decisions:`, `- [x] Decisions:`): a checklist is a list, and its author writes it as one.
+#: Only non-capturing groups, so a match is the whole line; keep it that way.
+DECISIONS_LINE_RX = re.compile(
+    r"^[ \t]*(?:(?:[-*+]|[0-9]{1,9}[.)])[ \t]+(?:\[[xX]\][ \t]+)?)?"
+    r"Decisions:[ \t]+(?:none[ \t]+-[ \t]+\S.*|"
+    r"d-[0-9]{8}-[0-9a-f]{8}(?:,[ \t]*d-[0-9]{8}-[0-9a-f]{8})*)[ \t]*$",
+    re.MULTILINE)
+_DECISION_ID_RX = re.compile(r"d-[0-9]{8}-[0-9a-f]{8}")
+
+
+#: A fence opener at any indent: one nested in a list item stands at the item's own indent.
+_FENCE_ANY_INDENT = re.compile(r"^[ \t]*(`{3,}|~{3,})(.*)$")
+#: A list item's marker and the whitespace after it; group 0's width is the item's content indent.
+_LIST_MARKER = re.compile(r"^[ \t]*(?:[-*+]|[0-9]{1,9}[.)])(?:[ \t]+|$)")
+
+
+def _fence_step(fence, found):
+    """The open fence after a line whose fence match is ``found``, and whether that line is part
+    of a fence: (fence, hidden). ``fence`` is the opener's run, None outside a fence.
+
+    A fence closes on a bare run of the same character at least as long as its opener; a
+    backtick opener whose info string holds a backtick is a code span, not a fence.
+    """
+    if fence is not None:
+        closes = found and found.group(1)[0] == fence[0] and len(found.group(1)) >= len(fence) \
+            and not found.group(2).strip()
+        return (None if closes else fence), True
+    if found and not (found.group(1)[0] == "`" and "`" in found.group(2)):
+        return found.group(1), True
+    return None, False
+
+
+def _unfenced_lines(text, fence_rx=_FENCE):
+    """Yield the lines of `text` outside fenced code blocks, as a Markdown reader sees them.
+
+    A fence never closed hides the rest of the file, as it does from a Markdown reader. By default
+    an opener counts at up to three spaces of indent only, CommonMark's rule at the top level.
+    """
+    fence = None
+    for line in text.splitlines():
+        fence, hidden = _fence_step(fence, fence_rx.match(line))
+        if not hidden:
+            yield line
+
+
+def _indent(line):
+    """The width of ``line``'s leading whitespace, a tab counted as four columns."""
+    wide = line.expandtabs(4)
+    return len(wide) - len(wide.lstrip())
+
+
+def _statement_lines(text):
+    """Yield the lines of `text` a Markdown reader shows as prose: outside every code block.
+
+    Stricter than `_unfenced_lines`, which `has_open_checkbox` keeps because hiding a line there
+    hides an open box: here a hidden line can only fail to satisfy the Decisions rule. A fence
+    opens at any indent (one nested in a list item stands past three spaces), and a line indented
+    four columns past the enclosing list item's content (past column 0 outside a list) is an
+    indented code block when no paragraph runs on into it. Nested items keep a stack of content
+    indents; a list marker, or a line after a blank one, indented less than an item's content
+    leaves that item (any other line runs on lazily as a paragraph continuation).
+    """
+    items, paragraph = [], False                   # content indents; a paragraph is open
+    for line in _unfenced_lines(text, _FENCE_ANY_INDENT):
+        if not line.strip():
+            paragraph = False
+            continue
+        indent = _indent(line)
+        if not paragraph and indent >= (items[-1] if items else 0) + 4:
+            continue                               # an indented code block line
+        marker = _LIST_MARKER.match(line)
+        while items and (marker or not paragraph) and indent < items[-1]:
+            items.pop()
+        if marker:
+            items.append(_content_indent(marker.group(0)))
+        paragraph = True
+        yield line
+
+
+def _content_indent(marker):
+    """The content indent of a list item whose marker and following whitespace are ``marker``;
+    a marker ending the line puts the content one column past it."""
+    width = len(marker.expandtabs(4))
+    return width if marker[-1:] in (" ", "\t") else width + 1
+
+
 def has_open_checkbox(text):
     """True when `text` has an unticked task-list item outside a fenced code block.
 
     A bare substring test for `[ ]` refused a fully ticked checklist whose line QUOTED an open-item
     template, so only a box that is itself a list item counts: one inside a code span, in prose or
-    in a fenced example is text about a box, not an open one. A fence closes on a bare run of the
-    same character at least as long as its opener; one never closed hides the rest of the file,
-    as it does from a Markdown reader.
+    in a fenced example is text about a box, not an open one (`_unfenced_lines`).
     """
-    fence = None
-    for line in text.splitlines():
-        found = _FENCE.match(line)
-        if fence is not None:
-            if found and found.group(1)[0] == fence[0] and len(found.group(1)) >= len(fence) \
-                    and not found.group(2).strip():
-                fence = None
-            continue
-        if found and not (found.group(1)[0] == "`" and "`" in found.group(2)):
-            fence = found.group(1)
-            continue
-        if _OPEN_TASK.match(line):
-            return True
-    return False
+    return any(_OPEN_TASK.match(line) for line in _unfenced_lines(text))
 
 
-def skill_review_failures(root, changed, read_original=None):
+def _shipped_review_files(root, name, arts, stage):
+    """The SKILL.md, the ledger and the co-changed checklists ``arts`` of skill ``name``, as
+    ``stage`` ships them.
+
+    Read the way the decision check reads a skill (`shipped_files`): a SKILL.md edit, a checklist
+    line or ticked box written to disk but never staged, a ledger entry likewise, and an untracked
+    checklist are not in what this commit carries. Maps the path relative to the skill dir to its
+    bytes; a file the stage does not ship is absent. Only these files are read, not the whole skill.
+    """
+    prefix = "%s/%s/" % (_SKILLS_DIR, name)
+    wanted = {"SKILL.md", skill_decisions.LEDGER_REL} | {a[len(prefix):] for a in arts}
+    return shipped_files(root / _SKILLS_DIR / name, stage, ignore=lambda rel: rel not in wanted)
+
+
+def _shipped_skill_md(root, name, stage):
+    """The bytes of skill ``name``'s SKILL.md as ``stage`` ships it, or None when it ships none."""
+    return _shipped_review_files(root, name, (), stage).get("SKILL.md")
+
+
+def _skill_mds_shipping_a_change(root, changed, stage):
+    """``changed`` without the SKILL.md paths whose bytes, as ``stage`` ships them, equal the
+    merge-base's.
+
+    `_changed_vs_origin` unions the working tree, so it lists a SKILL.md that only a peer's unstaged
+    edit touched; judged as this commit's change, that edit refused an unrelated commit. A SKILL.md
+    the stage ships unchanged from the fork point is dropped here; one changed by an earlier
+    unpushed commit stays, since what ships still differs. One absent from what ships but present
+    at the fork point (a staged deletion) differs too and stays. Every other path is kept.
+    """
+    base = _merge_base(root)
+    if base is None:
+        return list(changed)
+    kept = []
+    for path in changed:
+        match = _SKILL_MD_RX.match(path)
+        if match and (_shipped_skill_md(root, match.group(1), stage)
+                      == _checked_out_bytes(root, base, path)):
+            continue
+        kept.append(path)
+    return kept
+
+
+def _ids_missing_from(ledger, named):
+    """The ids of ``named`` no entry of the ledger bytes carries, read one line at a time.
+
+    Nothing is missing from a ledger that does not parse: `check_skill_decisions` refuses that
+    ledger by its line, and an id cannot honestly be called absent from text nobody could read.
+    """
+    missing = set(named)
+    try:
+        for entry in skill_decisions.parse_entries(_ledger_lines(ledger)):
+            missing.discard(entry["id"])
+            if not missing:
+                break
+    except skill_decisions.LedgerError:
+        return set()
+    return missing
+
+
+def _decisions_line_failures(name, texts, ledger, *, unreadable=False):
+    """Why the shipped co-changed checklist ``texts`` of skill ``name`` do not state what it
+    decided.
+
+    One of them must hold a `DECISIONS_LINE_RX` line outside any code block (`_statement_lines`:
+    a fenced or indented one quotes the format, as a fenced box quotes a box), and every id those
+    lines name must be in the shipped
+    ``ledger`` bytes. Both sides are read at one stage (`_shipped_review_files`). With an
+    ``unreadable`` checklist among them, a missing line is not reported: that checklist may hold
+    it, and its own refusal already blocks the change.
+    """
+    lines = [line for text in texts for line in _statement_lines(text)
+             if DECISIONS_LINE_RX.match(line)]
+    if not lines and unreadable:
+        return []
+    if not lines:
+        return ["skills/%s: the co-changed checklist has no 'Decisions:' line in the "
+                "required form. Name the ledger ids this change added "
+                "('Decisions: d-YYYYMMDD-xxxxxxxx, ...') or "
+                "say why it decided nothing ('Decisions: none - <reason>'), at the line start or "
+                "after a list marker and an optional ticked box ('- [x] Decisions: ...'), outside "
+                "a code fence or an indented code block." % name]
+    named = set(_DECISION_ID_RX.findall("\n".join(lines)))
+    if not named:
+        return []
+    missing = sorted(_ids_missing_from(ledger, named))
+    if not missing:
+        return []
+    return ["skills/%s: 'Decisions:' names %s, not in the skill's ledger as this change ships it "
+            "(%s/%s/%s). Record the entry (python3 plugins/bitranox/hooks/skill_decisions.py add "
+            "--from-file <entries.json>) and stage the ledger with this change, or correct the id."
+            % (name, ", ".join(missing), _SKILLS_DIR, name, skill_decisions.LEDGER_REL)]
+
+
+def skill_review_failures(root, changed, read_original=None, stage=None):
     """A changed SKILL.md needs a co-changed, fully-checked .skillwriter/checklist-*.md - the
     skill-writer procedure's committed receipt. Prose discipline gets cherry-picked; a required
-    artifact does not.
+    artifact does not. One of those checklists also says what the change decided
+    (`_decisions_line_failures`). The checklists and the ledger are read as ``stage`` ships them
+    (default the index), never from the working tree, so a checklist that is not staged is none.
+    Every SKILL.md in ``changed`` is judged as changed: `check_skill_review` first drops the ones
+    the stage ships unchanged (`_skill_mds_shipping_a_change`).
 
     One mechanical exception, waived only on proof: a change that re-pads tables and nothing else
-    (`table_repad_problem`). `read_original(rel)` returns the origin/master text, or None; it
-    defaults to reading git and is a parameter so tests need no remote."""
+    (`table_repad_problem`), judged on the SKILL.md the stage ships. `read_original(rel)` returns
+    the merge-base text, or None; it defaults to reading git and is a parameter so tests need
+    no remote."""
+    stage = STAGE_INDEX if stage is None else stage
     fails = []
     names = sorted({m.group(1) for p in changed for m in [_SKILL_MD_RX.match(p)] if m})
     for name in names:
         prefix = "%s/%s/.skillwriter/" % (_SKILLS_DIR, name)
         arts = [p for p in changed if p.startswith(prefix) and p.endswith(".md")]
-        if not arts:
+        shipped = _shipped_review_files(root, name, arts, stage)
+        skill_prefix = "%s/%s/" % (_SKILLS_DIR, name)
+        # A checklist the stage does not ship (untracked, unstaged-deleted) is no receipt of it.
+        kept = [a for a in arts if a[len(skill_prefix):] in shipped]
+        if not kept:
             not_a_repad = table_repad_problem(root, "%s/%s/SKILL.md" % (_SKILLS_DIR, name),
-                                              read_original)
+                                              shipped.get("SKILL.md"), read_original)
             if not_a_repad is None:
                 continue
+            unshipped = (" (%s is not in what this change ships: stage it)" % ", ".join(arts)
+                         if arts else "")
             fails.append("skills/%s/SKILL.md changed without an updated .skillwriter/checklist-*.md "
-                         "in the same change - run bitranox:meta-skill-writer and commit its "
+                         "in the same change%s - run bitranox:meta-skill-writer and commit its "
                          "checklist artifact. (Not a table re-pad, which needs none: %s.)"
-                         % (name, not_a_repad))
+                         % (name, unshipped, not_a_repad))
             continue
-        for a in arts:
-            try:
-                text = (root / a).read_text(encoding="utf-8")
-            except OSError:
-                continue
-            if has_open_checkbox(text):
-                fails.append("%s has unchecked boxes - finish the skill-writer checklist before "
-                             "committing." % a)
+        texts, problems = _shipped_checklist_texts(kept, shipped, skill_prefix)
+        fails += problems
+        fails += _decisions_line_failures(name, texts, shipped.get(skill_decisions.LEDGER_REL, b""),
+                                          unreadable=len(texts) < len(kept))
     return fails
 
 
-def check_skill_review(root):
-    changed = _changed_vs_origin(root)
+def _shipped_checklist_texts(arts, shipped, skill_prefix):
+    """(the decoded texts of the shipped checklists ``arts``, the refusals reading them gave).
+
+    A checklist is decoded strictly, as the ledger is: a non-UTF-8 one is refused by name rather
+    than read with a replacement character, and an open checkbox in one is refused too.
+    """
+    texts, problems = [], []
+    for a in arts:
+        try:
+            text = shipped[a[len(skill_prefix):]].decode("utf-8")
+        except UnicodeDecodeError as exc:
+            problems.append("%s is not valid UTF-8 as this change ships it (byte %d) - re-save it "
+                            "as UTF-8 and stage it." % (a, exc.start))
+            continue
+        if has_open_checkbox(text):
+            problems.append("%s has unchecked boxes - finish the skill-writer checklist before "
+                            "committing." % a)
+        texts.append(text)
+    return texts, problems
+
+
+def check_skill_review(root, stage=None):
+    """`skill_review_failures` for every SKILL.md whose text, as ``stage`` ships it, is changed."""
+    stage = STAGE_INDEX if stage is None else stage
+    changed = _shipping_candidates(root, stage)
     if changed is None:
         return []
-    return skill_review_failures(root, changed)
+    shipping = _skill_mds_shipping_a_change(root, changed, stage)
+    return skill_review_failures(root, shipping, stage=stage)
 
 
-def cso_failures(root, changed):
+def _shipped_description(root, name, stage):
+    """The `description:` of skill ``name``'s SKILL.md as ``stage`` ships it, or None.
+
+    Decoded as `skill_frontmatter.read_text` decodes a file, then read by the same field reader, so
+    the lint sees the string the router and the catalog are built from."""
+    data = _shipped_skill_md(root, name, stage)
+    if data is None:
+        return None
+    text = data.decode("utf-8-sig", errors="replace")
+    return skill_frontmatter.field(skill_frontmatter.frontmatter_block(text), "description")
+
+
+def cso_failures(root, changed, stage=None):
     """A changed skill description must be a single-line plain YAML scalar, trigger-first
     ('Use when ...'), and yield distinctive keywords - that is what makes it router-derivable
     and findable (the CSO rules). Block scalars (`>-`/`|`) and quoted scalars leak their
-    style markers into the derived catalog and trigger map."""
+    style markers into the derived catalog and trigger map.
+
+    The description is read as ``stage`` ships the SKILL.md (default the index), never from the
+    working tree; a skill whose SKILL.md the stage does not ship has none to lint."""
+    stage = STAGE_INDEX if stage is None else stage
     fails = []
     for p in changed:
         m = _SKILL_MD_RX.match(p)
         if not m:
             continue
-        desc = hc.frontmatter_description(root / p)
+        desc = _shipped_description(root, m.group(1), stage)
         if desc is None:
             continue
         fails.extend(hc.cso_failures_for("skills/%s" % m.group(1), desc))
     return fails
 
 
-def frontmatter_failures(root):
+def _shipped_skill_mds(root, stage):
+    """{skill name: SKILL.md bytes} for every skill dir's SKILL.md that ``stage`` ships, or None
+    when git cannot list or read them (not a repository, no commit for a push to read)."""
+    rc, blobs = _shipped_blobs(root, stage, keep=lambda rel: bool(_SKILL_MD_RX.match(rel)))
+    if rc:
+        return None
+    contents = _read_blobs(root, blobs)
+    if contents is None:
+        return None
+    return {_SKILL_MD_RX.match(rel).group(1): data
+            for (_sha, rel), data in zip(blobs, contents, strict=True)}
+
+
+def frontmatter_failures(root, stage=None):
     """EVERY shipped SKILL.md must have front matter a parser accepts, and only ONE of them.
 
     `cso_failures` above cannot reach this: it lints the description that `frontmatter_description`
@@ -1252,12 +1637,25 @@ def frontmatter_failures(root):
     only would rebuild the blind spot the check exists to close: the descriptions that prompted it
     survived because nothing ever swept the full set, and a defect can arrive in an untouched file
     through a merge, a mirror sync, or an edit made outside the hook. The sweep costs milliseconds
-    over 81 files."""
-    return hc.frontmatter_problems(root / _SKILLS_DIR)
+    over 81 files.
+
+    Each SKILL.md is read as ``stage`` ships it (default the index), never from the working tree:
+    a peer's unstaged description edit, or a skill dir nobody added yet, is not in this commit and
+    must not refuse it. The shipped bytes are written to a scratch skills dir so the checks, which
+    read a path, run unchanged. Where git cannot say what ships, the working tree is swept."""
+    shipped = _shipped_skill_mds(root, STAGE_INDEX if stage is None else stage)
+    if shipped is None:
+        return hc.frontmatter_problems(root / _SKILLS_DIR)
+    with tempfile.TemporaryDirectory(prefix="repo-gate-frontmatter-") as scratch:
+        for name, data in shipped.items():
+            skill = Path(scratch) / name
+            skill.mkdir()
+            (skill / "SKILL.md").write_bytes(data)
+        return hc.frontmatter_problems(scratch)
 
 
-def check_frontmatter(root):
-    return frontmatter_failures(root)
+def check_frontmatter(root, stage=None):
+    return frontmatter_failures(root, stage=stage)
 
 
 def _toolbox_nudge_module(root):
@@ -1331,39 +1729,20 @@ def check_toolbox_rule_coverage(root):
     return toolbox_rule_coverage_failures(root)
 
 
-def check_cso(root):
-    changed = _changed_vs_origin(root)
+def check_cso(root, stage=None):
+    """`cso_failures` for every SKILL.md whose text, as ``stage`` ships it, is changed."""
+    stage = STAGE_INDEX if stage is None else stage
+    changed = _shipping_candidates(root, stage)
     if changed is None:
         return []
-    return cso_failures(root, changed)
+    return cso_failures(root, _skill_mds_shipping_a_change(root, changed, stage), stage=stage)
 
 
 
-#: Skills that ship from BOTH this marketplace and their own tool repo, mapped to the
-#: twin's path under the shared `public/` tree. The two copies must stay identical apart
-#: from the divergences below, and both directions drift: a marketplace edit that is never
-#: mirrored back leaves the tool repo's own installers a release behind, and a repo edit
-#: that is never mirrored forward leaves this marketplace describing behaviour the tool
-#: dropped. Measured 2026-07-30: the coding-python-network-probe mirror still told an agent
-#: that a default sweep refuses to run, two ipscout releases after it stopped doing that.
-MIRRORED_SKILLS = {
-    "ai-llm-jev-judge": "KI/btx-skill-jev-judge/skills/jev-judge",
-    "coding-python-gitignore": "libs/igittigitt/skills/python-gitignore",
-    "coding-python-layered-config": "libs/lib_layered_config/skills/python-layered-config",
-    "coding-python-logging": "libs/lib_log_rich/skills/python-logging",
-    "coding-python-network-probe": "libs/ipscout/skills/python-network-probe",
-    "coding-python-new-public-library": "libs/bitranox_template_py_lib/skills/new-public-python-library",
-    "coding-python-pwshpy": "apps/utils/pwshpy/skills/using-pwsh",
-    "coding-python-send-mail": "libs/btx_lib_mail/skills/python-send-mail",
-    # The REPO dir is underscored (vnc_remote_control) while the SKILL dir inside it is
-    # hyphenated. Spelling both with hyphens pointed this entry at nothing, so the mirror
-    # check skipped compuse-vnc silently - the exact "degrades to skipped forever" failure
-    # the twin-exists test below guards against.
-    "compuse-vnc": "apps/utils/vnc_remote_control/skills/vnc-remote-control",
-    "devops-bmk": "apps/utils/bmk/skills/devops-bmk",
-    "infra-proxmox-bindsnap": "apps/pve-bindsnap/skills/proxmox-bindsnap",
-    "infra-storage-check-zpools": "apps/utils/check_zpools/skills/check-zpools",
-}
+#: Skills that ship from BOTH this marketplace and their own tool repo, mapped to the twin's
+#: path under the shared `public/` tree. The table lives in `mirrored_skills`, which the
+#: skill-edit guard reads too (to hand a twin's edit the marketplace copy's decision ledger).
+MIRRORED_SKILLS = mirrored_skills.MIRRORED_SKILLS
 
 #: The self-install note only the tool repo's copy carries: there it is true and useful,
 #: here it would tell a reader to add a marketplace they are already inside. Matched
@@ -1448,13 +1827,13 @@ def _mirror_ignored(rel):
     return bool(MIRROR_IGNORED_DIRS & set(rel.split("/")))
 
 
-def _working_tree_files(skill_dir):
+def _working_tree_files(skill_dir, *, ignore=_mirror_ignored):
     found = {}
     for path in sorted(Path(skill_dir).rglob("*")):
         if not path.is_file():
             continue
         rel = path.relative_to(skill_dir).as_posix()
-        if not _mirror_ignored(rel):
+        if not ignore(rel):
             found[rel] = path.read_bytes()
     return found
 
@@ -1579,26 +1958,49 @@ def _selection_index(directory, selection):
         yield env if _stage_selection(selection, top, real_index.strip(), temp_index, env) else None
 
 
-def _selected_files(skill_dir, selection):
+def _git_anchor(skill_dir):
+    """(an existing directory to run git in, ``skill_dir`` as a pathspec relative to it).
+
+    The skill dir itself with pathspec ".", or, for a dir gone from disk, its nearest existing
+    ancestor: `rm -rf` without `git rm` deletes nothing the index or HEAD ships, and git cannot
+    run in a directory that does not exist, so a reader anchored there would see nothing at all.
+    """
+    here = skill_dir
+    while not here.is_dir() and here.parent != here:
+        here = here.parent
+    return here, skill_dir.relative_to(here).as_posix()
+
+
+def _under(sub, path):
+    """``path`` (relative to the git anchor) relative to the skill dir ``sub``, or None if
+    outside it."""
+    if sub == ".":
+        return path
+    return path[len(sub) + 1:] if path.startswith(sub + "/") else None
+
+
+def _selected_files(skill_dir, selection, *, ignore=_mirror_ignored):
     """`shipped_files` for a `CommitSelection`, or None when git cannot say what it takes."""
-    with _selection_index(skill_dir, selection) as env:
+    here, sub = _git_anchor(Path(skill_dir))
+    with _selection_index(here, selection) as env:
         if env is None:
             return None
-        rc_l, listed = _git_paths(skill_dir, "ls-files", "--", ".", env=env)
+        rc_l, listed = _git_paths(here, "ls-files", "--", sub, env=env)
         if rc_l:
             return None
         found = {}
-        for rel in dict.fromkeys(listed):
-            if _mirror_ignored(rel):
+        for path in dict.fromkeys(listed):
+            rel = _under(sub, path)
+            if rel is None or ignore(rel):
                 continue
-            data = _checked_out_bytes(skill_dir, "", rel, env=env)
+            data = _checked_out_bytes(here, "", path, env=env)
             if data is None:
                 return None
             found[rel] = data
         return dict(sorted(found.items()))
 
 
-def shipped_files(skill_dir, stage):
+def shipped_files(skill_dir, stage, *, ignore=_mirror_ignored):
     """Map every comparable file of a mirrored skill to the bytes a commit or push SHIPS.
 
     The side being committed is judged by what its commit carries, never by its working tree: an
@@ -1606,37 +2008,45 @@ def shipped_files(skill_dir, stage):
     committed (#111). ``stage`` is ``STAGE_INDEX``, ``STAGE_HEAD`` or a `CommitSelection`, the one
     kind of commit that DOES take files from the working tree; when git cannot say what that
     selection takes, the index is read, as for a plain commit. Without git, or with nothing to list
-    (no commit yet), the working tree is all there is, and that is what is compared.
+    (no commit yet), the working tree is all there is, and that is what is compared. A skill dir
+    gone from disk is still read at ``stage`` (`_git_anchor`): only what the stage lists counts.
+
+    ``ignore(rel)`` names the files left out; the default is the mirror comparison's set, and the
+    decision check passes a narrower one because its ledger lives under `.skillwriter/`.
     """
     skill_dir = Path(skill_dir)
     if isinstance(stage, CommitSelection):
-        selected = _selected_files(skill_dir, stage)
+        selected = _selected_files(skill_dir, stage, ignore=ignore)
         if selected is not None:
             return selected
         stage = STAGE_INDEX
+    here, sub = _git_anchor(skill_dir)
     if stage == STAGE_INDEX:
-        commit, (rc, listed) = "", _git_paths(skill_dir, "ls-files", "--", ".")
+        commit, (rc, listed) = "", _git_paths(here, "ls-files", "--", sub)
     else:
-        commit, (rc, listed) = "HEAD", _git_paths(skill_dir, "ls-tree", "-r", "--name-only", "HEAD", "--", ".")
+        commit, (rc, listed) = "HEAD", _git_paths(here, "ls-tree", "-r", "--name-only", "HEAD",
+                                                  "--", sub)
     if rc:
-        return _working_tree_files(skill_dir)
+        return _working_tree_files(skill_dir, ignore=ignore)
     found = {}
-    for rel in dict.fromkeys(listed):            # an unmerged path is listed once per stage
-        if _mirror_ignored(rel):
+    for path in dict.fromkeys(listed):           # an unmerged path is listed once per stage
+        rel = _under(sub, path)
+        if rel is None or ignore(rel):
             continue
-        data = _checked_out_bytes(skill_dir, commit, rel)
+        data = _checked_out_bytes(here, commit, path)
         if data is None:
-            return _working_tree_files(skill_dir)
+            return _working_tree_files(skill_dir, ignore=ignore)
         found[rel] = data
     return dict(sorted(found.items()))
 
 
-def _on_published(skill_dir, local_since, fallback):
+def _on_published(skill_dir, local_since, fallback, ignore=_mirror_ignored):
     """The published ref's files, each one the checkout changed since forking replaced by its local copy.
 
     ``local_since(base)`` returns ``(paths, read)`` - the paths changed here since the fork point
     ``base`` and a reader giving a path's local bytes, or None for a path that is gone - or None
-    when it cannot tell. Every failure to read git hands over to ``fallback()``.
+    when it cannot tell. Every failure to read git hands over to ``fallback()``. ``ignore(rel)``
+    names the files left out, as in `shipped_files`.
     """
     skill_dir = Path(skill_dir)
     published = _published_commit(skill_dir)
@@ -1651,14 +2061,14 @@ def _on_published(skill_dir, local_since, fallback):
     paths, read = local
     found = {}
     for rel in upstream:
-        if rel in paths or _mirror_ignored(rel):
+        if rel in paths or ignore(rel):
             continue
         data = _checked_out_bytes(skill_dir, published, rel)
         if data is None:
             return fallback()
         found[rel] = data
     for rel in paths:
-        data = None if _mirror_ignored(rel) else read(rel)
+        data = None if ignore(rel) else read(rel)
         if data is not None:
             found[rel] = data
     return dict(sorted(found.items()))
@@ -1701,14 +2111,15 @@ def mirror_files(skill_dir):
     return _on_published(skill_dir, local_since, lambda: _working_tree_files(skill_dir))
 
 
-def published_files(skill_dir):
+def published_files(skill_dir, *, ignore=_mirror_ignored):
     """Map every comparable file of a mirrored skill to what its repo has PUBLISHED or COMMITTED.
 
     The reading of the side a commit or push is NOT being made in: its published ref, with every
     file it committed since forking from that ref read from HEAD. Its uncommitted and untracked
     files are ignored - they belong to another session's work in progress, which neither commit
     ships. Measured as #84: a tool-repo commit was blocked as DRIFT by a marketplace edit nobody
-    had committed. With no published ref this is HEAD; without git, the working tree.
+    had committed. With no published ref this is HEAD; without git, the working tree. ``ignore``
+    as in `shipped_files`: the twin decision check reads the ledger, which the default leaves out.
     """
 
     skill_dir = Path(skill_dir)
@@ -1719,7 +2130,9 @@ def published_files(skill_dir):
             return None
         return set(edited), lambda rel: _checked_out_bytes(skill_dir, "HEAD", rel)
 
-    return _on_published(skill_dir, local_since, lambda: shipped_files(skill_dir, STAGE_HEAD))
+    return _on_published(skill_dir, local_since,
+                         lambda: shipped_files(skill_dir, STAGE_HEAD, ignore=ignore),
+                         ignore=ignore)
 
 
 #: A published ref last fetched longer ago than this is named beside the comparison that read it.
@@ -1855,7 +2268,7 @@ def _unstaged_message(name, skill_dir, differing, stage):
 
 
 def mirror_failures(root, names, committing=None, stage=STAGE_INDEX, notices=None, twins=None,
-                    mirrors=None):
+                    mirrors=None, log=None):
     """Return a failure per mirrored skill in ``names`` whose twin has drifted.
 
     A mirrored skill is a DIRECTORY. Several pairs ship `references/` and `scripts/` beside their
@@ -1887,6 +2300,10 @@ def mirror_failures(root, names, committing=None, stage=STAGE_INDEX, notices=Non
     ``twins`` maps a skill name to the twin directory to read instead of its main-checkout path, for
     a tool repo worked in from a linked worktree (`_tool_repo_twins`). ``mirrors`` is the pair table,
     `MIRRORED_SKILLS` unless a caller passes another.
+
+    A gate committing the twin also judges the twin's shipped text against the marketplace copy's
+    decision ledger (`_twin_decision_failures`), whether or not the pair drifted; ``log``, when
+    given, receives an audit record per such refusal.
     """
 
     public = _marketplace_public(root)
@@ -1910,6 +2327,9 @@ def mirror_failures(root, names, committing=None, stage=STAGE_INDEX, notices=Non
         mine_files, their_files = read_here(here_dir), read_twin(twin_dir)
         if not mine_files or not their_files:
             continue  # nothing committed on one side yet: no text either commit could ship
+        if committing == "twin":
+            # Before the drift test: a twin in sync with an uncommitted marketplace edit passes it.
+            fails += _twin_decision_failures(name, here_dir, their_files, log)
         differing, sample = _mirror_differences(mine_files, their_files)
         if not differing:
             continue
@@ -2028,7 +2448,7 @@ def _commit_changes(root, stage):
 def check_skill_mirrors(root, stage=STAGE_INDEX, notices=None, publishes=False, mirrors=None):
     """Gate the mirrored twin of every skill this change ships a change to.
 
-    Scoped to what the change SHIPS, like the review and description checks are to what changed:
+    Scoped to what the change SHIPS, like the review and description checks:
     pre-existing drift in a skill this commit does not change must not block it ([740]: an
     unrelated commit was refused over an unstaged skill edit, and over a peer's unpushed commit),
     and the maintainer has ``--mirrors`` for the full sweep. A commit counts the files its own
@@ -2067,6 +2487,275 @@ def _shipped_changes(root, stage, publishes, published="origin/master"):
             return rc, []
         changed += pushed
     return 0, changed
+
+
+# ---- the skill decision ledger (`skill_decisions`): a recorded decision holds the skill text ----
+
+#: What the decision check skips when it reads a skill: caches only. The mirror reader skips
+#: `.skillwriter/` too, but the ledger lives there.
+_DECISION_IGNORED = frozenset({"__pycache__", ".pytest_cache", ".git", ".ruff_cache"})
+
+
+def _decision_ignored(rel):
+    return bool(_DECISION_IGNORED & set(rel.split("/")))
+
+
+def _log_decision_refusal(record):
+    """Append one refusal to the machine-local audit log; a log that cannot be written is
+    skipped."""
+    try:
+        # Imported here as an optional sink: a broken audit module must not break the gate.
+        from self_improve_signals import _audit_dir  # noqa: PLC0415 - optional sink
+        path = _audit_dir() / "skill-decision-gate.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record) + "\n")
+    except Exception:  # noqa: BLE001 - the log serves a later review; it must never block or crash
+        pass
+
+
+def _ledger_lines(data):
+    """Yield the lines of the ledger bytes ``data``, each with its b"\\n", splitting on b"\\n" only.
+
+    The reading `skill_decisions.file_lines` gives a file on disk: bytes, so `parse_entries`
+    decodes each line strictly and refuses a non-UTF-8 one by its line number, and a b"\\n" split,
+    because str.splitlines also cuts a JSON string at a raw U+2028 and a lenient decode reads a
+    non-UTF-8 byte as U+FFFD. A generator, so no second copy of the ledger is held as a list.
+    """
+    start = 0
+    while start < len(data):
+        end = data.find(b"\n", start)
+        end = len(data) if end < 0 else end + 1
+        yield data[start:end]
+        start = end
+
+
+def _append_only_problem(root, ledger_rel, shipped, base, fork_rel=None):
+    """Why ``shipped`` is not the fork point's ledger plus appended lines, or None when it is.
+
+    ``fork_rel`` is where the fork point kept this ledger when its skill was renamed since
+    (`_renamed_skills`); by default the ledger's own path."""
+    before = _checked_out_bytes(root, base, fork_rel or ledger_rel) if base else None
+    if not before:
+        return None
+    moved = " (moved from %s)" % fork_rel if fork_rel and fork_rel != ledger_rel else ""
+    after = _ledger_lines(shipped)
+    for number, old in enumerate(_ledger_lines(before), 1):
+        new = next(after, None)
+        # The line ending is no part of an entry: a last line the fork point left without its b"\n"
+        # gets one when the next entry is appended.
+        if new is None or new.rstrip(b"\r\n") != old.rstrip(b"\r\n"):
+            return ("%s%s is append-only; line %d, present at the fork point, was changed or "
+                    "removed. Withdraw an entry with a new void entry instead."
+                    % (ledger_rel, moved, number))
+    return None
+
+
+def _stage_renames(root, stage, base):
+    """(old, new) for every path ``stage`` ships moved since ``base``, as git's `-M` pairs them.
+
+    The index on a commit (a `CommitSelection` through its throwaway index, the plain index when
+    git cannot build that), HEAD on a push. [] when git cannot say."""
+    args = ("diff", "--name-status", "-M")
+    if not _is_commit(stage):
+        rc, out = _git_paths(root, *args, base, "HEAD")
+    else:
+        selecting = isinstance(stage, CommitSelection)
+        with (_selection_index(root, stage) if selecting else contextlib.nullcontext()) as env:
+            rc, out = _git_paths(root, *args, "--cached", base, env=env)
+    pairs, at = [], 0
+    while not rc and at < len(out):
+        status = out[at][:1]
+        if status == "R" and at + 2 < len(out):
+            pairs.append((out[at + 1], out[at + 2]))
+        at += 3 if status in ("R", "C") else 2
+    return pairs
+
+
+def _renamed_skills(root, stage, base, names):
+    """{new name: old name} for each skill of ``names`` new since ``base`` that a rename made.
+
+    A skill counts as renamed when git pairs its SKILL.md or its ledger (`_stage_renames`) with
+    the same file of another skill's dir. Any other file does not count: git pairs an identical
+    helper (a copied `scripts/tests/conftest.py`) just as readily, and a deleted skill plus an
+    unrelated new one holding that copy read as a rename, judged against a ledger it never had. A
+    rename git cannot pair, SKILL.md rewritten past its similarity threshold, reads as a deletion
+    plus a new skill, as it does to git. Only asked when a skill of ``names`` has no SKILL.md at
+    the fork point, so an edit to existing skills pays one `ls-tree` and no diff.
+    """
+    if base is None or not names:
+        return {}
+    mds = {name: "%s/%s/SKILL.md" % (_SKILLS_DIR, name) for name in names}
+    _, at_base = _git_paths(root, "ls-tree", "-r", "--name-only", base, "--", *mds.values())
+    new = {name for name, md in mds.items() if md not in at_base}
+    identity = ("SKILL.md", skill_decisions.LEDGER_REL)
+    found = {}
+    for old, moved in _stage_renames(root, stage, base) if new else ():
+        a, b = _SKILL_FILE_RX.match(old), _SKILL_FILE_RX.match(moved)
+        if a and b and b.group(1) in new and a.group(1) != b.group(1) \
+                and old[a.end():] == moved[b.end():] and old[a.end():] in identity:
+            found.setdefault(b.group(1), a.group(1))
+    return found
+
+
+def _decision_message(name, finding, ledger_rel, where="staged with this change"):
+    """One refusal line for ``finding``; ``where`` says where the superseding entry must land."""
+    if finding.anchor:
+        return ("skills/%s: %s\n  The rule's earlier decision is recorded with a reason. If the "
+                "change is meant, record why: python3 plugins/bitranox/hooks/skill_decisions.py "
+                "add --from-file <entries.json> with an entry whose supersedes names %s, %s."
+                % (name, finding.render(), finding.entry_id, where))
+    if not finding.entry_id:
+        # check_ledger turns a LedgerError into this one finding: the ledger does not parse, so
+        # none of its entries was judged.
+        return "skills/%s: %s %s; no entry of it can be checked until it parses." % (
+            name, ledger_rel, finding.problem)
+    return "skills/%s: %s: %s" % (name, ledger_rel, finding.render())
+
+
+def _judge_skill(root, name, files, base, log, fork_name=None):
+    """The refusals for skill ``name`` as its ``files`` ship; each one is also handed to ``log``.
+
+    ``fork_name`` is the name the skill had at the fork point when a rename made it
+    (`_renamed_skills`): the append-only half reads that skill's ledger there."""
+    if "SKILL.md" not in files:
+        return []                                   # the skill is deleted: its ledger goes with it
+    ledger_rel = "%s/%s/%s" % (_SKILLS_DIR, name, skill_decisions.LEDGER_REL)
+    fork_rel = "%s/%s/%s" % (_SKILLS_DIR, fork_name or name, skill_decisions.LEDGER_REL)
+    ledger = files.get(skill_decisions.LEDGER_REL, b"")
+    refusals = []                                   # (entry id, problem, message)
+    breach = _append_only_problem(root, ledger_rel, ledger, base, fork_rel)
+    if breach:
+        refusals.append(("", breach, "skills/%s: %s" % (name, breach)))
+    findings = skill_decisions.check_ledger(lambda: _ledger_lines(ledger),
+                                            skill_decisions.corpus_text(files))
+    for finding in findings:
+        refusals.append((finding.entry_id, _finding_problem(finding),
+                         _decision_message(name, finding, ledger_rel)))
+    for entry_id, problem, _message in refusals:
+        log(_refusal_record(name, entry_id, problem))
+    return [message for _entry_id, _problem, message in refusals]
+
+
+def _finding_problem(finding):
+    """The audit record's ``problem`` for ``finding``: its problem, then the anchor it lost."""
+    return finding.problem + (" %r" % finding.anchor if finding.anchor else "")
+
+
+def _refusal_record(name, entry_id, problem):
+    """One audit log record for a decision refusal of skill ``name``."""
+    return {"time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "skill": name,
+            "entry_id": entry_id, "problem": problem}
+
+
+#: Every twin decision refusal names this, so the tool-repo gate can label it
+#: (`gate_tool_repo_mirror`).
+_MARKETPLACE_LEDGER = "the marketplace ledger"
+
+
+def _twin_decision_failures(name, here_dir, twin_files, log=None):
+    """The refusals the marketplace skill ``here_dir``'s ledger gives the twin text ``twin_files``.
+
+    The twin is the same skill under its own repo's name, so a decision recorded in the marketplace
+    binds its text too; the mirror check alone passes a drop the marketplace holds uncommitted. The
+    ledger is read as that check reads the marketplace side (`published_files`): what it published
+    or committed, never an uncommitted entry. SKILL.md goes through `normalise_mirror` first, so an
+    anchor kept only in text the convention erases (an H1 parenthetical, the `name:` line, the
+    self-install blockquote) is gone. No append-only half: a tool-repo change cannot edit the
+    ledger.
+
+    The ledger comes from a published ref, so a refusal names that ref when it was last fetched
+    over STALE_REF_DAYS ago, as a drift message does (`stale_ref_notes`). ``log``, when given,
+    receives one audit record per refusal (`_refusal_record`); the caller decides which reading
+    counts, since a gate reads several checkouts and reports one.
+    """
+    rel = skill_decisions.LEDGER_REL
+    ledger = published_files(here_dir, ignore=lambda path: path != rel).get(rel)
+    if not ledger or "SKILL.md" not in twin_files:
+        return []
+    files = dict(twin_files)
+    text = files["SKILL.md"].decode("utf-8", errors="replace")
+    files["SKILL.md"] = normalise_mirror(text).encode("utf-8")
+    shown = "%s %s" % (_MARKETPLACE_LEDGER, here_dir / rel)
+    where = "committed to %s, in that checkout, before this change" % shown
+    findings = skill_decisions.check_ledger(lambda: _ledger_lines(ledger),
+                                            skill_decisions.corpus_text(files))
+    notes = "".join("\n  " + note for note in stale_ref_notes([here_dir])) if findings else ""
+    for finding in findings if log else ():
+        log(_refusal_record(name, finding.entry_id, _finding_problem(finding)))
+    return [_decision_message(name, finding, shown, where) + notes for finding in findings]
+
+
+def _skills_with_a_ledger(root, names, base):
+    """The skills among ``names`` whose ledger exists anywhere a gated command could read it.
+
+    On disk (a commit taking files itself), in the index (a commit), at HEAD (a push) or at the
+    fork point (the append-only check). A skill with no ledger in any of them has nothing to judge,
+    and skipping it spares reading every file of every skill a large change touches.
+    """
+    rels = {name: "%s/%s/%s" % (_SKILLS_DIR, name, skill_decisions.LEDGER_REL) for name in names}
+    if not rels:
+        return []
+    found = set()
+    trees = ["HEAD"] + ([base] if base else [])
+    for args in [("ls-files",)] + [("ls-tree", "-r", "--name-only", tree) for tree in trees]:
+        _, listed = _git_paths(root, *args, "--", *rels.values())
+        found.update(listed)
+    return [name for name, rel in rels.items() if rel in found or (root / rel).is_file()]
+
+
+def check_skill_decisions(root, stage=STAGE_INDEX, *, log=None):
+    """Refuse a commit or push whose SHIPPED text of a touched skill breaks its decision ledger.
+
+    A refusal is a live rule anchor gone from the skill's Markdown, a ledger line present at the
+    fork point changed or removed (the ledger is append-only), or a ledger that does not parse.
+    Only the skills this change touches since the merge-base are read, and each at what the
+    commit or push ships (`shipped_files` at ``stage``), so another skill's half-done working copy
+    never blocks an unrelated commit. The whole shipped skill dir is held at once, the ledger
+    included: the same per-skill bound the mirror check already has. ``log`` receives one
+    ``{"time", "skill", "entry_id", "problem"}`` record per refusal (default: the audit log,
+    `_log_decision_refusal`).
+
+    The candidates are `_shipping_candidates`, as for the review and description checks: a push
+    also counts the paths its commits change, so a change committed and then reverted in both the
+    index and the working copy is still judged. Whether a skill is deleted is read from what ships
+    (no SKILL.md in it), never from the disk. A rename carries the ledger: a skill renamed since
+    the fork point (`_renamed_skills`) is judged against its old name's ledger there, or the old
+    name would read as deleted and the new one as having no ledger to append to.
+    """
+    changed = _shipping_candidates(root, stage)
+    if not changed:
+        return []
+    base = _merge_base(root)
+    log = log or _log_decision_refusal
+    names = sorted({m.group(1) for m in (_SKILL_FILE_RX.match(p) for p in changed) if m})
+    renamed = _renamed_skills(root, stage, base, names)
+    judged = set(_skills_with_a_ledger(root, names, base)) | set(renamed)
+    fails = []
+    for name in (n for n in names if n in judged):
+        files = shipped_files(root / _SKILLS_DIR / name, stage, ignore=_decision_ignored)
+        fails += _judge_skill(root, name, files, base, log, renamed.get(name))
+    return fails
+
+
+def check_all_skill_decisions(root):
+    """The CI sweep: every ledger on disk against its skill's files as checked out on disk.
+
+    Both are read from the working tree (`file_lines`, `corpus_from_dir`), not from the index or
+    HEAD: in CI that is a clean checkout of the pushed commit, so the two agree there.
+
+    No append-only check here: that half needs a fork point, which `check_skill_decisions` reads.
+    `run_checks` runs both in CI; on a push the merge-base is HEAD, so only a pull request (and
+    the hook and pre-push gate) gives that half something to diff.
+    """
+    fails = []
+    for path in sorted((root / _SKILLS_DIR).glob("*/" + skill_decisions.LEDGER_REL)):
+        skill_dir = path.parent.parent
+        findings = skill_decisions.check_ledger(lambda p=path: skill_decisions.file_lines(p),
+                                                skill_decisions.corpus_from_dir(skill_dir))
+        fails += [_decision_message(skill_dir.name, finding, path.relative_to(root).as_posix())
+                  for finding in findings]
+    return fails
 
 
 def command_publishes(command, tool_name=None):
@@ -2690,9 +3379,10 @@ def run_checks(root, ci, full_pytest=None, run_pytest=True, baseline=0, mirror_a
     SCOPE and defaults to `ci`. They are separate axes because a pre-push is BOTH: the maintainer
     (so version-bump, skill-review and mirrors apply) and the last gate before CI (so it runs the
     whole suite CI runs, not just hooks/tests). `mirror_at` is what the commit or push ships of the
-    marketplace (`mirror_stage`): the index on a commit, HEAD on a push; the LF and mirror checks
-    read it. `publishes` says the same command also pushes (`command_publishes`). `notices`, when
-    given, collects what passed but must still reach the model (`check_skill_mirrors`).
+    marketplace (`mirror_stage`): the index on a commit, HEAD on a push; the LF, description,
+    decision, review and mirror checks read it. `publishes` says the same command also pushes
+    (`command_publishes`). `notices`, when given, collects what passed but must still reach the
+    model (`check_skill_mirrors`).
     `is_installed` answers whether THIS interpreter has a module (`pytest_interpreter`); a test
     passes one to stand in for a session interpreter that lacks the CI set. `parts` carries the
     other collaborators (`GateParts`)."""
@@ -2707,8 +3397,8 @@ def run_checks(root, ci, full_pytest=None, run_pytest=True, baseline=0, mirror_a
     failures += check_skills_index(root)
     failures += check_attribution(root)
     failures += check_skill_naming(root)
-    failures += check_cso(root)
-    failures += check_frontmatter(root)
+    failures += check_cso(root, stage=mirror_at)
+    failures += check_frontmatter(root, stage=mirror_at)
     failures += check_toolbox_rule_coverage(root)
     failures += check_secrets(root)
     # Runs in BOTH modes, unlike version-bump below. It compares nothing across refs, so CI can
@@ -2716,15 +3406,25 @@ def run_checks(root, ci, full_pytest=None, run_pytest=True, baseline=0, mirror_a
     # one that lets a version ship undocumented from a clone with no hooks enabled.
     failures += check_changelog_current_version(root)
     failures += check_version_sync(root)
+    # Both modes: CI sweeps every ledger (a clean checkout has nothing half-done), the hook and
+    # the pre-push judge only the skills the change touches, at what it ships. CI runs the
+    # per-change check at HEAD too, for its append-only half: on a pull request HEAD sits above
+    # its fork point, while on a push the merge-base IS HEAD, so it has no candidates and no cost.
+    # A finding both report is listed once.
+    if ci:
+        failures += list(dict.fromkeys(check_all_skill_decisions(root)
+                                       + check_skill_decisions(root, stage=STAGE_HEAD)))
+    else:
+        failures += check_skill_decisions(root, stage=mirror_at)
     # Version-bump is a release/merge concern owned by the maintainer, not a per-PR
     # gate: forcing contributors to bump causes plugin.json conflicts and takes the
     # version decision away from the merge. So enforce it ONLY in the local pre-commit
-    # hook (compares the maintainer's working tree to origin/master right before a
-    # push), never in CI on a contributor's PR.
+    # hook (compares what the commit or push ships with its fork point and origin/master),
+    # never in CI on a contributor's PR.
     if not ci:
-        failures += check_version_bumped(root)
+        failures += check_version_bumped(root, stage=mirror_at)
         failures += check_ragged_tables(root)
-        failures += check_skill_review(root)
+        failures += check_skill_review(root, stage=mirror_at)
         failures += check_skill_mirrors(root, stage=mirror_at, notices=notices, publishes=publishes,
                                         mirrors=parts.mirrors)
     # The whole-suite moments (--ci, the pre-push hook) also run the TypeScript side; a commit's
@@ -2764,7 +3464,8 @@ def _tool_repo_touched(root, stage, publishes, twins):
     return {name for name, twin in twins.items() if any(path.is_relative_to(twin) for path in shipped)}
 
 
-def gate_tool_repo_mirror(root, stage=STAGE_INDEX, guessed=False, publishes=False, mirrors=None):
+def gate_tool_repo_mirror(root, stage=STAGE_INDEX, guessed=False, publishes=False, mirrors=None,
+                          log=None):
     """Check the mirror of a skill edited in its OWN repo, before it is committed or pushed.
 
     `main` has already read the event and confirmed it is a gated command, and `root` is the
@@ -2793,7 +3494,9 @@ def gate_tool_repo_mirror(root, stage=STAGE_INDEX, guessed=False, publishes=Fals
     checkout, but it says so through ``additionalContext``, the one exit-0 channel the
     model actually reads (plain stdout/stderr on exit 0 does not reach it).
 
-    ``mirrors`` is the pair table, `MIRRORED_SKILLS` unless a caller passes another.
+    ``mirrors`` is the pair table, `MIRRORED_SKILLS` unless a caller passes another. ``log``
+    receives one audit record per reported decision refusal (default: the audit log,
+    `_log_decision_refusal`).
     """
 
     if root is None:
@@ -2819,23 +3522,28 @@ def gate_tool_repo_mirror(root, stage=STAGE_INDEX, guessed=False, publishes=Fals
     if _is_commit(stage):
         candidates += _other_marketplace_checkouts(marketplace)
     notices, fails, unpushed = [], [], set()
+    log = log or _log_decision_refusal
     for name in mine:
         refusals = []
         for candidate in candidates:
-            found = []
+            found, records = [], []
             failed = mirror_failures(candidate, {name}, committing="twin", stage=stage, notices=found,
-                                     twins=twins, mirrors=mirrors)
+                                     twins=twins, mirrors=mirrors, log=records.append)
             if not failed:
                 notices += found
                 break
-            refusals.append(failed)
+            refusals.append((failed, records))
         else:
             held = None if _is_commit(stage) else _unpushed_holder(marketplace, name, stage, twins, mirrors)
             if held:
                 unpushed.add(name)
                 fails.append(_unpushed_message(name, *held))
             else:
-                fails += refusals[0]  # the checkout a push would read is the one to report
+                fails += refusals[0][0]  # the checkout a push would read is the one to report
+                # Its decision refusals only: every checkout read refuses alike, and a refusal of
+                # one the gate passed through never blocked anything.
+                for record in refusals[0][1]:
+                    log(record)
     if not fails:
         _say_context(notices)
         return 0
@@ -2843,15 +3551,21 @@ def gate_tool_repo_mirror(root, stage=STAGE_INDEX, guessed=False, publishes=Fals
     # not. The table and the diff are the actionable part, so they cannot go anywhere else.
     blocked = {name for name in mine if any(name in f for f in fails)}
     unstaged = {name for name in blocked if any(name in f and _UNSTAGED_MARK in f for f in fails)}
+    # Refused by the marketplace ledger alone: every failure naming it is a decision refusal.
+    decided = {name for name in blocked
+               if all(_MARKETPLACE_LEDGER in f for f in fails if name in f)}
     lines = []
     for name in mine:
         verdict = ("UNPUSHED" if name in unpushed else "UNSTAGED" if name in unstaged else
-                   "DRIFT" if name in blocked else "in sync")
+                   "DECISION" if name in decided else "DRIFT" if name in blocked else "in sync")
         lines.append("%-9s%-34s %s" % (verdict, name, mirrors[name]))
     lines += ["\n" + failure for failure in fails]
     if blocked <= unpushed:
         lines.append("repo-gate: blocked - %s ships a skill whose marketplace twin is committed but "
                      "not yet published." % root)
+    elif blocked <= decided:
+        lines.append("repo-gate: blocked - %s ships a twin text that drops a decision recorded in "
+                     "%s." % (root, _MARKETPLACE_LEDGER))
     elif blocked <= unstaged:
         lines.append("repo-gate: blocked - %s holds the mirror fix on disk, but the commit does not "
                      "take it." % root)

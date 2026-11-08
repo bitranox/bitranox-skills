@@ -626,9 +626,12 @@ what makes "no findings" on a row credible.
 **The cost rows are read, never measured.** Algorithmic cost, the memory growth under Concurrency
 and Unbounded input are walked by reading the code; the sweep times, profiles and benchmarks
 nothing, so a finished loop is not a performance review. For the measured part (profiling hot
-spots with the real test suite, caching candidates, before/after timing) run
-`bitranox:coding-python-performance-review` on a Python project as a pass of its own. When it did
-not run, the final report says that performance was read, not measured.
+spots with the real test suite, caching candidates, before/after timing) run it as a pass of its
+own: `bitranox:coding-python-performance-review` on a Python project,
+`bitranox:coding-rust-performance-review` on a Rust one, and `bitranox:coding-performance-review`
+on any other language. Start from the language skill where there is one: it tells you to load the
+generic skill alongside it for the measurement method. When it did not run, the final report says
+that performance was read, not measured.
 
 **The Error contract row is about what ESCAPES, not about what the package raises.** A census of
 the package's own `raise` statements finds them all classified and passes the row while a stdlib or

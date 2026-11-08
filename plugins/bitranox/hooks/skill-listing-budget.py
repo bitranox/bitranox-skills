@@ -23,12 +23,12 @@ emits nothing and exits 0, so a broken hook never blocks a session.
 
 import json
 import math
-import os
 import sys
 from datetime import datetime
 from pathlib import Path
 
 import skill_frontmatter
+from claude_paths import config_dir
 
 # The listing reader is the skill router's, and it pulls in the router's classifier and signal
 # modules. An import error there may cost the correction it feeds, never the disk estimate.
@@ -57,12 +57,6 @@ DENOMINATOR_FLOOR = 200_000 * CHARS_PER_TOKEN_FLOOR
 SAFETY = 1.25
 FRACTION_CAP = 0.5  # refuse to run away if a catalogue is pathologically large
 HARNESS_DEFAULT_FRACTION = 0.01
-
-def config_dir():
-    """Return the Claude configuration directory (CLAUDE_CONFIG_DIR wins, else ~/.claude)."""
-    override = os.environ.get("CLAUDE_CONFIG_DIR")
-    return Path(override) if override else Path.home() / ".claude"
-
 
 def read_description(skill_md):
     """Return a SKILL.md's frontmatter description as one line, or None if it has none.

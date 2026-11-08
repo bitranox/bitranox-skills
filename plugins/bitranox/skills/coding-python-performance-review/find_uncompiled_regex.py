@@ -1,9 +1,10 @@
 """Find regex patterns used without re.compile().
 
 Scans Python files for calls like re.match(r'pattern', ...) inside a function body where
-the pattern is a string literal. These should be re.compile()'d at module level to avoid
-recompilation on every call. A call at module or class level runs once, so it is not
-reported.
+the pattern is a string literal. These should be re.compile()'d at module level: the re module
+caches compiled patterns (512 by default), so such a call pays a cache lookup on every call, and
+a real recompile only when more distinct patterns cycle than the cache holds. A call at module or
+class level runs once, so it is not reported.
 
 Recognised spellings: ``re.match(...)``, ``import re as X`` then ``X.match(...)``,
 ``from re import match [as m]`` then ``match(...)``, and the ``pattern=`` keyword.
@@ -153,7 +154,7 @@ def _scan(paths):
 
 def main(argv=None):
     _utf8_output()
-    parser = argparse.ArgumentParser(description="Find regex calls that recompile a literal pattern.")
+    parser = argparse.ArgumentParser(description="Find regex calls inside a function that pass a literal pattern.")
     parser.add_argument('files', nargs='+', metavar='FILE', help="Python source files to scan")
     args = parser.parse_args(argv)
 

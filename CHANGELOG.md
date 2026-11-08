@@ -30,6 +30,469 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.37.0]
+
+### Fixed
+
+- meta-prune-plugin-cache: under `CLAUDE_CONFIG_DIR`, `pluginprune.py` now reads the project index from `.claude.json` inside the config dir, where Claude Code keeps it then, instead of the home directory's `~/.claude.json`. The home file lists another configuration's projects, so a plugin enabled only in a project of the moved configuration could read as an uninstalled leftover.
+
+## [10.36.0]
+
+### Fixed
+
+- The context watcher's save request now asks for the checkpoint to be written with the Write tool, and says a file written through Bash is found only at the root of the repo the session is in. A session that wrote its handover through a Bash-run script into a parent repository, while its working directory was a nested repository, saved a checkpoint that was not handed back after the compaction.
+
+## [10.35.0]
+
+### Fixed
+
+- The context watcher no longer answers a subagent's tool call. A subagent's hook event carries
+  the main session's transcript and session id, so the save request went to the subagent, and the
+  session's asked flag then kept the main session silent until another tenth of the window: the
+  compaction came without a checkpoint. A subagent's event is now quiet and marks nothing.
+
+## [10.34.0]
+
+### Fixed
+
+- Every path inside Claude's config dir now follows `CLAUDE_CONFIG_DIR` when it is set: the
+  memory settings file, the transcript and auto-memory roots, settings.json and the autoupdate
+  opt-out, the CI-watch opt-in, installed_plugins.json and the personal skills dir, the toolbox
+  dir, the plugin cache, the hookdoc cache, the transcript index and the default roots of the
+  corpus jigs. Before, they read `~/.claude` even when Claude Code kept its configuration
+  elsewhere.
+- The test session drops an inherited `CLAUDE_CONFIG_DIR`, so a suite run where it is set (an A/B
+  arm) no longer reads or writes that config dir from tests that isolate HOME.
+
+## [10.33.0]
+
+### Fixed
+
+- The context watcher's save request now says to replace the whole `handover.md`: a checkpoint
+  appended under a first line still reading `# STALE` from an earlier hand-back is skipped as
+  already read, so the compaction lost it.
+
+## [10.32.0]
+
+### Changed
+
+- coding-python-performance-review: an uncompiled regex in a hot function is now MEDIUM and in a
+  non-hot function MINOR, on the shared severity scale. The `re` module caches compiled patterns,
+  so the call pays a cache lookup rather than a recompile; more patterns than the cache holds
+  stays MEDIUM with the recompile named, and a pattern built from untrusted input is one SEVERE
+  unsafe-input finding.
+- coding-performance-review: the untrusted-structured-input item is again not raised where the
+  project has deliberately accepted skipping the validation.
+- coding-rust-performance-review: the dhat recipe says to read no timings from a dhat build and
+  keeps the profiling allocator behind a `dhat-heap` feature.
+
+## [10.31.0]
+
+### Fixed
+
+- compact-resume hands back a checkpoint saved under an improvised name. Besides `handover.md`, it
+  takes a file this session wrote whose name ends in `-handover.md` (such as
+  `~/wt-vmxnet3-handover.md`, written by sessions whose worktree is outside any repo), provided one
+  of its lines is exactly `## Lessons for the next nap`, the heading every checkpoint carries. A
+  file with that suffix but without the heading is not taken, and `handover.prev.md`, the backup of
+  an earlier checkpoint, never is.
+
+## [10.30.0]
+
+### Removed
+
+- The `context_mode` setting and handover mode. The context watcher has one behaviour: shortly
+  before the harness auto-compacts it asks for a checkpoint (`OPEN-WORK.md` plus `handover.md`)
+  on `PostToolUse` and on `Stop`, and the session saves it and keeps working. A stored
+  `context_mode` is ignored: `/memory-settings view` hides it, and `set` and `reset` drop it from
+  the file. A handover the user asks for ("write a handover", "let's start a fresh session") still
+  ends with a stop and `/clear`.
+
+### Changed
+
+- meta-context-watcher: "Two modes" is now "Checkpoint or handover", and "compact-mode checkpoint"
+  is now "watcher checkpoint". The skill description no longer triggers on a Stop nudge about a
+  handover threshold.
+- meta-memory-settings and docs/reference.md: the `CLAUDE_CODE_AUTO_COMPACT_WINDOW` guidance moved
+  into the `context_handover_cap` row.
+
+## [10.29.0]
+
+### Changed
+
+- process-agents-subagent-driven-development: a new section, "When No Human Can Answer", covers a
+  headless run (`claude -p`, an SDK node, an A/B arm, a brief saying nobody is watching). A finding
+  whose fix changes what the plan text requires is routed by whether the fix changes behaviour a
+  release already ships. If it does, or the controller cannot tell, the run stops: no fix, no next
+  task, the question goes into `EXECUTION-USER-REVIEW.md`, and the final message begins
+  `UNFINISHED:` with the tasks done. Otherwise the fix goes in as its own commit (one revert
+  restores the plan's reading), is logged with a reopen-if line, and the run continues. The
+  pre-flight review, the review loop and BLOCKED step 4 point at it. A run with a human present
+  still asks.
+
+## [10.28.0]
+
+### Changed
+
+- The plugin's state dir follows `CLAUDE_CONFIG_DIR`. When it is set (and not blank), nudge flags,
+  audit logs, dream watermarks, the contribution queue and the classifier's shadow log live in
+  `$CLAUDE_CONFIG_DIR/self-improve-audit` instead of `~/.claude/self-improve-audit`, with no
+  fallback to the home one. A Claude Code session run against a throwaway config dir (an A/B arm,
+  an install test) therefore neither reads nor writes your real state. Every hook and skill script
+  resolves the path through one new hooks module, `claude_paths.py`, and a test fails if one builds
+  it from the home directory by hand again. Nothing is copied from the old location: a session
+  launched with the variable set starts with empty state.
+- `skill_decisions.py` and the `skill-listing-budget` hook use the same helper; a blank
+  `CLAUDE_CONFIG_DIR` now counts as unset there too.
+- `docs/reference.md` lists `CLAUDE_CONFIG_DIR` among the environment variables.
+
+## [10.27.0]
+
+### Added
+
+- `meta-skill-ab-test` gains "Designing the grid" and "Before and during a live run". A rewrite
+  of a source document needs an arm that delivers the source verbatim. A bare arm is not a
+  dynamic-workflow arm, and a removed skill's name left in other skills is a confound to state
+  in `PREREG.md`. Fix rounds do not converge, so run a fresh hunt after each. Set `deadline_s`
+  from the longest arm, before `seal`. Commit a `PREREG.md` amendment at once. A run spends the
+  5-hour and 7-day usage windows, and a limit notice reruns the arm from scratch. `--dry-run`
+  runs the full floor, so never start it beside a live arm.
+
+### Changed
+
+- The self-improve Stop gate no longer asks to invoke `meta-self-improve` or `meta-dream-nap`
+  again when the transcript shows that skill was invoked after the last compaction: its body is
+  still in context, so the block says to follow the loaded procedure instead of reloading it. A
+  skill invoked only before the compaction is still asked for, since the summary keeps at most a
+  truncated copy.
+
+### Fixed
+
+- `skills_invoked` no longer stops with an error on a transcript line holding a JSON value that
+  is not an object.
+
+## [10.26.0]
+
+### Added
+
+- coding-resilience: answers from untrusted peers (proxies, mirrors) may choose a value but never
+  stop a run, write a permanent ban, or discard saved progress; a first-contact value needs two
+  agreeing paths, and a resumed job trusts its own verified record over a fresh vote.
+- `bump_version.py --merge` renumbers a branch of any length whose release number a peer took:
+  it merges the ref and sets the next free version in the merge commit, keeping the peer's
+  changelog section and moving the branch's own above it.
+
+### Changed
+
+- `redcheck.py` weighs each shared term by how likely a document of that size is to hold it by
+  chance, so a long memory index no longer reads as prior coverage for every scenario; each hit
+  reports `evidence` and `evidence_needed`. process-test-driven-development says to grep each
+  `CLAUDE.local.md` after every clean run.
+
+### Fixed
+
+- meta-self-improve and `contrib_queue.py` say to count closed contributions with `shipped` and
+  `rejected`: the `<hash>.contrib-rejected.jsonl` store holds shipped entries too.
+- `bump_version.py` run from a subdirectory finds the repo's version files from the work tree's
+  top level instead of exiting 2 on a doubled path.
+
+## [10.25.0]
+
+### Added
+
+- `process-plan-writing-plans`: task ids start with a digit (`### Task 2.1: M2 parser`), since
+  `task_brief.py` finds no task in a plan headed `### Task M2.1:`. Self-Review gains four items:
+  each task imports, collects and lints on its own (no import block for later tasks; a `tests/`
+  helper made importable where it is created); run the plan's extracted code, its mutation battery
+  included, and make a substring assertion fail with the guarded code deleted; platform claims
+  agree with the CI OS matrix, and a test isolating `HOME` also sets `USERPROFILE`; DETAILED code is
+  checked against every behavioural sentence of the MID plan.
+- `process-test-design`: a budget the code spends waiting on a stand-in that must answer is roomy,
+  and a pacing TCP stand-in turns Nagle off instead of pinning bytes-within-budget. Three new
+  silent-defeater entries: a commit test under a fresh home sets the commit identity in a child
+  env stripped of inherited `GIT_*`; a refused-before-side-effect test asserts every sink, RED one
+  arm per sink; a timed-wake test uses a case only the timeout can wake and asserts an outcome only
+  the timed wake produces.
+- `process-agents-subagent-driven-development`: before the first dispatch the controller commits
+  its own edits in the shared worktree and, for a vendored checkout, turns the table reformatter
+  off. The implementer template runs the full suite through compuse-toolbox's `gate.py`, polls a
+  backgrounded run instead of ending the turn, and gains a Committing section (no amend, rebase,
+  `add -A` or stash in a shared worktree; a refusal over an untouched file is reported as
+  BLOCKED). A fix dispatch copies both parts, with the covering tests as its gate suite.
+- `git-worktrees`: before removing a worktree, diff each ignored file that is not build output (a
+  decision log, a handover, a backlog) against the main checkout's copy and merge the lines only
+  the worktree has, since `landed.py` exits 0 over ignored files; a secret file is compared with
+  `cmp -s` only. `ExitWorktree`'s "Discarded N commits" counts against the session's starting
+  commit, not origin, so a removal is judged by `landed.py` before it and by an ancestry check
+  on a recorded tip after it.
+- `meta-context-watcher`: in a linked worktree the backlog tools write the worktree's own
+  `OPEN-WORK.md`, so bring the commit to the main checkout or name the file before reporting an
+  item as added; an uncommitted checkpoint is copied aside before any step that resets it.
+
+- `meta-dream-nap`: the steps name their commands (`store_manifest.py backup --scope chain` and
+  `verify --out`, one `reconcile_memory_index.py --check` call over the whole chain, with its
+  home), an owed earlier transcript is marked with `session-reviewed --prose --transcript PATH`,
+  and a `show --body` file goes back with its frame. Step 3 finds candidates with the new
+  chain-scoped dedup scan.
+- `dedup_scan.py --scope chain`: scans only the facts the levels from `--from` up to the anchor
+  point at, so a nap's dedup fits its budget.
+
+- `docs-md-table-formatting`: re-Read a table after the hook realigns it, before the next Edit.
+- `meta-skill-writer`: when the edited text defines a placeholder and builds a command on it, run
+  the literal substitution before counting GREEN.
+- `coding-rust-performance-review`: `LazyLock` needs Rust 1.80 (`OnceLock` from 1.70 is the
+  fallback), and a `\d` to `[0-9]` swap is a behaviour change.
+- `coding-performance-review`: a speedup claim with no recorded before figure gets its before arm
+  rebuilt from the commit.
+
+### Changed
+
+- `backlog_add` and `backlog_close` return the file they wrote in `path`, and in a linked
+  worktree a `note` naming the main checkout's copy that does not have the change yet.
+
+## [10.24.2]
+
+### Fixed
+
+- The jsonl_grep and mod-bridge deep-nesting tests nest a million levels instead of 100,000 and
+  200,000. The macOS runner's smaller C frames fit 100,000 levels into the 8 MiB child stack, so
+  the jsonl_grep premise test saw the line decode on macOS 3.15 and failed.
+
+## [10.24.1]
+
+### Changed
+
+- process-test-design: a `pytest.raises(match=...)` pattern must miss every other refusal the code
+  can raise. `match=` is `re.search`, so a word several refusals share (or an alternation such as
+  `"locale|regional"`) passes whichever fires. Check the pattern against every `raise` message in
+  the module and the layers it calls, anchor an inner rule's pattern against a wrapper that
+  interpolates it, and give a sentinel the test raises itself a sentence matched whole
+  (`references/silent-test-defeaters.md`).
+
+## [10.24.0]
+
+### Added
+
+- The SKILL.md edit guard hands an edit of a tool repo's mirrored twin the marketplace copy's
+  decision brief. The twin keeps no ledger of its own, so its first edit used to pass with no
+  rejected or removed decision shown. The ledger is read from the marketplace checkout under the
+  shared `public/` tree when there is one, else from the installed plugin; running `show` for the
+  marketplace skill name avoids the refusal. A twin in a linked worktree is matched through its
+  main checkout.
+- `hooks/mirrored_skills.py` holds the `MIRRORED_SKILLS` table that `repo-gate.py` and the edit
+  guard both read.
+
+### Fixed
+
+- The commit gate's front-matter sweep reads every SKILL.md as the commit or push ships it (the
+  index, HEAD on a push, or what `git commit -a` / `git commit <paths>` takes from disk), not from
+  the working tree. Another session's unstaged description edit, or a skill directory nobody has
+  added yet, no longer refuses an unrelated commit. The sweep still covers every shipped skill,
+  not only the changed ones.
+- The version-bump check judges what the commit or push ships, and diffs plugins/ from the fork
+  point with origin/master rather than from origin's tip. A checkout behind origin is no longer
+  refused for a bump its own change does not need. It now refuses two cases the tip comparison let
+  through: an unbumped plugins/ change in a checkout behind origin, and a bump to the version
+  origin already published.
+- Three tests that feed deeply nested JSON to reach a `RecursionError` branch now reach it on
+  every runner. From Python 3.14 the decoder's depth limit is the thread's real stack, so on an
+  unlimited stack (the GitHub Linux and macOS runners) the input decoded and the branch went
+  untested while the tests passed. The mod-bridge and jsonl_grep tests start their child with an
+  8 MiB stack and check the branch was taken; the receipt test stands in a depth-limited decoder.
+- meta-skill-writer Step 0b describes the edit guard's refusal for a tool-repo twin.
+
+## [10.23.0]
+
+### Added
+
+- `process-plan-brainstorming`: the data-flow section of a design now decides memory for every
+  input whose size the caller controls - what is held per item, what grows with the count, the
+  peak. Items are processed one by one by default; a count limit is not a memory bound, so each
+  item gets a byte limit too; "validate everything before acting" is a check pass plus an action
+  pass; error and finding lists keep the first N plus a total; read-once input is spooled to a
+  disk file under a byte limit; a whole output is held only when it must be built in memory as one
+  piece, behind a byte limit with a typed refusal.
+- `process-plan-writing-plans`: Self-Review item 7, "Memory bound". The plan states the same three
+  figures for each caller-sized input, the task that builds the path prescribes a peak-memory test
+  at two input sizes (the child's maximum RSS where a driver or native code allocates, the spool's
+  bytes per item where a spool exists), and a step that collects every item before acting, or
+  bounds memory only with a count limit, is a defect to rewrite.
+
+## [10.22.1]
+
+### Fixed
+
+- meta-adopting-external-skills no longer contradicts itself about who commits: you make the
+  adoption commit and push it, and the helper never does. The commit sits as one commit on its own
+  worktree branch and goes to master only once upstream stalls or declines, after
+  `bump_version.py --rebase` renumbers a version another release took meanwhile. If upstream takes
+  the change, delete the branch and its worktree. Both rules are recorded in the skill's decision
+  ledger.
+
+## [10.22.0]
+
+### Added
+
+- `coding-performance-review`: the measurement method (profile first, reproduce the before
+  figure, interleave A/B runs, pin cores on hybrid CPUs, prove the change took effect) and a
+  language-neutral review checklist, with a router to the language skills. It now holds
+  `validate_perf_claims.py`.
+- `coding-rust-performance-review`: a Rust hot-path checklist plus recipes for clippy's perf
+  lints, criterion, profilers and release-profile settings.
+
+### Changed
+
+- `coding-python-performance-review` points at the generic skill for the method and the
+  language-neutral checklist, and runs the claim checker from its new place. It also says
+  `compare_performance.py` times each arm once, so a delta needs repeated, alternating runs.
+- `process-review-enhance-code-quality` routes the measured performance pass to the Python, Rust
+  or generic performance skill by language.
+- `coding-rust` points at `coding-rust-performance-review` from its See also section.
+
+## [10.21.0]
+
+### Added
+
+- git-footgun-guard advises when a git command uses `@{u}` / `@{upstream}` as a revision on a
+  branch whose upstream has another name (a branch cut from `origin/master` and pushed without
+  `-u`): it names both refs, says whether `origin/<branch>` exists locally, and gives the fix.
+  `@{u}..` there counts the topic commits as unpushed although `origin/<branch>` holds them.
+- compuse-toolbox `git_state.py` flags such a foreign upstream and judges the branch against
+  `origin/<branch>` by name (in sync only when it exists and equals HEAD), and gains `--fetch`
+  (`git fetch --prune` first; a failed fetch is exit 2). Without `--fetch` the human output says
+  the counts are as of the last fetch, and the JSON carries `fetched`.
+
+## [10.20.0]
+
+### Added
+
+- Skill ledgers seeded from the declined skill contributions: each kept proposal is a `rejected`
+  entry (origin `imported`) with its reason and what would reopen it.
+- devops-bmk and meta-dream-tree record two decisions that were once changed forward and back:
+  bmk runs from its own shared tool env (resolving it together with the project is a `rejected`
+  entry), and the dream's placement judgment runs inline on the session model, with its tier note.
+- meta-claude-hooks and compuse-toolbox: a hook or jig records a decision in a `Decisions:` block
+  in its module docstring, each decision naming the test that fails when it is reverted, or why
+  no test can.
+- meta-skill-writer: a decision about a bundled script or hook goes in that file's docstring
+  `Decisions:` block, not in the skill's ledger, which holds decisions about the skill's text.
+- meta-self-improve reads a skill's declined decisions before queueing a fix to it, and records a
+  lasting drop as a `rejected` entry.
+- meta-adopting-external-skills: an adoption records what it left out of the upstream skill.
+- meta-skill-audit: each skill's reviewer sees that skill's declined decisions, and a brief cut
+  short names a command that prints the rest from the reviewer's room.
+
+### Changed
+
+- `secret_patterns.py` and `memory_engine.py` carry docstring decision blocks for two decisions
+  that were once changed forward and back.
+
+## [10.19.2]
+
+### Fixed
+
+- skill-edit-guard tests: the nested-past-the-decoder cases give the guard a decoder that raises
+  RecursionError for the marked line, instead of feeding it 100000 nested brackets. How deep the
+  json decoder goes depends on the host: on the GitHub Linux runners CPython 3.14 and 3.15 decoded
+  that line even on a 4 MiB thread, so the 10.19.1 bounded-stack fix still failed there.
+
+## [10.19.1]
+
+### Fixed
+
+- skill-edit-guard tests: the deeply nested transcript-line cases run on a thread with a 4 MiB
+  stack. From Python 3.14 the json decoder's depth limit is the thread's real stack, so on a host
+  with an unlimited stack (the GitHub Linux and macOS runners) the line decoded and the
+  precondition test failed, while the guard's RecursionError branch went untested there.
+
+## [10.19.0]
+
+### Added
+
+- Each skill can keep a decision ledger, `.skillwriter/decisions.jsonl`, written through
+  `hooks/skill_decisions.py` (`add`, `show`, `check`): what the skill decided, why, the evidence,
+  and what would reopen it. A rule entry is bound to the skill text by short quoted anchors. A
+  `void` entry withdraws an entry and what it did, so a rule a voided entry superseded is live
+  again; a void cannot target a void. `add` is all or nothing across every skill a file names,
+  and counts an anchor only in files git tracks, saying so when untracked Markdown is present.
+- The commit and push gate refuses a change whose shipped text of a touched skill loses a live
+  anchor, and names the entry's decision, reason and reopen condition; a superseding entry with
+  its own reason answers it. Ledgers are append-only: a ledger moved out of its skill counts as
+  removed, and a skill renamed since the fork point answers to its old name's ledger. CI checks
+  every ledger, and on a pull request also refuses a ledger line removed since the fork point.
+- A commit or push in a tool repo that ships a mirrored skill's twin is judged against the
+  marketplace copy's ledger too, read at what the marketplace published or committed; a refusal
+  names that ledger as the place for the superseding entry.
+- A skill change's skill-writer checklist carries a `Decisions:` line naming the ledger entries
+  the change added, or `Decisions: none - <reason>`, at the line start or in a list item, ticked
+  or not (`- [x] Decisions: ...`).
+- The SKILL.md edit guard hands an agent editing a marketplace skill that skill's rejected and
+  removed decisions once, before its first edit, unless it already ran `skill_decisions.py show`
+  for that skill. An edit of a tool-repo twin gets no such brief; its editor runs `show` with the
+  marketplace `--skill-dir`.
+
+### Fixed
+
+- The changed-path checks of the commit gate diffed against origin's tip, so a checkout behind
+  origin listed a peer's pushed paths as its own changes. They now diff from the merge-base.
+- The skill-review and description checks of the commit gate judged every SKILL.md the working
+  tree had changed, so another session's unstaged edit to a skill refused an unrelated commit.
+  They now judge the SKILL.md the commit or push ships, and so does the table re-pad waiver,
+  which compares it with the merge-base rather than origin's tip.
+
+## [10.18.0]
+
+### Added
+
+- New PreToolUse hook `block-or-echo-verdict.py` (Bash). It refuses a grep-family command
+  (`grep`, `egrep`, `fgrep`, `zgrep`, `rg`, `git grep`), `diff`, `cmp` or `git diff` followed by
+  `|| echo <verdict>`, where the label is a clean or negative verdict ("clean", "no ...", "none",
+  "not found", "missing", "identical", "different", "ok"). These tools exit 1 for "no match" or
+  "different" and 2 or more when they could not look (a missing file, a bad regex, conflicting
+  options), and `||` fires on both, so the verdict also prints when nothing was checked. The
+  incident: `grep -inE ... -P || echo "no attribution"` exited 2 on conflicting matchers and
+  printed the all-clear. It also matches through an intermediate `&& echo ...` and inside
+  `$(...)`. It passes a label that admits doubt ("rc=$?", "or error"), a count (`|| echo 0`),
+  `|| true`, a pipeline ending in another program, the tool under `!`, and quoted or heredoc
+  text; a command string handed to another shell (`ssh host '...'`) is not inspected. The
+  refusal names a form it passes (`cmd; rc=$?; [ $rc -eq 1 ] && ...; [ $rc -gt 1 ] && ...`),
+  pinned by a test. Replayed before shipping over 205,309 recorded Bash calls: 224 refusals
+  (0.109%), every one the shape; 2 printed the verdict beside grep's own error message, and 22
+  more sent stderr to /dev/null first, so an error could not have shown.
+
+## [10.17.1]
+
+### Fixed
+
+- `meta-skill-ab-test`: `prune-run` also removes a worktree an arm registered itself under `arms/` (a parallel node's), by exact path and with its branch; before, it survived and stayed registered in the real repository. SKILL.md says a run dir can hold the pinned plugin checkout and must not be deleted by hand.
+
+## [10.17.0]
+
+### Added
+
+- New PreToolUse hook `unchained-gate-in-doc.py` (Edit, Write, MultiEdit). It refuses an edit to
+  a `SKILL.md` or `CLAUDE.md` that adds a bash block in which a gate (`cargo clippy`, `make test`,
+  `pytest`, any program the masked-exit guard treats as a gate) is followed by another command
+  with nothing consuming its status. A reader pastes such a block into one call, gets the last
+  command's exit code, and a red gate reads green. Ways out: the gate's own refusal
+  (`|| { echo REFUSE; exit 1; }`), chaining with `&&`, reading `$?` or `${PIPESTATUS[0]}` on the
+  next line, `set -e`, or a `# unchained-ok: <reason>` comment for a deliberate case. Only
+  findings the edit ADDS are refused, so existing blocks never stop an unrelated edit. Before
+  shipping, it was replayed over 2337 recorded edits of those files: 2 refusals, both the defect
+  that motivated it (a `Cargo.lock` check appended after a clippy gate).
+
+## [10.16.2]
+
+### Fixed
+
+- `meta-skill-ab-test`: the sandboxed worktree-registry test gives its commit an explicit author identity, so it passes on a runner with no git identity configured.
+
+## [10.16.1]
+
+### Fixed
+
+- `meta-skill-ab-test`: the arm sandbox keeps the real repository's other worktree registrations out of reach. The arm's own registry entry stays writable, the rest of `<git-dir>/worktrees` is read-only, so an arm's `git worktree prune` (which dropped a neighbour's 12 registrations) or `git worktree add` cannot touch them.
+
 ## [10.16.0]
 
 ### Added

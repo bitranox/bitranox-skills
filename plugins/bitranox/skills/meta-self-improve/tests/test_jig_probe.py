@@ -456,3 +456,18 @@ def test_report_survives_a_cp1252_console(tmp_path):
     done = subprocess.run([sys.executable, jp.__file__, "report", "--log", str(log)],
                           capture_output=True, env=env, timeout=60)
     assert done.returncode == 0, done.stderr.decode("cp1252", "replace")
+
+
+def _moved_config(tmp_path, monkeypatch):
+    """HOME at tmp/home, CLAUDE_CONFIG_DIR at tmp/arm: (home, arm)."""
+    home, arm = tmp_path / "home", tmp_path / "arm"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(arm))
+    return home, arm
+
+
+def test_the_default_corpus_follows_claude_config_dir(tmp_path, monkeypatch):
+    _, arm = _moved_config(tmp_path, monkeypatch)
+    assert jp._projects_root(None) == str(arm / "projects")
+    assert jp._projects_root("/opt/corpus") == "/opt/corpus"

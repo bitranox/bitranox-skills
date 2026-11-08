@@ -27,6 +27,7 @@ from shell_text import (  # noqa: F401
     blank_unexpanded_text, heredoc_bodies, is_shell_tool, strip_heredoc_bodies,
 )
 
+import claude_paths
 import splice_span
 
 # How far apart the two halves of a two-part rule may sit. These rules also scan AUTHORED text (a
@@ -659,8 +660,18 @@ def extract_text(tool_name, tool_input):
 
 
 def _toolbox_dir():
-    """The local toolbox tools dir (resolved at call time so HOME can be overridden in tests)."""
-    return Path(os.path.expanduser("~")) / ".claude" / "skills" / "toolbox" / "tools"
+    """The local toolbox tools dir in Claude's config dir (CLAUDE_CONFIG_DIR, else ~/.claude),
+    resolved at call time so HOME and CLAUDE_CONFIG_DIR can be overridden in tests."""
+    return claude_paths.config_dir() / "skills" / "toolbox" / "tools"
+
+
+def _shown(path):
+    """`path` as a person would type it: `~/...` under HOME, else in full. The config dir can sit
+    outside HOME (CLAUDE_CONFIG_DIR), so a hard-coded `~/.claude/...` would name the wrong file."""
+    try:
+        return "~/" + path.relative_to(Path.home()).as_posix()
+    except ValueError:
+        return str(path)
 
 
 def _shipped_dir():
@@ -701,7 +712,7 @@ def _tool_invocation(tool):
     local file alone would turn every successful contribution into a silently lost guard."""
     local = _toolbox_dir() / (tool + ".py")
     if local.is_file():
-        return "the local `toolbox` skill", local, "~/.claude/skills/toolbox/tools/%s.py" % tool
+        return "the local `toolbox` skill", local, _shown(local)
     shipped = _shipped_dir() / (tool + ".py")
     if shipped.is_file():
         return "the shipped `bitranox:compuse-toolbox` skill", shipped, "%s/%s.py" % (

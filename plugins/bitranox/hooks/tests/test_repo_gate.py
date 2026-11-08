@@ -23,6 +23,7 @@ from pathlib import Path
 import pytest
 
 import repo_gate as RG
+import skill_decisions as SD
 
 
 # --------------------------------------------------------------------------
@@ -113,12 +114,14 @@ def _cli(monkeypatch, *flags):
 
 
 def _unbumped_plugin_change(root):
-    """Commit `root` as origin/master, then change a plugin file without bumping the version."""
+    """Commit `root` as origin/master, then stage a plugin file change without bumping the
+    version (staged: the check judges what the commit ships)."""
     _init_git(root)
     _g(root, "add", "-A")
     _g(root, "commit", "-qm", "base")
     _g(root, "update-ref", "refs/remotes/origin/master", "HEAD")
     write(root / "plugins/bitranox/hooks/somehook.py", "x = 2\n")
+    _g(root, "add", "plugins/bitranox/hooks/somehook.py")
     return root
 
 
@@ -807,7 +810,8 @@ def _skill(root, name, desc, checklist=None, checked=True):
     if checklist:
         box = "[x]" if checked else "[ ]"
         write(root / f"plugins/bitranox/skills/{name}/.skillwriter/{checklist}",
-              "# checklist\n- %s RED baseline\n- %s pressure scenarios\n" % (box, box))
+              "# checklist\n- %s RED baseline\n- %s pressure scenarios\n"
+              "Decisions: none - fixture\n" % (box, box))
 
 
 def test_skill_review_requires_cochanged_checklist(tmp_path):
@@ -836,7 +840,8 @@ def test_skill_review_rejects_unchecked_boxes(tmp_path):
 def _checklist_body(root, name, body):
     _skill(root, name, "Use when gamma gizmos need a checklist body test")
     rel = f"plugins/bitranox/skills/{name}/.skillwriter/checklist-20261030.md"
-    write(root / rel, body)
+    # The Decisions line comes FIRST: a body whose fence never closes would hide one appended after.
+    write(root / rel, "Decisions: none - fixture\n" + body)
     return ["plugins/bitranox/skills/%s/SKILL.md" % name, rel]
 
 
@@ -880,7 +885,8 @@ def test_skill_review_still_rejects_an_open_list_item_checkbox(tmp_path, body):
 # The reformat-md-tables hook rewrites a non-canonical table in every fresh worktree, and the
 # checklist requirement then fires for a skill nobody edited. A re-pad changes nothing a reader or
 # the router sees, so it is waived - but only when the gate PROVES it, line by line, against
-# origin/master. Every test below that expects a refusal is a control for that proof.
+# the merge-base with origin/master. Every test below that expects a refusal is a control for that
+# proof.
 
 _REAL_ROOT = Path(RG.__file__).resolve().parents[3]
 
@@ -997,7 +1003,7 @@ def test_a_re_pad_that_is_still_not_canonical_is_not_waived(tmp_path):
 def test_a_new_skill_with_no_original_is_not_waived(tmp_path):
     changed = _skill_with_formatter(tmp_path, PAD_NEW)
     fails = RG.skill_review_failures(tmp_path, changed, read_original=lambda rel: None)
-    assert len(fails) == 1 and "origin/master" in fails[0]
+    assert len(fails) == 1 and "no version at its merge-base" in fails[0], fails
 
 
 def test_without_the_formatter_nothing_is_waived(tmp_path):
@@ -1015,12 +1021,12 @@ def test_the_waiver_reads_origin_master_through_the_real_entry_point(tmp_path):
     _g(tmp_path, "add", "-A")
     _g(tmp_path, "commit", "-qm", "base")
     _g(tmp_path, "update-ref", "refs/remotes/origin/master", "HEAD")
-    skill = tmp_path / "plugins/bitranox/skills/alpha/SKILL.md"
+    skill = "plugins/bitranox/skills/alpha/SKILL.md"
 
-    write(skill, PAD_NEW)
+    _stage(tmp_path, skill, PAD_NEW)          # staged: the gate judges what the commit ships
     assert RG.check_skill_review(tmp_path) == []
 
-    write(skill, PAD_NEW.replace("| short   |", "| shorter |"))  # control: same route, one cell
+    _stage(tmp_path, skill, PAD_NEW.replace("| short   |", "| shorter |"))  # control: one cell
     fails = RG.check_skill_review(tmp_path)
     assert len(fails) == 1 and "cell" in fails[0]
 
@@ -1067,6 +1073,66 @@ def test_frontmatter_gate_is_quiet_for_a_good_skill(tmp_path):
 def test_frontmatter_gate_is_quiet_when_the_repo_ships_no_skills(tmp_path):
     make_repo(tmp_path)
     assert RG.frontmatter_failures(tmp_path) == []
+
+
+_GOOD_DESC = "Use when gadget builds fail with linker errors on windows runners"
+_BAD_DESC = "Consolidates the store and prunes entries nightly"   # not trigger-first
+
+
+def _committed_skill_repo(root):
+    """A real repo whose HEAD ships two good skills, with origin/master at HEAD."""
+    make_repo(root)
+    _skill(root, "theta", _GOOD_DESC)
+    _skill(root, "kappa", _GOOD_DESC)
+    _g(root, "init", "-q", ".")
+    _g(root, "add", "-A")
+    _g(root, "commit", "-qm", "base")
+    _g(root, "update-ref", "refs/remotes/origin/master", "HEAD")
+    return root / "plugins/bitranox/skills/kappa/SKILL.md"
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_frontmatter_gate_ignores_an_unstaged_edit_an_unrelated_commit_does_not_ship(tmp_path):
+    """[98]: a peer's half-done description edit, never staged, must not block another commit."""
+    md = _committed_skill_repo(tmp_path)
+    md.write_text(md.read_text(encoding="utf-8").replace(_GOOD_DESC, _BAD_DESC), encoding="utf-8")
+    _stage(tmp_path, "unrelated.txt", "x\n")
+    assert RG.check_frontmatter(tmp_path, stage=RG.STAGE_INDEX) == []
+    # Control: the same edit staged ships, so the sweep refuses it by name.
+    _g(tmp_path, "add", "plugins/bitranox/skills/kappa/SKILL.md")
+    fails = RG.check_frontmatter(tmp_path, stage=RG.STAGE_INDEX)
+    assert fails and all("kappa" in f for f in fails), fails
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_frontmatter_gate_on_a_push_reads_head_not_the_index(tmp_path):
+    md = _committed_skill_repo(tmp_path)
+    md.write_text(md.read_text(encoding="utf-8").replace(_GOOD_DESC, _BAD_DESC), encoding="utf-8")
+    _g(tmp_path, "add", "-A")                    # staged, not committed: a push does not ship it
+    assert RG.check_frontmatter(tmp_path, stage=RG.STAGE_HEAD) == []
+    _g(tmp_path, "commit", "-qm", "bad")
+    assert any("kappa" in f for f in RG.check_frontmatter(tmp_path, stage=RG.STAGE_HEAD))
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_frontmatter_gate_judges_what_a_commit_a_takes_from_disk(tmp_path):
+    """`git commit -a` stages the unstaged edit itself, so it IS shipped and must be refused."""
+    md = _committed_skill_repo(tmp_path)
+    md.write_text(md.read_text(encoding="utf-8").replace(_GOOD_DESC, _BAD_DESC), encoding="utf-8")
+    selection = RG.CommitSelection("all", where=str(tmp_path))
+    assert any("kappa" in f for f in RG.check_frontmatter(tmp_path, stage=selection))
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_frontmatter_gate_skips_an_untracked_skill_and_still_sweeps_untouched_ones(tmp_path):
+    _committed_skill_repo(tmp_path)
+    _skill(tmp_path, "lambda", _BAD_DESC)        # a peer's new skill, never added
+    assert RG.check_frontmatter(tmp_path, stage=RG.STAGE_INDEX) == []
+    # The whole-dir sweep stands: a committed bad skill the change never touched is still found.
+    _g(tmp_path, "add", "-A")
+    _g(tmp_path, "commit", "-qm", "lambda")
+    _stage(tmp_path, "unrelated.txt", "x\n")
+    assert any("lambda" in f for f in RG.check_frontmatter(tmp_path, stage=RG.STAGE_INDEX))
 
 
 def test_cso_lint_requires_trigger_first_description(tmp_path):
@@ -3518,8 +3584,8 @@ def test_lf_endings_reads_a_commit_all_from_disk(tmp_path):
 def git_repo_with_origin(tmp_path, files):
     """A repo carrying an origin/master ref, so the origin-comparing checks actually run.
 
-    Both checks below return [] the moment `rev-parse --verify origin/master` fails, so without
-    this ref they pass while asserting nothing - which is how they came to have no test at all.
+    Both checks below return [] whenever `git merge-base HEAD origin/master` does not resolve, so
+    without this ref they pass while asserting nothing.
     """
     git_repo(tmp_path, files)
     subprocess.run(["git", "-c", "user.email=t@example.invalid", "-c", "user.name=t",
@@ -3555,20 +3621,99 @@ def test_version_bumped_fires_when_a_plugin_file_changes_without_a_bump(tmp_path
     pj = "plugins/bitranox/.claude-plugin/plugin.json"
     git_repo_with_origin(tmp_path, {pj: '{"version": "1.0.0"}\n',
                                     "plugins/bitranox/hooks/x.py": "x = 1\n"})
-    (tmp_path / "plugins" / "bitranox" / "hooks" / "x.py").write_text("x = 2\n", encoding="utf-8")
+    _stage(tmp_path, "plugins/bitranox/hooks/x.py", "x = 2\n")
     assert any("still 1.0.0" in f for f in RG.check_version_bumped(tmp_path))
-    (tmp_path / pj).write_text('{"version": "1.0.1"}\n', encoding="utf-8")
+    _stage(tmp_path, pj, '{"version": "1.0.1"}\n')
     assert RG.check_version_bumped(tmp_path) == []
 
 
-def test_version_bumped_fires_for_a_new_untracked_plugin_file(tmp_path):
-    """A brand-new file under plugins/bitranox is not in `git diff` at all - only the untracked
-    listing sees it. Nothing pinned that branch, so dropping it passed the whole suite."""
+def test_version_bumped_fires_for_a_new_staged_plugin_file(tmp_path):
+    """A brand-new file under plugins/bitranox ships once it is staged, and needs a bump then."""
     pj = "plugins/bitranox/.claude-plugin/plugin.json"
     git_repo_with_origin(tmp_path, {pj: '{"version": "1.0.0"}\n',
                                     "plugins/bitranox/hooks/x.py": "x = 1\n"})
     write(tmp_path / "plugins" / "bitranox" / "hooks" / "new_hook.py", "y = 1\n")
+    assert RG.check_version_bumped(tmp_path) == []          # untracked: this commit ships none of it
+    subprocess.run(["git", "add", "plugins/bitranox/hooks/new_hook.py"], cwd=tmp_path, check=True)
     assert any("still 1.0.0" in f for f in RG.check_version_bumped(tmp_path))
+
+
+def test_version_bumped_ignores_a_peers_unstaged_plugin_edit(tmp_path):
+    """The gate rule [98]/[99] share: a half-done edit nobody staged never blocks a commit."""
+    pj = "plugins/bitranox/.claude-plugin/plugin.json"
+    git_repo_with_origin(tmp_path, {pj: '{"version": "1.0.0"}\n',
+                                    "plugins/bitranox/hooks/x.py": "x = 1\n"})
+    (tmp_path / "plugins" / "bitranox" / "hooks" / "x.py").write_text("x = 2\n", encoding="utf-8")
+    _stage(tmp_path, "notes.md", "unrelated\n")
+    assert RG.check_version_bumped(tmp_path) == []
+    # `git commit -a` takes the edit from disk itself, so it ships and needs the bump.
+    selection = RG.CommitSelection("all", where=str(tmp_path))
+    assert any("still 1.0.0" in f for f in RG.check_version_bumped(tmp_path, stage=selection))
+
+
+def _commit_all(root, msg):
+    subprocess.run(["git", "-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit",
+                    "-q", "--no-verify", "-am", msg], cwd=root, check=True)
+
+
+def _origin_moves_on(root, version, rel="plugins/bitranox/hooks/peer.py"):
+    """Advance origin/master past HEAD by a commit that changes plugins/ and sets ``version``,
+    leaving HEAD where it was: a checkout behind its origin."""
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True,
+                          text=True, check=True).stdout.strip()
+    _stage(root, rel, "peer = 1\n")
+    _stage(root, "plugins/bitranox/.claude-plugin/plugin.json", '{"version": "%s"}\n' % version)
+    _commit_all(root, "peer release")
+    subprocess.run(["git", "update-ref", "refs/remotes/origin/master", "HEAD"], cwd=root, check=True)
+    subprocess.run(["git", "reset", "-q", "--hard", head], cwd=root, check=True)
+
+
+def test_version_bumped_passes_a_behind_checkout_whose_commit_leaves_plugins_alone(tmp_path):
+    """[99]: diffed against origin's TIP, origin's own plugins/ change read as this commit's."""
+    pj = "plugins/bitranox/.claude-plugin/plugin.json"
+    git_repo_with_origin(tmp_path, {pj: '{"version": "1.0.0"}\n',
+                                    "plugins/bitranox/hooks/x.py": "x = 1\n"})
+    _origin_moves_on(tmp_path, "1.0.0")      # origin changed plugins/ and kept the version
+    _stage(tmp_path, "notes.md", "unrelated\n")
+    assert RG.check_version_bumped(tmp_path) == []
+    assert RG.check_version_bumped(tmp_path, stage=RG.STAGE_HEAD) == []
+
+
+def test_version_bumped_refuses_an_unbumped_change_in_a_behind_checkout(tmp_path):
+    """The tip-only comparison let this through: origin's version differs from ours, so ours
+    'looked' bumped while this change never moved it from the fork point."""
+    pj = "plugins/bitranox/.claude-plugin/plugin.json"
+    git_repo_with_origin(tmp_path, {pj: '{"version": "1.0.0"}\n',
+                                    "plugins/bitranox/hooks/x.py": "x = 1\n"})
+    _origin_moves_on(tmp_path, "1.1.0")
+    _stage(tmp_path, "plugins/bitranox/hooks/x.py", "x = 2\n")
+    fails = RG.check_version_bumped(tmp_path)
+    assert any("still 1.0.0" in f and "fork point" in f for f in fails), fails
+
+
+def test_version_bumped_refuses_a_bump_to_the_number_origin_already_published(tmp_path):
+    pj = "plugins/bitranox/.claude-plugin/plugin.json"
+    git_repo_with_origin(tmp_path, {pj: '{"version": "1.0.0"}\n',
+                                    "plugins/bitranox/hooks/x.py": "x = 1\n"})
+    _origin_moves_on(tmp_path, "1.0.1")
+    _stage(tmp_path, "plugins/bitranox/hooks/x.py", "x = 2\n")
+    _stage(tmp_path, pj, '{"version": "1.0.1"}\n')
+    fails = RG.check_version_bumped(tmp_path)
+    assert any("1.0.1" in f and "origin/master" in f for f in fails), fails
+    _stage(tmp_path, pj, '{"version": "1.0.2"}\n')           # control: bumped past origin's
+    assert RG.check_version_bumped(tmp_path) == []
+
+
+def test_version_bumped_on_a_push_reads_head(tmp_path):
+    pj = "plugins/bitranox/.claude-plugin/plugin.json"
+    git_repo_with_origin(tmp_path, {pj: '{"version": "1.0.0"}\n',
+                                    "plugins/bitranox/hooks/x.py": "x = 1\n"})
+    _stage(tmp_path, "plugins/bitranox/hooks/x.py", "x = 2\n")
+    _commit_all(tmp_path, "change")
+    _stage(tmp_path, pj, '{"version": "1.0.1"}\n')           # staged, not committed: not pushed
+    assert any("still 1.0.0" in f for f in RG.check_version_bumped(tmp_path, stage=RG.STAGE_HEAD))
+    _commit_all(tmp_path, "bump")
+    assert RG.check_version_bumped(tmp_path, stage=RG.STAGE_HEAD) == []
 
 
 def test_version_bumped_ignores_untracked_files_outside_the_plugin_and_ignored_ones(tmp_path):
@@ -4247,3 +4392,1092 @@ def test_the_mirror_audit_runs_from_a_marketplace_worktree_outside_public(tmp_pa
 
     assert RG.audit_mirrors(mwt, mirrors=THING) == 1
     assert IN_PROGRESS in capsys.readouterr().out
+
+
+def test_changed_vs_origin_does_not_list_a_peer_s_pushed_path_as_ours(tmp_path):
+    """A checkout BEHIND origin listed every path origin gained since as its own change.
+
+    The checklist rule only survived that because reading the peer's missing file raised OSError
+    and was skipped; the decision ledger check reads the shipped text and would refuse on it.
+    """
+    git_repo_with_origin(tmp_path, {"mine.md": "a\n", "theirs.md": "b\n"})
+    base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=tmp_path, capture_output=True,
+                          text=True, check=True).stdout.strip()
+    (tmp_path / "theirs.md").write_text("b2\n", encoding="utf-8")
+    subprocess.run(["git", "-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit",
+                    "-qam", "peer", "--no-verify"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "update-ref", "refs/remotes/origin/master", "HEAD"], cwd=tmp_path,
+                   check=True)
+    subprocess.run(["git", "reset", "-q", "--hard", base], cwd=tmp_path, check=True)
+    (tmp_path / "mine.md").write_text("a2\n", encoding="utf-8")
+
+    assert RG._changed_vs_origin(tmp_path) == ["mine.md"]
+
+
+def test_changed_vs_origin_on_a_diverged_checkout_lists_our_commit_not_the_peer_s(tmp_path):
+    """Local commits ahead of origin AND origin moved ahead: only our side is ours.
+
+    Diffed against origin's tip, the peer's pushed path shows up too, because HEAD lacks it.
+    """
+    git_repo_with_origin(tmp_path, {"mine.md": "a\n", "theirs.md": "b\n"})
+    base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=tmp_path, capture_output=True,
+                          text=True, check=True).stdout.strip()
+    ident = ["-c", "user.email=t@example.invalid", "-c", "user.name=t"]
+    (tmp_path / "theirs.md").write_text("b2\n", encoding="utf-8")
+    subprocess.run(["git", *ident, "commit", "-qam", "peer", "--no-verify"], cwd=tmp_path,
+                   check=True)
+    subprocess.run(["git", "update-ref", "refs/remotes/origin/master", "HEAD"], cwd=tmp_path,
+                   check=True)
+    subprocess.run(["git", "reset", "-q", "--hard", base], cwd=tmp_path, check=True)
+    (tmp_path / "mine.md").write_text("a2\n", encoding="utf-8")
+    subprocess.run(["git", *ident, "commit", "-qam", "ours", "--no-verify"], cwd=tmp_path,
+                   check=True)
+
+    assert RG._changed_vs_origin(tmp_path) == ["mine.md"]
+
+
+def test_merge_base_is_none_without_an_origin_ref(tmp_path):
+    git_repo(tmp_path, {"x.md": "a\n"})
+    assert RG._merge_base(tmp_path) is None
+
+
+# --------------------------------------------------------------------------
+# The skill decision ledger: the commit and push gate (check_skill_decisions) and the CI sweep
+# --------------------------------------------------------------------------
+
+LEDGER_SKILL = "plugins/bitranox/skills/devops-bmk"
+LEDGER_REL = LEDGER_SKILL + "/.skillwriter/decisions.jsonl"
+RULE_TEXT = "Intro.\n\nbmk alone, shared across projects.\n"
+
+
+@pytest.fixture
+def _bare_git_env(monkeypatch):
+    """No inherited variable may point the tests' git, or the gate's, at another repository.
+
+    A push from a linked worktree exports GIT_DIR to its hooks, and this suite runs from one. The
+    GIT_CONFIG_* pins of `_lf_git_eol_config` stay.
+    """
+    for key in list(os.environ):
+        if key.startswith("GIT_") and not key.startswith("GIT_CONFIG_"):
+            monkeypatch.delenv(key)
+
+
+def _ledger_line(text_anchor="bmk alone, shared across projects", *, ensure_ascii=True, **over):
+    entry = {"v": 1, "date": "2026-11-05", "kind": "rule", "topic": "env-model",
+             "decision": "bmk installs alone.", "why": "Measured on bmk 3.8.0.",
+             "evidence": {"tier": "measured", "text": "release notes"},
+             "reopen_if": "bmk changes its env model.", "anchors": [text_anchor],
+             "supersedes": [], "refs": [], "origin": "authored"}
+    entry.update(over)
+    entry["id"] = SD.entry_id(entry)
+    return json.dumps(entry, ensure_ascii=ensure_ascii) + "\n", entry
+
+
+def _ledger_repo(tmp_path, ledger_lines):
+    """A repo whose HEAD and origin/master hold the skill with ``ledger_lines`` as its ledger.
+
+    Written byte for byte (`write`), not through `git_repo`'s text mode: a CRLF fixture on Windows
+    would differ from the LF ledger a test stages, which the append-only check would refuse.
+    """
+    write(tmp_path / LEDGER_SKILL / "SKILL.md", RULE_TEXT)
+    write(tmp_path / LEDGER_REL, "".join(ledger_lines))
+    return git_repo_with_origin(tmp_path, {})
+
+
+def _stage(root, rel, data):
+    path = root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data if isinstance(data, bytes) else data.encode("utf-8"))
+    subprocess.run(["git", "add", rel], cwd=root, check=True)
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_staged_change_that_drops_a_live_anchor_is_refused_with_the_reason(tmp_path):
+    line, entry = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    _stage(root, LEDGER_SKILL + "/SKILL.md", "Intro.\n\nbmk installs per project now.\n")
+    logged = []
+    fails = RG.check_skill_decisions(root, RG.STAGE_INDEX, log=logged.append)
+    assert len(fails) == 1 and entry["id"] in fails[0] and entry["why"] in fails[0]
+    assert "skill_decisions.py add" in fails[0]
+    assert [r["entry_id"] for r in logged] == [entry["id"]]
+    assert set(logged[0]) == {"time", "skill", "entry_id", "problem"}
+    assert logged[0]["skill"] == "devops-bmk"
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_superseding_entry_staged_with_the_change_passes(tmp_path):
+    line, entry = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    new_line, _ = _ledger_line("each project gets its own bmk env", decision="per project",
+                               supersedes=[entry["id"]])
+    _stage(root, LEDGER_SKILL + "/SKILL.md", "Intro.\n\nNow each project gets its own bmk env.\n")
+    _stage(root, LEDGER_REL, line + new_line)
+    assert RG.check_skill_decisions(root, RG.STAGE_INDEX, log=lambda r: None) == []
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_an_unstaged_edit_does_not_block_a_commit(tmp_path):
+    """The index is what the commit carries: a half-done working copy is not part of it."""
+    line, _ = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    write(root / LEDGER_SKILL / "SKILL.md", "half-done rewrite\n")
+    assert RG.check_skill_decisions(root, RG.STAGE_INDEX, log=lambda r: None) == []
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_push_reads_head_not_the_index(tmp_path):
+    line, _ = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    _stage(root, LEDGER_SKILL + "/SKILL.md", "dropped\n")
+    assert RG.check_skill_decisions(root, RG.STAGE_HEAD, log=lambda r: None) == []
+    # The control: the same tree read at the index is refused, so HEAD's pass is not vacuous.
+    assert RG.check_skill_decisions(root, RG.STAGE_INDEX, log=lambda r: None) != []
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_removed_ledger_line_is_refused(tmp_path):
+    line, _ = _ledger_line()
+    second, _ = _ledger_line(topic="second")
+    root = _ledger_repo(tmp_path, [line, second])
+    _stage(root, LEDGER_REL, second)
+    logged = []
+    fails = RG.check_skill_decisions(root, RG.STAGE_INDEX, log=logged.append)
+    assert any("append-only" in f for f in fails)
+    assert any("append-only" in r["problem"] for r in logged)
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_an_appended_ledger_line_is_not_an_append_only_breach(tmp_path):
+    line, _ = _ledger_line()
+    second, _ = _ledger_line(topic="second")
+    root = _ledger_repo(tmp_path, [line])
+    _stage(root, LEDGER_REL, line + second)
+    assert RG.check_skill_decisions(root, RG.STAGE_INDEX, log=lambda r: None) == []
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_deleting_the_ledger_but_keeping_the_skill_is_refused(tmp_path):
+    """The ledger is gone from disk and index alike, so only HEAD and the fork point still hold
+    it."""
+    line, _ = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    subprocess.run(["git", "rm", "-q", LEDGER_REL], cwd=root, check=True)
+    fails = RG.check_skill_decisions(root, RG.STAGE_INDEX, log=lambda r: None)
+    assert any("append-only" in f and "line 1" in f for f in fails)
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_deleting_the_whole_skill_takes_its_ledger_with_it(tmp_path):
+    line, _ = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    subprocess.run(["git", "rm", "-rq", LEDGER_SKILL], cwd=root, check=True)
+    assert RG.check_skill_decisions(root, RG.STAGE_INDEX, log=lambda r: None) == []
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_another_skill_s_broken_ledger_does_not_block_an_unrelated_commit(tmp_path):
+    line, _ = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    write(root / LEDGER_SKILL / "SKILL.md", "dropped, but not staged and not this commit\n")
+    _stage(root, "plugins/bitranox/hooks/x.py", "x = 1\n")
+    assert RG.check_skill_decisions(root, RG.STAGE_INDEX, log=lambda r: None) == []
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_staged_ledger_holding_a_raw_u2028_in_a_string_passes(tmp_path):
+    """One JSON line holding a raw U+2028 is ONE line: only b"\\n" ends a ledger line.
+
+    str.splitlines would cut the line at the U+2028 into two halves that are not JSON, so a valid
+    ledger written with ensure_ascii=False would be refused.
+    """
+    line, _ = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    wide, _ = _ledger_line(topic="wide", ensure_ascii=False,
+                           decision="bmk installs alone." + chr(0x2028) + "Still one entry.")
+    assert chr(0x2028) in wide
+    _stage(root, LEDGER_REL, line + wide)
+    assert RG.check_skill_decisions(root, RG.STAGE_INDEX, log=lambda r: None) == []
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_staged_non_utf8_ledger_line_is_refused_naming_skill_ledger_and_line(tmp_path):
+    """A byte that is not UTF-8 is refused, never read as U+FFFD.
+
+    The bad line is built so that a lenient decode (errors="replace") turns it into a VALID entry:
+    its decision holds U+FFFD and its id was computed over that, so only a strict per-line decode
+    can tell the shipped bytes are not the entry.
+    """
+    line, _ = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    fake, _ = _ledger_line(topic="fake", ensure_ascii=False,
+                           decision="bmk installs alone " + chr(0xFFFD) + ".")
+    bad = fake.encode("utf-8").replace(chr(0xFFFD).encode("utf-8"), b"\xff")
+    _stage(root, LEDGER_REL, line.encode("utf-8") + bad)
+    logged = []
+    fails = RG.check_skill_decisions(root, RG.STAGE_INDEX, log=logged.append)
+    assert len(fails) == 1
+    assert "devops-bmk" in fails[0] and LEDGER_REL in fails[0]
+    assert "line 2" in fails[0] and "not UTF-8" in fails[0]
+    assert "\n" not in fails[0]
+    assert [r["entry_id"] for r in logged] == [""]
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_the_default_log_appends_to_the_audit_dir_and_never_raises(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    line, entry = _ledger_line()
+    root = _ledger_repo(tmp_path / "repo", [line])
+    _stage(root, LEDGER_SKILL + "/SKILL.md", "dropped\n")
+    assert RG.check_skill_decisions(root, RG.STAGE_INDEX) != []
+    sink = home / ".claude" / "self-improve-audit" / "skill-decision-gate.jsonl"
+    records = [json.loads(x) for x in sink.read_text(encoding="utf-8").splitlines()]
+    assert [r["entry_id"] for r in records] == [entry["id"]]
+    # An audit dir that cannot hold the log (a FILE where the dir should be) still refuses cleanly.
+    sink.unlink()
+    sink.parent.rmdir()
+    sink.parent.write_text("not a dir\n", encoding="utf-8")
+    assert RG.check_skill_decisions(root, RG.STAGE_INDEX) != []
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_ci_sweeps_every_ledger_in_the_working_tree(tmp_path):
+    line, entry = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    write(root / LEDGER_SKILL / "SKILL.md", "dropped\n")
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+    fails = RG.check_all_skill_decisions(root)
+    assert len(fails) == 1 and entry["id"] in fails[0]
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_ci_sweep_names_the_ledger_and_line_of_a_malformed_one(tmp_path):
+    root = _ledger_repo(tmp_path, ["{not json\n"])
+    fails = RG.check_all_skill_decisions(root)
+    assert len(fails) == 1 and LEDGER_REL in fails[0] and "line 1" in fails[0]
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_run_checks_wires_the_decision_check_in_both_modes(tmp_path, monkeypatch):
+    """The hook judges the index of a touched skill; --ci sweeps every ledger on disk."""
+    # run_checks logs a refusal through the default sink, which must not land in the real HOME.
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+    line, entry = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    _stage(root, LEDGER_SKILL + "/SKILL.md", "dropped\n")
+    parts = RG.GateParts(mirrors={})
+    hook = RG.run_checks(root, ci=False, run_pytest=False, parts=parts)
+    ci = RG.run_checks(root, ci=True, run_pytest=False, parts=parts)
+    assert any(entry["id"] in f for f in hook)
+    assert any(entry["id"] in f for f in ci)
+    # The sweep and the per-change check both see this anchor: CI reports it once.
+    assert len([f for f in ci if entry["id"] in f]) == 1
+
+
+def _commit_all(root, message):
+    """Commit everything under ``root`` with a fixed identity, so no user config is needed."""
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True, env=env)
+    subprocess.run(["git", "commit", "-q", "--no-verify", "-m", message], cwd=root, check=True,
+                   env=env)
+
+
+def _git_out(root, *args):
+    return subprocess.run(["git", *args], cwd=root, capture_output=True, text=True,
+                          check=True).stdout.strip()
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_push_judges_a_committed_ledger_change_whose_index_and_working_copy_were_reverted(
+        tmp_path):
+    """A push ships HEAD: a ledger line removed in a commit is judged even once the index and the
+    working copy hold the fork point's ledger again, which leaves nothing for the merge-base
+    diff."""
+    line, _ = _ledger_line()
+    second, _ = _ledger_line(topic="second")
+    root = _ledger_repo(tmp_path, [line, second])
+    base = _git_out(root, "rev-parse", "HEAD")
+    write(root / LEDGER_REL, second)
+    _commit_all(root, "drop a ledger line")
+    subprocess.run(["git", "checkout", base, "--", LEDGER_REL], cwd=root, check=True)
+    assert RG._changed_vs_origin(root) == []
+    fails = RG.check_skill_decisions(root, RG.STAGE_HEAD, log=lambda r: None)
+    assert any("append-only" in f and "line 1" in f for f in fails)
+    # The commit carries the restored index, so the same tree judged as a commit passes.
+    assert RG.check_skill_decisions(root, RG.STAGE_INDEX, log=lambda r: None) == []
+
+
+@pytest.mark.parametrize("stage", [RG.STAGE_INDEX, RG.STAGE_HEAD])
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_skill_dir_removed_from_disk_but_still_shipped_is_judged_on_what_ships(tmp_path, stage):
+    """`rm -rf` without `git rm` deletes nothing a commit or push ships: the index (and HEAD)
+    still carry the skill, so its staged or committed text is what is judged, not the empty disk."""
+    line, entry = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    _stage(root, LEDGER_SKILL + "/SKILL.md", "Intro.\n\nbmk installs per project now.\n")
+    if stage == RG.STAGE_HEAD:
+        _commit_all(root, "drop the anchor")
+    shutil.rmtree(root / LEDGER_SKILL)
+    fails = RG.check_skill_decisions(root, stage, log=lambda r: None)
+    assert len(fails) == 1 and entry["id"] in fails[0]
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_skill_deleted_with_git_rm_after_a_staged_edit_passes(tmp_path):
+    """The control for the removed-dir case: here the stage itself ships no SKILL.md, so the
+    skill is deleted and its ledger goes with it."""
+    line, _ = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    _stage(root, LEDGER_SKILL + "/SKILL.md", "Intro.\n\nbmk installs per project now.\n")
+    subprocess.run(["git", "rm", "-rqf", LEDGER_SKILL], cwd=root, check=True)
+    assert not (root / LEDGER_SKILL).exists()
+    assert RG.check_skill_decisions(root, RG.STAGE_INDEX, log=lambda r: None) == []
+
+
+@pytest.mark.parametrize("stage", [RG.STAGE_INDEX, RG.STAGE_HEAD])
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_checkout_behind_origin_is_not_judged_on_origin_s_newer_ledger(tmp_path, stage):
+    """Origin gained an entry in another skill's ledger after this checkout forked. Judged against
+    origin's tip instead of the merge-base, this checkout would read as having removed it."""
+    other = "plugins/bitranox/skills/other-skill"
+    other_line, _ = _ledger_line("other rule text", topic="other")
+    write(tmp_path / other / "SKILL.md", "Other rule text.\n")
+    write(tmp_path / other / ".skillwriter/decisions.jsonl", other_line)
+    line, _ = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    newer, _ = _ledger_line("a newer rule", topic="newer")
+    write(root / other / "SKILL.md", "Other rule text.\n\nA newer rule.\n")
+    write(root / other / ".skillwriter/decisions.jsonl", other_line + newer)
+    _commit_all(root, "origin moves on")
+    subprocess.run(["git", "update-ref", "refs/remotes/origin/master", "HEAD"], cwd=root,
+                   check=True)
+    subprocess.run(["git", "reset", "-q", "--hard", "HEAD~1"], cwd=root, check=True)
+    _stage(root, LEDGER_SKILL + "/references/notes.md", "A note.\n")
+    _stage(root, "plugins/bitranox/hooks/x.py", "x = 1\n")
+    if stage == RG.STAGE_HEAD:
+        _commit_all(root, "an unrelated change")
+    assert RG.check_skill_decisions(root, stage, log=lambda r: None) == []
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_commit_naming_paths_is_judged_on_its_selection_not_the_working_tree(tmp_path):
+    """`git commit -- SKILL.md` takes SKILL.md from disk and leaves the unstaged ledger change out,
+    so the superseding entry sitting in the working copy is not part of what this commit ships."""
+    line, entry = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    new_line, _ = _ledger_line("each project gets its own bmk env", decision="per project",
+                               supersedes=[entry["id"]])
+    write(root / LEDGER_SKILL / "SKILL.md", "Intro.\n\nNow each project gets its own bmk env.\n")
+    write(root / LEDGER_REL, line + new_line)
+    only_md = RG.CommitSelection("only", [LEDGER_SKILL + "/SKILL.md"], where=root)
+    fails = RG.check_skill_decisions(root, only_md, log=lambda r: None)
+    assert len(fails) == 1 and entry["id"] in fails[0]
+    # The controls: naming the ledger too ships the supersede, and the plain index ships neither.
+    both = RG.CommitSelection("only", [LEDGER_SKILL + "/SKILL.md", LEDGER_REL], where=root)
+    assert RG.check_skill_decisions(root, both, log=lambda r: None) == []
+    assert RG.check_skill_decisions(root, RG.STAGE_INDEX, log=lambda r: None) == []
+
+
+@pytest.mark.parametrize("target", ["docs/old.jsonl",
+                                    "plugins/bitranox/skills/other-skill/kept.jsonl"])
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_ledger_moved_out_of_its_skill_with_git_mv_is_refused(tmp_path, target):
+    """git's rename detection lists a move under its NEW path only, so the skill the ledger left
+    was no candidate and the move passed; the old path must be listed as removed."""
+    line, _ = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    (root / target).parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "mv", LEDGER_REL, target], cwd=root, check=True)
+    fails = RG.check_skill_decisions(root, RG.STAGE_INDEX, log=lambda r: None)
+    assert any("present at the fork point, was changed or removed" in f and LEDGER_REL in f
+               for f in fails)
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_ci_on_a_pull_request_refuses_a_ledger_line_removed_with_its_anchor(tmp_path, monkeypatch):
+    """A PR's HEAD sits above origin/master, so the append-only half has a fork point to read in
+    CI too. Line 1 and its anchor are both gone, which leaves the sweep nothing to object to: the
+    remaining ledger matches the remaining text."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+    first, _ = _ledger_line()
+    second, _ = _ledger_line("release names its version", topic="second")
+    write(tmp_path / LEDGER_SKILL / "SKILL.md",
+          RULE_TEXT + "\nEach release names its version.\n")
+    write(tmp_path / LEDGER_REL, first + second)
+    root = git_repo_with_origin(tmp_path, {})
+    write(root / LEDGER_SKILL / "SKILL.md", "Intro.\n\nEach release names its version.\n")
+    write(root / LEDGER_REL, second)
+    _commit_all(root, "drop the first rule and its entry")
+    parts = RG.GateParts(mirrors={})
+    assert RG.check_all_skill_decisions(root) == []           # the sweep alone passes it
+    ci = RG.run_checks(root, ci=True, run_pytest=False, parts=parts)
+    assert any("append-only" in f and "line 1" in f for f in ci)
+
+
+RENAMED_SKILL = "plugins/bitranox/skills/devops-bmk2"
+#: Long enough that dropping the rule line leaves git's rename detection pairing the SKILL.md.
+LONG_RULE_TEXT = ("Intro.\n\n" + "".join("Unchanged context line %d.\n" % n for n in range(12))
+                  + "\nbmk alone, shared across projects.\n")
+
+
+def _renamed_skill_repo(tmp_path, *, keep_ledger):
+    """A repo whose skill was renamed with `git mv` after its fork point; with ``keep_ledger``
+    False the moved SKILL.md lost the rule line and the moved ledger was emptied, on disk."""
+    line, _ = _ledger_line()
+    write(tmp_path / LEDGER_SKILL / "SKILL.md", LONG_RULE_TEXT)
+    write(tmp_path / LEDGER_REL, line)
+    root = git_repo_with_origin(tmp_path, {})
+    subprocess.run(["git", "mv", LEDGER_SKILL, RENAMED_SKILL], cwd=root, check=True)
+    if not keep_ledger:
+        write(root / RENAMED_SKILL / "SKILL.md",
+              LONG_RULE_TEXT.replace("\nbmk alone, shared across projects.\n", ""))
+        write(root / RENAMED_SKILL / ".skillwriter/decisions.jsonl", "")
+    return root
+
+
+def _renamed_stage(root, kind):
+    if kind == "index":
+        subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+        return RG.STAGE_INDEX
+    if kind == "head":
+        _commit_all(root, "rename the skill")
+        return RG.STAGE_HEAD
+    # `git commit -- <old dir> <new dir>` takes the moved files from disk, unstaged edits included.
+    return RG.CommitSelection("only", [LEDGER_SKILL, RENAMED_SKILL], where=root)
+
+
+@pytest.mark.parametrize("kind", ["index", "head", "selection"])
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_renamed_skill_carries_its_ledger_into_the_append_only_check(tmp_path, kind):
+    """Renamed with `git mv`, the old name reads as deleted and the new one had no ledger at the
+    fork point, so an emptied ledger passed. The new ledger answers to the old path's bytes."""
+    root = _renamed_skill_repo(tmp_path, keep_ledger=False)
+    fails = RG.check_skill_decisions(root, _renamed_stage(root, kind), log=lambda r: None)
+    new_ledger = RENAMED_SKILL + "/.skillwriter/decisions.jsonl"
+    assert any("append-only" in f and new_ledger in f and LEDGER_REL in f and "line 1" in f
+               for f in fails), fails
+
+
+@pytest.mark.parametrize("kind", ["index", "head", "selection"])
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_renamed_skill_with_its_ledger_and_text_intact_passes(tmp_path, kind):
+    root = _renamed_skill_repo(tmp_path, keep_ledger=True)
+    assert RG.check_skill_decisions(root, _renamed_stage(root, kind), log=lambda r: None) == []
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_deleted_skill_plus_a_new_one_sharing_a_helper_file_is_no_rename(tmp_path):
+    """git pairs ANY identical file, so a new skill holding the deleted one's conftest.py read as
+    its rename and was refused for an empty ledger it never had. Only a paired SKILL.md or ledger
+    makes a rename."""
+    line, _ = _ledger_line()
+    helper = "import sys\nsys.path.insert(0, 'scripts')\n"
+    write(tmp_path / LEDGER_SKILL / "scripts/tests/conftest.py", helper)
+    root = _ledger_repo(tmp_path, [line])
+    subprocess.run(["git", "rm", "-r", "-q", LEDGER_SKILL], cwd=root, check=True)
+    fresh = "plugins/bitranox/skills/totally-new"
+    write(root / fresh / "SKILL.md",
+          "---\nname: totally-new\n---\n# Totally new\n\nNothing in common with the old one.\n")
+    write(root / fresh / "scripts/tests/conftest.py", helper)
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+    # control: git does pair the helper file, so the rule must look past that pairing
+    pairs = RG._stage_renames(root, RG.STAGE_INDEX, RG._merge_base(root))
+    assert (LEDGER_SKILL + "/scripts/tests/conftest.py",
+            fresh + "/scripts/tests/conftest.py") in pairs
+    assert RG.check_skill_decisions(root, RG.STAGE_INDEX, log=lambda r: None) == []
+
+
+def test_jsonl_is_an_lf_checked_suffix():
+    assert ".jsonl" in RG._LF_SUFFIXES
+
+
+# --------------------------------------------------------------------------
+# The skill-writer checklist states what the change decided: `Decisions: <ids>` or `none - <why>`
+# --------------------------------------------------------------------------
+
+def _review(tmp_path, checklist, ledger="", *, extra=None, changed_extra=()):
+    """skill_review_failures over a changed SKILL.md plus ``checklist``, no git: the working
+    tree."""
+    rel = "plugins/bitranox/skills/s1/"
+    files = {rel + "SKILL.md": "x\n", rel + ".skillwriter/checklist-1.md": checklist}
+    if ledger:
+        files[rel + ".skillwriter/decisions.jsonl"] = ledger
+    for path, text in {**files, **(extra or {})}.items():
+        write(tmp_path / path, text)
+    return RG.skill_review_failures(tmp_path, list(files) + list(changed_extra),
+                                    read_original=lambda rel: None)
+
+
+def test_a_checklist_without_a_decisions_line_is_refused(tmp_path):
+    fails = _review(tmp_path, "- [x] RED\n- [x] GREEN\n")
+    assert len(fails) == 1 and "Decisions:" in fails[0] and "skills/s1" in fails[0]
+
+
+def test_decisions_none_with_a_reason_passes(tmp_path):
+    assert _review(tmp_path, "- [x] RED\nDecisions: none - wording only, no rule changed\n") == []
+
+
+@pytest.mark.parametrize("line", [
+    "Decisions: none",                   # no reason at all
+    "Decisions: none -",                 # the dash, still no reason
+    "Decisions: none - ",                # a reason of whitespace only
+    "Decisions: nothing - reworded",     # not the keyword
+    "Decisions: d-2026110-0123abcd",     # a malformed id: seven date digits
+    "Decisions: d-20261105-0123abcd d-20261105-0123abce",   # ids not separated by a comma
+    "- [ ] Decisions: none - an open box",  # only a ticked box may precede the key
+    "> Decisions: none - quoted",        # a blockquote is not a list marker
+    "[x] Decisions: none - a box without a list marker",
+])
+def test_a_decisions_line_not_in_the_required_form_is_refused(tmp_path, line):
+    fails = _review(tmp_path, "- [x] RED\n%s\n" % line)
+    assert any("no 'Decisions:' line" in f for f in fails)
+    # The refusal shows the forms it accepts, the list-item one included.
+    assert any("- [x] Decisions:" in f for f in fails)
+
+
+@pytest.mark.parametrize("line", [
+    "- Decisions: none - in a list item",
+    "* Decisions: none - a star item",
+    "+ Decisions: none - a plus item",
+    "1. Decisions: none - an ordered item",
+    "- [x] Decisions: none - a ticked task item",
+    "- [X] Decisions: none - an upper-case tick",
+    "  Decisions: none - indented",
+    "    - [x] Decisions: none - an indented task item",
+])
+def test_a_decisions_line_after_whitespace_a_list_marker_or_a_ticked_box_passes(tmp_path, line):
+    assert _review(tmp_path, "- [x] RED\n%s\n" % line) == []
+
+
+def test_ids_on_a_list_item_decisions_line_are_still_looked_up(tmp_path):
+    fails = _review(tmp_path, "- [x] RED\n- [x] Decisions: d-20261105-0123abcd\n")
+    assert len(fails) == 1 and "d-20261105-0123abcd" in fails[0] and "ledger" in fails[0]
+
+
+def test_decisions_naming_an_id_the_ledger_lacks_is_refused(tmp_path):
+    fails = _review(tmp_path, "- [x] RED\nDecisions: d-20261105-0123abcd\n")
+    assert len(fails) == 1 and "d-20261105-0123abcd" in fails[0] and "ledger" in fails[0]
+
+
+def test_decisions_naming_an_id_a_present_ledger_lacks_is_refused(tmp_path):
+    line, entry = _ledger_line()
+    fails = _review(tmp_path, "- [x] RED\nDecisions: %s, d-20261105-0123abcd\n" % entry["id"],
+                    ledger=line)
+    assert len(fails) == 1 and "d-20261105-0123abcd" in fails[0]
+    assert entry["id"] not in fails[0]           # only the id the ledger lacks is named
+
+
+def test_decisions_naming_a_ledger_id_passes(tmp_path):
+    line, entry = _ledger_line()
+    assert _review(tmp_path, "- [x] RED\nDecisions: %s\n" % entry["id"], ledger=line) == []
+
+
+def test_a_decisions_line_inside_a_code_fence_does_not_count(tmp_path):
+    """Read the way `has_open_checkbox` reads a checklist: a fenced line is an example, not a
+    statement, so a checklist quoting the format has still not said what it decided."""
+    fenced = "- [x] RED\n\n```text\nDecisions: none - an example of the line\n```\n"
+    fails = _review(tmp_path, fenced)
+    assert len(fails) == 1 and "no 'Decisions:' line" in fails[0]
+    # control: the same line outside the fence counts
+    assert _review(tmp_path, fenced + "Decisions: none - stated\n") == []
+
+
+@pytest.mark.parametrize("checklist", [
+    # a fence nested in a list item stands at the item's indent, past CommonMark's three spaces
+    "- [x] RED\n- [x] Format:\n\n    ```\n    Decisions: none - <reason>\n    ```\n",
+    "- [x] RED\n- [x] Format:\n\n      ~~~text\n      Decisions: none - <reason>\n      ~~~\n",
+    # an indented code block: four spaces after a blank line, outside any list item
+    "Checked:\n\n    Decisions: none - an example of the line\n",
+    "    Decisions: none - a code block opening the file\n",
+    # four spaces past a list item's own content indent is a code block inside that item
+    "- [x] RED\n\n      Decisions: none - code inside the item\n",
+])
+def test_a_decisions_line_in_an_indented_fence_or_code_block_does_not_count(tmp_path, checklist):
+    fails = _review(tmp_path, checklist)
+    assert len(fails) == 1 and "no 'Decisions:' line" in fails[0], fails
+
+
+@pytest.mark.parametrize("checklist", [
+    # a list item's own continuation paragraph is prose, not code
+    "- [x] RED\n- [x] Format:\n\n    Decisions: none - a paragraph of the item\n",
+    # a closed indented fence hides only its own lines
+    "- [x] Format:\n\n    ```\n    Decisions: none - quoted\n    ```\n\nDecisions: none - stated\n",
+    # prose after an indented code block counts again
+    "Checked:\n\n    some code\n\nDecisions: none - stated\n",
+])
+def test_a_decisions_line_beside_an_indented_fence_or_code_block_counts(tmp_path, checklist):
+    assert _review(tmp_path, checklist) == []
+
+
+@pytest.mark.parametrize("text, expected", [
+    # has_open_checkbox keeps its own reading: an indented line is never hidden from it
+    ("Prose.\n\n    - [ ] an open box indented after a blank line\n", True),
+    ("- [x] A\n\n    ```\n    - [ ] inside a list item's fence\n    ```\n", True),
+    ("- [x] A\n\n```\n- [ ] quoted in a fence\n```\n", False),
+])
+def test_has_open_checkbox_keeps_its_three_space_fence_reading(text, expected):
+    assert RG.has_open_checkbox(text) is expected
+
+
+def test_a_decisions_line_in_a_checklist_that_is_not_co_changed_does_not_count(tmp_path):
+    old = "plugins/bitranox/skills/s1/.skillwriter/checklist-0.md"
+    stale = {old: "- [x] RED\nDecisions: none - an earlier change\n"}
+    fails = _review(tmp_path, "- [x] RED\n", extra=stale)
+    assert len(fails) == 1 and "no 'Decisions:' line" in fails[0]
+    # control: once that checklist is part of the change too, its line counts
+    assert _review(tmp_path, "- [x] RED\n", extra=stale, changed_extra=[old]) == []
+
+
+def test_a_broken_ledger_is_left_to_the_decision_check(tmp_path):
+    """An id cannot be looked up in a ledger that does not parse; `check_skill_decisions` refuses
+    that ledger by its line, so this rule does not add a second, false 'not in the ledger'."""
+    assert _review(tmp_path, "- [x] RED\nDecisions: d-20261105-0123abcd\n",
+                   ledger="{not json\n") == []
+
+
+def _decision_change(tmp_path, *, stage_ledger):
+    """A repo whose skill change names a NEW ledger entry, staged with it or only on disk."""
+    line, _ = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    new_line, new = _ledger_line(decision="bmk installs alone, measured again.")
+    checklist = LEDGER_SKILL + "/.skillwriter/checklist-1.md"
+    _stage(root, LEDGER_SKILL + "/SKILL.md", RULE_TEXT + "More.\n")
+    _stage(root, checklist, "- [x] RED\nDecisions: %s\n" % new["id"])
+    if stage_ledger:
+        _stage(root, LEDGER_REL, line + new_line)
+    else:
+        write(root / LEDGER_REL, line + new_line)
+    return root, [LEDGER_SKILL + "/SKILL.md", checklist], new["id"]
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_an_id_only_in_the_working_tree_ledger_is_refused_at_the_index_stage(tmp_path):
+    """The commit carries the index: an entry written but never staged is not in what ships."""
+    root, changed, new_id = _decision_change(tmp_path, stage_ledger=False)
+    fails = RG.skill_review_failures(root, changed, read_original=lambda rel: None,
+                                     stage=RG.STAGE_INDEX)
+    assert len(fails) == 1 and new_id in fails[0]
+    _stage(root, LEDGER_REL, (root / LEDGER_REL).read_bytes())          # control: stage it
+    assert RG.skill_review_failures(root, changed, read_original=lambda rel: None,
+                                    stage=RG.STAGE_INDEX) == []
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_run_checks_reads_the_ledger_at_the_stage_it_judges(tmp_path, monkeypatch):
+    """A push ships HEAD: a ledger entry staged but not committed passes the commit, not the
+    push."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+    root, changed, new_id = _decision_change(tmp_path, stage_ledger=True)
+    # HEAD must ship the checklist (the checklist is read at the stage too) and only the ledger
+    # entry stay staged, or the push would be refused for a missing checklist instead.
+    _commit_paths(root, "the skill change without its ledger entry", changed)
+    parts = RG.GateParts(mirrors={})
+
+    def named(stage):
+        fails = RG.run_checks(root, ci=False, run_pytest=False, mirror_at=stage, parts=parts)
+        return [f for f in fails if "'Decisions:' names" in f]
+
+    assert named(RG.STAGE_INDEX) == []
+    pushed = named(RG.STAGE_HEAD)
+    assert len(pushed) == 1 and new_id in pushed[0]
+
+
+def _commit_paths(root, message, paths):
+    """`git commit -- <paths>` with a fixed identity: only ``paths`` go in, the rest stays
+    staged."""
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
+    subprocess.run(["git", "commit", "-q", "--no-verify", "-m", message, "--", *paths],
+                   cwd=root, check=True, env=env)
+
+
+_CHECKLIST = LEDGER_SKILL + "/.skillwriter/checklist-1.md"
+
+
+def _checklist_change(tmp_path, staged, on_disk=None):
+    """A repo whose SKILL.md change is staged with ``staged`` as its checklist (None: untracked),
+    the checklist's working copy then holding ``on_disk`` when given."""
+    line, _ = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    _stage(root, LEDGER_SKILL + "/SKILL.md", RULE_TEXT + "More.\n")
+    if staged is not None:
+        _stage(root, _CHECKLIST, staged)
+    if on_disk is not None:
+        write(root / _CHECKLIST, on_disk)
+    return root
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_decisions_line_only_in_the_working_copy_is_refused_at_the_index_stage(tmp_path):
+    """The commit carries the index: a line written to the checklist but never staged is not in
+    it."""
+    root = _checklist_change(tmp_path, "- [x] RED\n", "- [x] RED\nDecisions: none - only on disk\n")
+    fails = RG.check_skill_review(root, stage=RG.STAGE_INDEX)
+    assert len(fails) == 1 and "no 'Decisions:' line" in fails[0]
+    _stage(root, _CHECKLIST, (root / _CHECKLIST).read_bytes())          # control: stage it
+    assert RG.check_skill_review(root, stage=RG.STAGE_INDEX) == []
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_box_ticked_only_in_the_working_copy_is_refused_at_the_index_stage(tmp_path):
+    """The checkbox rule reads the checklist through the same lens as the Decisions rule."""
+    root = _checklist_change(tmp_path, "- [ ] RED\nDecisions: none - fixture\n",
+                             "- [x] RED\nDecisions: none - fixture\n")
+    fails = RG.check_skill_review(root, stage=RG.STAGE_INDEX)
+    assert len(fails) == 1 and "unchecked" in fails[0] and _CHECKLIST in fails[0]
+    _stage(root, _CHECKLIST, (root / _CHECKLIST).read_bytes())          # control: stage it
+    assert RG.check_skill_review(root, stage=RG.STAGE_INDEX) == []
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_an_untracked_checklist_is_no_checklist_of_the_change(tmp_path):
+    """An untracked file ships nothing, though `_changed_vs_origin` lists it as changed."""
+    root = _checklist_change(tmp_path, None, "- [x] RED\nDecisions: none - never staged\n")
+    assert _CHECKLIST in RG._changed_vs_origin(root)
+    fails = RG.check_skill_review(root, stage=RG.STAGE_INDEX)
+    assert len(fails) == 1 and "without an updated .skillwriter/checklist" in fails[0]
+    assert "stage it" in fails[0]
+    _stage(root, _CHECKLIST, (root / _CHECKLIST).read_bytes())          # control: stage it
+    assert RG.check_skill_review(root, stage=RG.STAGE_INDEX) == []
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_checklist_staged_then_deleted_from_the_index_is_no_checklist(tmp_path):
+    """`git rm --cached` leaves the file on disk and in the change list, yet the commit drops it."""
+    root = _checklist_change(tmp_path, "- [x] RED\nDecisions: none - staged once\n")
+    subprocess.run(["git", "rm", "-q", "--cached", _CHECKLIST], cwd=root, check=True)
+    fails = RG.check_skill_review(root, stage=RG.STAGE_INDEX)
+    assert len(fails) == 1 and "without an updated .skillwriter/checklist" in fails[0]
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_staged_ticked_checklist_with_a_decisions_line_passes(tmp_path):
+    """The control for the lens tests: what the index ships is complete, the disk agrees."""
+    root = _checklist_change(tmp_path, "- [x] RED\nDecisions: none - fixture\n")
+    assert RG.check_skill_review(root, stage=RG.STAGE_INDEX) == []
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_commit_naming_the_checklist_is_judged_on_its_working_copy(tmp_path):
+    """`git commit -- SKILL.md <checklist>` takes the checklist from disk, so its working copy
+    counts."""
+    root = _checklist_change(tmp_path, "- [x] RED\n",
+                             "- [x] RED\nDecisions: none - taken from disk\n")
+    both = RG.CommitSelection("only", [LEDGER_SKILL + "/SKILL.md", _CHECKLIST], where=root)
+    assert RG.check_skill_review(root, stage=both) == []
+    # controls: the plain index still holds the line-less copy, and a selection leaving the
+    # checklist out commits HEAD's (none), so neither ships the line
+    assert RG.check_skill_review(root, stage=RG.STAGE_INDEX)
+    only_md = RG.CommitSelection("only", [LEDGER_SKILL + "/SKILL.md"], where=root)
+    fails = RG.check_skill_review(root, stage=only_md)
+    assert len(fails) == 1 and "without an updated .skillwriter/checklist" in fails[0]
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_checklist_that_is_not_utf_8_is_refused_in_one_line(tmp_path):
+    root = _checklist_change(tmp_path, b"- [x] RED\nDecisions: none - fixture\n\xff\n")
+    fails = RG.check_skill_review(root, stage=RG.STAGE_INDEX)
+    assert len(fails) == 1 and "UTF-8" in fails[0] and _CHECKLIST in fails[0]
+    assert "\n" not in fails[0]
+
+
+# --------------------------------------------------------------------------
+# The review and CSO checks judge the SKILL.md the commit ships, never the working tree
+# --------------------------------------------------------------------------
+#
+# Observed: a pathspec commit of four hook files was refused over a SKILL.md it did not carry,
+# whose only change was another session's unstaged edit. `_changed_vs_origin` lists that path (it
+# unions the working tree), so the checks must ask what the stage ships before judging a skill.
+
+_SKILL_MD = LEDGER_SKILL + "/SKILL.md"
+_UNRELATED = "plugins/bitranox/hooks/other.py"
+
+
+def _peer_edit_repo(tmp_path):
+    """A repo whose merge-base, HEAD and index hold one SKILL.md and an unrelated file; on disk
+    the SKILL.md then carries a peer's half-done edit and the unrelated file this commit's."""
+    line, _ = _ledger_line()
+    write(tmp_path / _UNRELATED, "x = 1\n")
+    root = _ledger_repo(tmp_path, [line])
+    write(root / _SKILL_MD, RULE_TEXT + "A peer's unfinished sentence.\n")
+    write(root / _UNRELATED, "x = 2\n")
+    return root
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_an_unstaged_skill_edit_demands_no_checklist_of_a_commit_that_does_not_carry_it(tmp_path):
+    root = _peer_edit_repo(tmp_path)
+    assert _SKILL_MD in RG._changed_vs_origin(root)          # the superset still lists it
+    assert RG.check_skill_review(root, stage=RG.STAGE_INDEX) == []
+    unrelated = RG.CommitSelection("only", [_UNRELATED], where=root)
+    assert RG.check_skill_review(root, stage=unrelated) == []
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_the_same_skill_edit_shipped_still_demands_the_checklist(tmp_path):
+    """The control: the narrowing drops only what the stage does not ship."""
+    root = _peer_edit_repo(tmp_path)
+    taken = RG.CommitSelection("only", [_SKILL_MD], where=root)    # the commit takes it from disk
+    fails = RG.check_skill_review(root, stage=taken)
+    assert len(fails) == 1 and "without an updated .skillwriter/checklist" in fails[0]
+    subprocess.run(["git", "add", _SKILL_MD], cwd=root, check=True)
+    fails = RG.check_skill_review(root, stage=RG.STAGE_INDEX)
+    assert len(fails) == 1 and "without an updated .skillwriter/checklist" in fails[0]
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_skill_deleted_in_what_ships_is_still_a_review_case(tmp_path):
+    """Kept as it was: a staged deletion of a skill differs from the merge-base, so it is refused
+    without a shipped checklist, and its description is not linted (there is none to read)."""
+    root = _peer_edit_repo(tmp_path)
+    subprocess.run(["git", "rm", "-q", "-r", "--cached", LEDGER_SKILL], cwd=root, check=True)
+    fails = RG.check_skill_review(root, stage=RG.STAGE_INDEX)
+    assert len(fails) == 1 and "without an updated .skillwriter/checklist" in fails[0]
+    assert RG.check_cso(root) == []
+
+
+def _commit_then_restore(root, rel):
+    """Commit the working copy of ``rel``, then put the fork point's text back in index and disk.
+
+    What is left is a change only HEAD carries: the merge-base diff of index and working tree is
+    empty, while a push ships the commit."""
+    base = _git_out(root, "rev-parse", "--verify", "HEAD")
+    _commit_all(root, "an unpushed edit of " + rel)
+    subprocess.run(["git", "checkout", base, "--", rel], cwd=root, check=True)
+    assert RG._changed_vs_origin(root) == []
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_push_reviews_a_committed_skill_edit_whose_index_and_disk_were_reverted(tmp_path):
+    """A push ships HEAD, so the unpushed commit's SKILL.md edit still needs its checklist."""
+    line, _ = _ledger_line()
+    root = _ledger_repo(tmp_path, [line])
+    write(root / _SKILL_MD, RULE_TEXT + "More.\n")
+    _commit_then_restore(root, _SKILL_MD)
+    fails = RG.check_skill_review(root, stage=RG.STAGE_HEAD)
+    assert len(fails) == 1 and "without an updated .skillwriter/checklist" in fails[0], fails
+    # The commit carries the restored index, so the same tree judged as a commit passes.
+    assert RG.check_skill_review(root, stage=RG.STAGE_INDEX) == []
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_push_lints_a_committed_description_whose_index_and_disk_were_reverted(tmp_path):
+    """The description lint takes the same push candidates as the review check."""
+    root = _cso_repo(tmp_path)
+    _commit_then_restore(root, _CSO_MD)
+    fails = RG.check_cso(root, stage=RG.STAGE_HEAD)
+    assert len(fails) == 1 and "skills/kappa" in fails[0] and "scalar" in fails[0], fails
+    assert RG.check_cso(root, stage=RG.STAGE_INDEX) == []
+
+
+def _pad_repo(tmp_path):
+    """The formatter plus a SKILL.md holding PAD_ORIG at the merge-base, HEAD and the index."""
+    _skill_with_formatter(tmp_path, PAD_ORIG)
+    _g(tmp_path, "init", "-q", ".")
+    _g(tmp_path, "add", "-A")
+    _g(tmp_path, "commit", "-qm", "base")
+    _g(tmp_path, "update-ref", "refs/remotes/origin/master", "HEAD")
+    return tmp_path, "plugins/bitranox/skills/alpha/SKILL.md"
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_staged_re_pad_is_waived_whatever_the_working_copy_holds(tmp_path):
+    root, rel = _pad_repo(tmp_path)
+    _stage(root, rel, PAD_NEW)
+    write(root / rel, PAD_NEW.replace("| short   |", "| shorter |"))     # unstaged, not a re-pad
+    assert RG.check_skill_review(root, stage=RG.STAGE_INDEX) == []
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_staged_real_edit_is_not_waived_by_a_working_copy_restored_to_the_base(tmp_path):
+    root, rel = _pad_repo(tmp_path)
+    _stage(root, rel, PAD_NEW.replace("| short   |", "| shorter |"))
+    write(root / rel, PAD_ORIG)
+    fails = RG.check_skill_review(root, stage=RG.STAGE_INDEX)
+    assert len(fails) == 1 and "cell" in fails[0], fails
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_re_pad_is_judged_against_the_merge_base_when_origin_changed_the_skill_since(tmp_path):
+    """A checkout behind origin: origin's tip holds a newer SKILL.md, so comparing a re-pad of the
+    fork point's text with the tip reads origin's own edit as a line this change altered."""
+    root, rel = _pad_repo(tmp_path)
+    write(root / rel, PAD_ORIG.replace("Prose line.", "Prose line, newer on origin."))
+    _g(root, "commit", "-qam", "origin moves on")
+    _g(root, "update-ref", "refs/remotes/origin/master", "HEAD")
+    _g(root, "reset", "-q", "--hard", "HEAD~1")
+    _stage(root, rel, PAD_NEW)
+    assert RG.check_skill_review(root, stage=RG.STAGE_INDEX) == []
+    # control: a changed cell against the same base is still refused
+    _stage(root, rel, PAD_NEW.replace("| short   |", "| shorter |"))
+    fails = RG.check_skill_review(root, stage=RG.STAGE_INDEX)
+    assert len(fails) == 1 and "cell" in fails[0], fails
+
+
+_CSO_MD = "plugins/bitranox/skills/kappa/SKILL.md"
+_CSO_GOOD = ("---\nname: kappa\ndescription: Use when kappa gadgets fail with linker errors on "
+             "windows runners\n---\n\n# kappa\n")
+_CSO_BAD = _CSO_GOOD.replace("description: Use", "description: >-\n  Use")
+
+
+def _cso_repo(tmp_path):
+    """A repo whose merge-base, HEAD and index hold a good description; the disk a block scalar."""
+    root = git_repo_with_origin(tmp_path, {_CSO_MD: _CSO_GOOD})
+    write(root / _CSO_MD, _CSO_BAD)
+    return root
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_an_unstaged_bad_description_is_not_linted(tmp_path):
+    root = _cso_repo(tmp_path)
+    assert RG.check_cso(root) == []
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_staged_bad_description_is_linted(tmp_path):
+    """The control: what the index ships is the block scalar, so the lint fires."""
+    root = _cso_repo(tmp_path)
+    subprocess.run(["git", "add", _CSO_MD], cwd=root, check=True)
+    fails = RG.check_cso(root)
+    assert len(fails) == 1 and "skills/kappa" in fails[0] and "scalar" in fails[0]
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_the_description_lint_reads_the_stage_run_checks_judges(tmp_path, monkeypatch):
+    """A push ships HEAD: a bad description staged but not committed blocks the commit only."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+    root = _cso_repo(tmp_path / "repo")
+    subprocess.run(["git", "add", _CSO_MD], cwd=root, check=True)
+
+    def kappa(stage):
+        fails = RG.run_checks(root, ci=False, run_pytest=False, mirror_at=stage,
+                              parts=RG.GateParts(mirrors={}))
+        return [f for f in fails if "skills/kappa:" in f]
+
+    assert len(kappa(RG.STAGE_INDEX)) == 1
+    assert kappa(RG.STAGE_HEAD) == []
+
+
+def test_decisions_ids_separated_by_a_bare_comma_pass(tmp_path):
+    first, one = _ledger_line()
+    second, two = _ledger_line(topic="second")
+    checklist = "- [x] RED\nDecisions: %s,%s\n" % (one["id"], two["id"])
+    assert _review(tmp_path, checklist, ledger=first + second) == []
+
+
+# --------------------------------------------------------------------------
+# A tool repo's twin answers to the MARKETPLACE copy's decision ledger
+# --------------------------------------------------------------------------
+#
+# The mirror check alone lets a twin drop an anchored sentence whenever the marketplace holds the
+# same drop where a commit accepts it (uncommitted, or in a linked worktree), while the ledger that
+# records the reason stays in the marketplace. Each refusal case below keeps the marketplace text
+# equal to the twin's, so only the ledger can refuse it.
+
+MP_LEDGER = "plugins/bitranox/skills/coding-python-thing/.skillwriter/decisions.jsonl"
+
+
+def _ledgered_pair(tmp_path, monkeypatch):
+    """`_published_pair` whose marketplace skill also publishes a ledger entry anchoring its
+    paragraph. HOME is ``tmp_path / "home"``: a decision refusal is written to the audit log."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+    public, root, tool = _published_pair(tmp_path)
+    line, entry = _ledger_line("One paragraph of content")
+    write(root / MP_LEDGER, line)
+    _g(root, "add", "-A")
+    _g(root, "commit", "-qm", "ledger")
+    _g(root, "update-ref", "refs/remotes/origin/master", "HEAD")
+    return public, root, tool, line, entry
+
+
+def _edit_both(root, tool, edit):
+    """The same ``edit`` on both sides: staged in the tool repo, left uncommitted in the
+    marketplace."""
+    write(root / MP_SKILL, edit(MIRROR_BODY))
+    write(tool / TW_SKILL, edit(TWIN_BODY))
+    _g(tool, "add", "-A")
+
+
+def _replace(old, new):
+    return lambda body: body.replace(old, new)
+
+
+def _into_the_h1(body):
+    """Move the anchored paragraph into the H1 parenthetical, which the mirror convention erases."""
+    for own in ("(coding-python-thing)", "(python-thing)"):
+        body = body.replace(own, "(One paragraph of content)")
+    return body.replace("\nOne paragraph of content.\n", "\n")
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+@pytest.mark.parametrize("edit", [_replace("One paragraph of content.", IN_PROGRESS), _into_the_h1],
+                         ids=["dropped", "kept-only-in-the-h1-parenthetical"])
+def test_a_twin_that_drops_a_marketplace_anchor_is_refused(tmp_path, monkeypatch, capsys, edit):
+    public, root, tool, _line, entry = _ledgered_pair(tmp_path, monkeypatch)
+    _edit_both(root, tool, edit)
+    _tool_repo_commit(monkeypatch, public, tool)
+
+    assert RG.main(parts=_parts()) == 2
+    err = capsys.readouterr().err
+    assert entry["id"] in err and entry["why"] in err and "skill_decisions.py add" in err
+    assert str(root / MP_LEDGER) in err                     # names the ledger to supersede in
+    assert "DECISION" in err and "DRIFT" not in err
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_twin_decision_refusal_is_audited_once_and_names_a_stale_marketplace_ref(
+        tmp_path, monkeypatch, capsys):
+    """Two marketplace checkouts (the main one and a linked worktree) both refuse the twin, and the
+    gate reports one of them: the audit log gets that one refusal, not one per checkout read."""
+    public, root, tool, _line, entry = _ledgered_pair(tmp_path, monkeypatch)
+    home = tmp_path / "home"
+    _g(root, "worktree", "add", "-q", "-b", "side", str(tmp_path / "mp-wt"))
+    _fetched(root, 9)
+    _edit_both(root, tool, _replace("One paragraph of content.", IN_PROGRESS))
+    _tool_repo_commit(monkeypatch, public, tool)
+
+    assert RG.main(parts=_parts()) == 2
+    err = capsys.readouterr().err
+    assert "DECISION" in err and "last fetched 9.0 days ago" in err
+    sink = home / ".claude" / "self-improve-audit" / "skill-decision-gate.jsonl"
+    records = [json.loads(x) for x in sink.read_text(encoding="utf-8").splitlines()]
+    assert [(r["skill"], r["entry_id"]) for r in records] == [("coding-python-thing", entry["id"])]
+    assert set(records[0]) == {"time", "skill", "entry_id", "problem"}
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_superseding_entry_the_marketplace_committed_lets_the_twin_drop_pass(
+        tmp_path, monkeypatch, capsys):
+    public, root, tool, line, entry = _ledgered_pair(tmp_path, monkeypatch)
+    _edit_both(root, tool, _replace("One paragraph of content.", IN_PROGRESS))
+    newer, _ = _ledger_line(IN_PROGRESS.rstrip("."), decision="Superseded.",
+                            supersedes=[entry["id"]])
+    write(root / MP_LEDGER, line + newer)
+    _tool_repo_commit(monkeypatch, public, tool)
+    # Uncommitted in the marketplace, the superseding entry does not count yet...
+    assert RG.main(parts=_parts()) == 2
+    assert entry["id"] in capsys.readouterr().err
+
+    _g(root, "commit", "-qam", "supersede")                 # ...committed there, it does.
+    _hook_stdin(monkeypatch, "git commit -m x")
+    assert RG.main(parts=_parts()) == 0
+    assert "DECISION" not in capsys.readouterr().err
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_a_twin_edit_that_keeps_every_anchor_passes(tmp_path, monkeypatch):
+    public, root, tool, _line, _entry = _ledgered_pair(tmp_path, monkeypatch)
+    _edit_both(root, tool, _replace("One paragraph of content.",
+                                    "One paragraph of content.\n\nAnother one."))
+    _tool_repo_commit(monkeypatch, public, tool)
+
+    assert RG.main(parts=_parts()) == 0

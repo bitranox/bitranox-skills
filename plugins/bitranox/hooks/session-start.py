@@ -26,6 +26,7 @@ import sys
 import time
 from pathlib import Path
 
+import claude_paths
 import open_work
 from self_improve_signals import (
     MEMORY_DIRNAME,
@@ -494,7 +495,7 @@ _NUDGE = (
 def _autoupdate_enabled(proj):
     """True if extraKnownMarketplaces['bitranox-skills'].autoUpdate is set in user/project settings."""
     candidates = [
-        Path.home() / ".claude" / "settings.json",
+        claude_paths.config_dir() / "settings.json",
         Path(proj) / ".claude" / "settings.json",
         Path(proj) / ".claude" / "settings.local.json",
     ]
@@ -512,7 +513,7 @@ def _autoupdate_enabled(proj):
 def autoupdate_nudge(proj):
     """A one-line, self-silencing reminder to enable marketplace auto-update; None when off."""
     try:
-        optout = Path.home() / ".claude" / ".bitranox-no-autoupdate-nudge"
+        optout = claude_paths.config_dir() / ".bitranox-no-autoupdate-nudge"
         if optout.exists() or _autoupdate_enabled(proj):
             return None
     except Exception:  # noqa: BLE001 - never let detection wedge the session

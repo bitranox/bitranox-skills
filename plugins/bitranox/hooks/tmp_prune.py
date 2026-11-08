@@ -52,6 +52,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import claude_paths  # noqa: E402 - needs the sys.path line above
 from process_liveness import LiveSessions, live_session_ids  # noqa: E402 - needs the sys.path line above
 
 __all__ = [
@@ -132,12 +133,12 @@ class PruneConfig:
     @classmethod
     def for_this_machine(cls, *, keep_sessions: frozenset[str] = frozenset()) -> PruneConfig:
         system_tmp = tempfile.gettempdir()
-        home = Path.home() / ".claude"
+        config = claude_paths.config_dir()
         return cls(
             scratch_bases=scratch_bases(os.environ, sys.platform, system_tmp),
             oneoff_base=Path("/tmp") if sys.platform == "darwin" else Path(system_tmp),
-            projects_dir=home / "projects",
-            sessions_dir=home / "sessions",
+            projects_dir=config / "projects",
+            sessions_dir=config / "sessions",
             uid=os.getuid() if hasattr(os, "getuid") else None,
             now=time.time(),
             keep_sessions=keep_sessions,
@@ -587,7 +588,7 @@ def _age(path: Path, now: float) -> float:
 
 
 def default_state_dir() -> Path:
-    return Path.home() / ".claude" / "self-improve-audit"
+    return claude_paths.audit_dir()
 
 
 def _parse(argv: Sequence[str]) -> argparse.Namespace:

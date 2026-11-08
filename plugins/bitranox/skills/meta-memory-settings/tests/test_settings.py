@@ -113,6 +113,30 @@ def test_a_stale_retired_knob_in_the_config_file_is_ignored_and_dropped_on_the_n
     assert "classifier_jig_repetition" not in stored and stored["classifier_backend"] == "jev"
 
 
+@pytest.mark.parametrize("argv", [["view"], ["set", "nudges", "off"], ["reset"]])
+def test_a_stored_context_mode_errors_no_verb(home, capsys, argv):
+    """`context_mode` is not a knob: the context watcher has one mode. A stored config file can
+    still hold the key, and no verb may refuse that file over it - view hides the key, and a write
+    drops it."""
+    path = home / ".claude" / ".bitranox-memory.json"
+    path.write_text(json.dumps({"context_mode": "handover", "dream_mode": "off"}),
+                    encoding="utf-8")
+    assert ST.main(argv) == 0
+    captured = capsys.readouterr()
+    assert "context_mode" not in captured.out + captured.err
+    assert "context_mode" not in sig.load_config()
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    if argv[0] == "view":
+        assert stored["context_mode"] == "handover", "view must not rewrite the file"
+    else:
+        assert "context_mode" not in stored
+
+
+def test_context_mode_is_an_unknown_key(capsys):
+    assert ST.main(["set", "context_mode", "compact"]) == 2
+    assert "unknown key" in capsys.readouterr().err
+
+
 def test_no_settings_row_offers_a_retired_site():
     text = (Path(ST.__file__).resolve().parent / "SKILL.md").read_text(encoding="utf-8")
     for key in ("classifier_backlog_ask", "classifier_audit_candidate",
@@ -165,7 +189,6 @@ def test_set_track_private_bool(capsys):
     ("privacy", "public"),
     ("promotion", "always"),
     ("mcp_search", "on"),
-    ("context_mode", "compaction"),     # the watcher would read it as compact, silently
 ])
 def test_set_refuses_an_unknown_enum_value(capsys, key, bad):
     rc = ST.main(["set", key, bad])

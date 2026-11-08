@@ -27,6 +27,8 @@ import sys
 import time
 from pathlib import Path
 
+import claude_paths
+
 TTL_SECONDS = 8 * 3600
 # Claude Code sets this in a Bash tool call, and its value is the session's own transcript name -
 # the same id a PreToolUse event carries. That equality is what lets the writer (a Bash call) and
@@ -44,7 +46,7 @@ def _safe(text):
 
 
 def receipts_dir():
-    return Path.home() / ".claude" / "self-improve-audit" / "skill-receipts"
+    return claude_paths.audit_dir() / "skill-receipts"
 
 
 def receipt_path(skill, session_id=""):

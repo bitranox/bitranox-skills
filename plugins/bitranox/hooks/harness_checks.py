@@ -23,6 +23,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import claude_paths
 import skill_frontmatter
 import tell_chars
 
@@ -49,13 +50,19 @@ def owning_plugin(path):
     return None
 
 
+def claude_dir(home=None):
+    """Claude's config dir: `<home>/.claude` for an explicit `home`, else
+    `claude_paths.config_dir()`, which follows CLAUDE_CONFIG_DIR. Resolved per call."""
+    return Path(home) / ".claude" if home is not None else claude_paths.config_dir()
+
+
 def under_installed_plugins(path, home=None):
-    """True when `path` sits under `<home>/.claude/plugins`.
+    """True when `path` sits under `<config dir>/plugins` (see `claude_dir`).
 
     That tree holds installed copies - the marketplace clone and the per-version cache. They carry
     no manifest of their own at every level, and editing one is pointless anyway: the next
     marketplace update overwrites it."""
-    base = (Path(home) if home is not None else Path.home()) / ".claude" / "plugins"
+    base = claude_dir(home) / "plugins"
     try:
         Path(path).relative_to(base)
     except ValueError:
@@ -292,13 +299,14 @@ def discover_shipped(roots, home=None, errors=None):
 
 
 def discover_candidates(roots, home=None, personal=True, errors=None):
-    """Every `<dir>/.claude/skills` holding a SKILL.md under `roots`, plus `<home>/.claude/skills`.
+    """Every `<dir>/.claude/skills` holding a SKILL.md under `roots`, plus the personal
+    `<config dir>/skills` (see `claude_dir`; it need not be named `.claude`).
 
     Shape only - ownership is `select_targets`' job. A plugin's own `skills/` dir is not a
     candidate at all: Claude Code loads it through the plugin, never as a project skill.
     Pass a list as `errors` to receive (path, reason) for every directory the walk could not list."""
-    home = Path(home) if home is not None else Path.home()
-    extra = [home / ".claude"] if personal else []
+    personal_dir = claude_dir(home)
+    extra = [personal_dir] if personal else []
     found = set()
     for root in [*[Path(r) for r in roots], *extra]:
         if not root.is_dir():
@@ -306,10 +314,11 @@ def discover_candidates(roots, home=None, personal=True, errors=None):
         for dirpath, dirnames, _ in os.walk(root, onerror=_walk_error_sink(errors)):
             dirnames[:] = [d for d in dirnames if d not in PRUNE_DIRS]
             here = Path(dirpath)
-            if here.name == ".claude":
+            if here.name == ".claude" or here == personal_dir:
                 # The installed-plugin tree is large and owned elsewhere; never descend it.
                 dirnames[:] = [d for d in dirnames if d != "plugins"]
-            if here.name == "skills" and here.parent.name == ".claude":
+            if here.name == "skills" and (here.parent.name == ".claude"
+                                          or here.parent == personal_dir):
                 dirnames[:] = []
                 if _holds_skill(here):
                     found.add(here)

@@ -14,6 +14,14 @@ Usage:
 
 Exit codes: 0 the diff was scanned (whether or not claims were found), 2 the diff could
 not be read or the arguments were invalid.
+
+Decisions:
+    - The closing advice points at the Method section of coding-performance-review and names
+      no language-specific tool. Why: this checker ships in the language-neutral skill, so a
+      reviewer of Go, bash or SQL code reads it, and the Python skill's profiling scripts do
+      not exist for them. Evidence: argued: review of the skill split. Reopen if: the checker
+      moves back into a single-language skill. Pinned by:
+      tests/test_validate_perf_claims.py::test_cli_advice_names_no_language_specific_tool
 """
 import argparse
 import re
@@ -157,8 +165,8 @@ def main(argv=None):
     print(f"Found {len(claims)} performance claim(s) in {path}")
     for c in claims:
         print(f"  - {c['claim']}  ({c['where']})")
-    print("\nValidate each against a REAL profiled run (find_hotspots / compare_performance);"
-          " never accept a claim on synthetic benchmarks.")
+    print("\nValidate each against a real measured run (see the Method section of"
+          " coding-performance-review); never accept a claim on synthetic benchmarks.")
     return 0
 
 

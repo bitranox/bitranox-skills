@@ -9,7 +9,6 @@ import find_cache_candidates as fcc
 import find_hotspots as fh
 import find_uncompiled_regex as fur
 import prioritize_cache_candidates as pcc
-import validate_perf_claims as vpc
 import compare_performance as cmp
 import profile_with_cache_template as pwct
 
@@ -139,31 +138,6 @@ def test_prioritize_matches_by_name_and_basename(tmp_path):
     hotspots = pcc.parse_hotspots(hot)
     pri = {p["function"] for p in pcc.prioritize(candidates, hotspots)}
     assert pri == {"fib"}           # fib is both; slow_sum is only a candidate
-
-
-# --- validate_perf_claims --------------------------------------------------
-
-def test_claims_extracts_varied_phrasings(tmp_path):
-    diff = _write(tmp_path, "changes.diff", """
-        +This change is 40% faster and gives a 3x speedup.
-        +It reduced latency by 30%.
-        +Improves the cache hit rate noticeably.
-    """)
-    claims = " | ".join(c["claim"] for c in vpc.find_performance_claims(diff)).lower()
-    assert "40% faster" in claims
-    assert "3x speedup" in claims
-    assert ("latency by 30%" in claims) or ("30%" in claims)
-    assert "cache hit rate" in claims
-
-
-def test_claims_empty_when_none(tmp_path):
-    diff = _write(tmp_path, "d.diff", "+just a normal refactor, no numbers here.\n")
-    assert vpc.find_performance_claims(diff) == []
-
-
-def test_validate_main_missing_file_returns_2(tmp_path):
-    # 2 = could not do the job; 1 would read as an answer
-    assert vpc.main([str(tmp_path / "nope.diff")]) == 2
 
 
 # --- compare_performance ---------------------------------------------------

@@ -367,3 +367,101 @@ def test_a_commit_pathspec_holds_no_redirection(command):
 def test_a_quoted_redirection_target_is_not_a_second_revision():
     """A raw-text regex cut `2>"/tmp/a b"` at the space and left `b"` as a revision."""
     assert G.broken_revparse('git rev-parse --short HEAD 2>"/tmp/a b"') is False
+
+
+# --- `@{u}` naming another branch ------------------------------------------------------------
+# A branch cut from a remote-tracking ref (`git checkout -b feat origin/master`) gets that ref as
+# its upstream, and `git push origin feat` without -u leaves it so: `git log @{u}..` then lists
+# every topic commit as unpushed although origin/feat holds them (measured 2026-11-06).
+
+UP = "@{u}"   # assembled so prose in this file is not read as a command by other guards
+
+
+@pytest.fixture
+def cut_from_master(tmp_path):
+    """A clone whose branch `feat` was cut from origin/master and pushed without -u."""
+    origin = tmp_path / "origin.git"
+    _git(tmp_path, "init", "-q", "--bare", "-b", "master", str(origin))
+    seed = tmp_path / "seed"
+    _git(tmp_path, "clone", "-q", str(origin), str(seed))
+    _git(seed, "checkout", "-q", "-b", "master")
+    (seed / "a.txt").write_bytes(b"a\n")
+    _git(seed, "add", "a.txt")
+    _git(seed, "commit", "-q", "-m", "base")
+    _git(seed, "push", "-q", "origin", "master")
+    clone = tmp_path / "clone"
+    _git(tmp_path, "clone", "-q", str(origin), str(clone))
+    _git(clone, "checkout", "-q", "-b", "feat", "origin/master")
+    (clone / "b.txt").write_bytes(b"b\n")
+    _git(clone, "add", "b.txt")
+    _git(clone, "commit", "-q", "-m", "topic")
+    return clone
+
+
+def _pushed(clone):
+    _git(clone, "push", "-q", "origin", "feat")   # no -u: the upstream stays origin/master
+    return clone
+
+
+def test_upstream_of_another_name_is_advised(cut_from_master, monkeypatch, capsys):
+    clone = _pushed(cut_from_master)
+    text = _advise(monkeypatch, capsys, "git log --oneline %s.." % UP, clone)
+    assert text and "UPSTREAM" in text
+    assert "origin/master" in text and "origin/feat" in text
+    assert "--set-upstream-to=origin/feat" in text and "exists" in text
+    assert text.count("\n") == 0                     # one line
+
+
+def test_an_absent_namesake_is_said_and_no_set_upstream_offered(cut_from_master, monkeypatch,
+                                                                capsys):
+    text = _advise(monkeypatch, capsys, "git rev-list --count %s..HEAD" % UP, cut_from_master)
+    assert text and "origin/master" in text and "origin/feat" in text
+    assert "does not exist" in text and "--set-upstream-to" not in text
+
+
+def test_matching_upstream_name_is_silent(cut_from_master, monkeypatch, capsys):
+    """Control: once `push -u` set origin/feat as upstream, `@{u}` means what it reads as."""
+    _git(cut_from_master, "push", "-q", "-u", "origin", "feat")
+    assert _advise(monkeypatch, capsys, "git log %s.." % UP, cut_from_master) is None
+
+
+def test_no_upstream_and_detached_head_are_silent(repo, monkeypatch, capsys):
+    assert _advise(monkeypatch, capsys, "git log %s.." % UP, repo) is None
+    _git(repo, "checkout", "-q", "--detach")
+    assert _advise(monkeypatch, capsys, "git log %s.." % UP, repo) is None
+
+
+@pytest.mark.parametrize("template", [
+    "git -C REPO rev-list --count %s..HEAD" % UP,
+    "cd REPO && git log %s.." % UP,
+    "git reset --hard %s" % UP,
+    "git diff HEAD...@{upstream}",
+    "git log @{U}..",
+    "n=$(git rev-list --count %s..) && echo $n" % UP,
+])
+def test_every_spelling_and_directory_form_is_advised(cut_from_master, tmp_path, monkeypatch,
+                                                      capsys, template):
+    clone = _pushed(cut_from_master)
+    command = template.replace("REPO", clone.as_posix())
+    cwd = tmp_path if "REPO" in template else clone
+    text = _advise(monkeypatch, capsys, command, cwd)
+    assert text and "origin/master" in text, command
+
+
+def test_a_named_branch_upstream_is_judged_for_that_branch(cut_from_master, monkeypatch, capsys):
+    clone = _pushed(cut_from_master)
+    _git(clone, "checkout", "-q", "master")
+    assert _advise(monkeypatch, capsys, "git log master%s.." % UP, clone) is None
+    text = _advise(monkeypatch, capsys, "git log feat%s..feat" % UP, clone)
+    assert text and "feat" in text and "origin/master" in text
+
+
+@pytest.mark.parametrize("command", [
+    "git commit -m 'compare against %s first'" % UP,
+    "echo git log %s.." % UP,
+    "cat > n.md <<'EOF'\ngit log %s..\nEOF" % UP,
+])
+def test_upstream_text_that_is_no_revision_is_silent(cut_from_master, monkeypatch, capsys,
+                                                     command):
+    clone = _pushed(cut_from_master)
+    assert _advise(monkeypatch, capsys, command, clone) is None

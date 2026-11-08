@@ -55,6 +55,7 @@ for _d in (str(_HOOKS), str(_JIGS)):
     if _d not in sys.path:
         sys.path.insert(0, _d)
 
+import claude_paths  # noqa: E402 - the sys.path setup above makes the hooks dir importable
 from classifier import Question, get_classifier, prepare_state  # noqa: E402
 
 __all__ = [
@@ -323,13 +324,19 @@ class _Outcome:
 
 
 def _log_path(named):
-    return Path(named) if named else Path.home() / ".claude" / "self-improve-audit" / JIG_LOG
+    return Path(named) if named else claude_paths.audit_dir() / JIG_LOG
+
+
+def _projects_root(named):
+    """--root as given, else `<Claude config dir>/projects`, resolved per call (CLAUDE_CONFIG_DIR)."""
+    return named if named else str(claude_paths.config_dir() / "projects")
 
 
 def _calls_or_nothing(args):
-    calls, skipped = collect_calls(args.root, args.tool)
+    root = _projects_root(args.root)
+    calls, skipped = collect_calls(root, args.tool)
     if not calls:
-        raise NothingToReport("no %s calls under %s" % (args.tool, args.root))
+        raise NothingToReport("no %s calls under %s" % (args.tool, root))
     return calls, skipped
 
 
@@ -420,7 +427,8 @@ def _parse(argv):
     sub = p.add_subparsers(dest="cmd", required=True)
     for name in ("size", "run"):
         s = sub.add_parser(name)
-        s.add_argument("--root", default=str(Path.home() / ".claude" / "projects"))
+        s.add_argument("--root", default=None,
+                       help="transcripts to read (default <Claude config dir>/projects)")
         s.add_argument("--tool", default="Bash")
         s.add_argument("--limit", type=_at_least_one, default=100, help="calls per class")
         s.add_argument("--seed", type=int, default=0)

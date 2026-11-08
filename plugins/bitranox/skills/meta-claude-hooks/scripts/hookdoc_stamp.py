@@ -38,6 +38,11 @@ from pathlib import Path
 from typing import Any
 from collections.abc import Callable, Iterable
 
+# claude_paths lives in the plugin's hooks dir: scripts -> meta-claude-hooks -> skills -> bitranox.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "hooks"))
+
+import claude_paths
+
 __all__ = [
     "ControlError",
     "Verdict",
@@ -49,6 +54,7 @@ __all__ = [
     "build_source_record",
     "compare",
     "coverage",
+    "default_cache_dir",
     "main",
 ]
 
@@ -97,7 +103,11 @@ KEYCOLON_RX = re.compile(r"^([a-z][A-Za-z0-9_]{2,})\s*:")
 # Literals and language tags read as identifiers but name no field.
 _NOT_A_FIELD = frozenset({"true", "false", "null", "json", "bash", "printf", "http"})
 
-DEFAULT_CACHE_DIR = Path.home() / ".claude" / "bitranox-hookdoc"
+
+def default_cache_dir() -> Path:
+    """Where `check` keeps its last verdict: `<Claude config dir>/bitranox-hookdoc`. Resolved per
+    call so CLAUDE_CONFIG_DIR (and HOME) set after import are honoured."""
+    return claude_paths.config_dir() / "bitranox-hookdoc"
 
 
 class ControlError(Exception):
@@ -780,7 +790,7 @@ def cmd_check(args: argparse.Namespace) -> int:
     stamp_file = Path(args.stamp)
     stamp = load_stamp(stamp_file)
     shash = stamp_hash(stamp_file)
-    cache_dir = Path(args.cache_dir)
+    cache_dir = Path(args.cache_dir) if args.cache_dir else default_cache_dir()
     now = time.time()
 
     docs_cover = None
@@ -1026,7 +1036,8 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--offline", action="store_true")
     c.add_argument("--force", action="store_true")
     c.add_argument("--timeout", default=8.0, type=float)
-    c.add_argument("--cache-dir", default=str(DEFAULT_CACHE_DIR))
+    c.add_argument("--cache-dir", default=None,
+                   help="where the last verdict is cached (default <Claude config dir>/bitranox-hookdoc)")
     c.add_argument("--body", help="read the body from a local file instead of the network")
     c.add_argument("--expect", choices=[CURRENT, COSMETIC, STRUCTURAL, BROKEN])
     c.add_argument("--no-cli-probe", action="store_true", help="skip the local claude --version probe")

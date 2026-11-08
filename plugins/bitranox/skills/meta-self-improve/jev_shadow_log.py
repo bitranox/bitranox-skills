@@ -98,7 +98,9 @@ class RunContext:
 
 def audit_dir() -> Path:
     """The directory the hooks log into, resolved per call so a changed HOME is honoured."""
-    return Path.home() / ".claude" / "self-improve-audit"
+    import claude_paths  # noqa: PLC0415 - the hooks dir is on sys.path only once jev_shadow_ports is imported
+
+    return claude_paths.audit_dir()
 
 
 def short_reason(text: str) -> str:

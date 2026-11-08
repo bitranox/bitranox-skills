@@ -227,6 +227,17 @@ git status --short                                    # any A/M you did not stag
 git commit -m "msg" -- path/to/your/file ...          # commit ONLY your paths (pathspec); -m BEFORE --
 ```
 
+- **`@{upstream}` can name ANOTHER branch, and it is only as fresh as the last fetch.** A branch cut
+  from a remote-tracking ref (`git checkout -b feat origin/master`, `git worktree add -b feat <wt>
+  origin/master`) tracks `origin/master`, and `git push origin feat` without `-u` leaves it so: the
+  count above then reports every topic commit as unpushed although `origin/feat` holds them. Read
+  `git rev-parse --abbrev-ref @{upstream}` first, `git fetch`, and to ask "is this pushed" compare
+  with the branch by name: `git rev-list --left-right --count HEAD...origin/feat` prints
+  `<only in HEAD> <only on origin/feat>`, `0 0` when pushed, and fails on a missing ref (a bare
+  `rev-parse origin/feat` echoes the name back instead). Once `origin/feat` exists,
+  `git branch --set-upstream-to=origin/feat` repairs the tracking. `git-footgun-guard` warns
+  (never blocks) when a command uses `@{u}` on such a branch.
+
 - **`git add <paths>` is NOT enough - use a pathspec commit.** `git commit` records the WHOLE index, so a
   sibling session's ALREADY-staged files get swept into your commit even when you only `git add`ed your
   own. Commit only your paths: `git commit -m "msg" -- <pathA> <pathB>` (the `-m` must come BEFORE `--`,
@@ -318,12 +329,16 @@ wrote, check this before debugging the tests.
 
 `git_state.py` automates the pre-commit / pre-push state check above across one or many repos
 (read-only): for each repo it prints the branch, whether HEAD is in sync with its upstream
-(ahead/behind/diverged, `no-upstream`, or an upstream gone on the remote), the dirty count and
-each staged file; it exits 1 if ANY repo is out of sync and 2 if the check was incomplete (a repo
-git could not read, or a `--root` that is missing, holds no repo, or has an unreadable directory) -
-so it doubles as a bulk pre-push guard. Add `--json` for the `{ok, command, data, skipped}`
-envelope: `ok` is true on BOTH exit 0 and exit 1 (it ran and answered, even "out of sync"),
-false only on exit 2 (it could not run).
+(ahead/behind/diverged, `no-upstream`, or an upstream gone on the remote), the dirty count and each
+staged file. An upstream of another name (`feat` tracking `origin/master`) is flagged and judged
+against `origin/feat` by name instead: in sync only when `origin/feat` exists and equals HEAD, out
+of sync (1) when it is absent or differs. The counts are as of the last fetch unless `--fetch` runs
+`git fetch --prune` first. It exits 0 when every repo is in sync (a dirty tree alone does not change
+that), 1 if ANY repo is out of sync, and 2 if the check was incomplete (a repo git could not read or
+`--fetch` could not fetch, or a `--root` that is missing, holds no repo, or has an unreadable
+directory; 2 wins over 1) - so it doubles as a bulk pre-push guard. Add `--json` for the `{ok,
+command, data, skipped}` envelope: `ok` is true on BOTH exit 0 and exit 1 (it ran and answered, even
+"out of sync"), false only on exit 2 (it could not run).
 
 It ships ONCE, in the skill that owns the jigs: `skills/compuse-toolbox/scripts/git_state.py`
 (see `bitranox:compuse-toolbox` for the rest of them).
@@ -331,9 +346,10 @@ It ships ONCE, in the skill that owns the jigs: `skills/compuse-toolbox/scripts/
 ```bash
 uv run <plugin>/skills/compuse-toolbox/scripts/git_state.py                 # current directory
 uv run <plugin>/skills/compuse-toolbox/scripts/git_state.py repoA repoB     # named repos
+uv run <plugin>/skills/compuse-toolbox/scripts/git_state.py --fetch repoA   # fetch first, so behind is current
 uv run <plugin>/skills/compuse-toolbox/scripts/git_state.py --root ~/src    # every repo below a dir (a .git dir, or a worktree's or submodule's .git file)
 ```
 
 ## Hooks
 
-`repo-gate` (PreToolUse on Bash and PowerShell, and `--ci`) blocks a commit on a failing gate (tests-exist, pytest, JSON valid, LF endings, the meta-using-bitranox-skills index in sync, and no leaked secrets/private data). `git-footgun-guard` blocks the always-broken `git rev-parse --short <2+ revs>` before it produces the confusing error. `git-commit-branch-guard` warns (never blocks) before a `git commit` when local HEAD is behind/diverged from its upstream (origin moved under you), and - for repos in `GIT_GUARD_STRICT_REPOS` - when you are off the default branch or detached.
+`repo-gate` (PreToolUse on Bash and PowerShell, and `--ci`) blocks a commit on a failing gate (tests-exist, pytest, JSON valid, LF endings, the meta-using-bitranox-skills index in sync, and no leaked secrets/private data). `git-footgun-guard` blocks the always-broken `git rev-parse --short <2+ revs>` before it produces the confusing error, and advises when a command uses `@{u}` on a branch whose upstream has another name. `git-commit-branch-guard` warns (never blocks) before a `git commit` when local HEAD is behind/diverged from its upstream (origin moved under you), and - for repos in `GIT_GUARD_STRICT_REPOS` - when you are off the default branch or detached.

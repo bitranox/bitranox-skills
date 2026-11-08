@@ -36,7 +36,6 @@ ENUM_CHOICES = {
     "skill_placement": ("lowest", "user", "project"),
     "mcp_search": ("off", "auto"),
     "classifier_backend": ("off", "jev"),
-    "context_mode": ("compact", "handover"),
     # decide only where the site's hook implements it: skill-router.py, self-improve-gate.py,
     # recall-memory.py and subagent-capture.py do; the skill-step pipeline does not.
     "classifier_stop_signal": ("off", "shadow", "decide"),
@@ -76,9 +75,9 @@ def _coerce(key, raw):
     return str(raw)
 
 
-# (low, high) inclusive; None = unbounded. A negative or zero percentage made the handover threshold
-# 1 token, so the handover offer fired on every turn; context_window 0 means "detect", and anything
-# between 1 and 999 cannot be a real model window.
+# (low, high) inclusive; None = unbounded. A negative or zero percentage makes the context limit
+# 1 token, so the checkpoint request would fire on every turn; context_window 0 means "detect", and
+# anything between 1 and 999 cannot be a real model window.
 INT_BOUNDS = {
     "context_handover_pct": (1, 100),
     "context_handover_cap": (1, None),

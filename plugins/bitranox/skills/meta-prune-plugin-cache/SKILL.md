@@ -97,7 +97,8 @@ version, so honouring it per version would preserve the entire history of everyt
 
 The settings files it reads are the user's pair plus the same pair inside every project
 `~/.claude.json` lists, because a plugin enabled only in a project may have no install record
-at all. The run reports which files it read (the last lines of the text report;
+at all. Under `CLAUDE_CONFIG_DIR` that index is `.claude.json` inside the config dir, which is
+where Claude Code keeps it then. The run reports which files it read (the last lines of the text report;
 `settings_files` and `install_record` in `--json`); `--no-project-settings` limits it to the user's,
 and naming any `--settings` file takes over the list entirely.
 

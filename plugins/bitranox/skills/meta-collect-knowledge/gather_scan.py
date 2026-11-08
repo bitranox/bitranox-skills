@@ -31,6 +31,7 @@ from pathlib import Path
 # self_improve_signals lives in the plugin's hooks dir: skills/meta-collect-knowledge -> skills -> bitranox -> hooks
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "hooks"))
 
+import claude_paths  # noqa: E402
 import self_improve_signals as sig  # noqa: E402
 
 # Generic words that carry no topical signal - dropped so the grep stays specific.
@@ -147,7 +148,7 @@ def discover_files(exclude_proj=None):
     layer (recursive). The current project's own memory is excluded - you gather FROM elsewhere."""
     files = []
     exclude = _own_memory_dirs(exclude_proj)
-    projroot = Path.home() / ".claude" / "projects"
+    projroot = claude_paths.config_dir() / "projects"
     try:
         for memdir in sorted(projroot.glob("*/memory")):
             try:
@@ -321,7 +322,7 @@ def discover_claude_md(self_cwd, cache_ttl=3600):
     except OSError:
         pass
     h = hashlib.sha1(str(root).encode("utf-8", "surrogatepass")).hexdigest()[:12]
-    cache = Path.home() / ".claude" / "self-improve-audit" / ("claude-md-paths.%s.txt" % h)
+    cache = claude_paths.audit_dir() / ("claude-md-paths.%s.txt" % h)
     paths = _cached_walk(cache, "claude-md:v2", cache_ttl, lambda: _find_claude_md(root))
     return [p for p in paths if p not in chain]
 

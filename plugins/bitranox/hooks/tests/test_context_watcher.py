@@ -1,4 +1,4 @@
-"""Tests for context-watcher.py (Stop hook: offer a handover before the context wall).
+"""Tests for context-watcher.py (Stop + PostToolUse hook: ask for a checkpoint before compaction).
 
 Three things carry the weight here, and each is a failure this repo has shipped before.
 
@@ -27,6 +27,20 @@ import context_watcher as W
 HOOKS_DIR = Path(__file__).resolve().parent.parent
 SCRIPT = HOOKS_DIR / "context-watcher.py"
 SHIM = HOOKS_DIR / "run-python.sh"
+
+# The harness auto-compact window that matches CFG's 140,000 limit (70% of 200,000), so a request
+# carries no settings advice unless a test asks for it. The harness compacts about 33,000 below it
+# (W._HARNESS_RESERVE), at 107,000, and the save point sits 40,000 below that, at 67,000.
+ALIGNED = "140000"
+
+
+@pytest.fixture(autouse=True)
+def _aligned_harness(monkeypatch):
+    """Pin CLAUDE_CODE_AUTO_COMPACT_WINDOW, so the outer environment never moves the numbers.
+
+    A test about another window sets or deletes it itself; monkeypatch restores it either way.
+    """
+    monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", ALIGNED)
 
 
 def _usage_line(input_tokens=0, cache_creation=0, cache_read=0, model="claude-opus-5"):
@@ -126,40 +140,41 @@ def test_a_nonsense_config_cannot_produce_a_zero_threshold():
     """
     assert W.threshold(0, 0, 0) == 1
     assert W.threshold(200_000, 0, 400_000) == 1
-    assert W.verdict(0, 200_000, 0, 400_000)[0] == "quiet"
-    assert W.verdict(502, 200_000, 0, 400_000)[0] == "offer"
+    assert W.compact_verdict(0, 200_000, 0, 400_000, 0)[0] == "quiet"
+    assert W.compact_verdict(502, 200_000, 0, 400_000, 0)[0] == "save"
     assert W.threshold("x", 70, 400_000) is None
 
 
-# ---------------------------------------------------------------- verdict()
+# ---------------------------------------------------------------- compact_verdict()
 
-def test_below_the_threshold_is_quiet():
-    state, _ = W.verdict(139_999, 200_000, 70, 400_000)
+def test_below_the_save_point_is_quiet():
+    state, _ = W.compact_verdict(66_999, 200_000, 70, 400_000, 140_000)
     assert state == "quiet"
 
 
-def test_at_the_threshold_offers():
+def test_at_the_save_point_asks_for_a_save():
     """Boundary, from the other side of the previous test - one-sided proves nothing."""
-    state, detail = W.verdict(140_000, 200_000, 70, 400_000)
-    assert state == "offer"
-    assert detail["limit"] == 140_000 and detail["tokens"] == 140_000
+    state, detail = W.compact_verdict(67_000, 200_000, 70, 400_000, 140_000)
+    assert state == "save"
+    assert (detail["limit"], detail["compact_at"], detail["save_at"]) == (140_000, 107_000, 67_000)
+    assert detail["tokens"] == 67_000
 
 
 def test_measuring_more_than_the_window_is_reported_not_ignored():
     """A threshold nothing can cross looks exactly like a watcher that works."""
-    state, detail = W.verdict(563_038, 200_000, 70, 400_000)
+    state, detail = W.compact_verdict(563_038, 200_000, 70, 400_000, 0)
     assert state == "misconfigured"
     assert detail["tokens"] == 563_038
 
 
 def test_the_same_reading_is_fine_on_a_correctly_configured_window():
-    """The control for the case above: same number, right window, ordinary offer."""
-    state, _ = W.verdict(563_038, 1_000_000, 70, 400_000)
-    assert state == "offer"
+    """The control for the case above: same number, right window, ordinary save request."""
+    state, _ = W.compact_verdict(563_038, 1_000_000, 70, 400_000, 0)
+    assert state == "save"
 
 
 def test_an_unknown_reading_is_quiet():
-    assert W.verdict(None, 200_000, 70, 400_000)[0] == "quiet"
+    assert W.compact_verdict(None, 200_000, 70, 400_000, 0)[0] == "quiet"
 
 
 # ------------------------------------------------- window_for_model() / resolve_window()
@@ -252,12 +267,12 @@ def test_the_explicit_knob_still_wins_over_the_declaration():
 
 def test_the_declared_window_gives_glm_the_real_threshold():
     """End to end on the numbers of the session that exposed this: 164k of context on glm-5.3
-    crossed the 140K threshold of a wrongly-assumed 200K window and asked for a handover at 16%
-    of the real 1M window; against the declared window the same reading is quiet."""
+    is past the save point of a wrongly-assumed 200K window at 16% of the real 1M window; against
+    the declared window the same reading is quiet."""
     declared_window = W.resolve_window({}, "glm-5.3", _GLM_ENV)[0]
     wrong_window = W.resolve_window({}, "glm-5.3", {})[0]
-    assert W.verdict(164_614, wrong_window, 70, 400_000)[0] == "offer"
-    assert W.verdict(164_614, declared_window, 70, 400_000)[0] == "quiet"
+    assert W.compact_verdict(164_614, wrong_window, 70, 400_000, 0)[0] == "save"
+    assert W.compact_verdict(164_614, declared_window, 70, 400_000, 0)[0] == "quiet"
 
 
 def test_an_explicit_window_overrides_the_family():
@@ -315,15 +330,35 @@ def test_re_ask_spacing_scales_with_the_window():
 
 # ---------------------------------------------------------------- messages
 
-def test_the_offer_names_the_numbers_and_the_skill():
-    _s, detail = W.verdict(140_000, 200_000, 70, 400_000)
+def test_the_save_request_names_the_numbers_and_the_skill():
+    _s, detail = W.compact_verdict(150_000, 200_000, 70, 400_000, 140_000)
     detail["source"] = "detected"
-    msg = W._offer(detail)
-    assert "140,000" in msg and "meta-context-watcher" in msg and "detected" in msg
+    msg = W._save(detail)
+    assert "150,000" in msg and "107,000" in msg and "meta-context-watcher" in msg
+
+
+def test_the_save_request_says_to_replace_the_whole_handover():
+    # A session once answered the request with an Edit that appended an update to a handover whose
+    # first line still read `# STALE` from the previous hand-back; compact-resume then rightly
+    # skipped it as already read, and the fresh checkpoint was lost. The request must say why the
+    # whole file is replaced, since the reader acts on the request mid-task, not on the skill.
+    _s, detail = W.compact_verdict(150_000, 200_000, 70, 400_000, 140_000)
+    msg = W._save(detail)
+    assert "Replace the whole file" in msg and "`# STALE`" in msg
+
+
+def test_the_save_request_asks_for_the_write_tool():
+    # compact-resume finds a checkpoint at the cwd's repo root or at a path the session touched
+    # with Write/Edit (touched-paths.py records only those tools). A session once wrote its
+    # handover through a Bash-run script into the umbrella repo while its cwd was a nested repo,
+    # and the checkpoint was not handed back.
+    _s, detail = W.compact_verdict(150_000, 200_000, 70, 400_000, 140_000)
+    msg = W._save(detail)
+    assert "with the Write tool" in msg and "through Bash" in msg
 
 
 def test_the_misconfigured_message_says_which_knob_to_set():
-    _s, detail = W.verdict(563_038, 200_000, 70, 400_000)
+    _s, detail = W.compact_verdict(563_038, 200_000, 70, 400_000, 0)
     detail["source"] = "assumed"
     msg = W._misconfigured(detail)
     assert "context_window" in msg and "563,038" in msg
@@ -336,7 +371,7 @@ def test_the_misconfigured_message_says_which_knob_to_set():
 
 # ---------------------------------------------------------------- is handover.md in git here?
 # Whether the outgoing handover.md has an earlier version is a per-repo fact: some repos gitignore
-# it, others track it. The offer used to assert the gitignored case everywhere.
+# it, others track it, so the save request must not assert either case everywhere.
 
 def _git(cwd, *args):
     subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=cwd,
@@ -394,35 +429,35 @@ def test_git_that_cannot_run_reads_as_unknown(repo, monkeypatch):
     assert W.handover_tracking(repo) == "unknown"
 
 
-def _offer_text(tracking):
-    _s, detail = W.verdict(140_000, 200_000, 70, 400_000)
+def _save_text(tracking):
+    _s, detail = W.compact_verdict(150_000, 200_000, 70, 400_000, 140_000)
     detail["source"] = "detected"
-    return W._offer(detail, tracking)
+    return W._save(detail, tracking)
 
 
-def test_the_offer_does_not_claim_a_tracked_handover_is_unrecoverable():
-    msg = _offer_text("tracked")
+def test_the_save_request_does_not_claim_a_tracked_handover_is_unrecoverable():
+    msg = _save_text("tracked")
     assert "gitignored" not in msg and "no earlier version" not in msg
     assert "git history" in msg and "OPEN-WORK.md" in msg
 
 
-def test_the_offer_warns_an_untracked_handover_has_no_earlier_version():
-    msg = _offer_text("untracked")
+def test_the_save_request_warns_an_untracked_handover_has_no_earlier_version():
+    msg = _save_text("untracked")
     assert "no earlier version" in msg and "OPEN-WORK.md" in msg
 
 
-def test_the_offer_names_the_check_when_tracking_is_unknown():
-    msg = _offer_text("unknown")
+def test_the_save_request_names_the_check_when_tracking_is_unknown():
+    msg = _save_text("unknown")
     assert "git ls-files --error-unmatch handover.md" in msg
     assert "it is gitignored" not in msg
 
 
-def test_the_offer_skips_the_overwrite_warning_when_there_is_no_handover():
-    msg = _offer_text("absent")
+def test_the_save_request_skips_the_overwrite_warning_when_there_is_no_handover():
+    msg = _save_text("absent")
     assert "OVERWRITING" not in msg and "meta-context-watcher" in msg
 
 
-def test_decide_words_the_offer_for_the_repo_it_is_in(tmp_path, repo, session):
+def test_decide_words_the_save_request_for_the_repo_it_is_in(tmp_path, repo, session):
     (repo / "handover.md").write_bytes(b"# handover\n")
     _git(repo, "add", "handover.md")
     _git(repo, "commit", "-qm", "h")
@@ -468,9 +503,9 @@ def session(request):
             pass
 
 
-# The tests in this block pin HANDOVER mode, which compact mode replaced as the default; compact
-# mode has its own block below.
-CFG = {"nudges": True, "context_window": 200_000, "context_mode": "handover",
+# A 200,000 window with the harness aligned at its 140,000 limit (the autouse fixture): the save
+# point is 67,000, and a repeat request waits a tenth of the window, 20,000 more.
+CFG = {"nudges": True, "context_window": 200_000,
        "context_handover_pct": 70, "context_handover_cap": 400_000}
 
 
@@ -479,8 +514,8 @@ def _event(session, transcript, cwd):
             "hook_event_name": "Stop"}
 
 
-def test_over_threshold_blocks_then_waits_a_tenth_of_the_window(tmp_path, session):
-    """First ask at the threshold; the next only after another 10% of the window."""
+def test_over_the_save_point_asks_then_waits_a_tenth_of_the_window(tmp_path, session):
+    """First ask past the save point; the next only after another 10% of the window."""
     first = _transcript(tmp_path, _usage_line(cache_read=150_000))
     assert W.decide(_event(session, first, tmp_path), CFG) is not None
 
@@ -494,7 +529,38 @@ def test_over_threshold_blocks_then_waits_a_tenth_of_the_window(tmp_path, sessio
     assert W.decide(_event(session, far, tmp_path), CFG) is not None
 
 
-def test_under_threshold_never_blocks(tmp_path, session):
+def test_a_subagent_tool_call_neither_asks_nor_spends_the_main_sessions_request(tmp_path, session):
+    """A subagent's PostToolUse carries the MAIN transcript and session plus its own agent_id."""
+    t = _transcript(tmp_path, _usage_line(cache_read=150_000))
+    sub = dict(_event(session, t, tmp_path), hook_event_name="PostToolUse", agent_id="a59e0edd6e4a")
+    assert W.decide(sub, CFG) is None
+    # the main session's own next tool call still gets the request
+    main = dict(_event(session, t, tmp_path), hook_event_name="PostToolUse")
+    assert W.decide(main, CFG) is not None
+
+
+def test_an_event_naming_a_subagent_transcript_is_quiet(tmp_path, session):
+    sub_dir = tmp_path / "sess" / "subagents"
+    sub_dir.mkdir(parents=True)
+    t = sub_dir / "agent-a59e0edd6e4a.jsonl"
+    t.write_text(_usage_line(cache_read=150_000) + "\n", encoding="utf-8")
+    ev = dict(_event(session, str(t), tmp_path), hook_event_name="PostToolUse")
+    assert W.decide(ev, CFG) is None
+
+
+@pytest.mark.parametrize(("event", "expected"), [
+    ({"agent_id": "abc"}, True),
+    ({"agent_id": None, "transcript_path": "/p/s.jsonl"}, False),
+    ({"agent_id": "", "transcript_path": "/p/s.jsonl"}, False),
+    ({"transcript_path": "/p/s/subagents/agent-abc.jsonl"}, True),
+    ({"transcript_path": "/p/agent-notes/s.jsonl"}, False),
+    ({}, False),
+])
+def test_is_subagent_event(event, expected):
+    assert W.is_subagent_event(event) is expected
+
+
+def test_under_the_save_point_never_asks(tmp_path, session):
     t = _transcript(tmp_path, _usage_line(cache_read=1000))
     assert W.decide(_event(session, t, tmp_path), CFG) is None
 
@@ -540,16 +606,16 @@ def test_the_nap_check_failing_does_not_wedge_the_turn(tmp_path, session, monkey
     assert W.decide(_event(session, t, tmp_path), CFG) is not None
 
 
-def test_an_earlier_offer_does_not_silence_the_misconfigured_notice(tmp_path, session):
+def test_an_earlier_save_request_does_not_silence_the_misconfigured_notice(tmp_path, session):
     """The two answers are different questions, so an answer to one cannot latch the other.
 
-    Offering at 150k and then measuring MORE than the window means the window is wrong - the one
-    thing the misconfigured notice exists to say. When both shared one flag, the offer's flag read
-    as "already reported" and the notice never spoke for the rest of the session.
+    Asking for a save at 150k and then measuring MORE than the window means the window is wrong -
+    the one thing the misconfigured notice exists to say. Were both on one flag, the request's flag
+    would read as "already reported" and the notice would never speak for the rest of the session.
     """
-    offer = _transcript(tmp_path, _usage_line(cache_read=150_000))
-    reason = W.decide(_event(session, offer, tmp_path), CFG)
-    assert reason is not None and "handover" in reason
+    first = _transcript(tmp_path, _usage_line(cache_read=150_000))
+    reason = W.decide(_event(session, first, tmp_path), CFG)
+    assert reason is not None and "OPEN-WORK.md" in reason
 
     over = _transcript(tmp_path, _usage_line(cache_read=211_000))
     notice = W.decide(_event(session, over, tmp_path), CFG)
@@ -564,8 +630,8 @@ def test_the_misconfigured_notice_still_says_itself_only_once(tmp_path, session)
     assert W.decide(_event(session, further, tmp_path), CFG) is None
 
 
-def test_a_misconfigured_notice_does_not_consume_the_offer(tmp_path, session):
-    """The other direction of the split: a notice first leaves the offer's re-ask level unset."""
+def test_a_misconfigured_notice_does_not_consume_the_save_request(tmp_path, session):
+    """The other direction of the split: a notice first leaves the request's re-ask level unset."""
     over = _transcript(tmp_path, _usage_line(cache_read=211_000))
     assert W.decide(_event(session, over, tmp_path), CFG) is not None
     assert W.asked_at(session) == 0
@@ -597,11 +663,16 @@ def test_a_non_object_message_is_skipped_not_fatal(tmp_path, session, junk):
 
 # ---------------------------------------------------------------- end to end through the shim
 
-def _run(payload):
+def _run(payload, home=None):
+    """(rc, stdout, stderr) of the hook through the shim; `home` keeps the user's config out."""
+    env = None
+    if home is not None:
+        (home / ".claude").mkdir(parents=True, exist_ok=True)
+        env = dict(os.environ, HOME=str(home), USERPROFILE=str(home))
     proc = subprocess.run(
         ["bash", str(SHIM), str(SCRIPT)],
         input=payload if isinstance(payload, str) else json.dumps(payload),
-        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
     )
     return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
 
@@ -609,16 +680,16 @@ def _run(payload):
 @pytest.mark.skipif(sys.platform == "win32", reason="drives the bash shim directly")
 def test_end_to_end_emits_a_stop_block(tmp_path, session):
     t = _transcript(tmp_path, _usage_line(cache_read=900_000))
-    rc, out, _err = _run(_event(session, t, tmp_path))
+    rc, out, _err = _run(_event(session, t, tmp_path), home=tmp_path / "home")
     assert rc == 0, "a Stop hook signals through JSON, not through a non-zero exit"
     payload = json.loads(out)
-    assert payload["decision"] == "block" and payload["reason"]
+    assert payload["decision"] == "block" and "OPEN-WORK.md" in payload["reason"]
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="drives the bash shim directly")
-def test_end_to_end_is_silent_under_threshold(tmp_path, session):
+def test_end_to_end_is_silent_under_the_save_point(tmp_path, session):
     t = _transcript(tmp_path, _usage_line(cache_read=1000))
-    assert _run(_event(session, t, tmp_path)) == (0, "", "")
+    assert _run(_event(session, t, tmp_path), home=tmp_path / "home") == (0, "", "")
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="drives the bash shim directly")
@@ -628,27 +699,19 @@ def test_malformed_input_fails_open(payload):
     assert (rc, out) == (0, "")
 
 
-# ---------------------------------------------------------------- compact mode (the default)
+# ---------------------------------------------------------------- the save point
 #
-# In compact mode the limit is where the HARNESS compacts, so the watcher asks for a checkpoint
-# early enough that the session can write it before the compaction arrives, then lets it continue.
+# The limit is where the HARNESS compacts, so the watcher asks for a checkpoint early enough that the session can write it before the compaction arrives, then lets it continue.
 # Measured on CLI 2.1.310 (scripted probes, CLAUDE_CODE_AUTO_COMPACT_WINDOW 100k and 200k): the
 # harness compacts about 33k tokens BELOW that window, not at it and not at a fixed percentage.
 
-CCFG = {"nudges": True, "context_window": 1_000_000, "context_mode": "compact",
+CCFG = {"nudges": True, "context_window": 1_000_000,
         "context_handover_pct": 70, "context_handover_cap": 500_000}
 
 
 def _compact_event(session, transcript, cwd, name="PostToolUse"):
     return {"session_id": session, "transcript_path": transcript, "cwd": str(cwd),
             "hook_event_name": name}
-
-
-def test_compact_mode_is_the_shipped_default():
-    assert W.sig.DEFAULT_CONFIG["context_mode"] == "compact"
-    assert W.context_mode({}) == "compact"
-    assert W.context_mode({"context_mode": "handover"}) == "handover"
-    assert W.context_mode({"context_mode": "nonsense"}) == "compact"
 
 
 def test_the_compaction_point_sits_the_measured_reserve_below_the_window():
@@ -713,10 +776,29 @@ def test_compact_mode_blocks_on_stop_with_the_same_request(tmp_path, session, mo
     assert text is not None and "OPEN-WORK.md" in text
 
 
-def test_handover_mode_never_speaks_on_posttooluse(tmp_path, session):
-    t = _transcript(tmp_path, _usage_line(cache_read=150_000))
-    assert W.decide(_compact_event(session, t, tmp_path), CFG) is None
-    assert W.decide(_event(session, t, tmp_path), CFG) is not None
+def test_a_stored_handover_mode_behaves_exactly_like_compact_mode(tmp_path, session,
+                                                                   monkeypatch):
+    """A stored `context_mode = handover` is not read: the watcher has one
+    mode, so PostToolUse and Stop both carry the save request, word for word what a config
+    without the key gets. `mark_asked(session, 0)` re-arms the request between the calls."""
+    monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "500000")
+    t = _transcript(tmp_path, _usage_line(cache_read=430_000))
+    old = dict(CCFG, context_mode="handover")
+    post = W.decide(_compact_event(session, t, tmp_path), old)
+    assert post is not None and "OPEN-WORK.md" in post and "CONTINUE" in post
+    W.mark_asked(session, 0)
+    stop = W.decide(_compact_event(session, t, tmp_path, name="Stop"), old)
+    assert stop == post
+    W.mark_asked(session, 0)
+    assert W.decide(_compact_event(session, t, tmp_path, name="Stop"), CCFG) == stop
+    # The stored key never reaches decide() through the real loader either.
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    (home / ".claude" / ".bitranox-memory.json").write_text(
+        json.dumps({"context_mode": "handover"}), encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    assert "context_mode" not in W.sig.load_config()
 
 
 def test_a_posttooluse_nudge_is_not_silenced_by_an_owed_nap(tmp_path, session, monkeypatch):

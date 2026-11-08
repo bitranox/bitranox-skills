@@ -28,6 +28,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import NamedTuple
 
+import claude_paths
+
 # ---- Audit-file location (shared by self-improve-audit.py writer + session-start reader) --
 
 def proj_key(proj):
@@ -62,7 +64,7 @@ def proj_key(proj):
 
 def audit_file(proj):
     """Where the SessionEnd audit writes candidate misses for the next SessionStart to read."""
-    return Path.home() / ".claude" / "self-improve-audit" / (proj_key(proj) + ".md")
+    return claude_paths.audit_dir() / (proj_key(proj) + ".md")
 
 
 # The characters that carry STRUCTURE in the frames a snippet is quoted into: the audit envelope's
@@ -227,7 +229,7 @@ def project_slug(proj):
 
 def memory_dir(proj):
     """The native Auto-memory dir for a project cwd."""
-    return Path.home() / ".claude" / "projects" / project_slug(proj) / "memory"
+    return claude_paths.config_dir() / "projects" / project_slug(proj) / "memory"
 
 
 # ---- curated store relocation: <proj>/.claude-bx-selflearning (the new per-project home) ----
@@ -461,7 +463,7 @@ def memory_lock(target_path, timeout=5.0, poll=0.05, now=None):
 
 def last_dream_file(proj):
     """Marker holding the unix timestamp of the last completed dream for this project."""
-    return Path.home() / ".claude" / "self-improve-audit" / (proj_key(proj) + ".dream")
+    return claude_paths.audit_dir() / (proj_key(proj) + ".dream")
 
 
 def dream_mode(proj=None):
@@ -830,7 +832,11 @@ REJECTED = "rejected"
 
 def rejected_file(proj):
     """Tombstones for contributions that have left the queue, either outcome (never re-queued).
-    Keyed exactly like `contrib_file`, `queue_key:` included."""
+    Keyed exactly like `contrib_file`, `queue_key:` included.
+
+    The name says rejected but the file holds shipped records too; `outcome` tells them apart.
+    It is not renamed because every installed plugin version reads this path: an open session
+    on an older version would find no closed set and let a dream re-queue every closed entry."""
     return _audit_dir() / (_queue_file_key(proj) + ".contrib-rejected.jsonl")
 
 
@@ -1399,7 +1405,7 @@ def unsatisfiable_nap_owed(proj, session_id=""):
 # re-nagged). The `meta-memory-settings` skill views / sets / resets it.
 
 def _config_path():
-    return Path.home() / ".claude" / ".bitranox-memory.json"
+    return claude_paths.config_dir() / ".bitranox-memory.json"
 
 
 DEFAULT_CONFIG = {
@@ -1417,11 +1423,9 @@ DEFAULT_CONFIG = {
     # keeps the full id including the `[1m]` suffix, which the transcript drops), so 0 means auto.
     # The context limit is min(pct of window, cap): the pct leg keeps a cushion on a small window,
     # and the cap catches a big-window session past the measured rot onset while still only 40%
-    # full. In compact mode that limit is the value CLAUDE_CODE_AUTO_COMPACT_WINDOW should hold:
-    # the watcher asks for a checkpoint before the harness compacts there, and the session goes
-    # on. In handover mode it is where a handover plus /clear is offered instead.
+    # full. That limit is the value CLAUDE_CODE_AUTO_COMPACT_WINDOW should hold: the watcher asks
+    # for a checkpoint before the harness compacts there, and the session goes on.
     "context_window": 0,           # 0 = detect; set a token count only to override the detection
-    "context_mode": "compact",     # compact (checkpoint, auto-compact, continue) | handover
     "context_handover_pct": 70,    # percentage leg of the context limit
     "context_handover_cap": 400000,  # absolute leg, in tokens (measured context-rot onset)
     # Opt-in text classifier (hooks/classifier.py). The backend is the master switch; each site
@@ -1606,7 +1610,7 @@ def discovery_roots():
 
 def _audit_dir():
     """Machine-local scratch dir the recall/gather caches and the stores-generation marker share."""
-    return Path.home() / ".claude" / "self-improve-audit"
+    return claude_paths.audit_dir()
 
 
 def _stores_gen_file():
@@ -1654,18 +1658,18 @@ def _is_dir(p):
 
 def find_claude_md_dirs(roots):
     """Every dir under `roots` that carries a `CLAUDE.md` - the raw material for tree discovery.
-    Prunes vendor/hidden/backup dirs, the store dirs themselves, `~/.claude`, and the excluded
-    anchor dirs; never follows symlinks (a link into another tree must not merge them)."""
+    Prunes vendor/hidden/backup dirs, the store dirs themselves, Claude's config dir, and the
+    excluded anchor dirs; never follows symlinks (a link into another tree must not merge them)."""
     out = set()
     excluded = {str(d) for d in _excluded_anchor_dirs()}
-    home_claude = str(Path.home() / ".claude")
+    config_dir = str(claude_paths.config_dir())
     for root in roots:
         try:
             for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
                 base = os.path.basename(dirpath)
                 if (base in VENDOR_DIRNAMES or base in (MEMORY_DIRNAME, CURATED_DIRNAME)
                         or ".bak-" in base or base.endswith(".bak")
-                        or dirpath == home_claude):
+                        or dirpath == config_dir):
                     dirnames[:] = []
                     continue
                 dirnames[:] = [d for d in dirnames
@@ -2206,7 +2210,7 @@ def subject_levels(touched, cwd):
 
 def seeded_file(proj):
     """Marker that this project has been seed-nudged (so the bootstrap nudge fires once)."""
-    return Path.home() / ".claude" / "self-improve-audit" / (proj_key(proj) + ".seeded")
+    return claude_paths.audit_dir() / (proj_key(proj) + ".seeded")
 
 
 def mark_seeded(proj, now=None):
@@ -2247,7 +2251,7 @@ def promotion_file():
     SHARED across projects, not per-project, because the question it answers is "how many DISTINCT
     projects corroborate this?" - a per-project file structurally cannot see another project's
     sighting, so the count it could offer would only ever be one project's own repeats."""
-    return Path.home() / ".claude" / "self-improve-audit" / "promotion-candidates.json"
+    return claude_paths.audit_dir() / "promotion-candidates.json"
 
 
 def _read_sightings():
@@ -2382,7 +2386,7 @@ def store_changed(memory_dir_path, since_mtime):
 
 
 def _model_review_file():
-    return Path.home() / ".claude" / "self-improve-audit" / "model-review.txt"
+    return claude_paths.audit_dir() / "model-review.txt"
 
 
 def model_review_due(interval_days=30, now=None):
@@ -2412,7 +2416,7 @@ def mark_model_reviewed(now=None):
 
 
 def _backup_reminder_file():
-    return Path.home() / ".claude" / "self-improve-audit" / "offsite-backup-reminder.txt"
+    return claude_paths.audit_dir() / "offsite-backup-reminder.txt"
 
 
 def backup_reminder_due(interval_days=30, now=None):
@@ -2460,17 +2464,17 @@ def _filler_baseline_path():
 
 def _filler_local_path(proj):
     """PER-PROJECT learned filler blacklist (out-of-store, machine-local)."""
-    return Path.home() / ".claude" / "self-improve-audit" / (proj_key(proj) + ".filler.json")
+    return claude_paths.audit_dir() / (proj_key(proj) + ".filler.json")
 
 
 def _topical_words_path(proj):
     """PER-PROJECT learned topical whitelist - confirmed genuine topics, not re-queued for classification."""
-    return Path.home() / ".claude" / "self-improve-audit" / (proj_key(proj) + ".topical.json")
+    return claude_paths.audit_dir() / (proj_key(proj) + ".topical.json")
 
 
 def _recall_pending_path(proj):
     """PER-PROJECT queue of as-yet-unclassified recall keywords, drained by the dream classifier."""
-    return Path.home() / ".claude" / "self-improve-audit" / (proj_key(proj) + ".recall-unknown.txt")
+    return claude_paths.audit_dir() / (proj_key(proj) + ".recall-unknown.txt")
 
 
 def _read_word_json(path):
@@ -2672,7 +2676,7 @@ def knowledge_store_empty(proj=None):
     except OSError:
         pass
     try:
-        for memdir in (Path.home() / ".claude" / "projects").glob("*/memory"):
+        for memdir in (claude_paths.config_dir() / "projects").glob("*/memory"):
             for p in memdir.glob("*.md"):
                 if p.name != "MEMORY.md":
                     return False
@@ -3100,15 +3104,59 @@ def skills_invoked(transcript_text):
             obj = json.loads(line)
         except ValueError:
             continue
-        if obj.get("type") != "assistant":
-            continue
-        content = obj.get("message", {}).get("content")
-        if not isinstance(content, list):
-            continue
-        for b in content:
-            if not isinstance(b, dict) or b.get("type") != "tool_use" or b.get("name") != "Skill":
-                continue
-            name = (b.get("input") or {}).get("skill")
-            if isinstance(name, str) and name:
-                tally[name] = tally.get(name, 0) + 1
+        for name in _skill_calls(obj):
+            tally[name] = tally.get(name, 0) + 1
     return tally
+
+
+def _skill_calls(obj):
+    """The skill names an assistant transcript record invokes through the Skill tool, in order.
+
+    A record that is not a JSON object (a stray array or number line) names none, rather than
+    raising out of the caller's loop."""
+    if not isinstance(obj, dict) or obj.get("type") != "assistant":
+        return []
+    message = obj.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(content, list):
+        return []
+    names = []
+    for b in content:
+        if not isinstance(b, dict) or b.get("type") != "tool_use" or b.get("name") != "Skill":
+            continue
+        args = b.get("input")
+        name = args.get("skill") if isinstance(args, dict) else None
+        if isinstance(name, str) and name:
+            names.append(name)
+    return names
+
+
+def skills_loaded_since_compaction(lines):
+    """Bare names of the skills invoked after the transcript's LAST compaction boundary.
+
+    A skill invoked since the last compaction still has its whole body in the model's context, so
+    a block telling it to invoke that skill again only reloads the same text (a long SKILL.md, on
+    every block). One invoked BEFORE the boundary is different: the compaction summary keeps at
+    most a truncated copy of its body, so re-invoking it is the right advice there.
+
+    `lines` is any iterable of raw transcript lines (an open file streams it), and only the set of
+    names is held, so memory does not grow with the transcript. A `bitranox:` prefix is dropped,
+    because callers ask by the bare name. A sidechain record is a subagent's call, which loads
+    nothing into this context.
+    """
+    loaded = set()
+    for raw in lines:
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(obj, dict) or obj.get("isSidechain") is True:
+            continue
+        if obj.get("type") == "system" and obj.get("subtype") == "compact_boundary":
+            loaded.clear()
+            continue
+        loaded.update(name.rsplit(":", 1)[-1] for name in _skill_calls(obj))
+    return frozenset(loaded)

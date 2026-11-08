@@ -75,7 +75,8 @@ When a learning here applies beyond this repo (it usually does), it also belongs
 ## A skill that also ships from its own tool repo has a twin to keep in sync
 
 Some skills exist twice: here, and in the repo of the tool they document. The map is
-`MIRRORED_SKILLS` in `hooks/repo-gate.py`, and `--mirrors` prints the live list with a verdict per
+`MIRRORED_SKILLS` in `hooks/mirrored_skills.py` (read by `repo-gate.py` and the SKILL.md edit
+guard), and `repo-gate.py --mirrors` prints the live list with a verdict per
 pair, so ask it rather than trusting a count written here (it also reports a twin the map does NOT
 list, which is how one was found after going unchecked). Both copies are installed by real users, so drift is
 not cosmetic - and it goes both ways. A marketplace edit that is never mirrored back leaves the
@@ -133,6 +134,30 @@ checkout. Nothing fetches; the audits, and every DRIFT message, name a repo whos
   A tool-repo push refused only because the matching marketplace text sits COMMITTED on a linked
   worktree's unpushed branch is not drift: the table says `UNPUSHED`, and the refusal names that
   worktree and branch and says to push it to the marketplace's master first.
+
+## Skill decisions are recorded per skill
+
+Each skill keeps an append-only ledger at
+`plugins/bitranox/skills/<skill>/.skillwriter/decisions.jsonl`: what was decided, why, the
+evidence, and what would reopen it. It ships with the skill, since `.skillwriter/` does. Read it
+with `python3 plugins/bitranox/hooks/skill_decisions.py show <skill>` and write it only with that
+script's `add --from-file`; `bitranox:meta-skill-writer` (Step 0b) says when and how.
+
+- The commit and push gates refuse a change whose shipped text no longer contains a live `rule`
+  entry's anchor, printing the entry's decision, why and reopen_if. Answer with a superseding
+  entry (`removed`, or a `rule` with a new anchor) that gives the reason, never by editing the
+  ledger. A line deleted from a ledger is refused too: it is append-only, and a renamed skill
+  answers to its old name's ledger at the fork point.
+- A SKILL.md change's checklist carries `Decisions: <id>, <id>` or `Decisions: none - <reason>`,
+  at the line start or in a list item (`- [x] Decisions: ...`), outside a code fence.
+- The SKILL.md edit guard refuses an agent's first edit of a skill once, with that skill's
+  rejected and removed decisions, unless the agent has run `show` for it. A tool-repo twin holds
+  no ledger, so its edit is refused with the marketplace copy's (the checkout under `public/` when
+  there is one, else the installed plugin's copy).
+- `repo-gate.py --ci` checks every ledger against its skill text, and on a pull request also
+  refuses a ledger line removed since the fork point.
+- Hooks and jigs keep no ledger: a decision about one goes in a `Decisions` block of its module
+  docstring (decision, why, evidence, reopen if), pinned by a test that fails when it is reverted.
 
 ## Every shipped Python script needs sibling tests
 

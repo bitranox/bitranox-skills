@@ -504,6 +504,16 @@ check the fixture's pairing before suspecting it.
   lets a slow process start on a loaded runner move the kill onto the next child, red on one CI
   cell only. Prove the timings in a scratch copy by adding a fixed start delay to every stand-in:
   the old timings must fail and the new ones pass.
+- **A budget the code spends waiting on a stand-in that must ANSWER is roomy (10 s, not 1 s).**
+  An answer returns at once, so the roomy budget costs nothing unless something stalls, and a
+  tight one lets one stall on a loaded host flip an unrelated outcome (a lost vote turning a
+  decision into a refusal) about once in a few full runs while the test passes alone every time.
+  Keep a tight budget only for the test that EXPECTS it to expire, and assert on the outcome, never
+  on elapsed time. A local TCP stand-in that paces tiny writes (a byte per pause, a trickle) turns
+  Nagle off (`disable_nagle_algorithm = True` on a `socketserver.StreamRequestHandler`, or
+  `TCP_NODELAY` on the socket), and the test does not pin how many bytes arrive inside a budget:
+  assert the outcome class and that the reported byte count equals the bytes on disk. Measured:
+  with Nagle on, macOS delivered 6 of 18 bytes where Linux and Windows delivered all.
 - **Inject time and randomness.** No bare now-clock, RNG, or UUID call in code under test - pass a
   clock / seed so the test is reproducible. (`datetime.now()`/`random`/`uuid4` in Python;
   `Date.now()`/`Math.random()`/`crypto.randomUUID()` in JS, or `vi.useFakeTimers()` at the edge;
@@ -889,7 +899,8 @@ mutation. Read it too when code in a unit suite could reach a real host or a use
 spawns a nested test runner or several writers appending to one file, asserts only a real tool's
 verdict, relies on `tests/conftest.py` fixtures reaching `src/` doctests or on fixtures ported
 from a template, feeds a FIFO from a writer thread, or derives its input from a constant you are
-about to mutate.
+about to mutate. Read it too when a test proves an input was refused before any side effect,
+proves a timed wake or poll fires, or runs `git commit` under a sandboxed or fresh home directory.
 
 ## Quick checklist
 

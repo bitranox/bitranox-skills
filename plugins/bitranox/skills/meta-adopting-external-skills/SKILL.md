@@ -137,6 +137,29 @@ text instead, since it matches no upstream name at all. A derived skill with no 
 line is missing attribution: MIT requires the notice to travel with every adapted copy. Fix every
 affected skill in one change.
 
+**Record the adoption's decisions in the new skill's ledger, before the adoption commit.** A
+commit message guards nothing; the ledger is what the next editor of the skill is shown. Record a
+`rejected` entry for each upstream part Step 3 deliberately left out, so a later sync does not
+re-import it (`decision` names the part, `reopen_if` says what would bring it back), and a `rule`
+entry, anchored on a 20 to 200 character phrase of the sentence that states it (`add` refuses a
+longer or shorter anchor), for each bitranox rule Step 3 added that the
+upstream text does not have. From the checkout root, `git add` the new skill directory first (an
+anchor is only counted in files git tracks), write the entries to a JSON file, and run
+`python3 plugins/bitranox/hooks/skill_decisions.py add --from-file <file>`. Each entry carries
+`skill` (`<name>`, the new skill's directory name), `kind`, `topic`, `decision`, `why`, `reopen_if`,
+`evidence` (`{"tier": ..., "text": ...}`), `"origin": "authored"`, `anchors` (empty for
+`rejected`) and the `supersedes` and `refs` lists (`[]` when empty); each field is defined in
+`bitranox:meta-skill-writer`, Step 0b. Put the ids `add` prints on the `Decisions:` line of the
+skill's `.skillwriter/checklist-*.md` from Step 3 (`Decisions: none - <reason>` when the adoption
+left nothing out and added no rule), then `git add` the ledger it wrote,
+`plugins/bitranox/skills/<name>/.skillwriter/decisions.jsonl`, and the checklist: both go in the
+adoption commit. Before that commit, run the gate again,
+`python3 plugins/bitranox/hooks/repo-gate.py --ci`: the run above came before the ledger existed,
+and the gate checks it. Make the adoption commit yourself, as ONE commit on its own worktree branch
+(`bitranox:git-worktrees`), never on master: it stays unpushed until Step 5 decides. A later
+re-sync from upstream is an edit of the skill, so Step 0b has its editor read the `rejected`
+entries first, and the commit gate refuses a change that drops a live `rule` entry's anchor.
+
 ## Step 5 - Upstream-first and coexist
 
 **REQUIRED: `bitranox:meta-self-improve`, its "Propagating skill (or hook) improvements upstream"
@@ -144,11 +167,23 @@ section.** Offer the improvement to the original author first (a PR to their rep
 the bitranox copy only if upstream stalls or declines. Either way the user's other installed
 plugins are left untouched - the bitranox copy coexists, and the user chooses which to invoke.
 
+**Ship it from the branch, or delete the branch.** Once upstream stalls or declines, push the
+adoption branch to master as every change to this repo ships. Run
+`python3 plugins/bitranox/hooks/bump_version.py --rebase` first: another release may have taken the
+version the commit carries while it waited, and `--rebase` moves that one commit onto
+`origin/master` with a version above origin's, in `plugin.json`, `pyproject.toml` and its
+`CHANGELOG.md` heading (it refuses when nothing was taken; a plain rebase onto `origin/master` is
+then enough). If upstream takes the change instead, delete the branch and its worktree: nothing
+was published.
+
 ## Common mistakes
 
 - Doing any adoption work before the license check passes.
 - Assuming MIT when no license is present (it is all-rights-reserved).
-- Letting the helper or yourself commit, push, or uninstall anything.
+- Letting the helper commit, push, or uninstall anything, or uninstalling anything yourself. The
+  adoption commit and its push are yours, on the branch and at the time Step 5 sets.
+- Pushing the adoption before upstream stalls or declines, or leaving its branch behind after
+  upstream took the change.
 - Restating skill-writer or self-improve here instead of cross-referencing them.
 - Writing provenance narrative ("ported from X") instead of the structured credit line plus the
   notices entry.

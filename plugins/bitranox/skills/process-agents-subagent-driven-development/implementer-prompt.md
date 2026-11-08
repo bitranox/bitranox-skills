@@ -45,7 +45,25 @@ Subagent (general-purpose):
     It's always OK to pause and clarify. Don't guess or make assumptions.
 
     While iterating, run the focused test for what you're changing; run the
-    full suite once before committing, not after every edit.
+    full suite once before committing, not after every edit. Run that suite (and
+    any gate your brief names) through compuse-toolbox's gate.py, which keeps the
+    gate's real exit status:
+    `python3 "$CLAUDE_PLUGIN_ROOT/skills/compuse-toolbox/scripts/gate.py" --gate "<suite command>"`.
+    Its closing line is `ALL GATES PASSED` or `GATE RED - follow-up NOT run`, and
+    the `[FAIL] <cmd> (rc=N)` line above it names the gate that failed. A call that
+    runs longer than about three minutes is moved to the background whatever you
+    asked: then read the output file the tool names, in short calls (a pause of a
+    minute or two, then read its last lines), until that closing line appears.
+    Never end your turn to wait for it: nothing wakes you.
+
+    ## Committing
+
+    Commit only the paths you changed, by pathspec. Never run `git commit --amend`,
+    `git rebase` or any other history rewrite, `git add -A`, or `git stash`: other
+    agents may commit in this same worktree, and an amend rewrites whatever commit
+    HEAD is at that moment, which may be theirs. To correct your own commit, make a
+    new one. If the commit gate refuses over a file you did not touch, stop and
+    report the refusal verbatim as BLOCKED; never route around it.
 
     ## Commit Messages
 

@@ -635,6 +635,14 @@ edit; who caught what. **Keep in the artifact:** the claim tested, how it was te
 outcome - a verbatim line of agent output earns its place when it IS the evidence, a paragraph of
 narrative around it does not.
 
+**A decision is not a story.** Why a rule in the skill's text was added, removed or rejected, the
+evidence, and what would reopen it go in the skill's decision ledger (see "Step 0b" under Planning
+Before You Start), not in a checklist, and that holds for a decision that reverses an earlier one.
+A decision about a bundled script or hook goes in that file's module docstring instead (see "A
+bundled script's decisions go in its docstring, not the skill's ledger"). A user decision is cited
+by date ("user decision 2026-11-05"), never as a conversation; the ledger holds no session
+narrative either.
+
 The trap is that provenance feels like rigour while you are writing it, because it is what you
 just lived through. Test it by reading a line back and asking what a reader DOES differently
 knowing it. "The operator lifted a restriction mid-session" changes nothing for anyone; "a
@@ -793,6 +801,18 @@ so Windows does not silently break it:
        the return code plus an output-file or output-text check in your own code, not shell
        glue. If you must accept a user-supplied command template, parse it once with
        `shlex.split` and substitute placeholders into the list elements (no shell).
+
+### A bundled script's decisions go in its docstring, not the skill's ledger
+
+When a bundled script (`skills/<skill>/scripts/*.py`) or a hook settles a choice a later editor
+could plausibly undo (a threshold picked from a measurement, an alternative tried and dropped),
+record it in a `Decisions:` block in that file's module docstring, each decision naming the test
+that pins it (or why no test can). The block's form is in `bitranox:meta-claude-hooks`,
+`references/authoring.md`, "Record a decision in the module docstring". Read the block, and the
+tests it names, before you change such a file. The skill's decision ledger (Step 0b) holds
+decisions about the skill's TEXT only, and a `rule` anchor quotes the skill's Markdown, never
+code: a change that touches only a script records nothing in the ledger, and when the change
+also edits SKILL.md, its checklist's `Decisions:` line names only the ledger entries.
 
 ### Ship tests for every script (and they MUST pass)
 
@@ -1112,6 +1132,89 @@ does not run can ship with no artifact at all. When you audit a recent skill edi
 session's, open the co-changed checklist and confirm it has a section documenting that change. If
 none does, RED/GREEN-test the shipped change now and append its section in the next commit.
 
+**Step 0b - read the skill's decisions before the first edit** (after the receipt). Every skill
+in the marketplace can keep an append-only decision ledger at `.skillwriter/decisions.jsonl`: what
+was decided, why, the evidence, and what would reopen it. From the marketplace repo (or a worktree
+of it), run:
+
+```bash
+python3 plugins/bitranox/hooks/skill_decisions.py show <skill> --kind rejected,removed --full
+python3 plugins/bitranox/hooks/skill_decisions.py show <skill>
+```
+
+The first prints, in full, every live alternative that was rejected and every rule that was
+removed; the second lists the live decisions one line each. Both print nothing for a skill with
+no ledger yet. A skill that also ships from a tool repo (`python3
+plugins/bitranox/hooks/repo-gate.py --mirrors` lists the pairs) keeps its ledger in the marketplace
+copy: run the command from the marketplace repo, or add
+`--skill-dir <marketplace>/plugins/bitranox/skills/<skill>` after the marketplace skill name.
+
+An edit that reverses a listed decision (re-adds a removed rule, adopts a rejected alternative,
+drops a recorded rule) is made only when you can answer that entry's `reopen_if` with what
+changed; without that answer, keep the decision. With it, make the edit, then record a new entry
+that names the old one in `supersedes` and carries the answer in its `why`. The edit guard refuses
+an agent's first edit of a SKILL.md once, showing this list, when that agent has not run `show`
+for the skill. A tool-repo twin holds no ledger of its own, so its first edit is refused with the
+marketplace copy's list (read from the marketplace checkout when one is reachable, else from the
+installed plugin), and running `show` for the marketplace skill name, as above, avoids it.
+The commit gate refuses a change whose shipped text no longer holds a live
+rule's anchor: an edit that deletes or rewords such a sentence records a `removed` entry, or a new
+`rule` with a new anchor, that supersedes it.
+
+**Record every decision the edit makes about the skill's text, in REFACTOR, before the
+commit.** A decision about a bundled script or hook goes in that file's module docstring instead
+(see "A bundled script's decisions go in its docstring, not the skill's ledger"). Write each
+ledger decision through
+`python3 plugins/bitranox/hooks/skill_decisions.py add --from-file <entries.json>`, never by
+editing the ledger: the file holds one entry object or a list, and each entry names its `skill`.
+Write the entries once the new text exists, since an anchor quotes the text as written. The
+`kind` field is one of:
+
+- `rule` - a rule the text now states. Carries `anchors`, phrases quoted from the skill; every
+  other kind has `"anchors": []`.
+- `removed` - a rule the edit takes out.
+- `rejected` - an alternative not adopted, or a gap declined for a reason that will still hold the
+  next time someone proposes it. A decline that only fits this edit stays in the checklist.
+- `void` - withdraws an entry written in error, named in `supersedes`, together with what that
+  entry did: voiding an entry that superseded another makes the other live again. A void cannot
+  target a void (`add` refuses it). To restore a voided entry, add it again with its `why` saying
+  it restores that entry: the id is a hash of the entry, so an unchanged copy with the same date
+  is refused as identical, while the changed `why` gives it a new id.
+
+Each entry also has `topic` (lowercase letters, digits and dashes, at most 40 characters,
+starting with a letter or digit; reuse the topic of an entry it supersedes), `decision`, `why`,
+`reopen_if` (not needed for `void`), `evidence`, `origin`, and three lists: `anchors`,
+`supersedes` (ids this entry replaces) and `refs` (free-text pointers such as a checklist file
+name or a commit subject; `[]` when none). `origin` is one of `authored` (an editor's own entry,
+the usual one), `baseline` (the baseline pass below), `ab` (a decision an A/B test settled) and
+`imported` (carried over from an older record). `evidence` is `{"tier": ..., "text": ...}`,
+exactly those two fields, the tier saying how the decision was established:
+
+- `measured` - you ran or measured it (a probe, a test, a replay).
+- `user` - a user decision, cited by date in `text`.
+- `argued` - reasoning, no measurement.
+- `inherited` - taken from a source nobody here re-checked (a changelog, a reviewer's claim).
+
+`add` always assigns `v` and `id`, keeps a `date` you supply (`YYYY-MM-DD`) and otherwise sets
+today's UTC date, and refuses an invalid entry with one line per problem. A file naming several
+skills is all or nothing: one refused entry writes none of them. An anchor is counted in the
+files git tracks, so `git add` a new Markdown file before quoting from it. Entry text is public,
+so it names no private host, path or repo.
+
+- **Picking an anchor:** quote 20 to 200 characters that are the stable core of one rule: unique
+  in the skill's Markdown (`add` refuses a phrase it finds zero times or twice), not a heading,
+  not inside a table row, preferably the clause that would have to change if the rule changed.
+  Line wraps, blockquote and list markers and table padding do not break a match; rewording does.
+  In a mirrored skill avoid the three by-convention divergences: the `name:` field, a trailing
+  `(<name>)` on the H1, the self-install blockquote.
+- **Baseline pass:** when a skill has no `rule` entries yet and the edit is a rewrite or an A/B
+  test, first record its load-bearing rules as `rule` entries with `"origin": "baseline"`, in a
+  commit of their own, so the rewrite is checked against them.
+- **The checklist names them** on one line the commit gate reads: `Decisions: <id>, <id>` (ids in
+  the ledger the commit ships) or `Decisions: none - <reason>`. The line may be indented and may
+  stand in a list item, ticked or not (`- Decisions: ...`, `1. Decisions: ...`,
+  `- [x] Decisions: ...`); one inside a code fence does not count.
+
 **Last step - close the receipt when the procedure is finished** (the change and its review
 artifact committed; for a coordinator, also every subagent it dispatched to edit a SKILL.md has
 reported or been stopped): run
@@ -1294,7 +1397,12 @@ output for the review artifact. A probe copies a snippet verbatim, so a broken o
 through it as compliance: a wait-loop whose check could never see the process gone (its `pgrep`
 exits 1 once nothing matches) was quoted word for word by a GREEN probe that read as a pass, and
 only a fake-ssh run caught it. A probe tests whether the text is FOLLOWED, never whether what it
-says WORKS.
+says WORKS. When the text DEFINES a placeholder or path (`<plugin>` as some directory, a working
+dir) and builds a command on it, substitute the text's own definition literally and run that
+command: a probe that writes a working command may have inferred past a wrong definition, so its
+pass does not prove the text. Measured: a step defined `<plugin>` as the checkout root, so its
+literal command named a script that does not exist (rc 2), while three GREEN probes wrote the
+right path and passed.
 
 **How to dispatch a verification test:**
 
@@ -1391,6 +1499,8 @@ decline it for one of the reasons above. A decline whose reason is a claim about
 tool already prints that line", "the hook does that for you") cites its evidence in the same
 bullet: the `file:line` you read or the command you ran and what it showed. An uncited factual
 reason is an unverified claim, not a decision, so the gap stays undecided until you look.
+A decline whose reason will still hold when the next editor proposes the same thing is also a
+`rejected` entry in the skill's ledger (see "Step 0b" under Planning Before You Start).
 
 **A probe shown only an excerpt reports gaps whose answer lives outside it.** Before adding text
 for any gap from such a probe, grep the whole skill (SKILL.md and its supporting files) for the
@@ -1521,6 +1631,9 @@ Deploying untested skills = deploying untested code. It's a violation of quality
 **IMPORTANT: Use your task/todo tooling (e.g. TodoWrite) to create tasks for EACH checklist item below.** For complex skills, if agent-team tooling is available, parallelize testing work across subagents.
 
 **PLAN Phase - Before Writing Anything:**
+- [ ] Step 0b: read the skill's rejected and removed decisions (`skill_decisions.py show <skill>
+      --kind rejected,removed --full`); an edit reversing one needs an answer to its
+      `reopen_if`, carried in the `why` of a superseding entry
 - [ ] Identify skill type (discipline, technique, pattern, or reference)
 - [ ] Choose test approach based on skill type (see "Testing All Skill Types")
 - [ ] Draft 2-3 pressure/application/retrieval scenarios
@@ -1571,6 +1684,10 @@ Deploying untested skills = deploying untested code. It's a violation of quality
       and that run's output is in the review artifact
 - [ ] Every pass and every "X does not happen" verdict also ran on `haiku`; the artifact states
       the tiers and cell count
+- [ ] Every decision the edit makes about the skill's text is a ledger entry written with
+      `skill_decisions.py add` (`rule` with an anchor, `removed`, `rejected` for a decline that
+      will still hold), and the checklist carries its `Decisions:` line; a decision about a
+      bundled script or hook is in that file's docstring `Decisions:` block instead
 - [ ] Identify NEW rationalizations from testing
 - [ ] Add explicit counters (if discipline skill)
 - [ ] Build rationalization table from all test iterations

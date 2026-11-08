@@ -29,6 +29,7 @@ Run (from the plugin root, via the launcher that forces UTF-8):
   `bash hooks/run-python.sh skills/meta-dream-tree/dedup_scan.py --from . --threshold 0.5`
   `bash hooks/run-python.sh skills/meta-dream-tree/dedup_scan.py --from . --threshold 0.4 --json`
   `bash hooks/run-python.sh skills/meta-dream-tree/dedup_scan.py --from . --top 20`
+  `bash hooks/run-python.sh skills/meta-dream-tree/dedup_scan.py --from . --scope chain` (a nap)
 
 Exit codes: 0 = scanned, no candidates at or above the threshold (and the control fired),
 1 = candidates to read, 2 = refused, something could not be read, or the control did NOT fire
@@ -56,6 +57,8 @@ import uuid_store
 # dir on sys.path the way running it directly does.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from tree_support import STORE_DIR, EnvelopeArgumentParser, store_anchor, utf8_stdio
+# The nap's chain is the one store_manifest backs up; one walk keeps the two scopes identical.
+from store_manifest import levels_on_chain
 
 __all__ = ["Fact", "Candidate", "Control", "Result", "similarity", "run", "load_facts", "main"]
 
@@ -391,22 +394,33 @@ def _read(path: Path, skipped: list[str]) -> str | None:
         return None
 
 
-def load_facts(start: Path, skipped: list[str] | None = None) -> list[Fact]:
-    """Every fact in the tree, each tagged with the level whose pointer block names it.
+def load_facts(start: Path, skipped: list[str] | None = None, *,
+               scope: str = "tree") -> list[Fact]:
+    """Every fact in scope, each tagged with the level whose pointer block names it.
+
+    scope "tree" walks every level under the anchor and keeps every body, pointed at or not.
+    scope "chain" is a nap's: only the levels from `start` up to the anchor (the same walk
+    store_manifest's chain backup uses), and only the facts those levels point at - a body the
+    chain does not name belongs to a sibling or to nobody, which is the full dream's business.
+    Skipping the tree walk and the sibling facts is what makes it fit a nap's budget.
 
     A level, directory or fact body that cannot be read is appended to `skipped` (when given)
     and left out; the caller decides that an incomplete scan is not a clean one.
     """
     skipped = [] if skipped is None else skipped
     anchor = anchor_dir(start)
+    levels = (levels_on_chain(Path(start), anchor) if scope == "chain"
+              else _levels(anchor, skipped))
     level_of: dict[str, str] = {}
-    for lvl in _levels(anchor, skipped):
+    for lvl in levels:
         text = _read(lvl / LEVEL_FILE, skipped)
         for pointer in uuid_store.parse_pointer_index(text or "")[1]:
             if not pointer.legacy:
                 level_of.setdefault(pointer.slug, str(lvl))
     out: list[Fact] = []
     for path in sorted((anchor / STORE_DIR / FACTS_SUBDIR).glob("*.md")):
+        if scope == "chain" and path.stem not in level_of:
+            continue
         body = _read(path, skipped)
         if body is None:
             continue
@@ -457,6 +471,9 @@ def _positive_int(raw: str) -> int:
 def build_parser() -> argparse.ArgumentParser:
     p = EnvelopeArgumentParser(description=__doc__.splitlines()[0], envelope_command="dedup_scan")
     p.add_argument("--from", dest="start", default=".", help="a dir inside the tree")
+    p.add_argument("--scope", choices=["tree", "chain"], default="tree",
+                   help="tree = every fact in the tree; chain = only the facts the levels from "
+                        "--from up to the anchor point at (a nap's scope)")
     p.add_argument("--threshold", type=float, default=0.5,
                    help="report pairs scoring at or above this (default 0.5)")
     p.add_argument("--top", type=_positive_int, default=None,
@@ -470,7 +487,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     skipped: list[str] = []
     try:
-        result = run(load_facts(Path(args.start).expanduser(), skipped),
+        result = run(load_facts(Path(args.start).expanduser(), skipped, scope=args.scope),
                      threshold=args.threshold, top=args.top)
     except DedupScanError as exc:
         if args.as_json:

@@ -103,6 +103,7 @@ import re
 import sys
 from pathlib import Path
 
+import claude_paths
 from self_improve_signals import main_checkout_root, project_slug
 
 SUBAGENT_TOOLS = {"Task", "Agent"}
@@ -303,7 +304,7 @@ def source_paths(cwd):
     root = main_checkout_root(cwd) if cwd else None
     if root is not None:
         return root / DECISIONS_NAME, root / REVIEW_NAME
-    audit = Path.home() / ".claude" / "self-improve-audit"
+    audit = claude_paths.audit_dir()
     return audit / (project_slug(str(cwd or "unknown")) + "." + DECISIONS_NAME), None
 
 

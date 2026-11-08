@@ -37,11 +37,15 @@ Exit: 0 hits (or index done), 1 no match, 2 error (a malformed --fts query, an
 empty query or one with no letter or digit in any word - punctuation is not
 indexed, so it could never match - a directory or file that could not be read
 while indexing, an index database that cannot be created, opened, migrated or
-written - unwritable ~/.claude, a corrupt, locked or full database - or an
+written - an unwritable config dir, a corrupt, locked or full database - or an
 internal error).
 
 `search --json` prints `{ok, command, data, skipped}` on every exit, 2 included;
 `ok` is false exactly when the exit is 2, and a miss adds a `caveat` key.
+
+Paths: the transcripts are read from `<config dir>/projects` and the index lives at
+`<config dir>/transcript-index.db`, the config dir being CLAUDE_CONFIG_DIR when it is set, else
+~/.claude - the same dir Claude Code itself uses.
 """
 
 import argparse
@@ -52,13 +56,22 @@ import sqlite3
 import sys
 import unicodedata
 
+from _claude_config import config_dir, projects_dir
 from _cli_envelope import (EXIT_ERROR, EXIT_NO, EXIT_YES, EnvelopeArgumentParser, emit,
                            envelope_for_exit, guarded, render)
 
-__all__ = ["QueryError", "ensure_schema", "fts_literal", "index_dir", "search", "main"]
+__all__ = ["QueryError", "db_path", "ensure_schema", "fts_literal", "index_dir", "projects_root",
+           "search", "main"]
 
-DB_PATH = pathlib.Path.home() / ".claude" / "transcript-index.db"
-ROOT = pathlib.Path.home() / ".claude" / "projects"
+
+def db_path() -> pathlib.Path:
+    """The index database, `<Claude config dir>/transcript-index.db`, resolved per call."""
+    return config_dir() / "transcript-index.db"
+
+
+def projects_root() -> pathlib.Path:
+    """The transcripts to index, `<Claude config dir>/projects`, resolved per call."""
+    return projects_dir()
 
 NO_MATCH_CAVEAT = (
     "tool calls, tool results and thinking blocks are not indexed - a miss "
@@ -269,14 +282,14 @@ def _tolerate_console_encoding() -> None:
                 pass
 
 
-def _run_index(db: sqlite3.Connection) -> int:
+def _run_index(db: sqlite3.Connection, db_file: pathlib.Path) -> int:
     errors: list[str] = []
     try:
-        n = index_dir(ROOT, db, errors)
+        n = index_dir(projects_root(), db, errors)
     except sqlite3.Error as exc:
         # A locked, corrupt or full database mid-run: what was committed stays, the rest did not
         # happen, so this is "could not index", never the 1 a search reads as "no match".
-        print(f"transcript_index: database error while indexing {DB_PATH}: {exc}",
+        print(f"transcript_index: database error while indexing {db_file}: {exc}",
               file=sys.stderr)
         return EXIT_ERROR
     print(f"indexed {n} new message(s)")
@@ -294,18 +307,18 @@ def _query_failed(exc: QueryError, as_json: bool) -> int:
     return EXIT_ERROR
 
 
-def _open_index(as_json: bool) -> sqlite3.Connection | None:
+def _open_index(db_file: pathlib.Path, as_json: bool) -> sqlite3.Connection | None:
     """The index database, created or migrated as needed; None (reported) when it cannot be.
 
-    An unwritable ~/.claude, a file where the directory should be, and a corrupt or locked
+    An unwritable config dir, a file where the directory should be, and a corrupt or locked
     database all used to escape as a traceback, whose exit 1 reads as "no match".
     """
     try:
-        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-        db = sqlite3.connect(DB_PATH)
+        db_file.parent.mkdir(parents=True, exist_ok=True)
+        db = sqlite3.connect(db_file)
         ensure_schema(db)
     except (OSError, sqlite3.Error) as exc:
-        message = f"cannot open the index database {DB_PATH}: {exc}"
+        message = f"cannot open the index database {db_file}: {exc}"
         print(f"transcript_index: {message}", file=sys.stderr)
         if as_json:
             emit(EXIT_ERROR, "search", [], error=message, indent=None)
@@ -329,12 +342,13 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--json", action="store_true", dest="as_json")
     args = ap.parse_args(argv)
 
-    db = _open_index(getattr(args, "as_json", False))
+    db_file = db_path()
+    db = _open_index(db_file, getattr(args, "as_json", False))
     if db is None:
         return EXIT_ERROR
 
     if args.cmd == "index":
-        return _run_index(db)
+        return _run_index(db, db_file)
 
     try:
         hits = search(db, args.query, args.limit, raw=args.fts)
