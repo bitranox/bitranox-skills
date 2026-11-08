@@ -138,14 +138,16 @@ def test_a_prose_mark_after_a_plain_review_stops_where_the_plain_review_stopped(
     assert D.sig.get_watermark("/p/x", str(tp), "dream") == len(USER) * 2
 
 
-def test_a_plain_mark_after_a_prose_review_still_marks_only_one_raw_part(home, tmp_path, capsys,
-                                                                        monkeypatch):
+def test_a_plain_mark_after_a_prose_review_marks_the_whole_view_it_showed(home, tmp_path, capsys,
+                                                                          monkeypatch):
+    # Cut to one raw part, the next review re-served the prose already read and the gate kept
+    # blocking.
     tp = _session(home, "/p/x", tmp_path, USER * 10)
     monkeypatch.setattr(D, "REVIEW_CHUNK_BYTES", len(USER) * 2)
     assert D.main(["session-review", "--prose", "/p/x"]) == 0
     capsys.readouterr()
     assert D.main(["session-reviewed", "/p/x"]) == 0
-    assert D.sig.get_watermark("/p/x", str(tp), "dream") == len(USER) * 2
+    assert D.sig.get_watermark("/p/x", str(tp), "dream") == tp.stat().st_size
 
 
 def test_the_cap_holds_after_a_replaced_transcript_reset_the_watermark(home, tmp_path, capsys,

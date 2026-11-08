@@ -57,11 +57,11 @@ def fake_rules(**over) -> FE.EngineRules:
 
 # The parser modules are COPIED from the installed engine, never re-implemented here. uuid_store
 # owns the pointer grammar and the caps; capture_constraints owns the advisories; uuid_store
-# imports self_improve_signals, which imports claude_paths (where the plugin's state dir lives),
-# and all four are stdlib-only beyond each other, so this is the whole closure. Re-implementing
+# imports self_improve_signals, which imports claude_paths (where the plugin's state dir lives) and
+# process_liveness, and all five are stdlib-only beyond each other, so this is the whole closure. Re-implementing
 # any of them would recreate the divergence in the docstring above.
 _PARSER_MODULES = ("uuid_store.py", "capture_constraints.py", "self_improve_signals.py",
-                   "claude_paths.py")
+                   "claude_paths.py", "process_liveness.py")
 
 # The one deliberate stand-in: the WRITE path. It records the argv it was handed and exits 0, so a
 # test can assert WHICH verb and files factedit chose without a real engine touching a real store.

@@ -94,10 +94,19 @@ than deleting it.
    frame's `description:` to the hook. Do not strip the frame by hand.
    A long owed stretch: read it with `dream_state.py session-review --prose` (text turns and
    failed tool results only, one part per 64 MB of transcript) rather than paging raw JSONL.
+   On a project whose transcript holds material that should not be re-surfaced (authorized
+   credential or auth reverse-engineering, exploit work, live secrets), redirect the review to a
+   file, grep it for those topics first, read only the parts clear of them, never page it into the
+   reply, and name what you skipped in the report.
    An EARLIER session's owed transcript is read with `session-review --prose --transcript PATH`
-   and marked with `session-reviewed --prose --transcript PATH`, the same PATH: a bare
-   `session-reviewed` advances the LIVE session's watermark instead, discharging a stretch nobody
-   read and leaving the owed one open.
+   and marked with `session-reviewed --prose --transcript PATH`, the same PATH. The review's first
+   line names the transcript it shows and that session's id, so check it is the one you meant. A
+   bare `session-reviewed` marks the file this session's last review showed, up to where that view
+   ended, and marks nothing when no review came since the last mark; `session-reviewed --transcript
+   PATH --to OFFSET` moves a mark back after a stretch was marked unread. An owed transcript whose
+   session is still running is left to that session: the gate does not block on it and the review
+   skips it. When the shell has no session id and live sessions share the directory, the review
+   warns; then pass `--transcript` to both calls.
    **A capture that wrote BELOW the chain** (an existing fact owned by a descendant level the
    session edited - the Stop gate's ROUTING EVIDENCE names those dirs) widens steps 2 and 6 to
    that level: take the backup with `--from <that descendant>` (its chain holds the cwd's chain),
@@ -125,7 +134,7 @@ than deleting it.
    like any other entry, pin intact; only its CONTENT is out of reach (per the core's Boundaries).
 5. **Prune the obvious**: leaked task-state and dead-content entries AT the chain's levels
    (propose-first per the removal policy in `bitranox:meta-dream-tree` -> references/dream-passes.md).
-   Include version-bound facts: run `versionrot.py scan --chain <cwd> --json` (home:
+   Include version-bound facts: run `versionrot.py scan --chain <cwd> --pypi --json` (home:
    `<plugin>/skills/meta-dream-tree/`, launch via `hooks/run-python.sh`; exit 1 lists candidates,
    0 none, 2 is an error to report) and handle each candidate whose level is ON the chain exactly
    as `bitranox:meta-dream-tree` step 7, question 3 says: re-check against the current release,
@@ -135,7 +144,9 @@ than deleting it.
    manifest file), and `TOTAL problems: 0` from ONE `reconcile_memory_index.py --check` call
    given the whole chain, narrowest first: the cwd's level, each ancestor level, and the anchor
    (home: `<plugin>/skills/meta-self-improve/`, not `hooks/`); one call per level checks no
-   reference between levels - then report counts AND an explicit
+   reference between levels. When the store is committed, `git add` only the paths this nap wrote,
+   never `git add -A`, and compare `git diff --cached --name-only` with the nap's own list first
+   (the store is shared, per the core's verification contract) - then report counts AND an explicit
    "deferred to the full dream" list (sibling dedup, tree-wide placement, descriptor synthesis,
    behavioral passes, unshipped skill/hook contributions (skill-fit) queued but not delivered, and
    the toolbox CONSOLIDATE half per dream-core.md - machine-global, outside the nap's chain-only

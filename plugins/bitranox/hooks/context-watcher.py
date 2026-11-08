@@ -573,7 +573,7 @@ def decide(event, cfg):
     proj = event.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
     if on_stop:
         try:
-            if sig.nap_owed_blocks(proj):
+            if sig.nap_owed_blocks(proj, event.get("session_id") or ""):
                 return None
         except Exception:                     # noqa: BLE001 - a missing helper must not wedge a turn
             pass

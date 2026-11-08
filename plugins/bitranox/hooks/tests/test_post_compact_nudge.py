@@ -133,3 +133,20 @@ def test_the_script_exits_zero_when_main_itself_raises(monkeypatch):
     with pytest.raises(SystemExit) as exc:
         runpy.run_path(str(SCRIPT), run_name="__main__")
     assert exc.value.code == 0
+
+
+def _register_live(home, sid):
+    d = home / ".claude" / "sessions"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / (sid + ".json")).write_text('{"pid": %d, "sessionId": "%s"}' % (os.getpid(), sid),
+                                     encoding="utf-8")
+
+
+def test_a_nap_owed_by_a_live_peer_does_not_block_this_session(tmp_path):
+    SIG.mark_nap_owed("/proj/x", session_id="sid-peer", transcript_path=str(tmp_path / "t.jsonl"))
+    (tmp_path / "t.jsonl").write_text("x", encoding="utf-8")
+    assert GATE._nap_owed_hint("/proj/x", "sid-mine") != ""     # the peer is not known to be alive
+    _register_live(tmp_path / "home", "sid-peer")
+    assert GATE._nap_owed_hint("/proj/x", "sid-mine") == ""
+    assert GATE._nap_owed_hint("/proj/x", "sid-peer") != ""     # its own gate still blocks it
+    assert GATE._nap_owed_hint("/proj/x", "") != ""             # no caller to compare: flag stands

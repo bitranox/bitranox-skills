@@ -226,7 +226,7 @@ def _nap_owed_hint(proj, session_id="", loaded=frozenset()):
 
     `loaded` names the skills already loaded since the last compaction (see `_run_skill`)."""
     try:
-        if not _sig.nap_owed_blocks(proj):
+        if not _sig.nap_owed_blocks(proj, session_id):
             return ""
         info = _sig.nap_owed_info(proj)
         owed_session = info.get("session_id") or ""

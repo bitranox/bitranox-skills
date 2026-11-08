@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 import claude_paths
+import process_liveness
 
 # ---- Audit-file location (shared by self-improve-audit.py writer + session-start reader) --
 
@@ -1389,10 +1390,35 @@ def nap_owed_declined(proj):
     return rec if isinstance(rec, dict) and rec.get("by") else {}
 
 
-def nap_owed_blocks(proj):
-    """True while an owed nap still blocks a Stop: owed, and not declined. The Stop gate blocks on
-    this and the context watcher yields on it, so the two cannot disagree about a declined nap."""
-    return is_nap_owed(proj) and not nap_owed_declined(proj)
+def calling_session_id():
+    """The Claude Code session this process runs under, or "" outside one. The CLI exports it to
+    every Bash call, so a script knows whose transcript is its own without asking the cwd."""
+    return os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
+
+
+def _live_sessions():
+    """The ids of the Claude Code sessions with a live process behind them."""
+    return process_liveness.live_session_ids(claude_paths.config_dir() / "sessions").ids
+
+
+def nap_owed_by_live_peer(proj, session_id):
+    """True when the owed nap names ANOTHER session that is still running.
+
+    That session's transcript is still growing and its own Stop gate owes the nap, so a second
+    session reviewing it can only duplicate the peer's capture, and each review finds a new stretch
+    to read. False when `session_id` is empty: with no caller to compare, the flag stands."""
+    owner = str(nap_owed_info(proj).get("session_id") or "")
+    if not owner or not session_id or owner == str(session_id):
+        return False
+    return owner in _live_sessions()
+
+
+def nap_owed_blocks(proj, session_id=""):
+    """True while an owed nap still blocks a Stop: owed, not declined, and not owed by a live peer
+    of `session_id`. The Stop gate blocks on this and the context watcher yields on it, so the two
+    cannot disagree about a declined nap."""
+    return (is_nap_owed(proj) and not nap_owed_declined(proj)
+            and not nap_owed_by_live_peer(proj, session_id))
 
 
 def clear_nap_owed(proj):
@@ -2042,14 +2068,50 @@ def unreviewed_transcript_text(proj, reviewer, transcript=None, max_bytes=2_000_
     return part.text, part.end
 
 
+def live_transcripts(proj):
+    """The transcripts in `proj`'s native dir whose session is running right now."""
+    native = memory_dir(proj).parent
+    return [str(native / (sid + ".jsonl")) for sid in _live_sessions()
+            if (native / (sid + ".jsonl")).is_file()]
+
+
+def _review_shown_file(proj):
+    # Per session as well as per project: two live sessions in one cwd review different transcripts.
+    return session_state_path("%s-%s" % (calling_session_id(), proj_key(proj)), ".review-shown")
+
+
+def record_review_shown(proj, transcript):
+    """Remember which transcript the calling session's last session-review showed.
+    Raises StateWriteError when the write does not land."""
+    _write_json_state(_review_shown_file(proj), {"path": str(transcript)})
+
+
+def last_review_shown(proj):
+    """The transcript the calling session's last session-review showed, or ""."""
+    try:
+        d = _decode_json_file(_review_shown_file(proj))
+    except (OSError, ValueError):
+        return ""
+    return str(d.get("path") or "") if isinstance(d, dict) else ""
+
+
 def resolve_transcript(proj):
-    """The transcript path for `proj`: the hook-recorded one, else the newest *.jsonl under the
-    project's native dir, else "".
+    """The transcript path for `proj`: the calling session's own when it has one here, else the
+    hook-recorded one, else the newest *.jsonl under the project's native dir, else "".
+
+    The session's own comes first because the hook-recorded path is per cwd: with two live sessions
+    in one cwd it names whichever stopped last, and a review would read and mark the peer's file.
 
     A manual session-review runs with NO Stop hook having recorded meta (right after /clear, or on a
     cwd-key mismatch). Without a fallback it reviews NOTHING while reporting "nothing new" - a silent
     miss of capture-first. The glob self-locates the live transcript so the review self-heals; newest
     by MTIME, never by name (a session-id prefix is not time-ordered)."""
+    sid = calling_session_id()
+    if sid and Path(sid).name == sid:
+        own = memory_dir(proj).parent / (sid + ".jsonl")
+        with contextlib.suppress(OSError):
+            if own.is_file():
+                return str(own)
     recorded = (read_session_meta(proj) or {}).get("transcript_path") or ""
     if recorded and os.path.exists(recorded):
         return recorded

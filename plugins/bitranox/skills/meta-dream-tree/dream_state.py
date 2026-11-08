@@ -37,10 +37,13 @@ Usage (cwd defaults to the current directory):
                                           evidence. Incremental (a watermark per reviewer), so an
                                           already-consumed prefix is never re-fed to the model.
   dream_state.py session-reviewed [cwd] [--prose]
-                                          advance the review watermark past what session-review
-                                          showed (to the current end, unless the stretch was
-                                          shown in parts - see below). After a --prose review pass
-                                          --prose here too, or it marks only one raw part.
+                                          advance the review watermark to where this session's last
+                                          session-review ended, on the transcript it showed, whichever
+                                          view that was. With nothing shown since the last mark it
+                                          marks nothing.
+  dream_state.py session-reviewed [cwd] --transcript PATH --to OFFSET
+                                          rewind PATH's watermark to OFFSET, for a stretch marked
+                                          reviewed that nobody read. Moves it back only.
   dream_state.py nap-decline [cwd] --by WHO
                                           record that WHO (normally "user") declined the owed
                                           post-compaction nap: the Stop gate stops blocking on it
@@ -54,7 +57,9 @@ Usage (cwd defaults to the current directory):
 
 The session-review pair is the compaction fix: compaction clears the model's CONTEXT but NOT the
 transcript file, so the pre-compaction stretch is recoverable only by reading the FILE. A dream never
-receives `transcript_path`; the Stop gate records it (record_session_meta) and this looks it up by cwd.
+receives `transcript_path`: the calling session's own transcript comes from CLAUDE_CODE_SESSION_ID,
+and only without one does this fall back to the path the Stop gate recorded per cwd. The owed
+transcript is skipped while the session that owes it is still running: its own nap consumes it.
 
 A stretch longer than REVIEW_CHUNK_BYTES is shown in PARTS, oldest first, each cut at a line end
 and marked TRUNCATED; session-reviewed then advances only to the end of the part shown, so the
@@ -66,9 +71,9 @@ tool output and system reminders, while the learnings sit in the user and assist
 prose view keeps only that text plus tool results that FAILED, drops skill bodies and other
 isMeta records, and cuts each record at PROSE_RECORD_CHARS. Because it is that much smaller, one
 prose part covers PROSE_CHUNK_BYTES of transcript instead of REVIEW_CHUNK_BYTES: a multi-MB
-stretch is one review, not a loop of raw parts. The window is still a part: `session-reviewed
---prose` marks exactly the window the prose review showed, and a longer stretch is TRUNCATED and
-continued the same way. Read the raw part (no --prose) when the question is about a tool call's
+stretch is one review, not a loop of raw parts. The window is still a part: `session-reviewed`
+marks exactly the window the prose review showed, and a longer stretch is TRUNCATED and continued
+the same way. Read the raw part (no --prose) when the question is about a tool call's
 input or a successful tool's output, which the prose view does not show.
 
 The review reads ONE transcript (the owed one, else the live session's), so every OTHER transcript
@@ -119,6 +124,7 @@ _KINDS = ("nap", "tree")
 # The Jev shadow sites a tree dream feeds (meta-dream-tree steps 5-7). A nap has none.
 TREE_SITES = ("dream-placement", "dream-firing", "dream-prune")
 _DONE_FLAGS = ("--kind", "--dream", "--jev-skip")
+# The most OFFSET --to accepts is the file size; a negative or non-numeric one is a usage error.
 _PROJ_CMDS = ("due", "done", "mode", "session-review", "session-reviewed", "nap-decline")
 _FLAGS = ("--structured-only", "--prose")
 _REVIEW_CMDS = ("session-review", "session-reviewed")
@@ -149,6 +155,7 @@ OFFER_LIMIT = 10
 
 USAGE = ("usage: dream_state.py [due|done|mode|session-review|session-reviewed] [cwd] "
          "[--structured-only | --prose] [--transcript PATH]\n"
+         "       dream_state.py session-reviewed [cwd] --transcript PATH --to OFFSET\n"
          "       dream_state.py done [cwd] --kind nap|tree [--dream ID] [--jev-skip SITE=REASON]\n"
          "       dream_state.py nap-decline [cwd] --by WHO\n"
          "       dream_state.py [saw-promotable|should-promote|promoted] <slug> [proj]\n"
@@ -216,7 +223,8 @@ def prose_view(transcript_text):
 
 
 def _render_review(subs, touched, skills, text, offset, proj, structured_only=False, path="",
-                   owed=False, start=None, total=None, named=False, others=(), prose=False):
+                   owed=False, start=None, total=None, named=False, others=(), prose=False,
+                   warning=""):
     """Render the session-review output STRING (pure). With `structured_only`, the SUBAGENT/ROUTING/
     SKILLS blocks are kept but the raw UNREVIEWED TRANSCRIPT body is suppressed (its byte-count header
     stays) - the structured value is ~10 lines while the raw dump can be hundreds of KB.
@@ -226,6 +234,12 @@ def _render_review(subs, touched, skills, text, offset, proj, structured_only=Fa
     `named` says the caller picked the file with --transcript, so the closing line names it too:
     without it, session-reviewed would mark the owed or live transcript instead."""
     lines = []
+    if path:
+        lines.append("== TRANSCRIPT SHOWN: %s (session %s) ==" % (path, Path(path).stem))
+        lines.append("")
+    if warning:
+        lines.append(warning)
+        lines.append("")
     if named and path and not owed:
         lines.append("== READING AN EARLIER SESSION OF THIS PROJECT (named with --transcript): %s =="
                      % path)
@@ -269,7 +283,7 @@ def _render_review(subs, touched, skills, text, offset, proj, structured_only=Fa
     else:
         lines.append("== UNREVIEWED TRANSCRIPT == NOTHING NEW (already consumed)")
     lines += _render_offer(proj, others)
-    lines.append("\n-- when done, run: dream_state.py session-reviewed %s%s%s --"
+    lines.append("\nWhen done, run: dream_state.py session-reviewed %s%s%s"
                  % (proj, " --prose" if prose else "", " --transcript %s" % path if named else ""))
     return "\n".join(lines)
 
@@ -329,9 +343,11 @@ def _review_target(proj):
     the target falls back to the live session so an ordinary review is unaffected.
 
     Raises OSError when the owed transcript exists but cannot be read: falling back then would
-    review (and mark) the live session while the compacted stretch stays unread."""
+    review (and mark) the live session while the compacted stretch stays unread. A transcript owed
+    by a session that is still running is not this review's: that session's own nap consumes it."""
     owed = (sig.nap_owed_info(proj) or {}).get("transcript_path") or ""
-    if owed and os.path.exists(owed):
+    if (owed and os.path.exists(owed)
+            and not sig.nap_owed_by_live_peer(proj, sig.calling_session_id())):
         if sig.unreviewed_transcript_part(proj, _REVIEWER, owed, REVIEW_CHUNK_BYTES).text:
             return owed
     return sig.resolve_transcript(proj)
@@ -361,6 +377,18 @@ def _unreadable(path, exc):
     print("error: transcript unreadable: %s (%s) - nothing was shown or marked reviewed"
           % (path, exc), file=sys.stderr)
     return 2
+
+
+def _peer_warning(proj):
+    """A line warning that the review may show a peer's transcript, or "".
+
+    Only when the shell names no session: with an id the review reads its own file by that id, so
+    a peer in the same cwd cannot be picked up."""
+    if sig.calling_session_id() or len(sig.live_transcripts(proj)) < 2:
+        return ""
+    return ("WARNING: several live sessions run in this directory and this shell names none of "
+            "them, so this may be a PEER's transcript. Check the path above; to read your own, "
+            "pass --transcript <your transcript> to session-review and session-reviewed.")
 
 
 def _session_review(proj, structured_only=False, named=None, prose=False):
@@ -405,7 +433,7 @@ def _session_review(proj, structured_only=False, named=None, prose=False):
     print(_render_review(subs, touched, skills, text, offset, proj, structured_only,
                          path=path, owed=path != live and (not named or path == owed_path),
                          start=start, total=size, named=bool(named) and path != live,
-                         others=others, prose=prose))
+                         others=others, prose=prose, warning=_peer_warning(proj)))
     # 0 while a transcript part was shown, 1 once none is left (the structured blocks can outlive
     # the stretch). A part loop tests this status: the output's body is raw transcript, which can
     # quote any end marker, so a grep over it ends the loop early.
@@ -426,23 +454,66 @@ def _record_shown(proj, path, offset):
         return
     try:
         sig.set_watermark(proj, path, _SHOWN, offset)
+        sig.record_review_shown(proj, path)
     except (OSError, ValueError, TypeError) as exc:
         print("warning: could not record how far this review showed (%s); session-reviewed will "
               "mark by its own window" % exc, file=sys.stderr)
 
 
-def _session_reviewed(proj, named=None, prose=False):
-    """Advance the dream's watermark past what session-review showed.
+def _rewind(proj, named, to):
+    """Move `named`'s review mark back to `to`: the undo for a stretch marked reviewed unread."""
+    current = sig.get_watermark(proj, named, _REVIEWER)
+    if to > current:
+        print("error: --to %d is past the current mark %d; --to only moves it back"
+              % (to, current), file=sys.stderr)
+        return 2
+    try:
+        sig.set_watermark(proj, named, _REVIEWER, to)
+    except OSError as exc:              # StateWriteError: the mark was not recorded
+        return _write_failed("the review watermark for %s (%s)" % (named, exc))
+    if sig.get_watermark(proj, named, _REVIEWER) != to:
+        return _write_failed("the review watermark for %s" % named)
+    print("review watermark rewound to %d for %s" % (to, named))
+    return 0
 
-    That is the current end of the transcript, unless the stretch was longer than one part: then
-    only to the end of the part shown, so the rest is shown next time rather than discharged. The
-    target is always the END OF A PART the shared reader actually read, never the file size: a
+
+def _mark_target(proj, named):
+    """(transcript to mark, or None when the last review's transcript is already marked).
+
+    The transcript this session's last review SHOWED, so the mark cannot land on another file. A
+    review that was already marked showed nothing new, and marking again would discharge bytes
+    nobody read."""
+    if named:
+        return named
+    shown_path = sig.last_review_shown(proj)
+    if not shown_path or not os.path.isfile(shown_path):
+        return ""
+    shown = sig.get_watermark(proj, shown_path, _SHOWN)
+    mark = sig.get_watermark(proj, shown_path, _REVIEWER)
+    if mark > os.path.getsize(shown_path):      # a replaced file: the reader restarts it at 0
+        mark = 0
+    return shown_path if shown > mark else None
+
+
+def _session_reviewed(proj, named=None, prose=False, to=None):
+    """Advance the dream's watermark to where session-review's last view ended.
+
+    That is the end of the part shown, so a stretch longer than one part is shown next time rather
+    than discharged, whichever view (raw or prose) printed it and whichever flag is passed here.
+    The target is always the END OF A PART the shared reader actually read, never the file size: a
     transcript that could not be read is refused (exit 2), not marked as consumed."""
     if named and not os.path.isfile(named):
         return _missing_named(named)
+    if to is not None:
+        return _rewind(proj, named, to)
+    named = _mark_target(proj, named)
+    if named is None:
+        print("nothing marked: the last session-review is already marked reviewed; run "
+              "session-review first")
+        return 0
     try:
-        tp, part = _part_to_review(proj, named,  # the SAME resolver review used, or the mark lands on
-                                   PROSE_CHUNK_BYTES if prose else None)
+        tp, part = _part_to_review(proj, named or None,  # the file review showed, or the mark lands
+                                   PROSE_CHUNK_BYTES if prose else None)  # on another transcript
     except OSError as exc:                  # the wrong file and the owed stretch is skipped forever
         return _unreadable(exc.filename or "(the review target)", exc)
     if not tp:
@@ -451,11 +522,13 @@ def _session_reviewed(proj, named=None, prose=False):
     if not os.path.exists(tp):          # vanished after it was resolved: the reader's empty part
         return _unreadable(tp, "the file is gone")          # would pull the mark back to 0
     target, size = part.end, part.size
-    # Judged against where this part STARTS, not the stored mark: the reader restarts a replaced
-    # transcript at 0, and a stored mark past its end would switch the cap off exactly there.
+    # Where the last review's view ended wins over this call's window, so a mark without --prose
+    # after a --prose review is not cut to one raw part. Judged against where this part STARTS, not
+    # the stored mark: the reader restarts a replaced transcript at 0, and a stored mark past its
+    # end would otherwise switch this off exactly there.
     shown = sig.get_watermark(proj, tp, _SHOWN)
-    if shown > part.start:
-        target = min(target, shown)
+    if part.start < shown <= size:
+        target = shown
     try:
         sig.set_watermark(proj, tp, _REVIEWER, target)
     except OSError as exc:              # StateWriteError: the mark was not recorded
@@ -557,7 +630,7 @@ def _proj_cmd(cmd, proj, structured_only, named=None, done_opts=None, prose=Fals
     if cmd == "session-review":
         return _session_review(proj, structured_only, named, prose)
     if cmd == "session-reviewed":
-        return _session_reviewed(proj, named, prose)
+        return _session_reviewed(proj, named, prose, done_opts["to"])
     if cmd == "due":
         due = sig.dream_due(proj)
         print("due" if due else "not-due")
@@ -615,6 +688,29 @@ def _take_done_flags(argv):
         else:
             opts[flag[2:]] = value
     return rest, opts
+
+
+def _take_to(argv):
+    """(argv without --to, its integer value or None), or an error string."""
+    rest, to, i = [], None, 0
+    while i < len(argv):
+        flag, eq, inline = argv[i].partition("=")
+        if flag != "--to":
+            rest.append(argv[i])
+            i += 1
+            continue
+        if eq:
+            value, i = inline, i + 1
+        elif i + 1 < len(argv):
+            value, i = argv[i + 1], i + 2
+        else:
+            return "--to needs a value"
+        if to is not None:
+            return "--to given twice"
+        if not re.fullmatch(r"[0-9]+", value):
+            return "--to needs a byte offset (a non-negative integer)"
+        to = int(value)
+    return rest, to
 
 
 def _take_by(argv):
@@ -681,6 +777,10 @@ def _parse(argv):
     if isinstance(taken, str):
         return taken
     argv, done_opts["by"] = taken
+    taken = _take_to(argv)
+    if isinstance(taken, str):
+        return taken
+    argv, done_opts["to"] = taken
     unknown = [a for a in argv if a.startswith("-") and a not in _FLAGS]
     if unknown:
         return "unknown option(s): %s" % " ".join(unknown)
@@ -690,6 +790,8 @@ def _parse(argv):
         return "--transcript applies to session-review and session-reviewed only"
     if "--prose" in argv and cmd not in _REVIEW_CMDS:
         return "--prose applies to session-review and session-reviewed only"
+    if done_opts["to"] is not None and (cmd != "session-reviewed" or named is None):
+        return "--to applies to session-reviewed with --transcript only"
     if "--prose" in argv and "--structured-only" in argv:
         return "--prose and --structured-only are two different views; pass one"
     if cmd in _PROMOTE_CMDS:

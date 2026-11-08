@@ -833,3 +833,152 @@ def test_another_dreams_rows_do_not_count(shadow_on, capsys):
     _mem()
     _shadow_rows(shadow_on, "old", TREE_SITES)
     assert D.main(["done", "/p/x", "--kind", "tree", "--dream", "new"]) == 1
+
+
+# ---- which transcript a review reads, and which one its mark lands on -------------------------
+
+_LINE = '{"type":"user","message":{"content":"%s"}}\n'
+
+
+def _session_file(proj, sid, text):
+    """A transcript where Claude Code keeps it: <config>/projects/<dashkey>/<session id>.jsonl."""
+    d = D.sig.memory_dir(proj).parent
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / (sid + ".jsonl")
+    f.write_text(_LINE % text, encoding="utf-8")
+    return f
+
+
+def _register_live(home, sid):
+    d = home / ".claude" / "sessions"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / ("%d-%s.json" % (os.getpid(), sid))).write_text(
+        '{"pid": %d, "sessionId": "%s"}' % (os.getpid(), sid), encoding="utf-8")
+
+
+def test_review_reads_the_calling_sessions_own_transcript_not_the_peer_the_hook_recorded(
+        home, capsys, monkeypatch):
+    proj = "/p/shared"
+    mine, peer = _session_file(proj, "sid-mine", "MY lesson"), _session_file(proj, "sid-peer", "PEER lesson")
+    D.sig.record_session_meta(proj, "sid-peer", str(peer))
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sid-mine")
+    assert D.main(["session-review", proj]) == 0
+    out = capsys.readouterr().out
+    assert "MY lesson" in out and "PEER lesson" not in out
+    assert out.splitlines()[0] == "== TRANSCRIPT SHOWN: %s (session sid-mine) ==" % mine
+    assert D.main(["session-reviewed", proj]) == 0
+    assert D.sig.get_watermark(proj, str(peer), "dream") == 0
+    assert D.sig.get_watermark(proj, str(mine), "dream") == mine.stat().st_size
+
+
+def test_without_a_session_id_a_review_warns_when_live_sessions_share_the_directory(
+        home, tmp_path, capsys, monkeypatch):
+    proj = "/p/shared"
+    peer = _session_file(proj, "sid-a", "A")
+    _session_file(proj, "sid-b", "B")
+    _register_live(home, "sid-a")
+    _register_live(home, "sid-b")
+    D.sig.record_session_meta(proj, "sid-a", str(peer))
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    assert D.main(["session-review", proj]) == 0
+    assert "may be a PEER's transcript" in capsys.readouterr().out
+
+
+def test_with_a_session_id_a_review_does_not_warn_about_peers(home, capsys, monkeypatch):
+    proj = "/p/shared"
+    _session_file(proj, "sid-a", "A")
+    _session_file(proj, "sid-b", "B")
+    _register_live(home, "sid-a")
+    _register_live(home, "sid-b")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sid-a")
+    assert D.main(["session-review", proj]) == 0
+    assert "PEER's transcript" not in capsys.readouterr().out
+
+
+def test_mark_lands_on_the_transcript_the_review_showed_after_the_owed_flag_moved(
+        home, tmp_path, capsys, monkeypatch):
+    # The owed transcript resolved at review time can differ at mark time; a re-resolve marked a
+    # file nobody had read and left the one that was read open.
+    proj = "/p/x"
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    old = tmp_path / "compacted.jsonl"
+    old.write_text(_LINE % "the OLD lesson", encoding="utf-8")
+    live = _session(home, proj, tmp_path, _LINE % "the NEW turn")
+    D.sig.mark_nap_owed(proj, session_id="sid-old", transcript_path=str(old))
+    assert D.main(["session-review", proj]) == 0
+    capsys.readouterr()
+    D.sig.clear_nap_owed(proj)
+    assert D.main(["session-reviewed", proj]) == 0
+    assert D.sig.get_watermark(proj, str(old), "dream") == old.stat().st_size
+    assert D.sig.get_watermark(proj, str(live), "dream") == 0
+
+
+def test_mark_stops_where_the_review_stopped_when_the_live_file_grew(home, tmp_path, capsys,
+                                                                     monkeypatch):
+    proj = "/p/x"
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    tp = _session(home, proj, tmp_path, _LINE % "seen")
+    assert D.main(["session-review", proj]) == 0
+    shown = tp.stat().st_size
+    with open(tp, "a", encoding="utf-8") as fh:
+        fh.write(_LINE % "written after the review")
+    assert D.main(["session-reviewed", proj]) == 0
+    assert D.sig.get_watermark(proj, str(tp), "dream") == shown
+
+
+def test_a_second_mark_with_no_review_between_marks_nothing(home, tmp_path, capsys, monkeypatch):
+    proj = "/p/x"
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    tp = _session(home, proj, tmp_path, _LINE % "seen")
+    assert D.main(["session-review", proj]) == 0
+    assert D.main(["session-reviewed", proj]) == 0
+    shown = tp.stat().st_size
+    with open(tp, "a", encoding="utf-8") as fh:
+        fh.write(_LINE % "unread")
+    capsys.readouterr()
+    assert D.main(["session-reviewed", proj]) == 0
+    assert "nothing marked" in capsys.readouterr().out
+    assert D.sig.get_watermark(proj, str(tp), "dream") == shown
+
+
+def test_to_rewinds_a_mark_and_the_stretch_is_served_again(home, tmp_path, capsys, monkeypatch):
+    proj = "/p/x"
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    tp = _session(home, proj, tmp_path, _LINE % "seen")
+    D.sig.set_watermark(proj, str(tp), "dream", tp.stat().st_size)
+    assert D.main(["session-reviewed", proj, "--transcript", str(tp), "--to", "0"]) == 0
+    assert D.sig.get_watermark(proj, str(tp), "dream") == 0
+    capsys.readouterr()
+    assert D.main(["session-review", proj]) == 0
+    assert "seen" in capsys.readouterr().out
+
+
+def test_to_refuses_to_move_a_mark_forward(home, tmp_path, capsys):
+    tp = _session(home, "/p/x", tmp_path, _LINE % "seen")
+    assert D.main(["session-reviewed", "/p/x", "--transcript", str(tp), "--to", "5"]) == 2
+    assert D.sig.get_watermark("/p/x", str(tp), "dream") == 0
+
+
+@pytest.mark.parametrize("args", [["session-review", "/p/x", "--to", "5"],
+                                  ["session-reviewed", "/p/x", "--to", "5"],
+                                  ["session-reviewed", "/p/x", "--transcript", "/f", "--to", "-1"],
+                                  ["session-reviewed", "/p/x", "--transcript", "/f", "--to", "x"]])
+def test_to_is_refused_outside_a_named_mark(home, args, capsys):
+    assert D.main(args) == 2
+
+
+def test_an_owed_transcript_of_a_live_peer_is_left_to_that_peer(home, tmp_path, monkeypatch):
+    proj = "/p/shared"
+    mine, peer = _session_file(proj, "sid-mine", "MINE"), _session_file(proj, "sid-peer", "PEER")
+    D.sig.mark_nap_owed(proj, session_id="sid-peer", transcript_path=str(peer))
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sid-mine")
+    assert D._review_target(proj) == str(peer)              # no registry entry: not known to be live
+    _register_live(home, "sid-peer")
+    assert D._review_target(proj) == str(mine)
+
+
+def test_the_closing_line_ends_on_the_command(home, tmp_path, capsys, monkeypatch):
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    _session(home, "/p/x", tmp_path, _LINE % "seen")
+    D.main(["session-review", "--prose", "/p/x"])
+    assert capsys.readouterr().out.rstrip().endswith("session-reviewed /p/x --prose")
