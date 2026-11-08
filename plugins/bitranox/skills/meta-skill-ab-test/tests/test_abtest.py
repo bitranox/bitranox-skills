@@ -1644,8 +1644,12 @@ def test_without_the_link_the_same_gate_fails(tmp_path, scratch_repo, skills_rep
     assert res["floor"]["passed"] is False and res["linked"] == []
 
 
+# CI has no global git identity: a commit made through L.git needs its own.
+_IDENTITY = ("-c", "user.name=t", "-c", "user.email=t@x")
+
+
 def _track_packages(repo):
-    for args in (("add", "-f", str(PROTOC)), ("commit", "-q", "-m", "vendor protoc")):
+    for args in (("add", "-f", str(PROTOC)), (*_IDENTITY, "commit", "-q", "-m", "vendor protoc")):
         assert L.git(repo, *args).returncode == 0
 
 
@@ -1675,7 +1679,7 @@ def test_seal_refuses_a_link_that_is_not_ignored_build_output(tmp_path, scratch_
 def _commit_file(repo, rel, text):
     (repo / rel).parent.mkdir(parents=True, exist_ok=True)
     (repo / rel).write_text(text, encoding="utf-8")
-    for args in (("add", rel), ("commit", "-q", "-m", f"add {rel}")):
+    for args in (("add", rel), (*_IDENTITY, "commit", "-q", "-m", f"add {rel}")):
         assert L.git(repo, *args).returncode == 0
 
 

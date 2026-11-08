@@ -30,6 +30,12 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.38.1]
+
+### Fixed
+
+- meta-skill-ab-test: the three `[workpiece] link` tests that commit through `_ablib.git` set their own git identity; on a CI runner without a global one the commit exited 128 and the ubuntu py3.14 and py3.15 cells went red.
+
 ## [10.38.0]
 
 ### Added
