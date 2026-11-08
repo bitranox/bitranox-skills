@@ -298,6 +298,16 @@ run the behavioural RED and read whether it actually fails. A clean result is WE
 compares distinctive terms, so it cannot see a paraphrase, and "no hit" means NOT CAUGHT rather
 than absent. Do not read a clean run as a sealed fixture.
 
+A long document that names nearly every topic of its store (a `CLAUDE.local.md` memory index)
+holds almost any rare term by chance, so the check weights each shared term by how unlikely a
+document of that size is to hold it, and a hit must clear the count AND that weighted bar
+(`evidence` and `evidence_needed` per hit in `--json`, and on the hit line in text mode). An
+index is scored as ONE document, so it no longer matches every scenario, and it also no longer
+reports the one pointer line that does state your lesson. The fact body that line points at is
+in the cascade too, but it is caught only when it shares enough of your scenario's rare terms.
+So after every clean run, grep each `CLAUDE.local.md` on the chain for the lesson's own
+keywords before dispatching, and read the body of any pointer line that matches.
+
 | Exit | Meaning                                                                                                           |
 |------|-------------------------------------------------------------------------------------------------------------------|
 | 0    | clean - neither leak found. Rules out these two reasons; does not prove the RED CAN fail                          |

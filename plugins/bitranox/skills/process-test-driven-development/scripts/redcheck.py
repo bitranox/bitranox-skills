@@ -33,7 +33,10 @@ HOW MUCH A VERDICT IS WORTH. The two directions are not symmetric, and the tool 
 is giving you:
   * INHERITED is labelled STRONG: the report names the file and the terms it shares with the
     scenario. A hit is a term overlap, not a reading, so open the named document and check it
-    states the claim before treating the RED as contaminated.
+    states the claim before treating the RED as contaminated. Each shared rare term is weighted
+    by how unlikely a document of THAT size is to hold it by chance, so a long index that names
+    every topic of its store (a CLAUDE.local.md memory index) does not match every scenario;
+    `evidence` and `evidence_needed` in the JSON show how far over the bar a hit sits.
   * CLEAN is WEAK. This compares distinctive terms, so it cannot see a paraphrase. "No hit" means
     NOT CAUGHT, never "absent from the agent's context" - a clean run is not a sealed fixture.
 A corpus of zero documents makes every scenario look clean, so asking for one and getting nothing
@@ -67,6 +70,7 @@ import json
 import math
 import os
 import re
+import statistics
 import sys
 from collections import Counter
 from dataclasses import dataclass, field
@@ -137,7 +141,8 @@ MIN_SHARED_TERMS = 4
 RARITY_MAX_FRACTION = 0.05
 
 # Below this many documents the frequency estimate is noise (in a 2-document corpus every term
-# looks common), so the rarity filter is skipped and the count stands alone.
+# looks common), so the rarity filter and the size weighting are skipped and the count stands
+# alone.
 MIN_CORPUS_FOR_RARITY = 20
 
 # Fraction of the ANSWER's distinctive terms already present in the scenario.
@@ -198,6 +203,9 @@ class InheritedHit:
     label: str
     shared: tuple[str, ...]
     score: float
+    # Size-weighted evidence and the bar it had to clear; None in a corpus too small to weigh.
+    evidence: float | None = None
+    evidence_needed: float | None = None
 
 
 @dataclass(frozen=True)
@@ -259,7 +267,15 @@ class Audit:
                 "note": self.evidence_note,
             },
             "inherited": [
-                {"label": h.label, "shared": list(h.shared), "score": round(h.score, 3)}
+                {
+                    "label": h.label,
+                    "shared": list(h.shared),
+                    "score": round(h.score, 3),
+                    "evidence": None if h.evidence is None else round(h.evidence, 2),
+                    "evidence_needed": (
+                        None if h.evidence_needed is None else round(h.evidence_needed, 2)
+                    ),
+                }
                 for h in self.inherited
             ],
             "telegraphs": [{"marker": t.marker, "text": t.text} for t in self.telegraphs],
@@ -287,11 +303,42 @@ def distinctive_terms(text: str) -> set[str]:
     return terms
 
 
-def _rare_terms(
+@dataclass(frozen=True)
+class _CorpusStats:
+    """Document frequencies and sizes, the two things a shared term's weight depends on."""
+
+    rare: set[str]
+    frequency: Counter[str]
+    documents: int
+    limit: int
+    median_size: float
+
+    def weight(self, term: str, size: int) -> float:
+        """Evidence one shared term carries in a document of `size` distinct terms.
+
+        It is -ln P(a document that size contains the term by chance): a term in 2% of the
+        corpus is strong evidence in a 20-term note and none at all in a 3000-term index,
+        which contains nearly every term the corpus uses. P scales the term's document share
+        by the document's size relative to the median, so an ordinary document weighs each
+        term at its plain inverse document frequency.
+        """
+        share = self.frequency[term] / self.documents
+        if share >= 1.0:
+            return 0.0
+        chance = -math.expm1((size / self.median_size) * math.log1p(-share))
+        return -math.log(chance) if chance > 0.0 else 0.0
+
+    def needed(self, min_shared: int) -> float:
+        """The weight `min_shared` terms AT the rarity cutoff carry in a median-size document,
+        so the weighting never rejects what the count alone accepted for an ordinary one."""
+        return min_shared * -math.log(self.limit / self.documents)
+
+
+def _corpus_stats(
     documents: Sequence[tuple[str, set[str]]],
     max_fraction: float = RARITY_MAX_FRACTION,
-) -> set[str] | None:
-    """Terms used by only a small share of the corpus, or None if it is too small.
+) -> _CorpusStats | None:
+    """The corpus's rare terms and the frequencies behind them, or None if it is too small.
 
     A term most documents contain is boilerplate, and boilerplate alone reaches the
     absolute threshold once a corpus is large. Returning None means "do not filter":
@@ -303,7 +350,9 @@ def _rare_terms(
     for _, terms in documents:
         frequency.update(terms)
     limit = max(1, int(len(documents) * max_fraction))
-    return {term for term, count in frequency.items() if count <= limit}
+    rare = {term for term, count in frequency.items() if count <= limit}
+    median_size = max(1.0, float(statistics.median(len(terms) for _, terms in documents)))
+    return _CorpusStats(rare, frequency, len(documents), limit, median_size)
 
 
 def audit(
@@ -338,16 +387,25 @@ def audit(
     scenario_terms = distinctive_terms(scenario)
 
     documents = [(label, distinctive_terms(text)) for label, text in corpus]
-    rare = _rare_terms(documents, rarity_max_fraction)
+    stats = _corpus_stats(documents, rarity_max_fraction)
 
     inherited: list[InheritedHit] = []
     for label, terms in documents:
         shared = scenario_terms & terms
-        if rare is not None:
-            shared &= rare
-        if len(shared) >= min_shared:
-            score = len(shared) / max(len(scenario_terms), 1)
-            inherited.append(InheritedHit(label, tuple(sorted(shared)), score))
+        if stats is not None:
+            shared &= stats.rare
+        if len(shared) < min_shared:
+            continue
+        evidence = needed = None
+        if stats is not None:
+            evidence = sum(stats.weight(term, len(terms)) for term in shared)
+            needed = stats.needed(min_shared)
+            # The tolerance keeps a document scored exactly at the bar (an ordinary-sized one
+            # with min_shared terms at the cutoff) on the side the count alone put it.
+            if evidence < needed - 1e-9:
+                continue
+        score = len(shared) / max(len(scenario_terms), 1)
+        inherited.append(InheritedHit(label, tuple(sorted(shared)), score, evidence, needed))
     inherited.sort(key=lambda h: h.score, reverse=True)
 
     folded = _fold_apostrophes(scenario)
@@ -559,7 +617,14 @@ def _render(result: Audit) -> str:
     if result.inherited:
         lines.append("INHERITED COVERAGE - the agent is handed this lesson before your prompt:")
         for hit in result.inherited[:10]:
-            lines.append(f"  {hit.label}  ({len(hit.shared)} shared terms, {hit.score:.0%})")
+            weighed = (
+                ""
+                if hit.evidence is None or hit.evidence_needed is None
+                else f", evidence {hit.evidence:.1f} of {hit.evidence_needed:.1f} needed"
+            )
+            lines.append(
+                f"  {hit.label}  ({len(hit.shared)} shared terms, {hit.score:.0%}{weighed})"
+            )
             lines.append(f"    {', '.join(hit.shared[:12])}")
         lines.append("  -> move the RED to a domain the corpus does not already teach.")
     if result.telegraphs:
