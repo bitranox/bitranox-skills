@@ -185,6 +185,18 @@ rather than re-dispatching from scratch, since its plan and context are
 already right. Plan mode switched on while writers are ALREADY running is a different case, with
 code already written: see "Interrupted Runs".
 
+**Before the first dispatch, settle what the session itself writes into the shared worktree.**
+Implementers and fixers commit from the tree you work in, and the commit gate reads that working
+tree whole. Commit your own edits there (a record file, an in-session task) before a writer
+commits, or give the writers a separate worktree: otherwise a writer's pathspec commit is refused
+over a file only you touched, and a fixer round is lost. The `reformat-md-tables` hook also writes
+there: it realigns the tables of every markdown file a Write or Edit targets or a Bash call leaves
+freshly changed. When the plan forbids editing markdown, or the checkout is a vendored upstream
+whose docs follow someone else's style, run `git config bitranox.reformatMdTables false` inside
+the checkout before the first Bash call (at once, if Bash already ran, then check `git status`
+for tables it already realigned), and after the first dispatch check `git status` for markdown
+nobody meant to change.
+
 ## Model Selection
 
 There are two working tiers: `haiku` for purely mechanical work, `opus` for everything else
@@ -452,10 +464,12 @@ final whole-branch review. When you fill a reviewer template:
   one file instead of re-deriving the branch diff with git commands.
 - Every fix dispatch carries the implementer contract: the fix subagent
   re-runs the tests covering its change and reports the results, and commits under the same
-  attribution policy line the implementer got (see File Handoffs). Name the
-  covering test files in the dispatch  -  a one-line fix does not need the
-  whole suite. Before re-dispatching the reviewer, confirm the fix report
-  contains the covering tests, the command run, and the output; dispatch
+  attribution policy line the implementer got (see File Handoffs). Copy implementer-prompt.md's
+  gate.py paragraph and its "Committing" section into the dispatch: a fixer committing beside
+  other writers needs the same no-amend rule and the same way to wait for a gate. Name the
+  covering test files in the dispatch and put them in the gate.py command as its suite  -  a
+  one-line fix does not need the whole suite. Before re-dispatching the reviewer, confirm the fix
+  report contains the covering tests, the command run, and the output; dispatch
   the re-review once all three are present.
 - If the final whole-branch review returns findings, dispatch ONE fix
   subagent with the complete findings list  -  not one fixer per finding.
