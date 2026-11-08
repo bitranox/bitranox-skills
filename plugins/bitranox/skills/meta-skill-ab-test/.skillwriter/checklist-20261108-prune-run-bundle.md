@@ -17,8 +17,11 @@ The description is untouched.
       bundle and adds none.
 - [x] "an arm's own bundle.git does not hold them": measured on the live run behind this change,
       where 62 branches existed and the per-arm `bundle.git` files held 45 of them.
-- [ ] "deletes nothing if that fails": read from `cmd_prune_run`, which empties the branch list when
-      `_bundle_branches` returns an error; NOT exercised by a test (a failing bundle write needs a
-      fixture no existing test provides). The SKILL.md clause states it as designed behaviour.
-- [x] Mutation-proved: with `abtest.py` reverted to the previous source the new test goes RED (no
-      branches.bundle); restored, it passes and the whole skill suite is green (331 passed, 1 skipped).
+- [x] "deletes nothing if that fails": executed.
+      `test_prune_run_deletes_no_branch_when_the_bundle_cannot_be_written` makes the run dir
+      read-only after a dry run, runs `prune-run` (exit 2, one error line naming the bundle) and
+      finds every branch still there. Mutation-proved: with the branch list no longer emptied on a
+      bundle error the test goes RED; restored, it passes.
+- [x] Mutation-proved: with `abtest.py` reverted to the previous source the new bundle test goes RED
+      (no branches.bundle); restored, it passes and the whole skill suite is green.
+- [x] Decisions: none - a clause documenting behaviour the code and its tests already carry; no design choice is made here.

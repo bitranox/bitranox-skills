@@ -410,6 +410,25 @@ def test_prune_run_bundles_every_branch_before_deleting_them(tmp_path, scratch_r
     assert bundle.is_file() and len(heads.splitlines()) == len(before)
 
 
+def test_prune_run_deletes_no_branch_when_the_bundle_cannot_be_written(tmp_path, scratch_repo, skills_repo, fake_claude_path,
+                                                                      monkeypatch):
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    env, creds = _env(fake_claude_path, tmp_path)
+    _use_env(monkeypatch, env)
+    assert T.main(["seal", str(run_dir)]) == 0
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--dry-run")) == 0
+    before = L.git(scratch_repo, "branch", "--list", f"abx/{run_dir.name}/*").stdout
+    assert before.strip()
+    run_dir.chmod(0o555)  # the bundle cannot be created in a read-only run dir
+    try:
+        if os.access(run_dir, os.W_OK):
+            pytest.skip("the run dir stays writable here (running as root)")
+        assert T.main(["prune-run", str(run_dir)]) == 2
+    finally:
+        run_dir.chmod(0o755)
+    assert L.git(scratch_repo, "branch", "--list", f"abx/{run_dir.name}/*").stdout == before
+
+
 # --- review round: pause on a refused request, leftovers of a killed attempt, refusals ------------
 
 PLANTED = "fake-planted-token-UNIQUE-0d41e2-abtest"  # a credentials copy a hard kill left behind
