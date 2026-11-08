@@ -1,33 +1,30 @@
-# Handover 2026-11-03 (the [27] implementation plan is written; execution not started)
+# Checkpoint 2026-11-08 16:50 CET (A/B experiment [26] finished: all paid runs done, data archived, pruned)
 
-## In flight
+## In flight (read first)
 
-- Nothing is part-done. The plan `docs/plans/2026-11-03-ab-test-skill.md` (16 tasks, M0-M2, later milestones after checkpoint 2) is complete and committed with the design amendments (24273510); the user has been offered the two execution options (subagent-driven on opus in this session, or attended) and has not answered yet.
+- Nothing paid is running. r5, r6, r20 and r21 are done and judged; results are in OPEN-WORK.md [24] and [31].
+- All data is archived in the private repo `rnprivat/presse/presse-agent-research` (local, 3+ commits, not pushed):
+  runs, raw streams and transcripts, judge inputs and diffs, every abx branch as `data/branches/abx-all.bundle`.
+- The workpiece branches were removed with `prune-run` for r1..r21 after that bundle was verified (62 heads).
+  Run dirs under `~/ab-runs` are still there (110 GB, plugin-pin included).
+
+## Decided
+
+- User 2026-11-08: "lets continue with the cleanup now that everything is saved so far" (my reading: covers prune-run).
+- Next paid step is the user's call: fix rounds on VN1b (and Vpar for a like-for-like), about 50 USD per arm; the
+  weaknesses list (one run, one judge, nothing code-checked) is in the research repo METHOD.md.
 
 ## Committed, or not
 
-- bitranox-skills: the plan, the design amendments, this file and the [27] backlog line are in the commit on top of 4019c1ca; pushed if `git log origin/master -1 --format=%s` names the plan.
-- RESEARCH: all local, unpushed (public repo; reword run_arm.py's docstring before any push); branch abx-better-work-axis at 2838fe1.
-- EXECUTION-USER-REVIEW.md (gitignored) holds the plan-writing decisions under "[27] implementation plan written on fable".
-
-## Decided, and why
-
-- Plan authored on fable; every implementer subagent and every arm/judge runs on opus, pinned and asserted (user directive 2026-11-02).
-- Tasks are detailed only to checkpoint 2 (one real control arm): its duration and cost fix M5's deadline and cap, and whether the arm commits per task decides how M3 prices an advantage.
+- OPEN-WORK.md and this file: commit and merge origin/master (peers landed 10.20.0 and 10.22.1).
 
 ## Still open, untouched
 
-OPEN-WORK.md: [27] (next: Task 1, the M0 probe), [25] (after [27] by the user), [40], [50] parked, [96].
-
-## Next action
-
-Task 1 of the plan (the M0 probe, about 0.20 USD) under whichever execution mode the user picks; if attended, a fresh session opens in a marketplace worktree per the plan's Global Constraints.
-
-## How to verify
-
-- `ls docs/plans/2026-11-03-ab-test-skill*.md` lists the design and the plan; `grep -c '^### Task' docs/plans/2026-11-03-ab-test-skill.md` prints 16.
-- CI on the pushed commit: `uv run <plugin cache>/skills/compuse-toolbox/scripts/ci_wait.py --ref HEAD`.
+OPEN-WORK.md: [24], [25], [26], [27], [28], [29], [30] overdue, [31], [40], [50], [95]-[100]. Also: full dream (about 21 MB of
+transcripts unreviewed), EXECUTION-USER-REVIEW.md needs the r5-r21 decisions, remove `~/ab-runs/*/plugin-pin` and the run dirs
+only on the user's word, fix rounds only on the user's word.
 
 ## Lessons for the next nap
 
-- When a user's directive pins the authoring tier (plans and skill text on fable), check the session's own model before starting the authoring and ask for the switch first: a design doc was written on opus and only caught at the plan stage.
+- When pruning a workpiece after an experiment, bundle EVERY branch first (`git bundle create ... <all refs>`): the per-arm bundle.git files missed 17 branches (attempts, killed arms).
+- When copying run dirs into an archive repo, exclude each run dir's own .git (it becomes an embedded repo and loses its content), keep it as a bundle instead.
