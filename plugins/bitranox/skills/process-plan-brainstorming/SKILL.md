@@ -1,6 +1,6 @@
 ---
 name: process-plan-brainstorming
-description: Use when starting non-trivial feature, component, or behaviour-change work whose design or requirements are not yet settled, or when a request adds a setting, option or feature that reverses or undoes a decision the user made earlier. Not for trivial, mechanical, or fully-specified changes.
+description: Use when starting non-trivial feature, component, or behaviour-change work whose design or requirements are not yet settled, when a request adds a setting, option or feature that reverses or undoes a decision the user made earlier, or when an idea from a backlog note or a measurement starts turning into a feature mid-task. Not for trivial, mechanical, or fully-specified changes.
 ---
 
 # Brainstorming Ideas Into Designs
@@ -19,16 +19,27 @@ Start by understanding the current project context, then ask questions one at a 
 
 **Understanding the idea:**
 - Check out the current project state first (files, docs, recent commits)
+- **Ground the first question in what exists and what it costs.** When the work redesigns an
+  existing component, first show the user what it holds today (its tables or records, one line
+  each, with counts). When it builds a new feature or device, measure its hard prerequisites
+  against the codebase and put that cost in the options. A question that presupposes a model the
+  user has never seen gets clarifying questions instead of an answer, and a scope question asked
+  on an unmeasured cost gets answered and then reversed.
 - **Ask WHETHER before any HOW question.** State whether the requested feature is worth having at
   all, with a recommendation: what already covers the need (a call site, an existing option, the
   default), what it costs to keep, and YAGNI. Every option of a scope or design question
   presupposes the feature, so once you ask one the user has no way left to say no to it. This
   matters most when the request reverses a decision the user made earlier (a setting to turn off
   something they just chose to have no setting for): name that decision and its reason, and
-  recommend for or against reversing it before asking anything else.
+  recommend for or against reversing it before asking anything else. It applies the same when an
+  idea from a backlog note or a test result starts turning into a feature mid-task, before the
+  first question about how it should work.
 - Ask questions one at a time to refine the idea
 - Prefer multiple choice questions when possible, but open-ended is fine too
 - Only one question per message - if a topic needs more exploration, break it into multiple questions
+- When the user answers an option question with a free-text counter-idea, turn it into a concrete
+  scheme (quote the hard limit it must meet) and ask once more with that scheme as option 1:
+  building from the raw idea guesses details they would have chosen
 - Focus on understanding: purpose, constraints, success criteria
 
 **Exploring approaches:**
@@ -59,6 +70,11 @@ switch-model-or-continue (the main agent cannot self-switch its model). See
   first N plus a total. Hold the whole only where the output must be built in memory as one piece
   (a complete file that can be streamed does not qualify), behind a byte limit with a typed
   refusal. Asked at review instead, the same question means a rewrite.
+- **When the design detects change by a checksum of an item's own bytes** (versions, cache
+  invalidation, skip-if-unchanged), check whether the derived output it stores reads OTHER items
+  too; if so, decide with the user what a change in those others does before sign-off.
+- **When the design adds a stored artifact beside an existing one**, say in the same sentence
+  that the existing one stays and what each is for.
 - Be ready to go back and clarify if something doesn't make sense
 
 ## After the Design

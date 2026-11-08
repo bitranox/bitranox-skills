@@ -1,6 +1,6 @@
 ---
 name: process-debug-systematic
-description: Use when encountering any bug, test failure, or unexpected behavior, before proposing fixes
+description: Use when encountering any bug, test failure, unexpected behavior or outage, before proposing fixes
 ---
 
 # Systematic Debugging
@@ -32,6 +32,7 @@ Use for ANY technical issue:
 - Performance problems
 - Build failures
 - Integration issues
+- A service, fleet or runner that stops doing its work after a deploy, restart or change
 
 **Use this ESPECIALLY when:**
 - Under time pressure (emergencies make guessing tempting)
@@ -170,6 +171,10 @@ You MUST complete each phase before proceeding to the next.
    - Make the SMALLEST possible change to test hypothesis
    - One variable at a time
    - Don't fix multiple things at once
+   - **Before asking anyone to approve a fix, run the cheapest test that separates your hypothesis
+     from its nearest rival** (restart ONE runner, recreate one session). If you cannot, say in the
+     question that the hypothesis is untested: the most visible difference between good and bad is
+     a candidate, not a cause, and an approval given to it starts the expensive work.
    - **Run both arms from the SAME path.** Comparing an old version against a new one by copying
      one of them to a scratch directory moves a SECOND variable: a program that derives anything
      from `__file__` or the working directory behaves differently when relocated, so the

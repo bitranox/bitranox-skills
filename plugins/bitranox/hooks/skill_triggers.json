@@ -1196,6 +1196,7 @@
   "failure",
   "unexpected",
   "behavior",
+  "outage",
   "proposing",
   "fixes"
  ],
@@ -1214,6 +1215,7 @@
   "adds",
   "setting",
   "option",
+  "mid-task",
   "fully-specified"
  ],
  "process-plan-writing-plans": [
