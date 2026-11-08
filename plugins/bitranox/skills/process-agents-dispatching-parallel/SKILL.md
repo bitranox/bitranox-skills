@@ -88,6 +88,10 @@ the agents happen to miss each other. Decide the split BEFORE dispatching:
 - Assign every file to exactly ONE agent, and give each agent its allow-list explicitly.
 - A file several domains must touch gets ONE owner - or edit it yourself first and let the others
   only read from it.
+- A public signature one agent may change while another builds against it (a lint fix or refactor
+  reshaping a constructor) is a shared file in disguise: forbid signature changes in the first
+  agent's brief, or send the second agent the new API before you merge its output, and re-run the
+  second agent's tests in the real tree after merging.
 - Tell each agent that other agents are editing the rest of the tree concurrently, and that a
   needed change in someone else's file is to be REPORTED, not made. Say it in those words, or a
   helpful agent reaches across "just this once". The hand-off is a feature: in one measured run
@@ -196,6 +200,13 @@ worktrees, a hard reset or a force push bundled into a brief with ordinary work 
 permission classifier refuse the WHOLE dispatch (`[Git Destructive]`), not just that step, and the
 refusal names no item, so the lane starts late and you re-brief it by guesswork. Run destructive
 steps yourself as dispatcher steps, before or after the fan-out.
+
+**Settle host-wide prerequisites yourself before the fan-out.** N agents on a fresh base each find
+the same missing prerequisite (the toolchain version the base requires against the one installed,
+a shared cache) and each install it into the same directory: the installs race, and the loser's
+rollback can leave that directory broken for all of them. Compare what the base requires with what
+the host has and install it once yourself before dispatching; if an agent has to do it, name that
+one agent as the writer in every brief.
 
 ### 3. Dispatch in Parallel
 

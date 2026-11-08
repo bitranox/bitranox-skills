@@ -158,6 +158,11 @@ content unchanged: the decisions, measured facts and design under `## Global Con
 `### Task <id>: <name>` heading per task. Commit it where the plan is tracked, and log the
 restructure in `EXECUTION-USER-REVIEW.md` as a decision you took.
 
+**In a worktree-isolated session (EnterWorktree) that log is a different file.** The worktree guard
+refuses an edit of the main checkout's `EXECUTION-USER-REVIEW.md`, and the file is gitignored, so
+the worktree has no copy. Keep a gitignored copy at the worktree root and fold it into the main
+log at merge (after ExitWorktree keep).
+
 **A task that ADDS or TIGHTENS a refusal** (a new validator, an empty-directory check, a stricter
 path rule) also breaks every existing test, fixture and doc example that relied on the old
 leniency, and those are part of the task. Before dispatching it, find them: grep the tests and
@@ -386,6 +391,11 @@ Implementer subagents report one of four statuses. Handle each appropriately:
 
 **Never** ignore an escalation or force the same model to retry without changes. If the implementer said it's stuck, something needs to change.
 
+**An item sent to an agent that already reported may never be read.** After you SendMessage a new
+item to a background implementer or fixer that has reported, check for its commit before waiting
+on it: an agent that went idle can leave a queued item unacted on. No commit and no activity means
+re-send the item in full.
+
 **A claim in a report is the subagent's own inference.** "X is redundant", "Y is orphaned",
 "Z is the cause", "tool T deletes an empty variable": before you relay such a claim to your human
 partner, who may act on it, or forward it into a later brief, fix dispatch or plan amendment,
@@ -393,7 +403,9 @@ check its premise with one direct read or probe. If you cannot, carry it labelle
 from the Task 3 report". A relayed claim arrives with your authority: the user turns it into an
 instruction, and a fixer writes it into code comments, docs and a CHANGELOG line. The same goes
 for a number that moved between rounds without a reason given (a test count that dropped):
-explain it before the task counts as complete.
+explain it before the task counts as complete. A deviation from the brief that cites its source
+is judged the same way, against that source, not against the brief: a fake or test that knows more
+than the code is often the point.
 
 ## Handling Reviewer WARN Items
 
@@ -479,6 +491,20 @@ final whole-branch review. When you fill a reviewer template:
   plan text, ask which governs, and do not dispatch that fix without
   asking (in a headless run, "When No Human Can Answer" decides it
   instead). Never dismiss a finding because the plan mandates it.
+- A further instance of a defect CLASS your human partner already ordered
+  fixed in this pass is in scope, even when the order named only two
+  instances: fix it in the same round or ask the one question. Recording it
+  as found and left is the wave-off the Pathfinder rule forbids.
+- A re-review after a fix round gets that round's REAL parent (the commit the
+  fixer started from) as its BASE and named risks on the code the round ADDED (a refactor, a new helper, a new
+  test that must go RED), not only the question whether the listed findings
+  are fixed: the next round's defects sit in the last round's new code.
+- When the plan requires each commit of a task to stand alone (it may be cut
+  upstream by itself), verify per commit: cherry-pick ONLY that commit onto
+  the task's parent in a throwaway worktree and run the repo's lint and suite
+  there; a conflict or a failure means it does not stand alone. A report that
+  commit 1 alone passes says nothing about commit 2, which ran only on top of
+  commit 1. Put the check in the brief and in the reviewer's named risks.
 - A regression test that comes with a fix is only a restatement until it
   FAILS against the defect. Require the fix report to show it failing with
   the exact defect the fix removes put back: compuse-toolbox's
@@ -521,9 +547,9 @@ review is approved, with the review package and these inputs, each by path:
   its source. Read it in full. If the plan names none, say so in the dispatch.
 - the plan at HEAD, with every amendment made during the run. The amended plan is the plan: judge
   the branch against it, not against the plan as it stood at the start.
-- `.bitranox/sdd/progress.md`, `.bitranox/sdd/decisions.md` when present, and
-  `EXECUTION-USER-REVIEW.md` when present: the decisions and amendments, and the Minor findings
-  the task reviews deferred to this review.
+- `.bitranox/sdd/progress.md` (or this plan's `progress-<plan>.md`), `.bitranox/sdd/decisions.md`
+  when present, and `EXECUTION-USER-REVIEW.md` when present: the decisions and amendments, and
+  the Minor findings the task reviews deferred to this review.
 
 Its instructions, in the dispatch:
 
@@ -579,7 +605,11 @@ and is re-read on every later turn. Hand artifacts over as files:
   merge, version bump, release or build step to an implementer or fixer dispatch: the agent does
   it before any independent review, and a defect the review finds is already on the main branch.
   You merge once the task review is clean and the commit messages pass the attribution check
-  below; a release or build is a dispatch of its own after that.
+  below; a release or build is a dispatch of its own after that. Nor ask an agent to squash or
+  amend: have it leave plain new commits and hand back the exact squash command and message file,
+  and run the squash yourself. In auto mode the permission classifier judges each subagent's
+  history rewrite on its own and refuses some, and a rewrite refused for the subagent is not yours
+  to run on its behalf: that one goes to your human partner.
 - **Commit attribution is a stated policy, never the subagent's default.** A subagent's harness
   can carry a system reminder telling it to append attribution lines to every commit (a
   `Co-Authored-By:` trailer, a "Generated with" footer), and the subagent follows it unless its
@@ -619,9 +649,16 @@ and is re-read on every later turn. Hand artifacts over as files:
   option's description, any note), from `USER-DECISIONS.jsonl` at the main checkout's root, where
   every answered question is logged. `<text>` must occur in exactly one record's question or
   chosen label; the script refuses (exit 1, naming the text) when it matches none or several, so
-  lengthen it until it names one. The reviewer reads the same brief, so it judges against the
-  same words. A plan's one-line summary of an option drops qualifiers, and code built and
-  reviewed against the summary passes review while contradicting the decision.
+  lengthen it until it names one. Quote words of the question or the option label as recorded:
+  the question's short header chip and a paraphrase of the decision match nothing. A decision
+  given as a plain chat message has no record at all, so write it into the plan's Global
+  Constraints. The reviewer reads the same brief, so it judges against the same words. A plan's
+  one-line summary of an option drops qualifiers, and code built and reviewed against the summary
+  passes review while contradicting the decision.
+- **A requirement you add beyond the brief that names an observable** (assert a flag, a status
+  bit, a field): first grep that the code under change can PRODUCE it. A requirement copied from a
+  reference implementation is a premise, not a fact about this code. If the mechanism is missing,
+  say so in the brief: the plumbing is a decision of its own.
 - **A restriction you add beyond the brief** ("do not run X", "skip Y", "leave
   Z alone") reaches the implementer with MORE force than the brief, and in auto
   mode the permission classifier enforces it too, refusing the step the brief
@@ -713,7 +750,10 @@ a ledger file, not only in todos.
 - At skill start, check for a ledger:
   `cat "$(git rev-parse --show-toplevel)/.bitranox/sdd/progress.md"`. Tasks listed there
   as complete are DONE  -  do not re-dispatch them; resume at the first task
-  not marked complete.
+  not marked complete. Run `git ls-files --error-unmatch .bitranox/sdd/progress.md` from the
+  repo root too: an earlier plan's ledger can sit there, even tracked. If its Task lines belong to another plan,
+  keep this plan's in `.bitranox/sdd/progress-<plan>.md`. Add to a ledger by appending, never
+  with a bare `>` redirect, which overwrites it.
 - When a task's review comes back clean, append one line to the ledger in
   the same message as your other bookkeeping:
   `Task N: complete (commits <base7>..<head7>, review clean)`.
@@ -767,7 +807,8 @@ Use the Read tool to load a file below when its topic comes up.
 - Skip task review, or accept a report missing either verdict (spec compliance AND task quality are both required)
 - Proceed with unfixed issues
 - Dispatch multiple implementation subagents in parallel (conflicts)
-- Put merge, bump, release or build into an implementer's or fixer's brief (it lands before review)
+- Put merge, bump, release or build into an implementer's or fixer's brief (it lands before review),
+  or a squash or amend (the agent's rewrite can be refused)
 - Dispatch a committing agent without the repo's attribution policy, or merge its commits without
   reading `git log --format=%B <base>..HEAD` against that policy
 - Make a subagent read the whole plan file (hand it its task brief  - 
