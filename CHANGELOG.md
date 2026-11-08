@@ -30,6 +30,23 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.23.0]
+
+### Added
+
+- `process-plan-brainstorming`: the data-flow section of a design now decides memory for every
+  input whose size the caller controls - what is held per item, what grows with the count, the
+  peak. Items are processed one by one by default; a count limit is not a memory bound, so each
+  item gets a byte limit too; "validate everything before acting" is a check pass plus an action
+  pass; error and finding lists keep the first N plus a total; read-once input is spooled to a
+  disk file under a byte limit; a whole output is held only when it must be built in memory as one
+  piece, behind a byte limit with a typed refusal.
+- `process-plan-writing-plans`: Self-Review item 7, "Memory bound". The plan states the same three
+  figures for each caller-sized input, the task that builds the path prescribes a peak-memory test
+  at two input sizes (the child's maximum RSS where a driver or native code allocates, the spool's
+  bytes per item where a spool exists), and a step that collects every item before acting, or
+  bounds memory only with a count limit, is a defect to rewrite.
+
 ## [10.22.1]
 
 ### Fixed
