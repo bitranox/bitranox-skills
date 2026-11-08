@@ -793,3 +793,20 @@ def test_control_a_personal_non_synced_copy_is_still_a_duplicate_finding(tmp_pat
     (mine / "batch_convert.py").write_text("print('x')\n", encoding="utf-8")
     found = audit_local.check_personal(home, shipped_root=plug)
     assert [m for c, m in found if c == "duplicate-of-shipped"], found
+
+
+def test_the_personal_harness_is_read_from_claude_config_dir(tmp_path, monkeypatch):
+    # Without --home the personal target is Claude's config dir, wherever CLAUDE_CONFIG_DIR put it.
+    home, arm = tmp_path / "home", tmp_path / "arm"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(arm))
+    (arm / "skills" / "mine").mkdir(parents=True)
+    (arm / "skills" / "mine" / "SKILL.md").write_text(
+        "---\nname: mine\ndescription: Use when testing.\n---\n", encoding="utf-8")
+    work = tmp_path / "work"
+    work.mkdir()
+    _, out, _ = _run_check(["check", "--root", str(work), "--json"])
+    targets = [entry["target"] for entry in json.loads(out)["data"]["results"]]
+    assert str(arm / "skills") in targets and str(arm) in targets, targets
+    assert not any(t.startswith(str(home)) for t in targets), targets

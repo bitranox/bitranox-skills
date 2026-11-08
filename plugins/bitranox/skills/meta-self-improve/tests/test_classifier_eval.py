@@ -1764,3 +1764,14 @@ def test_rows_of_a_retired_site_are_left_out_of_the_report(site, regex, answer, 
     assert rep["sites"] == {} and rep["rows"] == 1
     ce.render_text(rep)
     assert site not in ce.SITES and not hasattr(ce, "summarize_" + site)
+
+
+def test_the_corpus_and_replay_log_defaults_follow_claude_config_dir(tmp_path, monkeypatch):
+    # Resolved when the parser is built, per call: a module constant froze them at import.
+    home, arm = tmp_path / "home", tmp_path / "arm"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(arm))
+    args = ce._parser().parse_args(["replay"])
+    assert args.root == str(arm / "projects")
+    assert args.out == arm / "self-improve-audit" / "classifier-replay.jsonl"

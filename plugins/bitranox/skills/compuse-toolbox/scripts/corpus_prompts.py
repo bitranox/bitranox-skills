@@ -57,15 +57,15 @@ import os
 import sys
 from pathlib import Path
 
+from _claude_config import projects_dir
 from _cli_envelope import EnvelopeArgumentParser, emit, wants_json
 
 __all__ = [
-    "DEFAULT_ROOT", "TYPED_ENTRYPOINTS", "UsageError", "collect_prompts", "diff_predicates",
+    "TYPED_ENTRYPOINTS", "UsageError", "collect_prompts", "diff_predicates",
     "extract_prompts", "main", "prompt_key", "prompt_text_of", "read_transcript",
     "transcript_lines", "transcript_prefix",
 ]
 
-DEFAULT_ROOT = "~/.claude/projects"
 # `entrypoint` separates a person typing from a headless node being driven. Both are `type: user`,
 # and an SDK node's brief reads exactly like a prompt, so a rule priced on both measures a
 # population it will never run against.
@@ -257,7 +257,9 @@ def _load(module, func):
 def _parse(argv):
     p = EnvelopeArgumentParser(description="Replay typed prompts through a predicate.",
                                envelope_command="corpus_prompts")
-    p.add_argument("--root", default=DEFAULT_ROOT, help="transcript corpus (default %(default)s)")
+    # Built per call, so the default follows CLAUDE_CONFIG_DIR as Claude Code's own does.
+    p.add_argument("--root", default=str(projects_dir()),
+                   help="transcript corpus (default %(default)s)")
     p.add_argument("--module", help="file defining the predicate")
     p.add_argument("--func", help="name of the predicate (default %s)" % DEFAULT_FUNC)
     p.add_argument("--module-b", help="a SECOND predicate, to diff firing sets against")

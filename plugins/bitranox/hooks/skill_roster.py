@@ -34,6 +34,7 @@ import tempfile
 from pathlib import Path
 
 import classifier
+import claude_paths
 import self_improve_signals as sig
 import skill_frontmatter
 
@@ -147,7 +148,7 @@ def _file_description(path):
 def _installed_plugin_roots():
     """{plugin name: [install dirs]} from Claude Code's installed_plugins.json, {} when
     it cannot be read."""
-    path = Path.home() / ".claude" / "plugins" / "installed_plugins.json"
+    path = claude_paths.config_dir() / "plugins" / "installed_plugins.json"
     try:
         plugins = json.loads(path.read_text(encoding="utf-8")).get("plugins")
     except (OSError, ValueError, AttributeError):
@@ -164,13 +165,13 @@ def _installed_plugin_roots():
 
 def _claude_dirs(cwd):
     """The `.claude/` dirs whose skills a session sees: the cwd's and its ancestors',
-    then HOME's."""
+    then the personal config dir (CLAUDE_CONFIG_DIR, else ~/.claude)."""
     dirs = []
     if cwd:
         start = Path(cwd).absolute()
         dirs += [d / ".claude" for d in (start, *start.parents)]
-    home = Path.home() / ".claude"
-    return dirs + ([home] if home not in dirs else [])
+    personal = claude_paths.config_dir()
+    return dirs + ([personal] if personal not in dirs else [])
 
 
 def _candidates(roots, skill):

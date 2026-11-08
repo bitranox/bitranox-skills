@@ -84,7 +84,8 @@ def _home(args):
 
     Overridable so a run can be aimed at a fixture: without it, auditing a sandbox silently mixes
     in findings about the operator's actual `~/.claude`, and the report reads as if they came from
-    the tree under test."""
+    the tree under test. With --home the config dir is `<home>/.claude`; without it, None, and
+    the config dir follows CLAUDE_CONFIG_DIR (`harness_checks.claude_dir`)."""
     return Path(args.home) if getattr(args, "home", "") else None
 
 
@@ -274,8 +275,8 @@ def check_personal(home=None, shipped_root=None):
     the local copy when the twin finally appears. Every other check keeps passing - the file exists,
     it is registered, its tombstone is well formed - because none of them asks whether the plugin
     now ships the same thing."""
+    claude, found = hc.claude_dir(home), []
     home = Path(home) if home is not None else Path.home()
-    claude, found = home / ".claude", []
     synced = (claude / "skills" / SYNCED_DIRNAME).resolve()
     if shipped_root:
         for local, twin, status in hc.duplicate_shipped_files(
@@ -355,7 +356,6 @@ def cmd_check(args, out=None, err=None):
     err = err or sys.stderr
     if _refuse_missing_paths(args, "check", out, err):
         return 2
-    home = _home(args) or Path.home()
     unlistable = []
     selected, skipped = gather([Path(r) for r in args.root], home=_home(args),
                                 personal=not args.no_personal, unlistable=unlistable)
@@ -368,7 +368,8 @@ def cmd_check(args, out=None, err=None):
         total += 1
         results.append({"target": path, "findings": [
             {"check": "unlistable", "message": "cannot list, not audited: %s" % why}]})
-    synced = home / ".claude" / "skills" / SYNCED_DIRNAME
+    claude = hc.claude_dir(_home(args))
+    synced = claude / "skills" / SYNCED_DIRNAME
     if not args.no_personal and synced.is_dir():
         skipped.append({"path": str(synced), "reason": SYNCED_REASON})
     for target in selected:
@@ -381,9 +382,10 @@ def cmd_check(args, out=None, err=None):
     # no target at all, so the run printed "0 finding(s) across 0 target(s)" and exited 0 over
     # exactly the rot this check exists to find.
     if not args.no_personal:
-        findings = check_personal(home, shipped_root=shipped_dir.parent if shipped_dir else None)
+        findings = check_personal(_home(args),
+                                  shipped_root=shipped_dir.parent if shipped_dir else None)
         total += len(findings)
-        results.append({"target": str(home / ".claude"),
+        results.append({"target": str(claude),
                         "findings": [{"check": c, "message": m} for c, m in findings]})
     if args.json:
         print(json.dumps({"ok": not unlistable, "command": "check",

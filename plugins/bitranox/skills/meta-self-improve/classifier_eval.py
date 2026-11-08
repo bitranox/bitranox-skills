@@ -725,8 +725,6 @@ DEFAULT_SHORTLIST = 3
 # suppress. Measured over the corpus: 595 of 1,409 typed prompts. Sampling without splitting on
 # it would let one class dominate whichever way the shuffle fell.
 CONTINUATION_WORDS = 3
-DEFAULT_REPLAY_LOG = claude_paths.audit_dir() / "classifier-replay.jsonl"
-DEFAULT_CORPUS = "~/.claude/projects"
 
 # Planted pair, asserted before any number from a run may be read. They must answer DIFFERENTLY:
 # an arm that names a skill for everything and an arm that works are the same observation until
@@ -1456,7 +1454,10 @@ def _parser():
                            default=None, metavar="SKILL=FILE",
                            help="offer SKILL with the text of FILE as its description, to "
                                 "measure a reworded description on the same prompts (repeatable)")
-        q.add_argument("--root", default=DEFAULT_CORPUS, help="transcript corpus")
+        # Both resolved when the parser is built, per call: CLAUDE_CONFIG_DIR moves the corpus
+        # and the audit dir, and a module constant would freeze them at import.
+        q.add_argument("--root", default=str(claude_paths.config_dir() / "projects"),
+                       help="transcript corpus")
         if name == "replay":
             q.add_argument("--prompts", type=Path, default=None, metavar="LOG",
                            help="replay the exact prompts of an earlier run's JSONL log instead "
@@ -1469,7 +1470,8 @@ def _parser():
         q.add_argument("--shortlist", type=positive_int, default=DEFAULT_SHORTLIST)
         q.add_argument("--deadline", type=float, default=cl.SHADOW_DEADLINE)
         q.add_argument("--seed", type=int, default=0)
-        q.add_argument("--out", type=Path, default=DEFAULT_REPLAY_LOG)
+        q.add_argument("--out", type=Path,
+                       default=claude_paths.audit_dir() / "classifier-replay.jsonl")
         q.add_argument("--json", action="store_true", help="print a JSON envelope")
     r = sub.add_parser("report", help="summarise the shadow log per site")
     r.add_argument("--log", type=Path, default=None,

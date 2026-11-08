@@ -53,7 +53,7 @@ import memory_engine as ME               # noqa: E402
 import reconcile_memory_index as R       # noqa: E402
 
 def _projects_dir():
-    return Path.home() / ".claude" / "projects"
+    return claude_paths.config_dir() / "projects"
 
 
 def _backups_dir():

@@ -229,7 +229,7 @@ def project_slug(proj):
 
 def memory_dir(proj):
     """The native Auto-memory dir for a project cwd."""
-    return Path.home() / ".claude" / "projects" / project_slug(proj) / "memory"
+    return claude_paths.config_dir() / "projects" / project_slug(proj) / "memory"
 
 
 # ---- curated store relocation: <proj>/.claude-bx-selflearning (the new per-project home) ----
@@ -1405,7 +1405,7 @@ def unsatisfiable_nap_owed(proj, session_id=""):
 # re-nagged). The `meta-memory-settings` skill views / sets / resets it.
 
 def _config_path():
-    return Path.home() / ".claude" / ".bitranox-memory.json"
+    return claude_paths.config_dir() / ".bitranox-memory.json"
 
 
 DEFAULT_CONFIG = {
@@ -1658,18 +1658,18 @@ def _is_dir(p):
 
 def find_claude_md_dirs(roots):
     """Every dir under `roots` that carries a `CLAUDE.md` - the raw material for tree discovery.
-    Prunes vendor/hidden/backup dirs, the store dirs themselves, `~/.claude`, and the excluded
-    anchor dirs; never follows symlinks (a link into another tree must not merge them)."""
+    Prunes vendor/hidden/backup dirs, the store dirs themselves, Claude's config dir, and the
+    excluded anchor dirs; never follows symlinks (a link into another tree must not merge them)."""
     out = set()
     excluded = {str(d) for d in _excluded_anchor_dirs()}
-    home_claude = str(Path.home() / ".claude")
+    config_dir = str(claude_paths.config_dir())
     for root in roots:
         try:
             for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
                 base = os.path.basename(dirpath)
                 if (base in VENDOR_DIRNAMES or base in (MEMORY_DIRNAME, CURATED_DIRNAME)
                         or ".bak-" in base or base.endswith(".bak")
-                        or dirpath == home_claude):
+                        or dirpath == config_dir):
                     dirnames[:] = []
                     continue
                 dirnames[:] = [d for d in dirnames
@@ -2676,7 +2676,7 @@ def knowledge_store_empty(proj=None):
     except OSError:
         pass
     try:
-        for memdir in (Path.home() / ".claude" / "projects").glob("*/memory"):
+        for memdir in (claude_paths.config_dir() / "projects").glob("*/memory"):
             for p in memdir.glob("*.md"):
                 if p.name != "MEMORY.md":
                     return False

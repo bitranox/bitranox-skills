@@ -148,7 +148,7 @@ def discover_files(exclude_proj=None):
     layer (recursive). The current project's own memory is excluded - you gather FROM elsewhere."""
     files = []
     exclude = _own_memory_dirs(exclude_proj)
-    projroot = Path.home() / ".claude" / "projects"
+    projroot = claude_paths.config_dir() / "projects"
     try:
         for memdir in sorted(projroot.glob("*/memory")):
             try:

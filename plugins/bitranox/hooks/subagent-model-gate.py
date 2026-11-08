@@ -56,6 +56,7 @@ import re
 import sys
 from pathlib import Path
 
+import claude_paths
 import skill_receipt
 
 SUBAGENT_TOOLS = {"Task", "Agent"}
@@ -236,7 +237,8 @@ def agent_definition_model(subagent_type, project_dir=None, home=None, plugin_ro
         dirs = []
         if project_dir:
             dirs.append(Path(project_dir) / ".claude" / "agents")
-        dirs.append(Path(home if home is not None else Path.home()) / ".claude" / "agents")
+        personal = Path(home) / ".claude" if home is not None else claude_paths.config_dir()
+        dirs.append(personal / "agents")
     for agents_dir in dirs:
         fields = _definition_in(agents_dir, name)
         if fields is not None:

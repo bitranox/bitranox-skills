@@ -52,14 +52,14 @@ from abprofile import SANDBOX_BWRAP_KINDS, SANDBOX_MISSING, SKELETON, Profile, P
 from abstream import OPUS_PREFIX, SYNTHETIC_REASON_PREFIX
 
 __all__ = [
-    "DEFAULT_CREDENTIALS",
-    "DEFAULT_SKILLS_REPO",
     "OPUS_PREFIX",
     "WEIGHTS",
     "JournalError",
     "RunContext",
     "RunRefused",
     "build_parser",
+    "default_credentials",
+    "default_skills_repo",
     "load_journal",
     "main",
     "record",
@@ -67,10 +67,21 @@ __all__ = [
 ]
 
 LoginCheck = Callable[[Path], str]
-DEFAULT_CREDENTIALS = Path.home() / ".claude" / ".credentials.json"
-DEFAULT_SKILLS_REPO = Path.home() / ".claude" / "plugins" / "marketplaces" / "bitranox-skills"  # the clone every install has
 WEIGHTS = {"correctness": 0.30, "task_coverage": 0.25, "tests": 0.20, "beyond_plan_fixes": 0.10,
            "readability": 0.10, "scope_creep": 0.05}
+
+
+def default_credentials() -> Path:
+    """The login `run` checks and installs from when --credentials is not given: the one in the
+    user's Claude config dir (abarm.user_config_dir, which follows CLAUDE_CONFIG_DIR). Per call."""
+    return abarm.user_config_dir() / ".credentials.json"
+
+
+def default_skills_repo() -> Path:
+    """The marketplace clone every install has, in the user's Claude config dir. Per call."""
+    return abarm.user_config_dir() / "plugins" / "marketplaces" / "bitranox-skills"
+
+
 PREREG_SKELETON = """# Pre-registration
 
 ## Question
@@ -718,7 +729,8 @@ def _context(args: argparse.Namespace, run_dir: Path, profile: Profile,
     if not args.stop_grace_s > 0:
         raise RunRefused("--stop-grace-s must be above 0")
     return RunContext(run_dir=run_dir, profile=profile, tasks=_arm_tasks(run_dir, profile),
-                      credentials=Path(args.credentials).expanduser(), skills_repo=Path(args.skills_repo).expanduser(),
+                      credentials=Path(args.credentials).expanduser() if args.credentials else default_credentials(),
+                      skills_repo=Path(args.skills_repo).expanduser() if args.skills_repo else default_skills_repo(),
                       dry_run=args.dry_run, max_turns=args.max_turns, stop_grace_s=args.stop_grace_s,
                       sealed_suite=sealed_suite)
 
@@ -1100,8 +1112,10 @@ class _Parser(argparse.ArgumentParser):
 def _add_run_options(sp: argparse.ArgumentParser) -> None:
     sp.add_argument("--dry-run", action="store_true", help="everything but the paid claude -p step")
     sp.add_argument("--only", help="run only this arm name (C or a variant name)")
-    sp.add_argument("--credentials", default=str(DEFAULT_CREDENTIALS))
-    sp.add_argument("--skills-repo", default=str(DEFAULT_SKILLS_REPO))
+    sp.add_argument("--credentials", default=None,
+                    help="the login file (default <Claude config dir>/.credentials.json)")
+    sp.add_argument("--skills-repo", default=None,
+                    help="the bitranox-skills clone (default <Claude config dir>/plugins/marketplaces/bitranox-skills)")
     sp.add_argument("--max-turns", type=int, default=400)
     sp.add_argument("--stop-grace-s", type=float, default=float(abarm.STOP_GRACE_S),
                     help="seconds a session's process group gets between SIGTERM and SIGKILL when it is ended")

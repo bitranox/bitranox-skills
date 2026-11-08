@@ -1,4 +1,5 @@
 """abtest CLI: init, seal, run (dry and fake-live), score, prune-run, resume; through the fake claude."""
+import importlib.util
 import json
 import os
 import shutil
@@ -1376,3 +1377,36 @@ def test_run_refuses_a_prompt_whose_sha_differs_from_the_seal_row(tmp_path, scra
     capsys.readouterr()
     assert T.main(_run_args(run_dir, creds, skills_repo, "--dry-run", "--only", "C", "--json")) == 2
     assert "the prompt of arm Vbare (task-bare.md) differs from the seal" in json.loads(capsys.readouterr().out)["data"]["error"]
+
+
+def _moved_config(tmp_path, monkeypatch):
+    """HOME at tmp/home, CLAUDE_CONFIG_DIR at tmp/arm: (home, arm)."""
+    home, arm = tmp_path / "home", tmp_path / "arm"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(arm))
+    return home, arm
+
+
+def test_the_default_login_and_skills_clone_follow_claude_config_dir(tmp_path, monkeypatch):
+    _, arm = _moved_config(tmp_path, monkeypatch)
+    assert T.default_credentials() == arm / ".credentials.json"
+    assert T.default_skills_repo() == arm / "plugins" / "marketplaces" / "bitranox-skills"
+    args = T.build_parser().parse_args(["run", str(tmp_path / "run")])
+    assert (args.credentials, args.skills_repo) == (None, None)    # resolved per run, not at build
+
+
+def test_user_config_dir_answers_like_the_plugin_rule(tmp_path, monkeypatch):
+    # abarm keeps a copy of hooks/claude_paths.config_dir(); pin the two to the same answers.
+    hooks = Path(__file__).resolve().parents[3] / "hooks" / "claude_paths.py"
+    spec = importlib.util.spec_from_file_location("_claude_paths_for_parity", hooks)
+    rule = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rule)
+    home, arm = _moved_config(tmp_path, monkeypatch)
+    for value in (str(arm), "", "   ", None):
+        if value is None:
+            monkeypatch.delenv("CLAUDE_CONFIG_DIR")
+        else:
+            monkeypatch.setenv("CLAUDE_CONFIG_DIR", value)
+        assert A.user_config_dir() == rule.config_dir(), value
+    assert A.user_config_dir() == home / ".claude"

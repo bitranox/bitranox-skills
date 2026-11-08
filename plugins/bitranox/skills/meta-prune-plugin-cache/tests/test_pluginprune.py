@@ -1561,3 +1561,19 @@ def test_json_apply_reports_a_real_removal_failure_as_failed(cache: Path, capsys
     assert {entry["reason_code"] for entry in payload["data"]["failed"]} == {"io_error"}
     assert {entry["path"] for entry in payload["data"]["failed"]} <= {
         str(p) for p in parent.iterdir()}
+
+
+def _moved_config(tmp_path, monkeypatch):
+    """HOME at tmp/home, CLAUDE_CONFIG_DIR at tmp/arm: (home, arm)."""
+    home, arm = tmp_path / "home", tmp_path / "arm"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(arm))
+    return home, arm
+
+
+def test_the_default_cache_follows_claude_config_dir(tmp_path, monkeypatch):
+    # Claude Code keeps its plugin cache in CLAUDE_CONFIG_DIR when that is set; pruning under
+    # ~/.claude then would judge (and could delete from) a cache no session uses.
+    _, arm = _moved_config(tmp_path, monkeypatch)
+    assert P.default_cache_dir() == arm / "plugins" / "cache"

@@ -807,3 +807,21 @@ def test_a_trailing_separator_on_self_does_not_hide_a_colliding_sibling(home, ca
     out = fwd(capsys.readouterr().out)
     assert "/%s/" % sig.project_slug(sibling) in out     # the sibling's note is reported
     assert "/-p-cur/" not in out                         # our own is not
+
+
+def _moved_config(tmp_path, monkeypatch):
+    """HOME at tmp/home, CLAUDE_CONFIG_DIR at tmp/arm: (home, arm)."""
+    home, arm = tmp_path / "home", tmp_path / "arm"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(arm))
+    return home, arm
+
+
+def test_discovery_reads_the_moved_projects_root_only(tmp_path, monkeypatch):
+    home, arm = _moved_config(tmp_path, monkeypatch)
+    for root, name in ((home / ".claude" / "projects", "-h"), (arm / "projects", "-a")):
+        (root / name / "memory").mkdir(parents=True)
+        (root / name / "memory" / "note.md").write_text("x", encoding="utf-8")
+    found = {Path(f).parent.parent.name for f in G.discover_files()}
+    assert "-a" in found and "-h" not in found

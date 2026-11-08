@@ -118,6 +118,7 @@ from typing import NoReturn
 # One copy of the liveness checks for every pruner the plugin ships: the temp-dir pruner in
 # hooks/ asks the same questions, and two copies would drift.
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "hooks"))
+import claude_paths
 from process_liveness import pid_alive, process_start_ticks  # noqa: E402
 
 __all__ = [
@@ -1158,7 +1159,8 @@ def _blocker_now(entry: Entry, *, base: Path) -> tuple[str, str] | None:
 
 
 def default_cache_dir() -> Path:
-    return Path.home() / ".claude" / "plugins" / "cache"
+    """`<Claude config dir>/plugins/cache`; the config dir follows CLAUDE_CONFIG_DIR. Per call."""
+    return claude_paths.config_dir() / "plugins" / "cache"
 
 
 def _human(size: float) -> str:

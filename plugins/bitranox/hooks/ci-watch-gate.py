@@ -27,6 +27,7 @@ import sys
 from pathlib import Path
 
 import ci_watch_state as state
+import claude_paths
 
 __all__ = ["enabled", "main", "sentinel_path", "verdict"]
 
@@ -39,8 +40,9 @@ _CI_WAIT = Path(__file__).resolve().parent.parent / "skills" / "compuse-toolbox"
 
 
 def sentinel_path() -> Path:
-    """Where the opt-in marker lives. Resolved per call so HOME stays a real seam for tests."""
-    return Path.home() / ".claude" / _OPT_IN_NAME
+    """Where the opt-in marker lives: Claude's config dir (CLAUDE_CONFIG_DIR, else ~/.claude).
+    Resolved per call so HOME and CLAUDE_CONFIG_DIR stay real seams for tests."""
+    return claude_paths.config_dir() / _OPT_IN_NAME
 
 
 def enabled() -> bool:
