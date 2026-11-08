@@ -30,6 +30,60 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.25.0]
+
+### Added
+
+- `process-plan-writing-plans`: task ids start with a digit (`### Task 2.1: M2 parser`), since
+  `task_brief.py` finds no task in a plan headed `### Task M2.1:`. Self-Review gains four items:
+  each task imports, collects and lints on its own (no import block for later tasks; a `tests/`
+  helper made importable where it is created); run the plan's extracted code, its mutation battery
+  included, and make a substring assertion fail with the guarded code deleted; platform claims
+  agree with the CI OS matrix, and a test isolating `HOME` also sets `USERPROFILE`; DETAILED code is
+  checked against every behavioural sentence of the MID plan.
+- `process-test-design`: a budget the code spends waiting on a stand-in that must answer is roomy,
+  and a pacing TCP stand-in turns Nagle off instead of pinning bytes-within-budget. Three new
+  silent-defeater entries: a commit test under a fresh home sets the commit identity in a child
+  env stripped of inherited `GIT_*`; a refused-before-side-effect test asserts every sink, RED one
+  arm per sink; a timed-wake test uses a case only the timeout can wake and asserts an outcome only
+  the timed wake produces.
+- `process-agents-subagent-driven-development`: before the first dispatch the controller commits
+  its own edits in the shared worktree and, for a vendored checkout, turns the table reformatter
+  off. The implementer template runs the full suite through compuse-toolbox's `gate.py`, polls a
+  backgrounded run instead of ending the turn, and gains a Committing section (no amend, rebase,
+  `add -A` or stash in a shared worktree; a refusal over an untouched file is reported as
+  BLOCKED). A fix dispatch copies both parts, with the covering tests as its gate suite.
+- `git-worktrees`: before removing a worktree, diff each ignored file that is not build output (a
+  decision log, a handover, a backlog) against the main checkout's copy and merge the lines only
+  the worktree has, since `landed.py` exits 0 over ignored files; a secret file is compared with
+  `cmp -s` only. `ExitWorktree`'s "Discarded N commits" counts against the session's starting
+  commit, not origin, so a removal is judged by `landed.py` before it and by an ancestry check
+  on a recorded tip after it.
+- `meta-context-watcher`: in a linked worktree the backlog tools write the worktree's own
+  `OPEN-WORK.md`, so bring the commit to the main checkout or name the file before reporting an
+  item as added; an uncommitted checkpoint is copied aside before any step that resets it.
+
+- `meta-dream-nap`: the steps name their commands (`store_manifest.py backup --scope chain` and
+  `verify --out`, one `reconcile_memory_index.py --check` call over the whole chain, with its
+  home), an owed earlier transcript is marked with `session-reviewed --prose --transcript PATH`,
+  and a `show --body` file goes back with its frame. Step 3 finds candidates with the new
+  chain-scoped dedup scan.
+- `dedup_scan.py --scope chain`: scans only the facts the levels from `--from` up to the anchor
+  point at, so a nap's dedup fits its budget.
+
+- `docs-md-table-formatting`: re-Read a table after the hook realigns it, before the next Edit.
+- `meta-skill-writer`: when the edited text defines a placeholder and builds a command on it, run
+  the literal substitution before counting GREEN.
+- `coding-rust-performance-review`: `LazyLock` needs Rust 1.80 (`OnceLock` from 1.70 is the
+  fallback), and a `\d` to `[0-9]` swap is a behaviour change.
+- `coding-performance-review`: a speedup claim with no recorded before figure gets its before arm
+  rebuilt from the commit.
+
+### Changed
+
+- `backlog_add` and `backlog_close` return the file they wrote in `path`, and in a linked
+  worktree a `note` naming the main checkout's copy that does not have the change yet.
+
 ## [10.24.2]
 
 ### Fixed
