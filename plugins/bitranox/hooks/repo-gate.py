@@ -97,6 +97,7 @@ if str(_HOOKS_DIR) not in sys.path:
     sys.path.insert(0, str(_HOOKS_DIR))
 
 import harness_checks as hc  # noqa: E402
+import mirrored_skills  # noqa: E402
 import shell_text  # noqa: E402
 import secret_patterns  # noqa: E402
 import skill_decisions  # noqa: E402
@@ -230,34 +231,40 @@ _LF_SUFFIXES = (".py", ".sh", ".json", ".jsonl")
 _REGULAR_MODES = frozenset({"100644", "100755"})
 
 
-def _listed_blobs(root, args, env=None):
-    """(rc, [(sha, path)]) of the LF-checked regular files `ls-files -s` or `ls-tree -r` lists."""
+def _lf_checked(rel):
+    return rel.endswith(_LF_SUFFIXES)
+
+
+def _listed_blobs(root, args, env=None, keep=_lf_checked):
+    """(rc, [(sha, path)]) of the regular files `ls-files -s` or `ls-tree -r` lists whose path
+    ``keep`` accepts (default: the LF-checked suffixes)."""
     rc, rows = _git_paths(root, *args, env=env)
     found = []
     for row in rows:
         meta, _, rel = row.partition("\t")
         fields = meta.split()
-        if len(fields) == 3 and fields[0] in _REGULAR_MODES and rel.endswith(_LF_SUFFIXES):
+        if len(fields) == 3 and fields[0] in _REGULAR_MODES and keep(rel):
             found.append((fields[2] if args[0] == "ls-tree" else fields[1], rel))
     return rc, list(dict.fromkeys(found))     # an unmerged path is listed once per stage
 
 
-def _shipped_blobs(root, stage):
+def _shipped_blobs(root, stage, keep=_lf_checked):
     """(rc, [(sha, path)]) of the blobs a commit or push at ``stage`` ships: HEAD's on a push, the
     index's on a commit, and the selection's on a commit that takes files from disk itself
-    (`CommitSelection`; the index when git cannot build it, as `shipped_files` does)."""
+    (`CommitSelection`; the index when git cannot build it, as `shipped_files` does). Only paths
+    ``keep`` accepts are listed."""
     if not _is_commit(stage):
-        return _listed_blobs(root, ("ls-tree", "-r", "HEAD"))
+        return _listed_blobs(root, ("ls-tree", "-r", "HEAD"), keep=keep)
     if isinstance(stage, CommitSelection):
         with _selection_index(root, stage) as env:
             if env is not None:
-                return _listed_blobs(root, ("ls-files", "-s"), env=env)
-    return _listed_blobs(root, ("ls-files", "-s"))
+                return _listed_blobs(root, ("ls-files", "-s"), env=env, keep=keep)
+    return _listed_blobs(root, ("ls-files", "-s"), keep=keep)
 
 
-def _blobs_with_crlf(root, blobs):
-    """The paths among ``blobs`` whose blob holds a CRLF, read in ONE `git cat-file --batch`; None
-    when git cannot read them."""
+def _read_blobs(root, blobs):
+    """The bytes of each ``(sha, path)`` in ``blobs``, in order, read in ONE `git cat-file
+    --batch`; None when git cannot read them all."""
     if not blobs:
         return []
     try:
@@ -267,17 +274,24 @@ def _blobs_with_crlf(root, blobs):
         return None
     if out.returncode != 0:
         return None
-    data, at, crlf = out.stdout, 0, []
-    for _sha, rel in blobs:
+    data, at, contents = out.stdout, 0, []
+    for _blob in blobs:
         end = data.find(b"\n", at)
         header = data[at:end].split()
         if end < 0 or len(header) != 3:
             return None                      # `<sha> missing`, or output this reader cannot follow
         size = int(header[2])
-        if b"\r\n" in data[end + 1:end + 1 + size]:
-            crlf.append(rel)
+        contents.append(data[end + 1:end + 1 + size])
         at = end + 1 + size + 1
-    return crlf
+    return contents
+
+
+def _blobs_with_crlf(root, blobs):
+    """The paths among ``blobs`` whose blob holds a CRLF; None when git cannot read them."""
+    contents = _read_blobs(root, blobs)
+    if contents is None:
+        return None
+    return [rel for (_sha, rel), data in zip(blobs, contents, strict=True) if b"\r\n" in data]
 
 
 def check_lf_endings(root, stage=None):
@@ -421,20 +435,92 @@ def _plugin_version_pair(root):
     return old_v, new_v
 
 
-def check_version_bumped(root):
-    pair = _plugin_version_pair(root)
-    if pair is None:
-        return []  # no origin/master reference available -> skip, do not block
-    old_v, new_v = pair
-    _, changed = _git_paths(root, "diff", "--name-only", "origin/master", "--", "plugins/bitranox")
-    _, untracked = _git_paths(root, "ls-files", "--others", "--exclude-standard", "plugins/bitranox")
-    plugin_changed = bool(changed) or bool(untracked)
-    if not plugin_changed:
+_PLUGIN_DIR = "plugins/bitranox"
+_PLUGIN_JSON = _PLUGIN_DIR + "/.claude-plugin/plugin.json"
+
+
+def _version_in(data):
+    """The `version` a plugin.json's bytes name, or None when they do not parse as one."""
+    try:
+        return json.loads(data).get("version")
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _git_version(root, commit):
+    """The plugin.json version at ``commit``, or None."""
+    rc, blob, _ = _git(root, "show", f"{commit}:{_PLUGIN_JSON}")
+    return None if rc else _version_in(blob)
+
+
+def _shipped_plugin_change(root, stage, base):
+    """(plugins/ paths ``stage`` ships changed since ``base``, the plugin.json version it ships),
+    or None when git cannot say. Only what the commit or push carries counts: an unstaged edit
+    or an untracked file is no part of it (a `CommitSelection` is staged by git first)."""
+    def diff_and_version(env=None):
+        if _is_commit(stage):
+            rc, changed = _git_paths(root, "diff", "--cached", "--name-only", "--no-renames", base,
+                                     "--", _PLUGIN_DIR, env=env)
+        else:
+            rc, changed = _git_paths(root, "diff", "--name-only", "--no-renames", base, "HEAD",
+                                     "--", _PLUGIN_DIR)
+        rc_v, blobs = _shipped_blobs(root, stage, keep=lambda rel: rel == _PLUGIN_JSON)
+        contents = _read_blobs(root, blobs) if rc_v == 0 else None
+        if rc or not contents:
+            return None
+        return changed, _version_in(contents[0])
+
+    if isinstance(stage, CommitSelection):
+        with _selection_index(root, stage) as env:
+            if env is not None:
+                return diff_and_version(env)
+        stage = STAGE_INDEX
+    return diff_and_version()
+
+
+def check_version_bumped(root, stage=None):
+    """Does this change ship a plugin version an installed clone will see move?
+
+    The marketplace updates by `git pull` and an install moves only when plugin.json's version
+    does, so the question is asked of what ``stage`` ships (default the index; HEAD on a push):
+
+    * TRIGGER - did it change anything under plugins/bitranox since the FORK POINT with
+      origin/master? Not since origin's tip: in a checkout behind origin the tip's own later
+      plugins/ changes are no part of this change, and diffing against the tip refused a commit
+      for a bump it did not need ([99]).
+    * BUMPED - is its version different from the fork point's? Compared with the tip only, an
+      unbumped change in a behind checkout passed as soon as origin had moved the number.
+    * NOT REUSED - is its version different from origin's tip? A number origin already published
+      is one installs already have, so the change would never reach them.
+
+    In a checkout that is not behind, fork point and tip are one commit and the last two collapse
+    into one comparison. Earlier unpushed commits count (the diff and the version are taken across
+    the whole unpushed range), so a commit stacked on an earlier bump rides it. Any reading git
+    cannot answer skips rather than blocks.
+    """
+    stage = STAGE_INDEX if stage is None else stage
+    base = _merge_base(root)
+    if base is None:
+        return []  # no origin/master to fork from -> skip, do not block
+    shipped = _shipped_plugin_change(root, stage, base)
+    if shipped is None:
         return []
-    if new_v == old_v:
+    changed, new_v = shipped
+    if not changed or new_v is None:
+        return []
+    base_v, tip_v = _git_version(root, base), _git_version(root, "origin/master")
+    if new_v == base_v:
         return [
-            f"plugins/ changed but plugin.json version is still {new_v} (== origin/master).",
+            f"plugins/ changed but plugin.json version is still {new_v} (== the fork point with "
+            "origin/master).",
             "Bump the version (the marketplace is append-only; updates ship via a version bump).",
+        ]
+    if new_v == tip_v:
+        return [
+            f"plugin.json version {new_v} is the one origin/master already published - installs "
+            "that have it will not see this change.",
+            "Merge origin/master and bump from its version "
+            "(uv run plugins/bitranox/hooks/bump_version.py --part patch ...).",
         ]
     return []
 
@@ -1525,7 +1611,20 @@ def cso_failures(root, changed, stage=None):
     return fails
 
 
-def frontmatter_failures(root):
+def _shipped_skill_mds(root, stage):
+    """{skill name: SKILL.md bytes} for every skill dir's SKILL.md that ``stage`` ships, or None
+    when git cannot list or read them (not a repository, no commit for a push to read)."""
+    rc, blobs = _shipped_blobs(root, stage, keep=lambda rel: bool(_SKILL_MD_RX.match(rel)))
+    if rc:
+        return None
+    contents = _read_blobs(root, blobs)
+    if contents is None:
+        return None
+    return {_SKILL_MD_RX.match(rel).group(1): data
+            for (_sha, rel), data in zip(blobs, contents, strict=True)}
+
+
+def frontmatter_failures(root, stage=None):
     """EVERY shipped SKILL.md must have front matter a parser accepts, and only ONE of them.
 
     `cso_failures` above cannot reach this: it lints the description that `frontmatter_description`
@@ -1538,12 +1637,25 @@ def frontmatter_failures(root):
     only would rebuild the blind spot the check exists to close: the descriptions that prompted it
     survived because nothing ever swept the full set, and a defect can arrive in an untouched file
     through a merge, a mirror sync, or an edit made outside the hook. The sweep costs milliseconds
-    over 81 files."""
-    return hc.frontmatter_problems(root / _SKILLS_DIR)
+    over 81 files.
+
+    Each SKILL.md is read as ``stage`` ships it (default the index), never from the working tree:
+    a peer's unstaged description edit, or a skill dir nobody added yet, is not in this commit and
+    must not refuse it. The shipped bytes are written to a scratch skills dir so the checks, which
+    read a path, run unchanged. Where git cannot say what ships, the working tree is swept."""
+    shipped = _shipped_skill_mds(root, STAGE_INDEX if stage is None else stage)
+    if shipped is None:
+        return hc.frontmatter_problems(root / _SKILLS_DIR)
+    with tempfile.TemporaryDirectory(prefix="repo-gate-frontmatter-") as scratch:
+        for name, data in shipped.items():
+            skill = Path(scratch) / name
+            skill.mkdir()
+            (skill / "SKILL.md").write_bytes(data)
+        return hc.frontmatter_problems(scratch)
 
 
-def check_frontmatter(root):
-    return frontmatter_failures(root)
+def check_frontmatter(root, stage=None):
+    return frontmatter_failures(root, stage=stage)
 
 
 def _toolbox_nudge_module(root):
@@ -1627,31 +1739,10 @@ def check_cso(root, stage=None):
 
 
 
-#: Skills that ship from BOTH this marketplace and their own tool repo, mapped to the
-#: twin's path under the shared `public/` tree. The two copies must stay identical apart
-#: from the divergences below, and both directions drift: a marketplace edit that is never
-#: mirrored back leaves the tool repo's own installers a release behind, and a repo edit
-#: that is never mirrored forward leaves this marketplace describing behaviour the tool
-#: dropped. Measured 2026-07-30: the coding-python-network-probe mirror still told an agent
-#: that a default sweep refuses to run, two ipscout releases after it stopped doing that.
-MIRRORED_SKILLS = {
-    "ai-llm-jev-judge": "KI/btx-skill-jev-judge/skills/jev-judge",
-    "coding-python-gitignore": "libs/igittigitt/skills/python-gitignore",
-    "coding-python-layered-config": "libs/lib_layered_config/skills/python-layered-config",
-    "coding-python-logging": "libs/lib_log_rich/skills/python-logging",
-    "coding-python-network-probe": "libs/ipscout/skills/python-network-probe",
-    "coding-python-new-public-library": "libs/bitranox_template_py_lib/skills/new-public-python-library",
-    "coding-python-pwshpy": "apps/utils/pwshpy/skills/using-pwsh",
-    "coding-python-send-mail": "libs/btx_lib_mail/skills/python-send-mail",
-    # The REPO dir is underscored (vnc_remote_control) while the SKILL dir inside it is
-    # hyphenated. Spelling both with hyphens pointed this entry at nothing, so the mirror
-    # check skipped compuse-vnc silently - the exact "degrades to skipped forever" failure
-    # the twin-exists test below guards against.
-    "compuse-vnc": "apps/utils/vnc_remote_control/skills/vnc-remote-control",
-    "devops-bmk": "apps/utils/bmk/skills/devops-bmk",
-    "infra-proxmox-bindsnap": "apps/pve-bindsnap/skills/proxmox-bindsnap",
-    "infra-storage-check-zpools": "apps/utils/check_zpools/skills/check-zpools",
-}
+#: Skills that ship from BOTH this marketplace and their own tool repo, mapped to the twin's
+#: path under the shared `public/` tree. The table lives in `mirrored_skills`, which the
+#: skill-edit guard reads too (to hand a twin's edit the marketplace copy's decision ledger).
+MIRRORED_SKILLS = mirrored_skills.MIRRORED_SKILLS
 
 #: The self-install note only the tool repo's copy carries: there it is true and useful,
 #: here it would tell a reader to add a marketplace they are already inside. Matched
@@ -3307,7 +3398,7 @@ def run_checks(root, ci, full_pytest=None, run_pytest=True, baseline=0, mirror_a
     failures += check_attribution(root)
     failures += check_skill_naming(root)
     failures += check_cso(root, stage=mirror_at)
-    failures += check_frontmatter(root)
+    failures += check_frontmatter(root, stage=mirror_at)
     failures += check_toolbox_rule_coverage(root)
     failures += check_secrets(root)
     # Runs in BOTH modes, unlike version-bump below. It compares nothing across refs, so CI can
@@ -3328,10 +3419,10 @@ def run_checks(root, ci, full_pytest=None, run_pytest=True, baseline=0, mirror_a
     # Version-bump is a release/merge concern owned by the maintainer, not a per-PR
     # gate: forcing contributors to bump causes plugin.json conflicts and takes the
     # version decision away from the merge. So enforce it ONLY in the local pre-commit
-    # hook (compares the maintainer's working tree to origin/master right before a
-    # push), never in CI on a contributor's PR.
+    # hook (compares what the commit or push ships with its fork point and origin/master),
+    # never in CI on a contributor's PR.
     if not ci:
-        failures += check_version_bumped(root)
+        failures += check_version_bumped(root, stage=mirror_at)
         failures += check_ragged_tables(root)
         failures += check_skill_review(root, stage=mirror_at)
         failures += check_skill_mirrors(root, stage=mirror_at, notices=notices, publishes=publishes,

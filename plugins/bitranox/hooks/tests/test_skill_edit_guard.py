@@ -437,6 +437,65 @@ def test_the_first_edit_is_refused_once_with_the_declined_decisions(tmp_path, ar
     assert G.decide(_brief_edit(main, path), {}) is None
 
 
+def _twin_layout(tmp_path):
+    """A `public/` tree: the marketplace copy coding-python-gitignore holds a rejection, its
+    tool-repo twin python-gitignore (as `mirrored_skills` names it) holds no ledger."""
+    public = tmp_path / "public"
+    market = public / "KI" / "bitranox-skills" / "plugins" / "bitranox"
+    _skill_with_rejection(tmp_path, "coding-python-gitignore")
+    market.mkdir(parents=True)
+    (tmp_path / "repo" / "skills").rename(market / "skills")
+    twin = public / "libs" / "igittigitt" / "skills" / "python-gitignore" / "SKILL.md"
+    twin.parent.mkdir(parents=True)
+    twin.write_text("text\n", encoding="utf-8")
+    return market / "skills" / "coding-python-gitignore", twin
+
+
+def test_an_edit_of_a_tool_repo_twin_gets_the_marketplace_copys_brief(tmp_path, armed):
+    """[95]: the twin has no ledger, so its edit used to pass with nobody shown the rejection."""
+    market, twin = _twin_layout(tmp_path)
+    assert not SD.ledger_path(twin.parent).exists()
+    main = _session(tmp_path, [_load_record(_CACHE + "meta-skill-writer")])
+    reason = G.decide(_brief_edit(main, twin), {})
+    assert reason is not None and "Two projects cannot share it." in reason
+    assert "python-gitignore (a tool-repo twin" in reason and "coding-python-gitignore" in reason
+    assert G.show_command(market) in reason           # the show command reads the right ledger
+    assert G.decide(_brief_edit(main, twin), {}) is None
+
+
+def test_a_twin_edit_after_show_of_the_marketplace_skill_is_not_refused(tmp_path, armed):
+    _market, twin = _twin_layout(tmp_path)
+    main = _session(tmp_path, [_load_record(_CACHE + "meta-skill-writer"),
+                               _show_record("coding-python-gitignore")])
+    assert G.decide(_brief_edit(main, twin), {}) is None
+
+
+def test_a_skill_dir_named_like_a_twin_in_another_repo_gets_no_brief(tmp_path, armed):
+    """Control: the twin's NAME alone is not enough, its path must be the one the table names."""
+    _skill_with_rejection(tmp_path, "unused")
+    _twin_layout(tmp_path)
+    other = tmp_path / "public" / "libs" / "elsewhere" / "skills" / "python-gitignore" / "SKILL.md"
+    other.parent.mkdir(parents=True)
+    other.write_text("text\n", encoding="utf-8")
+    main = _session(tmp_path, [_load_record(_CACHE + "meta-skill-writer")])
+    assert G.decide(_brief_edit(main, other), {}) is None
+
+
+def test_a_twin_holding_its_own_ledger_keeps_it(tmp_path):
+    market, twin = _twin_layout(tmp_path)
+    SD.ledger_path(twin.parent).parent.mkdir(parents=True)
+    SD.ledger_path(twin.parent).write_text("", encoding="utf-8")
+    assert G.ledger_dir(twin.parent, SD.ledger_path) == twin.parent
+    SD.ledger_path(twin.parent).unlink()
+    assert G.ledger_dir(twin.parent, SD.ledger_path) == market
+
+
+def test_the_last_ledger_root_is_this_installs_own_skills_dir():
+    """Off this machine (no `public/` tree) the plugin's own copy still holds every ledger."""
+    root = G._marketplace_skill_roots("/opt/elsewhere/skills/x")[-1]
+    assert (root / "meta-skill-writer" / "SKILL.md").is_file()
+
+
 def test_an_agent_that_ran_show_is_not_refused(tmp_path, armed):
     path = _skill_with_rejection(tmp_path)
     main = _session(tmp_path, [_load_record(_CACHE + "meta-skill-writer"), _show_record("foo")])

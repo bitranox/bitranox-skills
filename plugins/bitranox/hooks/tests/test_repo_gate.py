@@ -114,12 +114,14 @@ def _cli(monkeypatch, *flags):
 
 
 def _unbumped_plugin_change(root):
-    """Commit `root` as origin/master, then change a plugin file without bumping the version."""
+    """Commit `root` as origin/master, then stage a plugin file change without bumping the
+    version (staged: the check judges what the commit ships)."""
     _init_git(root)
     _g(root, "add", "-A")
     _g(root, "commit", "-qm", "base")
     _g(root, "update-ref", "refs/remotes/origin/master", "HEAD")
     write(root / "plugins/bitranox/hooks/somehook.py", "x = 2\n")
+    _g(root, "add", "plugins/bitranox/hooks/somehook.py")
     return root
 
 
@@ -1071,6 +1073,66 @@ def test_frontmatter_gate_is_quiet_for_a_good_skill(tmp_path):
 def test_frontmatter_gate_is_quiet_when_the_repo_ships_no_skills(tmp_path):
     make_repo(tmp_path)
     assert RG.frontmatter_failures(tmp_path) == []
+
+
+_GOOD_DESC = "Use when gadget builds fail with linker errors on windows runners"
+_BAD_DESC = "Consolidates the store and prunes entries nightly"   # not trigger-first
+
+
+def _committed_skill_repo(root):
+    """A real repo whose HEAD ships two good skills, with origin/master at HEAD."""
+    make_repo(root)
+    _skill(root, "theta", _GOOD_DESC)
+    _skill(root, "kappa", _GOOD_DESC)
+    _g(root, "init", "-q", ".")
+    _g(root, "add", "-A")
+    _g(root, "commit", "-qm", "base")
+    _g(root, "update-ref", "refs/remotes/origin/master", "HEAD")
+    return root / "plugins/bitranox/skills/kappa/SKILL.md"
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_frontmatter_gate_ignores_an_unstaged_edit_an_unrelated_commit_does_not_ship(tmp_path):
+    """[98]: a peer's half-done description edit, never staged, must not block another commit."""
+    md = _committed_skill_repo(tmp_path)
+    md.write_text(md.read_text(encoding="utf-8").replace(_GOOD_DESC, _BAD_DESC), encoding="utf-8")
+    _stage(tmp_path, "unrelated.txt", "x\n")
+    assert RG.check_frontmatter(tmp_path, stage=RG.STAGE_INDEX) == []
+    # Control: the same edit staged ships, so the sweep refuses it by name.
+    _g(tmp_path, "add", "plugins/bitranox/skills/kappa/SKILL.md")
+    fails = RG.check_frontmatter(tmp_path, stage=RG.STAGE_INDEX)
+    assert fails and all("kappa" in f for f in fails), fails
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_frontmatter_gate_on_a_push_reads_head_not_the_index(tmp_path):
+    md = _committed_skill_repo(tmp_path)
+    md.write_text(md.read_text(encoding="utf-8").replace(_GOOD_DESC, _BAD_DESC), encoding="utf-8")
+    _g(tmp_path, "add", "-A")                    # staged, not committed: a push does not ship it
+    assert RG.check_frontmatter(tmp_path, stage=RG.STAGE_HEAD) == []
+    _g(tmp_path, "commit", "-qm", "bad")
+    assert any("kappa" in f for f in RG.check_frontmatter(tmp_path, stage=RG.STAGE_HEAD))
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_frontmatter_gate_judges_what_a_commit_a_takes_from_disk(tmp_path):
+    """`git commit -a` stages the unstaged edit itself, so it IS shipped and must be refused."""
+    md = _committed_skill_repo(tmp_path)
+    md.write_text(md.read_text(encoding="utf-8").replace(_GOOD_DESC, _BAD_DESC), encoding="utf-8")
+    selection = RG.CommitSelection("all", where=str(tmp_path))
+    assert any("kappa" in f for f in RG.check_frontmatter(tmp_path, stage=selection))
+
+
+@pytest.mark.usefixtures("_bare_git_env")
+def test_frontmatter_gate_skips_an_untracked_skill_and_still_sweeps_untouched_ones(tmp_path):
+    _committed_skill_repo(tmp_path)
+    _skill(tmp_path, "lambda", _BAD_DESC)        # a peer's new skill, never added
+    assert RG.check_frontmatter(tmp_path, stage=RG.STAGE_INDEX) == []
+    # The whole-dir sweep stands: a committed bad skill the change never touched is still found.
+    _g(tmp_path, "add", "-A")
+    _g(tmp_path, "commit", "-qm", "lambda")
+    _stage(tmp_path, "unrelated.txt", "x\n")
+    assert any("lambda" in f for f in RG.check_frontmatter(tmp_path, stage=RG.STAGE_INDEX))
 
 
 def test_cso_lint_requires_trigger_first_description(tmp_path):
@@ -3559,20 +3621,99 @@ def test_version_bumped_fires_when_a_plugin_file_changes_without_a_bump(tmp_path
     pj = "plugins/bitranox/.claude-plugin/plugin.json"
     git_repo_with_origin(tmp_path, {pj: '{"version": "1.0.0"}\n',
                                     "plugins/bitranox/hooks/x.py": "x = 1\n"})
-    (tmp_path / "plugins" / "bitranox" / "hooks" / "x.py").write_text("x = 2\n", encoding="utf-8")
+    _stage(tmp_path, "plugins/bitranox/hooks/x.py", "x = 2\n")
     assert any("still 1.0.0" in f for f in RG.check_version_bumped(tmp_path))
-    (tmp_path / pj).write_text('{"version": "1.0.1"}\n', encoding="utf-8")
+    _stage(tmp_path, pj, '{"version": "1.0.1"}\n')
     assert RG.check_version_bumped(tmp_path) == []
 
 
-def test_version_bumped_fires_for_a_new_untracked_plugin_file(tmp_path):
-    """A brand-new file under plugins/bitranox is not in `git diff` at all - only the untracked
-    listing sees it. Nothing pinned that branch, so dropping it passed the whole suite."""
+def test_version_bumped_fires_for_a_new_staged_plugin_file(tmp_path):
+    """A brand-new file under plugins/bitranox ships once it is staged, and needs a bump then."""
     pj = "plugins/bitranox/.claude-plugin/plugin.json"
     git_repo_with_origin(tmp_path, {pj: '{"version": "1.0.0"}\n',
                                     "plugins/bitranox/hooks/x.py": "x = 1\n"})
     write(tmp_path / "plugins" / "bitranox" / "hooks" / "new_hook.py", "y = 1\n")
+    assert RG.check_version_bumped(tmp_path) == []          # untracked: this commit ships none of it
+    subprocess.run(["git", "add", "plugins/bitranox/hooks/new_hook.py"], cwd=tmp_path, check=True)
     assert any("still 1.0.0" in f for f in RG.check_version_bumped(tmp_path))
+
+
+def test_version_bumped_ignores_a_peers_unstaged_plugin_edit(tmp_path):
+    """The gate rule [98]/[99] share: a half-done edit nobody staged never blocks a commit."""
+    pj = "plugins/bitranox/.claude-plugin/plugin.json"
+    git_repo_with_origin(tmp_path, {pj: '{"version": "1.0.0"}\n',
+                                    "plugins/bitranox/hooks/x.py": "x = 1\n"})
+    (tmp_path / "plugins" / "bitranox" / "hooks" / "x.py").write_text("x = 2\n", encoding="utf-8")
+    _stage(tmp_path, "notes.md", "unrelated\n")
+    assert RG.check_version_bumped(tmp_path) == []
+    # `git commit -a` takes the edit from disk itself, so it ships and needs the bump.
+    selection = RG.CommitSelection("all", where=str(tmp_path))
+    assert any("still 1.0.0" in f for f in RG.check_version_bumped(tmp_path, stage=selection))
+
+
+def _commit_all(root, msg):
+    subprocess.run(["git", "-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit",
+                    "-q", "--no-verify", "-am", msg], cwd=root, check=True)
+
+
+def _origin_moves_on(root, version, rel="plugins/bitranox/hooks/peer.py"):
+    """Advance origin/master past HEAD by a commit that changes plugins/ and sets ``version``,
+    leaving HEAD where it was: a checkout behind its origin."""
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True,
+                          text=True, check=True).stdout.strip()
+    _stage(root, rel, "peer = 1\n")
+    _stage(root, "plugins/bitranox/.claude-plugin/plugin.json", '{"version": "%s"}\n' % version)
+    _commit_all(root, "peer release")
+    subprocess.run(["git", "update-ref", "refs/remotes/origin/master", "HEAD"], cwd=root, check=True)
+    subprocess.run(["git", "reset", "-q", "--hard", head], cwd=root, check=True)
+
+
+def test_version_bumped_passes_a_behind_checkout_whose_commit_leaves_plugins_alone(tmp_path):
+    """[99]: diffed against origin's TIP, origin's own plugins/ change read as this commit's."""
+    pj = "plugins/bitranox/.claude-plugin/plugin.json"
+    git_repo_with_origin(tmp_path, {pj: '{"version": "1.0.0"}\n',
+                                    "plugins/bitranox/hooks/x.py": "x = 1\n"})
+    _origin_moves_on(tmp_path, "1.0.0")      # origin changed plugins/ and kept the version
+    _stage(tmp_path, "notes.md", "unrelated\n")
+    assert RG.check_version_bumped(tmp_path) == []
+    assert RG.check_version_bumped(tmp_path, stage=RG.STAGE_HEAD) == []
+
+
+def test_version_bumped_refuses_an_unbumped_change_in_a_behind_checkout(tmp_path):
+    """The tip-only comparison let this through: origin's version differs from ours, so ours
+    'looked' bumped while this change never moved it from the fork point."""
+    pj = "plugins/bitranox/.claude-plugin/plugin.json"
+    git_repo_with_origin(tmp_path, {pj: '{"version": "1.0.0"}\n',
+                                    "plugins/bitranox/hooks/x.py": "x = 1\n"})
+    _origin_moves_on(tmp_path, "1.1.0")
+    _stage(tmp_path, "plugins/bitranox/hooks/x.py", "x = 2\n")
+    fails = RG.check_version_bumped(tmp_path)
+    assert any("still 1.0.0" in f and "fork point" in f for f in fails), fails
+
+
+def test_version_bumped_refuses_a_bump_to_the_number_origin_already_published(tmp_path):
+    pj = "plugins/bitranox/.claude-plugin/plugin.json"
+    git_repo_with_origin(tmp_path, {pj: '{"version": "1.0.0"}\n',
+                                    "plugins/bitranox/hooks/x.py": "x = 1\n"})
+    _origin_moves_on(tmp_path, "1.0.1")
+    _stage(tmp_path, "plugins/bitranox/hooks/x.py", "x = 2\n")
+    _stage(tmp_path, pj, '{"version": "1.0.1"}\n')
+    fails = RG.check_version_bumped(tmp_path)
+    assert any("1.0.1" in f and "origin/master" in f for f in fails), fails
+    _stage(tmp_path, pj, '{"version": "1.0.2"}\n')           # control: bumped past origin's
+    assert RG.check_version_bumped(tmp_path) == []
+
+
+def test_version_bumped_on_a_push_reads_head(tmp_path):
+    pj = "plugins/bitranox/.claude-plugin/plugin.json"
+    git_repo_with_origin(tmp_path, {pj: '{"version": "1.0.0"}\n',
+                                    "plugins/bitranox/hooks/x.py": "x = 1\n"})
+    _stage(tmp_path, "plugins/bitranox/hooks/x.py", "x = 2\n")
+    _commit_all(tmp_path, "change")
+    _stage(tmp_path, pj, '{"version": "1.0.1"}\n')           # staged, not committed: not pushed
+    assert any("still 1.0.0" in f for f in RG.check_version_bumped(tmp_path, stage=RG.STAGE_HEAD))
+    _commit_all(tmp_path, "bump")
+    assert RG.check_version_bumped(tmp_path, stage=RG.STAGE_HEAD) == []
 
 
 def test_version_bumped_ignores_untracked_files_outside_the_plugin_and_ignored_ones(tmp_path):

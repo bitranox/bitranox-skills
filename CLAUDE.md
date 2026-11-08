@@ -75,7 +75,8 @@ When a learning here applies beyond this repo (it usually does), it also belongs
 ## A skill that also ships from its own tool repo has a twin to keep in sync
 
 Some skills exist twice: here, and in the repo of the tool they document. The map is
-`MIRRORED_SKILLS` in `hooks/repo-gate.py`, and `--mirrors` prints the live list with a verdict per
+`MIRRORED_SKILLS` in `hooks/mirrored_skills.py` (read by `repo-gate.py` and the SKILL.md edit
+guard), and `repo-gate.py --mirrors` prints the live list with a verdict per
 pair, so ask it rather than trusting a count written here (it also reports a twin the map does NOT
 list, which is how one was found after going unchecked). Both copies are installed by real users, so drift is
 not cosmetic - and it goes both ways. A marketplace edit that is never mirrored back leaves the
@@ -149,10 +150,10 @@ script's `add --from-file`; `bitranox:meta-skill-writer` (Step 0b) says when and
   answers to its old name's ledger at the fork point.
 - A SKILL.md change's checklist carries `Decisions: <id>, <id>` or `Decisions: none - <reason>`,
   at the line start or in a list item (`- [x] Decisions: ...`), outside a code fence.
-- The SKILL.md edit guard refuses an agent's first edit of a marketplace skill once, with that
-  skill's rejected and removed decisions, unless the agent has run `show` for it. It reads the
-  ledger beside the edited file, so a tool-repo twin's editor runs `show` with the marketplace
-  `--skill-dir` instead.
+- The SKILL.md edit guard refuses an agent's first edit of a skill once, with that skill's
+  rejected and removed decisions, unless the agent has run `show` for it. A tool-repo twin holds
+  no ledger, so its edit is refused with the marketplace copy's (the checkout under `public/` when
+  there is one, else the installed plugin's copy).
 - `repo-gate.py --ci` checks every ledger against its skill text, and on a pull request also
   refuses a ledger line removed since the fork point.
 - Hooks and jigs keep no ledger: a decision about one goes in a `Decisions` block of its module

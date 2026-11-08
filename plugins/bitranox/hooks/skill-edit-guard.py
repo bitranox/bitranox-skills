@@ -33,7 +33,9 @@ after backslashes become `/` and `.`/`..` segments collapse:
     live rejected or removed entry and the editing agent's transcript shows no
     `skill_decisions.py show <skill>` call, the first edit is refused with those entries
     (`render_brief`) and a `show` command naming this install's script and the skill's own dir
-    (`show_command`), so it runs from any cwd; the re-send passes. This direction fails OPEN: an
+    (`show_command`), so it runs from any cwd; the re-send passes. A tool repo's twin of a
+    mirrored skill holds no ledger of its own, so its edit gets the marketplace copy's
+    (`ledger_dir`, via the `mirrored_skills` table). This direction fails OPEN: an
     unreadable ledger, a missing module or an unstorable flag lets the edit through, because the
     commit gate owns ledger integrity and this refusal only delivers reading.
 
@@ -229,15 +231,52 @@ def _refuse_once(session, agent, skill):
         return False
 
 
+_TWIN_LABEL = "%s (a tool-repo twin; its decisions are kept with the marketplace copy, %s)"
+
+
+def _marketplace_skill_roots(skill_dir):
+    """Where the marketplace's skills dirs may be, freshest first: the checkout under the shared
+    `public/` tree holding ``skill_dir`` (where new ledger entries land), then this install's own
+    skills dir (the plugin ships each `.skillwriter/` ledger, so it is there off this machine too)."""
+    roots = [parent / "KI" / "bitranox-skills" / "plugins" / "bitranox" / "skills"
+             for parent in Path(skill_dir).resolve().parents if parent.name == "public"][:1]
+    return roots + [Path(__file__).resolve().parent.parent / "skills"]
+
+
+def ledger_dir(skill_dir, ledger_path, owner=None):
+    """The skill dir whose decision ledger governs an edit of ``skill_dir``.
+
+    ``skill_dir`` itself when it holds a ledger. A tool repo's twin holds none - the mirror
+    leaves `.skillwriter/` out, the marketplace copy owns it - so for a twin it is the marketplace
+    copy that has one (`_marketplace_skill_roots`); without this its rejected and removed entries
+    reached nobody editing the twin. ``ledger_path`` maps a skill dir to its ledger file;
+    ``owner`` maps a dir to the marketplace skill it mirrors (default `mirrored_skills`).
+    """
+    skill_dir = Path(skill_dir)
+    if ledger_path(skill_dir).is_file():
+        return skill_dir
+    if owner is None:
+        import mirrored_skills  # noqa: PLC0415 - a missing module must not wedge the guard
+        owner = mirrored_skills.marketplace_name
+    name = owner(skill_dir)
+    if name is None:
+        return skill_dir
+    for root in _marketplace_skill_roots(skill_dir):
+        if ledger_path(root / name).is_file():
+            return root / name
+    return skill_dir
+
+
 def _brief_refusal(event, path):
     """The decisions-brief refusal owed before this agent's first edit of the skill, or None."""
     session = event.get("session_id")
     if not isinstance(session, str) or not session.strip():
         return None
-    skill_dir = Path(path).parent
-    command = show_command(skill_dir)
+    edited = Path(path).parent
     try:
         import skill_decisions  # noqa: PLC0415 - a missing module must not wedge the guard
+        skill_dir = ledger_dir(edited, skill_decisions.ledger_path)
+        command = show_command(skill_dir)
         ledger = skill_decisions.ledger_path(skill_dir)
         brief = skill_decisions.render_brief(lambda: skill_decisions.file_lines(ledger),
                                              skill=skill_dir.name, show_command=command)
@@ -255,7 +294,8 @@ def _brief_refusal(event, path):
         return None
     # When entries were left out, the brief's own trailer already names the command; say it once.
     full_list = "" if command in brief else _FULL_LIST % command
-    return _BRIEF % (skill_dir.name, brief, full_list)
+    label = edited.name if skill_dir == edited else _TWIN_LABEL % (edited.name, skill_dir.name)
+    return _BRIEF % (label, brief, full_list)
 
 
 def decide(event, env):

@@ -26,9 +26,32 @@ def repo(tmp_path, env):
     return r
 
 
-def run(cwd, env, data):
+def run(cwd, env, data, preexec_fn=None):
     return subprocess.run([sys.executable, str(BRIDGE)], input=data, capture_output=True,
-                          cwd=cwd, env=env)
+                          cwd=cwd, env=env, preexec_fn=preexec_fn)
+
+
+_CHILD_STACK = 8 << 20
+
+
+def bounded_stack():
+    """A preexec_fn giving the child an 8 MiB stack, or None where there is no rlimit (Windows).
+
+    From Python 3.14 the json decoder's depth limit is the thread's real stack, and the GitHub
+    Linux and macOS runners run with an unlimited one: there 200,000 open brackets decode to a
+    plain 'Expecting value' error and the RecursionError branch is never reached, while the test
+    passes either way. The child's stack is sized from the rlimit at exec, so bounding it there
+    makes the branch reachable on every runner.
+    """
+    if os.name != "posix":
+        return None
+    import resource  # noqa: PLC0415 - POSIX-only module
+
+    def bound():
+        hard = resource.getrlimit(resource.RLIMIT_STACK)[1]
+        soft = _CHILD_STACK if hard == resource.RLIM_INFINITY else min(_CHILD_STACK, hard)
+        resource.setrlimit(resource.RLIMIT_STACK, (soft, hard))
+    return bound
 
 
 def call(cwd, env, tool, payload=None, raw=None):
@@ -113,13 +136,25 @@ def test_a_missing_required_field_is_a_refusal(repo, env):
 
 @pytest.mark.parametrize("raw", ["not json", "[]", '{"tool": "nope", "input": {}}',
                                  '{"tool": "backlog_list", "input": []}',
-                                 '{"tool": ["x"], "input": {}}', '{"tool": {"a": 1}, "input": {}}',
-                                 pytest.param("[" * 200000, id="deep-nesting")])
+                                 '{"tool": ["x"], "input": {}}', '{"tool": {"a": 1}, "input": {}}'])
 def test_a_request_the_bridge_cannot_run_exits_2(tmp_path, env, raw):
     p = run(tmp_path, env, raw.encode("utf-8"))
     assert p.returncode == 2 and len(p.stdout.decode("ascii").splitlines()) == 1
     out = json.loads(p.stdout.decode("ascii"))
     assert (out["ok"], out["error"]["kind"]) == (False, "BadRequest")
+
+
+def test_nesting_past_the_decoders_depth_exits_2_not_a_traceback(tmp_path, env):
+    """The RecursionError branch of `_request`, reached on every runner (`bounded_stack`)."""
+    p = run(tmp_path, env, ("[" * 200000).encode("ascii"), preexec_fn=bounded_stack())
+    assert p.returncode == 2 and len(p.stdout.decode("ascii").splitlines()) == 1
+    out = json.loads(p.stdout.decode("ascii"))
+    assert (out["ok"], out["error"]["kind"]) == (False, "BadRequest")
+    # The premise, checked: a decoder that read every level reports 'Expecting value' instead.
+    # A RecursionError reads "maximum recursion depth" before 3.14 and "Stack overflow (used N
+    # kB)" from 3.14 on.
+    message = out["error"]["message"]
+    assert "recursion" in message or "Stack overflow" in message, message
 
 
 def test_a_bad_request_still_names_a_known_tool(tmp_path, env):

@@ -342,12 +342,34 @@ def test_an_over_range_integer_timestamp_is_stale_not_a_crash(monkeypatch, capsy
     assert "stale-or-missing" in capsys.readouterr().out
 
 
+class _DepthLimitedJson:
+    """The json module, except that `loads` raises RecursionError for a deeply nested body.
+
+    From Python 3.14 the decoder's depth limit is the thread's real stack, and on the GitHub
+    Linux and macOS runners (unlimited stack) 100,000 levels decode - into a list, which `_read`
+    rejects as not a dict, so the test passed there without ever reaching its RecursionError
+    branch. A thread with a 4 MiB stack did not restore it on GitHub Linux (10.19.1), so the
+    decoder is stood in for at this external edge, as test_skill_edit_guard's
+    `depth_limited_json` does.
+    """
+
+    def __getattr__(self, name):
+        return getattr(json, name)
+
+    @staticmethod
+    def loads(text, *args, **kwargs):
+        if text.startswith("[" * 1000):
+            raise RecursionError("maximum recursion depth exceeded while decoding a JSON array")
+        return json.loads(text, *args, **kwargs)
+
+
 def test_a_pathologically_nested_receipt_is_stale_not_a_crash(monkeypatch, capsys):
     """json.loads raises RecursionError (not ValueError) on deep nesting; the CLI `check` must
     still answer stale-or-missing instead of dying with a traceback."""
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", THIS)
     SR.start("meta-skill-writer", session_id=THIS).write_text("[" * 100000 + "]" * 100000,
                                                               encoding="utf-8")
+    monkeypatch.setattr(SR, "json", _DepthLimitedJson())
     assert SR.is_fresh("meta-skill-writer", session_id=THIS) is False
     assert SR.main(["check", "meta-skill-writer"]) == 1
     assert "stale-or-missing" in capsys.readouterr().out

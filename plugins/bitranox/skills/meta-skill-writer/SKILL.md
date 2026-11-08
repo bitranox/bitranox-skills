@@ -1147,15 +1147,16 @@ removed; the second lists the live decisions one line each. Both print nothing f
 no ledger yet. A skill that also ships from a tool repo (`python3
 plugins/bitranox/hooks/repo-gate.py --mirrors` lists the pairs) keeps its ledger in the marketplace
 copy: run the command from the marketplace repo, or add
-`--skill-dir <marketplace>/plugins/bitranox/skills/<skill>` after the skill name.
+`--skill-dir <marketplace>/plugins/bitranox/skills/<skill>` after the marketplace skill name.
 
 An edit that reverses a listed decision (re-adds a removed rule, adopts a rejected alternative,
 drops a recorded rule) is made only when you can answer that entry's `reopen_if` with what
 changed; without that answer, keep the decision. With it, make the edit, then record a new entry
 that names the old one in `supersedes` and carries the answer in its `why`. The edit guard refuses
-an agent's first edit of a marketplace SKILL.md once, showing this list, when that agent has not
-run `show` for the skill; it reads the ledger beside the edited file, so an edit of a tool-repo
-twin gets no such refusal, and its editor runs `show` with the marketplace `--skill-dir` as above.
+an agent's first edit of a SKILL.md once, showing this list, when that agent has not run `show`
+for the skill. A tool-repo twin holds no ledger of its own, so its first edit is refused with the
+marketplace copy's list (read from the marketplace checkout when one is reachable, else from the
+installed plugin), and running `show` for the marketplace skill name, as above, avoids it.
 The commit gate refuses a change whose shipped text no longer holds a live
 rule's anchor: an edit that deletes or rewords such a sentence records a `removed` entry, or a new
 `rule` with a new anchor, that supersedes it.

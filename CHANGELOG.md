@@ -30,6 +30,38 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.24.0]
+
+### Added
+
+- The SKILL.md edit guard hands an edit of a tool repo's mirrored twin the marketplace copy's
+  decision brief. The twin keeps no ledger of its own, so its first edit used to pass with no
+  rejected or removed decision shown. The ledger is read from the marketplace checkout under the
+  shared `public/` tree when there is one, else from the installed plugin; running `show` for the
+  marketplace skill name avoids the refusal. A twin in a linked worktree is matched through its
+  main checkout.
+- `hooks/mirrored_skills.py` holds the `MIRRORED_SKILLS` table that `repo-gate.py` and the edit
+  guard both read.
+
+### Fixed
+
+- The commit gate's front-matter sweep reads every SKILL.md as the commit or push ships it (the
+  index, HEAD on a push, or what `git commit -a` / `git commit <paths>` takes from disk), not from
+  the working tree. Another session's unstaged description edit, or a skill directory nobody has
+  added yet, no longer refuses an unrelated commit. The sweep still covers every shipped skill,
+  not only the changed ones.
+- The version-bump check judges what the commit or push ships, and diffs plugins/ from the fork
+  point with origin/master rather than from origin's tip. A checkout behind origin is no longer
+  refused for a bump its own change does not need. It now refuses two cases the tip comparison let
+  through: an unbumped plugins/ change in a checkout behind origin, and a bump to the version
+  origin already published.
+- Three tests that feed deeply nested JSON to reach a `RecursionError` branch now reach it on
+  every runner. From Python 3.14 the decoder's depth limit is the thread's real stack, so on an
+  unlimited stack (the GitHub Linux and macOS runners) the input decoded and the branch went
+  untested while the tests passed. The mod-bridge and jsonl_grep tests start their child with an
+  8 MiB stack and check the branch was taken; the receipt test stands in a depth-limited decoder.
+- meta-skill-writer Step 0b describes the edit guard's refusal for a tool-repo twin.
+
 ## [10.22.1]
 
 ### Fixed
