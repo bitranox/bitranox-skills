@@ -30,6 +30,12 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.36.0]
+
+### Fixed
+
+- The context watcher's save request now asks for the checkpoint to be written with the Write tool, and says a file written through Bash is found only at the root of the repo the session is in. A session that wrote its handover through a Bash-run script into a parent repository, while its working directory was a nested repository, saved a checkpoint that was not handed back after the compaction.
+
 ## [10.35.0]
 
 ### Fixed

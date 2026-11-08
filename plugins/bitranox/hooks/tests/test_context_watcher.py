@@ -347,6 +347,16 @@ def test_the_save_request_says_to_replace_the_whole_handover():
     assert "Replace the whole file" in msg and "`# STALE`" in msg
 
 
+def test_the_save_request_asks_for_the_write_tool():
+    # compact-resume finds a checkpoint at the cwd's repo root or at a path the session touched
+    # with Write/Edit (touched-paths.py records only those tools). A session once wrote its
+    # handover through a Bash-run script into the umbrella repo while its cwd was a nested repo,
+    # and the checkpoint was not handed back.
+    _s, detail = W.compact_verdict(150_000, 200_000, 70, 400_000, 140_000)
+    msg = W._save(detail)
+    assert "with the Write tool" in msg and "through Bash" in msg
+
+
 def test_the_misconfigured_message_says_which_knob_to_set():
     _s, detail = W.compact_verdict(563_038, 200_000, 70, 400_000, 0)
     detail["source"] = "assumed"
