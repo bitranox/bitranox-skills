@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """SessionStart hook: after a compaction, put the saved checkpoint back in front of the model.
 
-In compact mode the context watcher asks the session to save a checkpoint (`handover.md` plus
+The context watcher asks the session to save a checkpoint (`handover.md` plus
 `OPEN-WORK.md`) shortly before the harness auto-compacts, and the session then keeps working. The
 compaction summary keeps the gist and loses the working detail, so this hook re-injects the
 checkpoint the session wrote, and the work resumes from saved state rather than from the summary.

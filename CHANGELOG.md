@@ -30,6 +30,25 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.30.0]
+
+### Removed
+
+- The `context_mode` setting and handover mode. The context watcher has one behaviour: shortly
+  before the harness auto-compacts it asks for a checkpoint (`OPEN-WORK.md` plus `handover.md`)
+  on `PostToolUse` and on `Stop`, and the session saves it and keeps working. A stored
+  `context_mode` is ignored: `/memory-settings view` hides it, and `set` and `reset` drop it from
+  the file. A handover the user asks for ("write a handover", "let's start a fresh session") still
+  ends with a stop and `/clear`.
+
+### Changed
+
+- meta-context-watcher: "Two modes" is now "Checkpoint or handover", and "compact-mode checkpoint"
+  is now "watcher checkpoint". The skill description no longer triggers on a Stop nudge about a
+  handover threshold.
+- meta-memory-settings and docs/reference.md: the `CLAUDE_CODE_AUTO_COMPACT_WINDOW` guidance moved
+  into the `context_handover_cap` row.
+
 ## [10.29.0]
 
 ### Changed

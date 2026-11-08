@@ -1423,11 +1423,9 @@ DEFAULT_CONFIG = {
     # keeps the full id including the `[1m]` suffix, which the transcript drops), so 0 means auto.
     # The context limit is min(pct of window, cap): the pct leg keeps a cushion on a small window,
     # and the cap catches a big-window session past the measured rot onset while still only 40%
-    # full. In compact mode that limit is the value CLAUDE_CODE_AUTO_COMPACT_WINDOW should hold:
-    # the watcher asks for a checkpoint before the harness compacts there, and the session goes
-    # on. In handover mode it is where a handover plus /clear is offered instead.
+    # full. That limit is the value CLAUDE_CODE_AUTO_COMPACT_WINDOW should hold: the watcher asks
+    # for a checkpoint before the harness compacts there, and the session goes on.
     "context_window": 0,           # 0 = detect; set a token count only to override the detection
-    "context_mode": "compact",     # compact (checkpoint, auto-compact, continue) | handover
     "context_handover_pct": 70,    # percentage leg of the context limit
     "context_handover_cap": 400000,  # absolute leg, in tokens (measured context-rot onset)
     # Opt-in text classifier (hooks/classifier.py). The backend is the master switch; each site

@@ -1,6 +1,6 @@
 ---
 name: meta-context-watcher
-description: Use when a session's context is large enough that quality is degrading or compaction is close, when the context watcher asks for a checkpoint before auto-compaction or a compaction hands a saved checkpoint back, when a Stop nudge reports the handover threshold was crossed, or on "write a handover", "hand this over", "context is getting full", or "let's start a fresh session". Also use when a session picks up from an existing handover.md or OPEN-WORK.md, or is asked what to do next - "read the handover", "what next", "what's next for <project>", "what is still open", "list the open points" - when unfinished work or an unmet user request must outlive the session and belongs in the standing backlog, when open items keep sinking under whatever was worked on last, or on "add this to the backlog", "clean up the backlog"
+description: Use when a session's context is large enough that quality is degrading or compaction is close, when the context watcher asks for a checkpoint before auto-compaction or a compaction hands a saved checkpoint back, or on "write a handover", "hand this over", "context is getting full", or "let's start a fresh session". Also use when a session picks up from an existing handover.md or OPEN-WORK.md, or is asked what to do next - "read the handover", "what next", "what's next for <project>", "what is still open", "list the open points" - when unfinished work or an unmet user request must outlive the session and belongs in the standing backlog, when open items keep sinking under whatever was worked on last, or on "add this to the backlog", "clean up the backlog"
 ---
 
 # Save the task state before the context wall
@@ -15,20 +15,17 @@ than from the paper; where the harness compacts is product behaviour that can mo
 Treat both as the order of magnitude that justifies acting early, never as thresholds to tune
 against.
 
-## Two modes
+## Checkpoint or handover
 
-What happens at the context limit is the `context_mode` setting (bitranox:meta-memory-settings):
+When context reaches the limit, the context watcher asks for a CHECKPOINT before the harness
+compacts: steps 1-6 of the procedure below, then back to the task you were on (step 7c). The
+compaction follows on its own, and the checkpoint is handed back to you right after it. Nothing
+ends: no `/clear`, no stop. No setting changes this.
 
-- **compact** (the default): before the harness compacts, save a CHECKPOINT - steps 1-6 of the
-  procedure below - and then go back to the task you were on (step 7c). The compaction follows on
-  its own, and the checkpoint is handed back to you right after it. Nothing ends: no `/clear`, no
-  stop.
-- **handover**: write the handover, stop, and send the user to `/clear` (steps 1-8).
-
-A handover the USER asks for ("write a handover", "let's start a fresh session") runs steps 1-8
-in either mode. "Compact-mode checkpoint" below means only the file written because the context
-watcher asked for one in compact mode; a handover the user asked for is never one, so the
-checkpoint exceptions (no commit, next action = the task in flight) do not apply to it.
+A handover the USER asks for ("write a handover", "let's start a fresh session") runs steps 1-8:
+write the handover, stop, and send the user to `/clear`. "Watcher checkpoint" below means only the
+file written because the context watcher asked for one; a handover the user asked for is never
+one, so the checkpoint exceptions (no commit, next action = the task in flight) do not apply to it.
 
 ## The one rule
 
@@ -233,7 +230,7 @@ goes for `size`: `size: unknown` is a usable line, an invented count is not.
   must be the top-ranked open item in `OPEN-WORK.md`, or the file must say plainly why a
   lower-ranked one goes first.** Recency is not a reason. "It is what I was working on", "it is
   nearly done", "the user mentioned it most recently" and "it is small" are the four that get
-  written, and none of them outranks a bigger item the user is still waiting on. A compact-mode
+  written, and none of them outranks a bigger item the user is still waiting on. A watcher
   checkpoint is the one exception: its next action is the next step of the task in flight,
   because the same session goes straight back to that task; the ranking decides what follows it.
 - **Files that matter** - repo-relative PATHS, not bare filenames; inferring them is the work
@@ -263,8 +260,8 @@ goes for `size`: `size: unknown` is a usable line, an invented count is not.
 
 ## Procedure
 
-Steps 1-6 write the checkpoint and run in both modes. Then compact mode takes step 7c and nothing
-after it; handover mode, and any handover the user asked for, take steps 7 and 8 instead.
+Steps 1-6 write the file and run for both. Then a watcher checkpoint takes step 7c and nothing
+after it; a handover the user asked for takes steps 7 and 8 instead.
 
 1. **Record the lessons, do not capture them.** Each durable thing this session learned goes into
    the handover as ONE line under `## Lessons for the next nap`, worded trigger-first, with no slug
@@ -318,7 +315,7 @@ after it; handover mode, and any handover the user asked for, take steps 7 and 8
    two moments in it, leaves the reader deciding which half is true. Commit it along with
    `OPEN-WORK.md`: tracking them costs one diff per session and buys a history for the one file that
    is destroyed on purpose every time, so a dropped item can be recovered once somebody notices.
-   A compact-mode checkpoint commits nothing just for itself: both files ride along with the next
+   A watcher checkpoint commits nothing just for itself: both files ride along with the next
    commit the work makes. Until then the checkpoint lives only in the working tree, and git has no
    copy of an uncommitted edit: before any step that resets or overwrites `handover.md` or
    `OPEN-WORK.md` (a release step's `git restore handover.md` to clean the tree, a checkout, a
@@ -333,7 +330,7 @@ after it; handover mode, and any handover the user asked for, take steps 7 and 8
 
 6. **Re-read it as the next session.** Any line the repo could have told them is a line to cut.
 
-**Compact mode ends here:**
+**A watcher checkpoint ends here:**
 
 7c. **Go back to the task you were on.** Tell the user in one line that a checkpoint was saved,
     naming its path, then take the exact next action you just wrote. Do not stop, do not ask
@@ -342,7 +339,7 @@ after it; handover mode, and any handover the user asked for, take steps 7 and 8
     keep it in step with every edit: it is read only when the compaction arrives, which is at most
     the save margin away. If the context watcher asks again before a compaction, write it again.
 
-**Handover mode, or a handover the user asked for:**
+**A handover the user asked for:**
 
 7. **STOP. The handover is the LAST thing you do in this session.** Writing it ends the session's
    work. Do NOT start a new task, resume the one you were part-way through, or "just finish" the
@@ -400,7 +397,7 @@ now carries an uncommitted STALE line, so the dirty tree has an owner instead of
 gate or session.
 
 **A checkpoint handed back after a compaction is your own work in progress.** After an automatic
-compaction in compact mode, a `<BITRANOX-COMPACT-RESUME>` block carries the checkpoint THIS session
+compaction, a `<BITRANOX-COMPACT-RESUME>` block carries the checkpoint THIS session
 wrote shortly before, mid-task. Take its exact next action at once and mark it STALE as the block
 says. The paragraphs after this one, from "A gate result in the handover" on, are for a handover
 from an EARLIER session and do not apply to it: nothing was cleared, and the task in flight was
@@ -537,11 +534,11 @@ the work stands, never restate the skill's rules.
 ## When it fires on its own
 
 A hook measures context from the transcript's last recorded usage and asks for the checkpoint
-(compact mode) or blocks on `Stop` (handover mode) once it crosses
+(on `PostToolUse` and on `Stop`) once it crosses
 `min(context_handover_pct of the window, context_handover_cap)`. Read references/when-it-fires.md
 when it asks about `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, reports a window you did not expect, or
 measures more context than the window: it covers where the window comes from, the save margin,
-and what a decline does.
+and when it asks again.
 
 ## Not the same as its neighbours
 
