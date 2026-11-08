@@ -59,7 +59,13 @@ quoted in a prompt, a brief or a read-back does not count, a write by any other 
 marker. `suite=` splits a failing acceptance suite by its log into
 `does_not_compile(<code>x<error lines>,...; missing <symbols>)` and `tests_failed(<failed> of
 <total>)`; plain `failed` is a non-zero exit its log explains neither way, and
-`did_not_finish` a suite that timed out, could not start or was not placed.
+`did_not_finish` a suite that timed out, could not start or was not placed. `gate=` reads the
+floor's gate step from `floor-gate.log` the same way (`-` when no gate ran; a failed gate runs no
+suite, so `suite=-` then). Either one reads `build_prerequisite_missing(protoc)` when a build
+script failed (`failed to run custom build command`) and the log says protoc is missing (`Could
+not find protoc`, `failed to invoke protoc`, or a protoc path with `No such file or directory`),
+checked before the rustc codes: the worktree lacked a tool, so the arm's code was never compiled,
+unlike `does_not_compile`. Only protoc is recognised; another missing tool reads `failed`.
 
 Do not judge a variant from transcripts (the design's reason for this skill), do not run arms in
 parallel (serial interleaved arms isolate CPU, quota and the prompt cache; the design's
@@ -106,6 +112,19 @@ them. The paid arm is started by the user in their own terminal, never from a to
   to size the grid from. `run` has no option to stop after a number of arms: it goes on until a
   usage-limit notice pauses it, so fit the grid to the room left in the windows before the user
   starts it.
+- **One `run` per run dir, and SIGTERM stops it cleanly.** `run` holds an exclusive lock on
+  `<run dir>/run.lock`, the holder's pid written in it; a second `run` on the same run dir exits 2
+  naming that pid and touches nothing of the first. To stop a run from a script, send SIGTERM to
+  that pid (the harness ends the session's process group itself): it takes the Ctrl-C path, so
+  the arm in progress gets its `result.json` and an `interrupted` journal row, its session is
+  ended, its config dir with the credentials copy is deleted, `run` exits 130, and the same
+  command resumes with that arm from scratch. The kernel releases the lock when the process ends,
+  however it ends, so a killed run leaves no stale lock; the file itself stays and keeps the last
+  pid, so check that pid is still an `abtest.py run` before signalling it. SIGKILL skips the
+  Ctrl-C path (no `result.json` and no journal row for the arm, and under `sandbox = "none"` the
+  session may keep running in its own process group; bwrap ends it with the run); the next `run`
+  deletes the config dir it left, renames the attempt to `<label>.attempt-<k>` and runs the arm
+  again from scratch.
 - **`--dry-run` is not light.** It skips only the session: every arm still gets its worktree and
   the full floor (the gate and the acceptance suite), which takes minutes per arm and competes for
   CPU with a live arm, so never run it beside one, for this run dir or any other. A killed dry

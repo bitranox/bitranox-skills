@@ -26,13 +26,21 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from types import FrameType
 from typing import Any
+
+if sys.platform != "win32":
+    # flock for the run dir lock. Windows has no fcntl; the suite still imports this module there.
+    import fcntl
 
 import abarm
 import abguard
@@ -95,7 +103,12 @@ PREREG_SKELETON = """# Pre-registration
 Pairwise blind judge (design S2), A/B swap tie rule, control first then finalists; labels per design S5.4.
 """
 GITIGNORE = ("frozen/\narms/*/cfg\narms/*/home\narms/*/stream.jsonl\narms/*/bundle.git\narms/*/guard\n"
-             "arms/*/transcripts\narms/*/uncommitted.patch\narms/*/untracked.tar\njournal.jsonl\njournal.torn\n")
+             "arms/*/transcripts\narms/*/uncommitted.patch\narms/*/untracked.tar\njournal.jsonl\njournal.torn\n"
+             "run.lock\n")
+# The file `run` holds an exclusive flock on while it runs, the holder's pid written in it. Two runs
+# on one run dir raced before it: the second swept the first's live config dir and set its arm aside.
+# flock is released by the kernel when the holder dies, however it dies, so no pid is ever stale.
+LOCK_FILE = "run.lock"
 # Where an arm's session transcripts (copied out of its config dir before that is deleted) go.
 TRANSCRIPTS = "transcripts"
 JOURNAL, TORN = "journal.jsonl", "journal.torn"
@@ -916,9 +929,73 @@ def _require_sandbox(profile: Profile) -> None:
             raise RunRefused(problem)
 
 
+def _lock_holder(fd: int) -> str:
+    """The pid the holder wrote into the lock file, or "unknown" (it may not have written it yet)."""
+    try:
+        text = os.pread(fd, 64, 0).decode("ascii", errors="replace").strip()
+    except OSError:
+        return "unknown"
+    return text if text.isascii() and text.isdecimal() else "unknown"
+
+
+@contextmanager
+def _run_lock(run_dir: Path) -> Iterator[None]:
+    """Hold an exclusive flock on <run_dir>/run.lock for the whole run, the holder's pid written in it.
+
+    Raises:
+        RunRefused: another process holds the lock (a `run` already going on this run dir).
+    """
+    if sys.platform == "win32":
+        yield  # no flock here; the harness is Linux only
+        return
+    path = run_dir / LOCK_FILE
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RunRefused(f"another `run` holds {path} (pid {_lock_holder(fd)}); two runs on one run dir "
+                             "would delete each other's live arm state: wait for it, or stop it "
+                             "(Ctrl-C or SIGTERM end it cleanly)") from None
+        os.ftruncate(fd, 0)
+        os.pwrite(fd, f"{os.getpid()}\n".encode("ascii"), 0)
+        yield
+    finally:
+        os.close(fd)  # closing the descriptor releases the flock
+
+
+def _raise_interrupt(signum: int, frame: FrameType | None) -> None:
+    raise KeyboardInterrupt
+
+
+@contextmanager
+def _sigterm_as_interrupt() -> Iterator[None]:
+    """While a run goes, SIGTERM raises KeyboardInterrupt: the Ctrl-C path, which writes result.json and
+    the journal row, ends the session's group and removes the credentials copy. Restored on exit.
+
+    A handler can only be installed from the main thread; elsewhere SIGTERM keeps its own handling.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    previous = signal.signal(signal.SIGTERM, _raise_interrupt)
+    try:
+        yield
+    finally:
+        # None: the previous handler was not installed from Python; the default is what it was.
+        signal.signal(signal.SIGTERM, signal.SIG_DFL if previous is None else previous)
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     run_dir = _run_dir(args.run_dir)
     _require_sealed(run_dir)
+    # Before anything that touches arm state (_sweep_cfgs deletes every arms/*/cfg).
+    with _run_lock(run_dir), _sigterm_as_interrupt():
+        return _run_locked(args, run_dir)
+
+
+def _run_locked(args: argparse.Namespace, run_dir: Path) -> int:
+    """cmd_run's body, under the run dir lock."""
     profile = load_profile(run_dir / "abtest.toml")
     sealed_suite = _require_seal_intact(run_dir, profile)
     ctx = _context(args, run_dir, profile, sealed_suite)
@@ -999,7 +1076,8 @@ def _score_line(label: str, score: dict[str, Any]) -> str:
             f"@{(score.get('task_sha256') or '-')[:12]}"
             f" subagents={abtrace.describe_subagents(score.get('subagents'))}"
             f" ideas={abtrace.describe_ideas(score.get('idea_markers'))}"
-            f" suite={abtrace.describe_suite(score.get('floor_suite'))}")
+            f" suite={abtrace.describe_suite(score.get('floor_suite'))}"
+            f" gate={abtrace.describe_suite(score.get('floor_gate'))}")
     flag = _store_flag(label, score)
     line = line if flag is None else f"{line} FLAG {flag}"
     # One line per idea under its arm: the first marker line the arm wrote for it.

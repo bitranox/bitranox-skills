@@ -3,6 +3,7 @@ import importlib.util
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
@@ -331,6 +332,7 @@ def test_ctrl_c_still_writes_result_and_journal_then_reraises(tmp_path, scratch_
     res = json.loads((arm / "result.json").read_text(encoding="utf-8"))
     assert res["stop_reason"] == "interrupted" and not (arm / "cfg").exists()
     assert not (scratch_repo / ".claude" / "worktrees" / f"abx-{run_dir.name}-r1-C").exists()
+    assert _lock_is_free(run_dir), "a Ctrl-C left the run dir locked"
 
 
 def _fabricate_arm(run_dir, round_no, *, cache_read, stop_reason="finished", guard_changes=()):
@@ -407,8 +409,9 @@ def test_score_text_names_subagents_ideas_and_the_suite_outcome(tmp_path, scratc
     r1 = next(ln for ln in lines if ln.startswith("r1-C:"))
     r2 = next(ln for ln in lines if ln.startswith("r2-C:"))
     assert "subagents=2(max 2 at once)" in r1 and "ideas=3x1" in r1 and "suite=tests_failed(2 of 10)" in r1, r1
+    assert "gate=passed" in r1, r1
     assert "  r1-C idea 3: [abx] idea=3 reviewed twice" in lines, lines
-    assert "subagents=- ideas=- suite=-" in r2, r2
+    assert "subagents=- ideas=- suite=- gate=-" in r2, r2
 
 
 def test_prune_run_deletes_the_branches(tmp_path, scratch_repo, skills_repo, fake_claude_path, monkeypatch):
@@ -1481,3 +1484,106 @@ def test_user_config_dir_answers_like_the_plugin_rule(tmp_path, monkeypatch):
             monkeypatch.setenv("CLAUDE_CONFIG_DIR", value)
         assert A.user_config_dir() == rule.config_dir(), value
     assert A.user_config_dir() == home / ".claude"
+
+
+# --- one `run` per run dir: the lock, and SIGTERM taking the Ctrl-C path -------------------------
+
+ABTEST = Path(T.__file__).resolve()
+LOCK_FILE = "run.lock"  # spelt out, so the test reads RED (not AttributeError) on a harness without it
+# Run by the fake claude after its commit: says the session started, then holds it until the
+# test writes RELEASE (bounded, so a run that is never released still ends).
+_HOLDS_THE_SESSION = """
+import time
+from pathlib import Path
+Path(MARKER).write_text("held", encoding="utf-8")
+for _ in range(400):
+    if Path(RELEASE).exists():
+        break
+    time.sleep(0.05)
+"""
+
+
+def _lock_is_free(run_dir):
+    """Whether run.lock exists and nobody holds it (a fresh flock on it succeeds at once)."""
+    fcntl = pytest.importorskip("fcntl")
+    path = run_dir / LOCK_FILE
+    if not path.is_file():
+        return False
+    with path.open("r+", encoding="utf-8") as fh:
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return False
+        fcntl.flock(fh, fcntl.LOCK_UN)
+    return True
+
+
+def _wait_for(path, seconds=90.0):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if path.exists():
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def _held_child(tmp_path, run_dir, creds, skills_repo, env):
+    """`abtest.py run` in a child process whose one arm's session is held open; (child, marker, release, script)."""
+    marker, release, script = tmp_path / "session-held", tmp_path / "release", tmp_path / "hold.py"
+    script.write_text(_HOLDS_THE_SESSION.replace("MARKER", repr(str(marker))).replace("RELEASE", repr(str(release))),
+                      encoding="utf-8")
+    child_env = dict(os.environ, **env, FAKE_CLAUDE_SCRIPT=str(script))
+    argv = [sys.executable, str(ABTEST), *_run_args(run_dir, creds, skills_repo, "--only", "C", "--stop-grace-s", "1")]
+    child = subprocess.Popen(argv, env=child_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,  # nosec B603
+                             text=True, encoding="utf-8", start_new_session=True)
+    return child, marker, release, script
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="flock and SIGTERM delivery are POSIX here")
+def test_a_second_run_on_a_held_run_dir_is_refused_and_sigterm_ends_the_first_like_ctrl_c(
+        tmp_path, scratch_repo, skills_repo, fake_claude_path, monkeypatch, capsys):
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    env, creds = _env(fake_claude_path, tmp_path)
+    assert T.main(["seal", str(run_dir)]) == 0
+    child, marker, release, script = _held_child(tmp_path, run_dir, creds, skills_repo, env)
+    cfg = run_dir / "arms" / "r1-C" / "cfg"
+    try:
+        assert _wait_for(marker), "the first run's session never started"
+        assert cfg.is_dir() and not _lock_is_free(run_dir)
+        # The first run's own environment: a harness without the lock would sweep the held arm's
+        # config dir and set its arm aside before running it again.
+        _use_env(monkeypatch, dict(env, FAKE_CLAUDE_SCRIPT=str(script)))
+        capsys.readouterr()
+        rc = T.main(_run_args(run_dir, creds, skills_repo, "--only", "C", "--json"), login_check=_Probe("ok"))
+        out = json.loads(capsys.readouterr().out)
+        assert rc == 2 and out["ok"] is False, out
+        assert LOCK_FILE in out["data"]["error"] and f"pid {child.pid}" in out["data"]["error"], out
+        assert cfg.is_dir(), "the refused run swept the held arm's config dir"
+        assert not (run_dir / "arms" / "r1-C.attempt-1").exists(), "the refused run set the held arm aside"
+        os.kill(child.pid, signal.SIGTERM)
+        _, err = child.communicate(timeout=120)
+    finally:
+        release.write_text("go", encoding="utf-8")
+        if child.poll() is None:
+            os.killpg(child.pid, signal.SIGKILL)
+            child.wait()
+    assert child.returncode == 130, err
+    assert "interrupted" in err
+    assert _arm_rows(run_dir) == [(1, "C", "interrupted")]
+    res = json.loads((run_dir / "arms" / "r1-C" / "result.json").read_text(encoding="utf-8"))
+    assert res["stop_reason"] == "interrupted" and not cfg.exists()
+    assert _lock_is_free(run_dir), "SIGTERM left the run dir locked"
+
+
+def test_a_run_takes_the_lock_and_frees_it_and_the_sigterm_handler_at_its_end(
+        tmp_path, scratch_repo, skills_repo, fake_claude_path, monkeypatch):
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    env, creds = _env(fake_claude_path, tmp_path)
+    _use_env(monkeypatch, env)
+    assert T.main(["seal", str(run_dir)]) == 0
+    before = signal.getsignal(signal.SIGTERM)
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--only", "C"), login_check=_Probe("ok")) == 0
+    assert signal.getsignal(signal.SIGTERM) is before, "run left its SIGTERM handler installed"
+    assert _lock_is_free(run_dir), "a finished run left the run dir locked"
+    assert (run_dir / LOCK_FILE).read_text(encoding="utf-8").strip() == str(os.getpid()), "the lock names its holder"
+    assert LOCK_FILE not in L.git(run_dir, "status", "--porcelain").stdout, "the lock file is gitignored"

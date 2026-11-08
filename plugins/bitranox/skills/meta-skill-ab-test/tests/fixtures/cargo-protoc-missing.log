@@ -1,0 +1,15 @@
+   Compiling proc-macro2 v1.0.86
+   Compiling prost-build v0.13.3
+   Compiling sbx-proto v0.1.0 (/work/sbx-proto)
+error: failed to run custom build command for `sbx-proto v0.1.0 (/work/sbx-proto)`
+
+Caused by:
+  process didn't exit successfully: `/work/target/debug/build/sbx-proto-5c1f0e2d/build-script-build` (exit status: 101)
+  --- stdout
+  cargo:rerun-if-changed=proto/sbx.proto
+
+  --- stderr
+  thread 'main' panicked at sbx-proto/build.rs:4:43:
+  called `Result::unwrap()` on an `Err` value: Custom { kind: NotFound, error: "Could not find `protoc`. If `protoc` is installed, try setting the `PROTOC` environment variable to the path of the `protoc` binary. To install it on Debian, run `apt-get install protobuf-compiler`. It is also available at https://github.com/protocolbuffers/protobuf/releases  For more information: https://docs.rs/prost-build/#sourcing-protoc" }
+  note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+warning: build failed, waiting for other jobs to finish...

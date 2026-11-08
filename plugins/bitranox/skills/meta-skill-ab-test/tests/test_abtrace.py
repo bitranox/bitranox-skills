@@ -240,6 +240,70 @@ def test_the_missing_list_is_capped_but_every_code_is_counted(tmp_path):
     assert len(out["missing"]) == X.MISSING_CAP and out["error_codes"] == {"E0425": X.MISSING_CAP + 5}
 
 
+# --- a build prerequisite the worktree lacks (protoc) --------------------------------------------
+
+BUILD_SCRIPT_FAILED = "error: failed to run custom build command for `sbx-proto v0.1.0 (/work/sbx-proto)`"
+# What prost-build before 0.12 printed, and what any build script prints when PROTOC names a path
+# the arm's worktree does not have (a gitignored .packages dir).
+OLD_PROST = ('  failed to invoke protoc (hint: https://docs.rs/prost-build/#sourcing-protoc): '
+             'Os { code: 2, kind: NotFound, message: "No such file or directory" }')
+PROTOC_PATH_GONE = '  Error: "/work/.packages/protoc/bin/protoc": No such file or directory (os error 2)'
+# A protoc that is there but cannot be run (not executable in the worktree) fails the same step.
+OLD_PROST_DENIED = ('  failed to invoke protoc (hint: https://docs.rs/prost-build/#sourcing-protoc): '
+                    'Os { code: 13, kind: PermissionDenied, message: "Permission denied" }')
+
+
+def _log(tmp_path, *lines):
+    log = tmp_path / "floor.log"
+    log.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return log
+
+
+def test_a_build_script_that_cannot_find_protoc_is_a_missing_prerequisite():
+    out = X.suite_outcome(_suite(101), FIXTURES / "cargo-protoc-missing.log")
+    assert out["outcome"] == X.SUITE_PREREQ_MISSING == "build_prerequisite_missing"
+    assert out["prerequisite"] == "protoc" and out["error_codes"] == {}
+    assert X.describe_suite(out) == "build_prerequisite_missing(protoc)"
+
+
+@pytest.mark.parametrize("line", [OLD_PROST, OLD_PROST_DENIED, PROTOC_PATH_GONE],
+                         ids=["failed-to-invoke", "failed-to-invoke-denied", "path-gone"])
+def test_every_protoc_wording_after_a_build_script_failure_is_the_prerequisite(tmp_path, line):
+    out = X.suite_outcome(_suite(101), _log(tmp_path, BUILD_SCRIPT_FAILED, "", "Caused by:", line))
+    assert (out["outcome"], out["prerequisite"]) == (X.SUITE_PREREQ_MISSING, "protoc")
+
+
+def test_a_build_script_failure_that_names_no_protoc_stays_failed(tmp_path):
+    out = X.suite_outcome(_suite(101), _log(tmp_path, BUILD_SCRIPT_FAILED, "  thread 'main' panicked at build.rs:3:5:",
+                                            "  bindgen could not find libclang"))
+    assert (out["outcome"], out["prerequisite"]) == (X.SUITE_FAILED, None)
+
+
+def test_a_real_compile_error_stays_does_not_compile_beside_a_protoc_line(tmp_path):
+    compile_log = (FIXTURES / "cargo-compile-error.log").read_text(encoding="utf-8").splitlines()
+    out = X.suite_outcome(_suite(101), _log(tmp_path, "note: protoc found at /usr/bin/protoc", *compile_log))
+    assert (out["outcome"], out["prerequisite"]) == (X.SUITE_NO_COMPILE, None)
+
+
+def test_a_test_that_prints_a_protoc_failure_is_a_test_failure_not_a_prerequisite(tmp_path):
+    runtime = (FIXTURES / "cargo-test-failed.log").read_text(encoding="utf-8").splitlines()
+    out = X.suite_outcome(_suite(101), _log(tmp_path, OLD_PROST, *runtime))
+    assert (out["outcome"], out["prerequisite"]) == (X.SUITE_TESTS_FAILED, None)
+
+
+def test_protoc_lines_in_a_passing_run_do_not_trigger(tmp_path):
+    out = X.suite_outcome(_suite(0), _log(tmp_path, BUILD_SCRIPT_FAILED, OLD_PROST,
+                                          "test result: ok. 3 passed; 0 failed; 0 ignored"))
+    assert (out["outcome"], out["prerequisite"]) == (X.SUITE_PASSED, None)
+
+
+def test_the_gate_step_is_classified_the_same_way():
+    gate = {"name": "gate", "rc": 101, "error": None}
+    out = X.step_outcome(gate, FIXTURES / "cargo-protoc-missing.log")
+    assert (out["outcome"], out["prerequisite"]) == (X.SUITE_PREREQ_MISSING, "protoc")
+    assert X.step_outcome(None, FIXTURES / "cargo-protoc-missing.log") is None
+
+
 # --- the text line -------------------------------------------------------------------------------
 
 @pytest.mark.parametrize(("subagents", "text"), [

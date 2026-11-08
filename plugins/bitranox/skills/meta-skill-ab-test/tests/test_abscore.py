@@ -128,7 +128,7 @@ def test_score_carries_the_listed_fields(tmp_path):
     assert set(s) == {"arm", "cost_usd", "per_model", "main_new_tokens", "first_cache_read", "floor_passed",
                       "bundle_commits", "void", "wall_s", "floor_error", "floor_steps", "warmth_checked",
                       "result_subtype", "store_changes", "store_guard", "sandbox", "task_file", "task_sha256",
-                      "subagents", "idea_markers", "floor_suite"}
+                      "subagents", "idea_markers", "floor_suite", "floor_gate"}
     assert (s["arm"], s["main_new_tokens"], s["bundle_commits"], s["wall_s"]) == ("r1-C", 20010, 1, 1.2)
 
 
@@ -157,7 +157,21 @@ def test_score_reads_subagents_ideas_and_the_suite_from_the_arm_dir(tmp_path):
 
 def test_an_arm_with_no_kept_files_scores_none_for_all_three(tmp_path):
     s = _score(tmp_path, _result(), TWO_PEERS)
-    assert (s["subagents"], s["idea_markers"], s["floor_suite"]) == (None, None, None)
+    assert (s["subagents"], s["idea_markers"], s["floor_suite"], s["floor_gate"]) == (None, None, None, None)
+
+
+def test_a_gate_that_cannot_find_protoc_reads_as_a_missing_prerequisite(tmp_path):
+    """The gate step is classified from floor-gate.log like the suite; a failed gate runs no suite."""
+    arm = tmp_path / "arms" / "r1-C"
+    arm.mkdir(parents=True)
+    (arm / "floor-gate.log").write_text((FIXTURES / "cargo-protoc-missing.log").read_text(encoding="utf-8"),
+                                        encoding="utf-8")
+    floor = {"passed": False, "steps": [{"name": "gate", "rc": 101, "error": None}]}
+    (arm / "result.json").write_text(json.dumps(_result(floor=floor)), encoding="utf-8")
+    s = S.score_arm(arm, _pure_profile(tmp_path), peers=TWO_PEERS)
+    assert (s["floor_gate"]["outcome"], s["floor_gate"]["prerequisite"]) == ("build_prerequisite_missing", "protoc")
+    assert s["floor_suite"] is None and s["floor_passed"] is False and s["void"] == []
+    assert s["floor_steps"] == [{"name": "gate", "rc": 101}], "existing keys unchanged"
 
 
 def test_the_suite_log_run_floor_writes_is_the_one_the_score_reads(tmp_path):

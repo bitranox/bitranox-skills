@@ -10,8 +10,10 @@ never confused with "nothing to look at":
 - idea_markers: the `[abx] idea=N ...` lines an arm writes to .bitranox/sdd/progress.md. That file
   is untracked, so it is in no branch: the writing tool calls in the stream and the subagent
   transcripts are the only record left.
-- suite_outcome: the floor's suite step split by its log into does-not-compile (rustc E-codes and
-  the symbols they name) and fails-at-run-time (N of M tests), where cargo exits 101 for both.
+- suite_outcome (and step_outcome, the same reading of any floor step, the gate's included): the
+  step split by its log into a missing build prerequisite (a build script that cannot find
+  protoc), does-not-compile (rustc E-codes and the symbols they name) and fails-at-run-time (N of
+  M tests), where cargo exits 101 for all three.
 
 Stdlib only, like every script here: the repo gate runs this suite in a bare environment.
 """
@@ -30,11 +32,13 @@ __all__ = [
     "SUITE_NOT_FINISHED",
     "SUITE_NO_COMPILE",
     "SUITE_PASSED",
+    "SUITE_PREREQ_MISSING",
     "SUITE_TESTS_FAILED",
     "describe_ideas",
     "describe_subagents",
     "describe_suite",
     "idea_markers",
+    "step_outcome",
     "subagent_overlap",
     "suite_outcome",
 ]
@@ -56,12 +60,21 @@ SUITE_NO_COMPILE = "does_not_compile"
 SUITE_TESTS_FAILED = "tests_failed"
 SUITE_FAILED = "failed"  # a non-zero exit whose log shows neither shape
 SUITE_NOT_FINISHED = "did_not_finish"  # timed out, could not start, held open, or the suite was not placed
+# A build script failed for want of a tool the arm's worktree does not have (protoc, which a
+# gitignored .packages dir holds in the real checkout): the arm's code was never compiled, so
+# this is neither its compile error nor its failing test.
+SUITE_PREREQ_MISSING = "build_prerequisite_missing"
 # At most this many missing symbols are listed; every error code is still counted.
 MISSING_CAP = 20
 _ERROR_CODE = re.compile(r"^error\[(E\d{4})\]:(.*)$")
 _COULD_NOT_COMPILE = re.compile(r"^error: could not compile ")
 _TEST_RESULT = re.compile(r"^test result: \w+\. (\d+) passed; (\d+) failed;")
 _BACKTICKED = re.compile(r"`([^`]+)`")
+_BUILD_SCRIPT_FAILED = re.compile(r"^error: failed to run custom build command for ")
+# How a build script says protoc is missing: prost-build 0.12+ ("Could not find `protoc`"), older
+# prost-build ("failed to invoke protoc"), and a PROTOC path that does not exist. cargo indents a
+# build script's stderr, so these are searched anywhere in the line.
+_PROTOC_MISSING = re.compile(r"Could not find `?protoc|failed to invoke protoc|protoc\S*:? .*No such file or directory")
 # The rustc codes that mean a name was not found: unresolved import or path, unknown value, type,
 # struct, trait, method or field. Their first backticked name is the symbol the code expected.
 _MISSING_CODES = frozenset({"E0405", "E0407", "E0412", "E0422", "E0423", "E0425", "E0432", "E0433",
@@ -252,8 +265,13 @@ class _SuiteLog:
         self.could_not_compile = False
         self.passed: int | None = None
         self.failed: int | None = None
+        self.build_script_failed = False
+        self.protoc_missing = False
 
     def feed(self, line: str) -> None:
+        # Read beside the classification below, never instead of it: the line still counts there.
+        self.build_script_failed = self.build_script_failed or _BUILD_SCRIPT_FAILED.match(line) is not None
+        self.protoc_missing = self.protoc_missing or _PROTOC_MISSING.search(line) is not None
         if (m := _ERROR_CODE.match(line)) is not None:
             self._note_error(m.group(1), m.group(2))
         elif _COULD_NOT_COMPILE.match(line):
@@ -270,6 +288,13 @@ class _SuiteLog:
 
     def does_not_compile(self) -> bool:
         return bool(self.codes) or self.could_not_compile
+
+    def prerequisite(self) -> str | None:
+        """The tool a failed build script could not find; only both lines together name one.
+
+        A protoc line alone is not enough: a test may print one, and a tool found is still named.
+        """
+        return "protoc" if self.build_script_failed and self.protoc_missing else None
 
 
 def _read_log(log: Path) -> _SuiteLog:
@@ -288,34 +313,46 @@ def _outcome(step: dict[str, Any], parsed: _SuiteLog) -> str:
         return SUITE_NOT_FINISHED
     if step.get("rc") == 0:
         return SUITE_PASSED
+    if parsed.prerequisite() is not None:
+        return SUITE_PREREQ_MISSING
     if parsed.does_not_compile():
         return SUITE_NO_COMPILE
     return SUITE_TESTS_FAILED if parsed.failed else SUITE_FAILED
 
 
-def suite_outcome(step: dict[str, Any] | None, log: Path) -> dict[str, Any] | None:
-    """The floor's suite step, classified by its log rather than by one exit code.
+def step_outcome(step: dict[str, Any] | None, log: Path) -> dict[str, Any] | None:
+    """A floor step (the gate or the suite), classified by its log rather than by one exit code.
 
     Args:
-        step: the suite step as run_floor recorded it ({"name", "rc", "error", ...}); None when the
-            floor attempted no suite step.
-        log: the step's log (floor-suite.log in the arm dir).
+        step: the step as run_floor recorded it ({"name", "rc", "error", ...}); None when the
+            floor attempted no such step.
+        log: the step's log (floor-gate.log or floor-suite.log in the arm dir).
 
     Returns:
-        None for no suite step, else {"outcome": SUITE_PASSED, SUITE_NO_COMPILE (a rustc
+        None for no step, else {"outcome": SUITE_PASSED, SUITE_PREREQ_MISSING (a "failed to run
+        custom build command" line and a line saying protoc is missing), SUITE_NO_COMPILE (a rustc
         error[Exxxx] or "could not compile" line), SUITE_TESTS_FAILED (the "test result:" lines
         count a failed test), SUITE_FAILED (a non-zero exit the log does not explain) or
         SUITE_NOT_FINISHED (the step recorded an error), "rc", "error_codes" ({code: count}),
         "missing" (the names the not-found codes expected, at most MISSING_CAP, in log order),
         "tests_failed" and "tests_total" (passed plus failed over every "test result:" line; None
-        when the log has none)}.
+        when the log has none), "prerequisite" (the missing tool, "protoc", when the outcome is
+        SUITE_PREREQ_MISSING; else None)}.
     """
     if step is None:
         return None
     parsed = _read_log(log)
     total = None if parsed.passed is None or parsed.failed is None else parsed.passed + parsed.failed
-    return {"outcome": _outcome(step, parsed), "rc": step.get("rc"), "error_codes": dict(sorted(parsed.codes.items())),
-            "missing": parsed.missing, "tests_failed": parsed.failed, "tests_total": total}
+    outcome = _outcome(step, parsed)
+    prerequisite = parsed.prerequisite() if outcome == SUITE_PREREQ_MISSING else None
+    return {"outcome": outcome, "rc": step.get("rc"), "error_codes": dict(sorted(parsed.codes.items())),
+            "missing": parsed.missing, "tests_failed": parsed.failed, "tests_total": total,
+            "prerequisite": prerequisite}
+
+
+def suite_outcome(step: dict[str, Any] | None, log: Path) -> dict[str, Any] | None:
+    """The floor's suite step, classified by its log (step_outcome of the suite step and floor-suite.log)."""
+    return step_outcome(step, log)
 
 
 # --- the text line -------------------------------------------------------------------------------
@@ -339,10 +376,15 @@ def describe_ideas(markers: dict[str, Any] | None) -> str:
 
 
 def describe_suite(suite: dict[str, Any] | None) -> str:
-    """The outcome, with its codes and missing symbols, or its failed-of-total count."""
+    """The outcome, with its codes and missing symbols, its failed-of-total count, or the missing tool.
+
+    Reads any step_outcome, the gate's as well as the suite's.
+    """
     if suite is None:
         return "-"
     outcome = suite["outcome"]
+    if outcome == SUITE_PREREQ_MISSING:
+        return f"{outcome}({suite.get('prerequisite') or '?'})"
     if outcome == SUITE_NO_COMPILE:
         codes = ",".join(f"{c}x{n}" for c, n in suite["error_codes"].items())
         missing = f"; missing {','.join(suite['missing'])}" if suite["missing"] else ""

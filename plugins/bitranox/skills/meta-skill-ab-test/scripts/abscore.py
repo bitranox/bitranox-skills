@@ -29,7 +29,7 @@ from typing import Any
 
 from _ablib import clear_group, median, sha256_file, signal_group
 from abprofile import Profile
-from abtrace import idea_markers, subagent_overlap, suite_outcome
+from abtrace import idea_markers, step_outcome, subagent_overlap, suite_outcome
 
 __all__ = [
     "CAP_STOP_REASONS",
@@ -401,15 +401,16 @@ def _floor_error(steps: list[dict[str, Any]]) -> str | None:
     return None
 
 
-def _suite_step_of(steps: list[dict[str, Any]]) -> dict[str, Any] | None:
-    return next((s for s in steps if s.get("name") == "suite"), None)
+def _step_named(steps: list[dict[str, Any]], name: str) -> dict[str, Any] | None:
+    return next((s for s in steps if s.get("name") == name), None)
 
 
 def _trace_fields(arm_dir: Path, steps: list[dict[str, Any]]) -> dict[str, Any]:
-    """What the arm's kept files show: subagent overlap, idea markers, the suite's outcome."""
+    """What the arm's kept files show: subagent overlap, idea markers, the suite's and the gate's outcome."""
     return {"subagents": subagent_overlap(arm_dir / TRANSCRIPTS_DIR),
             "idea_markers": idea_markers(arm_dir / STREAM_FILE, arm_dir / TRANSCRIPTS_DIR),
-            "floor_suite": suite_outcome(_suite_step_of(steps), arm_dir / SUITE_LOG)}
+            "floor_suite": suite_outcome(_step_named(steps, "suite"), arm_dir / SUITE_LOG),
+            "floor_gate": step_outcome(_step_named(steps, "gate"), arm_dir / GATE_LOG)}
 
 
 def _score_record(res: dict[str, Any], arm_dir: Path, profile: Profile,
@@ -453,11 +454,13 @@ def score_arm(arm_dir: Path, profile: Profile, peers: list[dict[str, Any]]) -> d
         arm ran under, "bwrap", "bwrap-host-proc" or "none"; None for an arm run before the key existed),
         task_file and task_sha256 (the prompt the arm was given, relative to the run dir; None for an
         arm run before per-arm prompts existed), void (every reason, the stream
-        account's own ones first and unchanged; empty means the arm counts), and three readings
+        account's own ones first and unchanged; empty means the arm counts), and four readings
         of the arm dir's kept files, informational and never voiding: subagents
         (abtrace.subagent_overlap of transcripts/), idea_markers (abtrace.idea_markers of
-        stream.jsonl and the subagent transcripts) and floor_suite (abtrace.suite_outcome of the suite step and
-        floor-suite.log); each is None when its file or step is absent.
+        stream.jsonl and the subagent transcripts), floor_suite (abtrace.suite_outcome of the suite step and
+        floor-suite.log) and floor_gate (abtrace.step_outcome of the gate step and floor-gate.log,
+        which tells a build prerequisite the worktree lacks from the arm's own failure); each is
+        None when its file or step is absent.
 
     Raises:
         FileNotFoundError: arm_dir has no result.json.
