@@ -115,6 +115,25 @@ def test_an_explicit_target_is_used_as_given(repo: Path, notes: Path) -> None:
     assert _versions(repo) == ("1.10.0", "1.10.0")
 
 
+def test_a_run_from_a_subdirectory_bumps_the_repo_files(
+    repo: Path, notes: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The cwd is a skill or hooks dir as often as the repo root; the files are found from the
+    work tree's top level, never joined onto the cwd."""
+    sub = repo / PJ.parent
+    monkeypatch.chdir(sub)
+    assert bump_version.main(["--part", "patch", "--changelog", str(notes)]) == 0
+    assert _versions(repo) == ("1.2.4", "1.2.4")
+    assert not (sub / PJ).exists()
+
+
+def test_a_root_outside_any_repo_is_a_could_not_run(notes: Path, tmp_path: Path) -> None:
+    outside = tmp_path / "not-a-repo"
+    outside.mkdir()
+    rc = bump_version.main(["--root", str(outside), "--part", "patch", "--changelog", str(notes)])
+    assert rc == 2
+
+
 def test_the_pyproject_edit_changes_only_the_project_version_line(repo: Path, notes: Path) -> None:
     before = (repo / "pyproject.toml").read_text(encoding="utf-8").splitlines()
     assert bump_version.main(["--root", str(repo), "--part", "patch", "--changelog", str(notes)]) == 0
@@ -345,3 +364,87 @@ def test_rebase_carries_a_non_utf8_change_byte_for_byte(repo: Path, tmp_path: Pa
     assert _git(repo, "rev-parse", "refs/bump-version/pre-rebase") == mine
     assert (repo / "legacy.txt").read_bytes() == b"caf\xe4\r\nline two\n"
     assert _git(repo, "status", "--porcelain") == ""
+
+
+# ---- --merge: a long-lived branch bumped first, and a peer released that number ---------------
+
+
+def _long_branch(repo: Path) -> str:
+    """The release bump first, then two more commits on top - the shape --rebase refuses."""
+    _my_bump_commit(repo)
+    for name in ("later-1.txt", "later-2.txt"):
+        (repo / name).write_text(name + "\n", encoding="utf-8", newline="\n")
+        _git(repo, "add", name)
+        _git(repo, "commit", "-q", "-m", "work on " + name)
+    return _git(repo, "rev-parse", "HEAD")
+
+
+def test_merge_renumbers_a_long_branch_whose_version_a_peer_took(repo: Path, tmp_path: Path) -> None:
+    head = _long_branch(repo)
+    theirs = _peer_takes(tmp_path)
+    assert bump_version.main(["--root", str(repo), "--merge"]) == 0
+    assert _git(repo, "log", "-1", "--format=%P").split() == [head, theirs]
+    assert _versions(repo) == ("1.2.5", "1.2.5")
+    text = (repo / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert text.index("## [1.2.5]\n\n### Fixed\n\n- mine: the widget.") < text.index("## [1.2.4]\n\n### Added")
+    assert text.count("- mine: the widget.") == 1
+    assert "- peer: theirs." in text
+    for name in ("widget.txt", "later-1.txt", "later-2.txt", "peer.txt"):
+        assert (repo / name).exists(), name
+    assert _git(repo, "rev-parse", "refs/bump-version/pre-rebase") == head
+    assert _git(repo, "status", "--porcelain") == ""
+
+
+def test_merge_keeps_both_sides_other_edits_to_the_version_files(repo: Path, tmp_path: Path) -> None:
+    """Only the version line is settled by the jig; any other change on either side merges."""
+    _long_branch(repo)
+    pp = repo / "pyproject.toml"
+    pp.write_text(pp.read_text(encoding="utf-8") + "\n[tool.mine]\nkey = 1\n", encoding="utf-8", newline="\n")
+    _git(repo, "commit", "-q", "-am", "mine: a tool table")
+    peer = _clone(tmp_path / "origin.git", tmp_path / "peer-edit")
+    _peer_takes(tmp_path)
+    _git(peer, "pull", "-q", "origin", "master")
+    ppp = peer / "pyproject.toml"
+    ppp.write_text(ppp.read_text(encoding="utf-8").replace('description = "a demo"', 'description = "a peer demo"'),
+                   encoding="utf-8", newline="\n")
+    _git(peer, "commit", "-q", "-am", "peer: description")
+    _git(peer, "push", "-q", "origin", "master")
+    assert bump_version.main(["--root", str(repo), "--merge"]) == 0
+    doc = tomllib.loads(pp.read_text(encoding="utf-8"))
+    assert doc["project"]["version"] == "1.2.5"
+    assert doc["project"]["description"] == "a peer demo"
+    assert doc["tool"]["mine"]["key"] == 1
+
+
+def test_merge_refuses_when_the_version_was_not_taken(repo: Path, tmp_path: Path) -> None:
+    _my_bump_commit(repo, "1.2.5", "Fix; 1.2.5")
+    head = _git(repo, "rev-parse", "HEAD")
+    _peer_takes(tmp_path, "1.2.4")
+    assert bump_version.main(["--root", str(repo), "--merge"]) == 1
+    assert _git(repo, "rev-parse", "HEAD") == head
+
+
+def test_merge_refuses_a_dirty_tree(repo: Path, tmp_path: Path) -> None:
+    head = _long_branch(repo)
+    _peer_takes(tmp_path)
+    (repo / "widget.txt").write_text("uncommitted\n", encoding="utf-8", newline="\n")
+    assert bump_version.main(["--root", str(repo), "--merge"]) == 1
+    assert _git(repo, "rev-parse", "HEAD") == head
+    assert (repo / "widget.txt").read_text(encoding="utf-8") == "uncommitted\n"
+
+
+def test_merge_leaves_the_branch_as_it_was_on_a_conflict_in_another_file(repo: Path, tmp_path: Path) -> None:
+    head = _long_branch(repo)
+    _peer_takes(tmp_path, extra="widget.txt")          # the peer wrote the same file differently
+    assert bump_version.main(["--root", str(repo), "--merge"]) == 1
+    assert _git(repo, "rev-parse", "HEAD") == head
+    assert _git(repo, "status", "--porcelain") == ""
+    assert (repo / "widget.txt").read_text(encoding="utf-8") == "fixed\n"
+    assert subprocess.run(["git", "-C", str(repo), "rev-parse", "-q", "--verify", "MERGE_HEAD"],
+                          capture_output=True, check=False).returncode != 0
+
+
+def test_merge_and_rebase_cannot_be_combined(repo: Path) -> None:
+    with pytest.raises(SystemExit) as exc:
+        bump_version.main(["--root", str(repo), "--merge", "--rebase"])
+    assert exc.value.code == 2

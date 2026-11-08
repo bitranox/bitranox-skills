@@ -37,6 +37,9 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 - coding-resilience: answers from untrusted peers (proxies, mirrors) may choose a value but never
   stop a run, write a permanent ban, or discard saved progress; a first-contact value needs two
   agreeing paths, and a resumed job trusts its own verified record over a fresh vote.
+- `bump_version.py --merge` renumbers a branch of any length whose release number a peer took:
+  it merges the ref and sets the next free version in the merge commit, keeping the peer's
+  changelog section and moving the branch's own above it.
 
 ### Changed
 
@@ -49,6 +52,8 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 - meta-self-improve and `contrib_queue.py` say to count closed contributions with `shipped` and
   `rejected`: the `<hash>.contrib-rejected.jsonl` store holds shipped entries too.
+- `bump_version.py` run from a subdirectory finds the repo's version files from the work tree's
+  top level instead of exiting 2 on a doubled path.
 
 ## [10.25.0]
 

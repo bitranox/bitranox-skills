@@ -14,7 +14,8 @@ jig moves all three together from the version ORIGIN holds:
     bump_version.py --to 10.5.0 --changelog notes.md [--json]
 
 `notes.md` holds the section BODY (`### Fixed` and its bullets); the jig writes the
-`## [<version>]` heading above the newest release heading.
+`## [<version>]` heading above the newest release heading. It runs from any directory inside the
+repo (or `--root <dir>`): the three files are found from that work tree's top level.
 
 `--rebase` renumbers a version a peer TOOK: the one unpushed commit on this branch bumped to a
 version origin now names too (two sessions picked the same next number). It sets the old commit
@@ -30,6 +31,19 @@ It refuses (exit 1, nothing changed) on uncommitted tracked changes, on more tha
 commit (squash first: a renumber is one commit's job), when the commit's version is still above
 origin's (nothing was taken; an ordinary rebase will do), and when the change does not apply on
 top of origin, in which case the old commit is checked out again.
+
+`--merge` is the same renumber for a branch of ANY length, the shape a long-lived branch has when
+its release bump came first (so every later commit passes the version-bump gate) and a peer then
+released that number. It merges the ref in one merge commit, and the three version files in it
+are three-way merges with the version set to the next free one on every side, so only the
+version line is settled for you: the branch's own changelog section moves under the new number
+above the ref's newest release, and the peer's section stays. History is not rewritten, so older
+commit messages keep the taken number. The texts are built before anything is touched; it
+refuses (exit 1, the branch as it was) on uncommitted tracked changes, a version not taken, a
+branch that never bumped, and a conflict in any other file or in the version files apart from
+the version, and keeps the old HEAD at `refs/bump-version/pre-rebase`:
+
+    bump_version.py --merge [--part minor] [--json]
 
 It fetches the remote first and reads origin's plugin.json with `git show`, because the shared
 checkout moves under a session: it refuses when the working copy's plugin.json or pyproject.toml
@@ -52,6 +66,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import tomllib
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -149,6 +164,16 @@ def _git_bytes(root: Path, *args: str, stdin: bytes | None = None,
         raise CouldNotRun("git %s exited %d: %s" % (" ".join(args), proc.returncode,
                                                      proc.stderr.decode("utf-8", errors="replace").strip()))
     return proc.stdout
+
+
+def repo_root(start: Path) -> Path:
+    """The top level of the work tree holding `start`, so a run from a subdirectory finds the
+    three version files rather than reporting them unreadable under a doubled path. A linked
+    worktree answers with its own top level, which is the copy that run means to bump."""
+    top = _git(start, "rev-parse", "--show-toplevel").strip()
+    if not top:
+        raise CouldNotRun("git named no top level for %s" % start)
+    return Path(top).resolve()
 
 
 def origin_version(root: Path, ref: str, *, fetch: bool) -> str:
@@ -341,6 +366,108 @@ def rebase_bump(root: Path, args: argparse.Namespace) -> Plan:
     return plan
 
 
+# ---- --merge --------------------------------------------------------------------------------
+
+
+def _merge3(ours: str, base: str, theirs: str) -> str:
+    """`git merge-file -p` of three texts; BumpRefused on a conflict, so nothing is written."""
+    with tempfile.TemporaryDirectory() as tmp:
+        paths = []
+        for name, text in (("ours", ours), ("base", base), ("theirs", theirs)):
+            path = Path(tmp) / name
+            path.write_bytes(text.encode("utf-8"))
+            paths.append(str(path))
+        try:
+            proc = subprocess.run(["git", "merge-file", "-p", "--", *paths], capture_output=True, timeout=120,
+                                  check=False)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise CouldNotRun("git merge-file failed to run: %s" % exc) from exc
+    if proc.returncode != 0:
+        raise BumpRefused("the version files conflict apart from the version itself (git merge-file "
+                          "exited %d); merge the ref by hand" % proc.returncode)
+    return proc.stdout.decode("utf-8")
+
+
+def _without_section(text: str, version: str) -> str:
+    """CHANGELOG text with the `## [version]` section (heading through the next `## `) removed."""
+    match = re.search(r"^## \[" + re.escape(version) + r"\][^\n]*\n", text, re.M)
+    if match is None:
+        raise BumpRefused("CHANGELOG.md has no ## [%s] section to move" % version)
+    nxt = _ANY_H2.search(text, match.end())
+    return text[: match.start()] + (text[nxt.start():] if nxt else "")
+
+
+def _merged_texts(root: Path, revs: dict[str, str], mine: str, new: str) -> dict[Path, str]:
+    """The three version files as the merge must leave them, built before anything is touched.
+
+    Each is a three-way merge of base, this branch and the ref with the version first set to
+    `new` on all three sides, so the version line itself can never conflict while every other
+    change on either side still merges or is refused. The branch's own changelog section is
+    lifted out and re-added under `new` above the ref's newest release.
+    """
+    def side(rel: Path, rev: str) -> str:
+        return _git(root, "show", "%s:%s" % (rev, rel.as_posix()))
+
+    texts: dict[Path, str] = {}
+    texts[PLUGIN_JSON] = _merge3(*(set_plugin_version(side(PLUGIN_JSON, revs[s]), new)
+                                   for s in ("ours", "base", "theirs")))
+    texts[PYPROJECT] = _merge3(*(set_pyproject_version(side(PYPROJECT, revs[s]), new)
+                                 for s in ("ours", "base", "theirs")))
+    ours_log = side(CHANGELOG, revs["ours"])
+    body = changelog_section(ours_log, mine)
+    merged_log = _merge3(_without_section(ours_log, mine), side(CHANGELOG, revs["base"]),
+                         side(CHANGELOG, revs["theirs"]))
+    texts[CHANGELOG] = add_changelog_section(merged_log, new, body)
+    return texts
+
+
+def merge_bump(root: Path, args: argparse.Namespace) -> Plan:
+    """Merge `args.ref` into a branch of any length whose release number the ref took, and
+    renumber that release to the next free version in the merge commit. Raises BumpRefused or
+    CouldNotRun; the branch's old HEAD is kept at BACKUP_REF either way."""
+    origin = origin_version(root, args.ref, fetch=args.fetch)
+    if _git(root, "status", "--porcelain", "--untracked-files=no").strip():
+        raise BumpRefused("uncommitted tracked changes; commit or set them aside first")
+    head = _git(root, "rev-parse", "HEAD").strip()
+    theirs = _git(root, "rev-parse", "%s^{commit}" % args.ref).strip()
+    base = _git(root, "merge-base", "HEAD", args.ref).strip()
+    if base == theirs:
+        raise BumpRefused("%s holds nothing this branch lacks; there is nothing to merge" % args.ref)
+    mine = _version_at(root, head)
+    if _parse(mine) > _parse(origin):
+        raise BumpRefused("HEAD's version %s is still above %s's %s: nothing was taken, an ordinary "
+                          "merge will do" % (mine, args.ref, origin))
+    if mine == _version_at(root, base):
+        raise BumpRefused("this branch does not bump the version (it stays %s); nothing to renumber" % mine)
+    new = next_version(origin, args.part or "patch")
+    texts = _merged_texts(root, {"ours": head, "base": base, "theirs": theirs}, mine, new)
+    _git(root, "update-ref", BACKUP_REF, head)
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env["LC_ALL"] = "C"
+    proc = subprocess.run(["git", "-C", str(root), "merge", "--no-ff", "--no-commit", theirs],
+                          capture_output=True, env=env, timeout=120, check=False)
+    try:
+        unmerged = set(_git(root, "diff", "--name-only", "--diff-filter=U").split())
+        others = sorted(unmerged - {rel.as_posix() for rel in _VERSION_FILES})
+        if others:
+            raise BumpRefused("%s conflicts outside the version files: %s; merge it by hand"
+                              % (args.ref, ", ".join(others)))
+        if proc.returncode not in (0, 1):
+            raise CouldNotRun("git merge exited %d: %s" % (proc.returncode,
+                                                          proc.stderr.decode("utf-8", errors="replace").strip()))
+        plan = Plan(origin, new, texts)
+        apply_plan(root, plan)
+        _git(root, "add", "--", *(rel.as_posix() for rel in _VERSION_FILES))
+        message = "Merge %s; renumber %s to %s, which %s took\n" % (args.ref, mine, new, args.ref)
+        _git(root, "commit", "-q", "--no-verify", "-F", "-", stdin=message)
+    except (BumpRefused, CouldNotRun):
+        # A half-done merge is worse than none: the branch goes back to the commit it was on
+        # (a hard reset also ends the merge in progress).
+        _git(root, "reset", "-q", "--hard", head)
+        raise
+    return plan
+
+
 # ---- the run --------------------------------------------------------------------------------
 
 
@@ -393,9 +520,13 @@ def _parser() -> argparse.ArgumentParser:
     target.add_argument("--part", choices=("patch", "minor", "major"), help="raise this part of origin's version")
     target.add_argument("--to", help="the exact new version (must be above origin's)")
     parser.add_argument("--changelog", help="file holding the new section's body (required without --rebase)")
-    parser.add_argument("--rebase", action="store_true",
-                        help="renumber the one unpushed commit's version, which a peer took, onto the ref")
-    parser.add_argument("--root", default=".", help="repo root (default: the cwd)")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--rebase", action="store_true",
+                      help="renumber the one unpushed commit's version, which a peer took, onto the ref")
+    mode.add_argument("--merge", action="store_true",
+                      help="merge the ref into a branch of any length whose version it took, renumbering it")
+    parser.add_argument("--root", default=".",
+                        help="any directory inside the repo (default: the cwd); the jig works from its top level")
     parser.add_argument("--ref", default="origin/master", help="remote-tracking ref holding the released version")
     parser.add_argument("--no-fetch", dest="fetch", action="store_false", help="trust the ref as last fetched")
     parser.add_argument("--json", action="store_true", help="print a JSON envelope")
@@ -405,14 +536,17 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
-    if args.rebase and args.to:
-        parser.error("--rebase picks the next free version itself; use --part, not --to")
-    if not args.rebase and not (args.changelog and (args.part or args.to)):
+    renumber = args.rebase or args.merge
+    if renumber and args.to:
+        parser.error("--rebase and --merge pick the next free version themselves; use --part, not --to")
+    if not renumber and not (args.changelog and (args.part or args.to)):
         parser.error("a bump needs --part or --to, and --changelog")
-    root = Path(args.root).resolve()
     try:
+        root = repo_root(Path(args.root).resolve())
         if args.rebase:
             plan = rebase_bump(root, args)
+        elif args.merge:
+            plan = merge_bump(root, args)
         else:
             plan = plan_bump(root, args)
             apply_plan(root, plan)
@@ -421,6 +555,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     except CouldNotRun as exc:
         return _emit(args.json, 2, "could not run: %s" % exc, None)
     data = {"origin": plan.origin, "new": plan.new, "ref": args.ref}
+    if args.merge:
+        data["backup_ref"] = BACKUP_REF
+        return _emit(args.json, 0, "merged %s (at %s) and renumbered this branch's release to %s; the old HEAD "
+                     "is kept at %s" % (args.ref, plan.origin, plan.new, BACKUP_REF), data)
     if args.rebase:
         data["backup_ref"] = BACKUP_REF
         return _emit(args.json, 0, "renumbered onto %s at %s -> %s; the old commit is kept at %s"
