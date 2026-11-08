@@ -160,6 +160,9 @@ session's last text ends with "?" (it stopped to ask); a flag, never a void.
 --json prints one pretty-printed envelope: parse the whole stdout as one JSON document."""
 # How much of an arm's last text the question flag shows: its end, where the question is.
 QUESTION_SHOWN = 200
+# Printed under every human score table: readers of the table took a low suite count for bad code.
+SUITE_LEGEND = ("suite= and gate= show how far an arm got before it stopped (completeness), "
+                "not code quality; rate quality from the diff")
 SEAL_GIT = ("-c", "user.name=abtest", "-c", "user.email=abtest@localhost", "-c", "commit.gpgsign=false",
             "-c", "core.hooksPath=/dev/null")
 
@@ -1166,7 +1169,8 @@ def _score_line(label: str, score: dict[str, Any]) -> str:
             f" subagents={abtrace.describe_subagents(score.get('subagents'))}"
             f" ideas={abtrace.describe_ideas(score.get('idea_markers'))}"
             f" suite={abtrace.describe_suite(score.get('floor_suite'))}"
-            f" gate={abtrace.describe_suite(score.get('floor_gate'))}")
+            f" gate={abtrace.describe_suite(score.get('floor_gate'))}"
+            f" commits={score.get('bundle_commits', 0)}")
     flag = _arm_flag(label, score)
     line = line if flag is None else f"{line} FLAG {flag}"
     # One line per idea under its arm: the first marker line the arm wrote for it.
@@ -1187,7 +1191,7 @@ def cmd_score(args: argparse.Namespace) -> int:
         record(run_dir, step="score", round=res.get("round", 0), arm=res.get("name", ""), status="scored")
     flags = {label: flag for label, score in scores.items() if (flag := _arm_flag(label, score)) is not None}
     _emit(args.json, "score", {"arms": scores, "flags": flags}, True,
-          "\n".join(_score_line(k, v) for k, v in scores.items()))
+          "\n".join([*(_score_line(k, v) for k, v in scores.items()), SUITE_LEGEND]))
     return EXIT_YES
 
 

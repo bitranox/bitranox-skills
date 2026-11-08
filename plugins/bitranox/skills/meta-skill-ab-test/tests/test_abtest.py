@@ -3,6 +3,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -413,6 +414,8 @@ def test_score_text_names_subagents_ideas_and_the_suite_outcome(tmp_path, scratc
     assert "gate=passed" in r1, r1
     assert "  r1-C idea 3: [abx] idea=3 reviewed twice" in lines, lines
     assert "subagents=- ideas=- suite=- gate=-" in r2, r2
+    assert re.search(r"gate=passed commits=\d+", r1), r1
+    assert lines[-1] == T.SUITE_LEGEND, lines
 
 
 def test_prune_run_deletes_the_branches(tmp_path, scratch_repo, skills_repo, fake_claude_path, monkeypatch):

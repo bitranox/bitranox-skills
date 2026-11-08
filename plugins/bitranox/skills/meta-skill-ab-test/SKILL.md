@@ -5,10 +5,11 @@ description: Use when comparing a shipped bitranox skill against one or more mod
 
 # A/B testing a skill against its variants (meta-skill-ab-test)
 
-Provisional text: the harness ships and runs; the full guide (judge, report, worked example)
-follows in a later release. Every command below is `python3 <this skill's dir>/scripts/abtest.py
-<subcommand> <run_dir> [--json]`; `--help` on each subcommand lists its options. Exit 0 yes, 1 no,
-2 could not run. `--json` prints one pretty-printed envelope across many lines, so a caller parses
+Provisional text: the harness ships and runs; the full guide (report, worked example) follows in
+a later release. Every command below is
+`python3 <this skill's dir>/scripts/abtest.py <subcommand> <run_dir> [--json]`;
+`--help` on each subcommand lists its options. Exit 0 yes, 1 no, 2 could not run. `--json` prints
+one pretty-printed envelope across many lines, so a caller parses
 the whole stdout as one JSON document, never line by line. Each arm runs the shipped `claude -p`
 in a nested git worktree of the real repository with its own config dir and a frozen plugin
 checkout; the memory store is not written (`BITRANOX_MEMORY_WRITES=off`) and any change to it is
@@ -158,3 +159,24 @@ them. The paid arm is started by the user in their own terminal, never from a to
   CPU with a live arm, so never run it beside one, for this run dir or any other. A killed dry
   run leaves arm dirs, branches and a worktree behind; the next `run` sets them aside, and
   `prune-run` removes them.
+
+## Judging the arms
+
+The verdict comes from blind judges reading each arm's diff against the spec, never from the
+acceptance suite. A suite checks names, so an arm can fail it on a few missing symbols while its own
+gate passes. `suite=` and its count say how far an arm got before it stopped (completeness), never
+how good its code is: an arm that stops early scores low whatever it wrote. Report that count beside
+`commits=`, the tasks done of the plan (from the diff) and how the arm ended (`ended_with_question`,
+`last_text`), and let the judges rate quality. The pairwise comparison is the checklist of step 2
+read across the arms.
+
+1. **One blind judge per arm** (`opus`, the diff and the spec only, arms relabelled) reports each
+   requirement as met, partly or not, with the code lines, plus spec defects the arm found and
+   corrected, plus bugs.
+2. **One shared checklist** built from the union of those findings. Each item is a SINGLE property,
+   scored FIXED or PRESENT (the defect it names), NA or PARTLY; split a compound item in two.
+   Measured over 3 arms: two judges agreed on 58 of 60 cells and both disputes were compound items.
+3. **Two independent `opus` judges with different arm order**, diffs only, run the checklist. They
+   are new judges, not the ones from step 1. You settle each disagreement by reading the code,
+   never by averaging.
+4. **A defect hunt per arm** (`opus`, the diff only) covers what the checklist lacks.
