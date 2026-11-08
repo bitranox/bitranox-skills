@@ -47,6 +47,18 @@ switch-model-or-continue (the main agent cannot self-switch its model). See
 - Break it into sections of 200-300 words
 - Ask after each section whether it looks right so far
 - Cover: architecture, components, data flow, error handling, testing
+- **Decide memory in the data-flow section, before the first data structure is chosen.** For
+  every input whose size the caller controls (a file, a batch, a list of records, a stream),
+  state what is held per item, what grows with the count, and the resulting peak. Default to
+  processing items one by one from a re-iterable source, holding only the current one; input that
+  can be read only once (stdin, an upload) is spooled to a disk file under a byte limit first (a
+  tmpfs `/tmp` is memory). A count limit is not a memory bound: it caps one factor of items x
+  size of each, so it bounds time or refuses abuse, never memory; bound the other factor with a
+  byte limit per item. "Validate everything before acting" still iterates: a check pass that
+  discards each result, then an action pass. What does grow (errors, findings, caches) keeps the
+  first N plus a total. Hold the whole only where the output must be built in memory as one piece
+  (a complete file that can be streamed does not qualify), behind a byte limit with a typed
+  refusal. Asked at review instead, the same question means a rewrite.
 - Be ready to go back and clarify if something doesn't make sense
 
 ## After the Design

@@ -1,33 +1,55 @@
-# Handover 2026-11-03 (the [27] implementation plan is written; execution not started)
+# Checkpoint 2026-11-08 (night run: OPEN-WORK [30], [40], then [25]; the user is asleep)
 
 ## In flight
 
-- Nothing is part-done. The plan `docs/plans/2026-11-03-ab-test-skill.md` (16 tasks, M0-M2, later milestones after checkpoint 2) is complete and committed with the design amendments (24273510); the user has been offered the two execution options (subagent-driven on opus in this session, or attended) and has not answered yet.
-
-## Committed, or not
-
-- bitranox-skills: the plan, the design amendments, this file and the [27] backlog line are in the commit on top of 4019c1ca; pushed if `git log origin/master -1 --format=%s` names the plan.
-- RESEARCH: all local, unpushed (public repo; reword run_arm.py's docstring before any push); branch abx-better-work-axis at 2838fe1.
-- EXECUTION-USER-REVIEW.md (gitignored) holds the plan-writing decisions under "[27] implementation plan written on fable".
-
-## Decided, and why
-
-- Plan authored on fable; every implementer subagent and every arm/judge runs on opus, pinned and asserted (user directive 2026-11-02).
-- Tasks are detailed only to checkpoint 2 (one real control arm): its duration and cost fix M5's deadline and cap, and whether the arm commits per task decides how M3 prices an advantage.
-
-## Still open, untouched
-
-OPEN-WORK.md: [27] (next: Task 1, the M0 probe), [25] (after [27] by the user), [40], [50] parked, [96].
+- User order, verbatim: "do 30,40, then 25", then "no human, I go to bed". Questions for the user
+  are recorded in the main checkout's `EXECUTION-USER-REVIEW.md`, never asked.
+- Worktree `.claude/worktrees/night-backlog`, branch `worktree-night-backlog`, from origin/master
+  10d4ea1b (10.22.1).
+- [30] DONE as far as it goes: committed (`chore(backlog): [30] re-counted under 10.9.16, question
+  pending; file [94]`), not pushed. The purge question waits for the user.
+- [40] IN PROGRESS, uncommitted: memory-bound rule added to
+  `plugins/bitranox/skills/process-plan-brainstorming/SKILL.md` ("Presenting the design" bullet)
+  and `plugins/bitranox/skills/process-plan-writing-plans/SKILL.md` (Self-Review item 7). RED =
+  text check (0 hits for memory in both, pre-edit); behavioural RED skipped because the memory
+  index already teaches it. GREEN passed on opus and haiku for both skills; gaps closed
+  (validate-then-act two-pass, cap accumulators, per-item byte limit, tracemalloc vs max RSS).
+  Two re-probes on the final text are running (opus quote-back at effort medium, haiku
+  brainstorming re-run) with a 120 s deadline shell.
+- skill-writer receipt is armed (`skill_receipt.py end meta-skill-writer` after the [40] commit).
 
 ## Next action
 
-Task 1 of the plan (the M0 probe, about 0.20 USD) under whichever execution mode the user picks; if attended, a fresh session opens in a marketplace worktree per the plan's Global Constraints.
+Read the two re-probe hand-backs; then write the ledger entries (`skill_decisions.py add
+--from-file`, anchors: brainstorming "state what is held per item, what grows with the count, and
+the resulting peak", writing-plans "A step that collects every item before acting, or bounds
+memory only with a count limit, is a defect"), one `.skillwriter/checklist-20261108-memory-bound.md`
+in EACH of the two skill dirs, CHANGELOG + `bump_version.py --part minor` (origin is 10.22.1),
+commit; then delete OPEN-WORK [40] in that commit (reason: shipped) and drop the three datamax-dpl
+contrib_queue entries that carry the same change. Then [25].
 
-## How to verify
+## Decided, and why
 
-- `ls docs/plans/2026-11-03-ab-test-skill*.md` lists the design and the plan; `grep -c '^### Task' docs/plans/2026-11-03-ab-test-skill.md` prints 16.
-- CI on the pushed commit: `uv run <plugin cache>/skills/compuse-toolbox/scripts/ci_wait.py --ref HEAD`.
+- [40] owners: brainstorming + writing-plans, not coding-python-clean-architecture (the user said
+  "at the design stage"; the planning skills serve every language). Logged in
+  EXECUTION-USER-REVIEW.md.
+- writing-plans item 7 is one long line like items 1-6 (file style), not wrapped.
+
+## Coordination
+
+- Peer session skills-history owns OPEN-WORK [95], [98], [99], [100] and will message before its
+  push; message it before pushing too. From [25] leave entries targeting repo-gate or the
+  skill-edit guard alone.
 
 ## Lessons for the next nap
 
-- When a user's directive pins the authoring tier (plans and skill text on fable), check the session's own model before starting the authoring and ask for the switch first: a design doc was written on opus and only caught at the plan stage.
+- When a script must cut a numeric value from Python source by grep, remember adjacent string literals concatenate: "Save a " "checkpoint NOW" matches at runtime while grep for the phrase finds nothing.
+- tooling: in a worktree-isolated session, a Bash call that runs python3 on a $VARIABLE path is refused; write literal paths.
+
+## How to verify
+
+- `git log --oneline origin/master..HEAD` lists the [30] commit (and later the [40] commit).
+- `python3 plugins/bitranox/hooks/skill_decisions.py check`.
+
+Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not
+delete it - if this session ends badly it is the only record of where things stood.
