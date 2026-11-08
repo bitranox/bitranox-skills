@@ -313,7 +313,7 @@ if [ "${#python_files[@]}" -gt 0 ]; then
 fi
 ```
 
-Every `re.match(r'...', ...)` inside a function body should become a module-level `_RE = re.compile(r'...')` with `_RE.match(...)` at the call site. This avoids recompilation on every call.
+Every `re.match(r'...', ...)` inside a function body should become a module-level `_RE = re.compile(r'...')` with `_RE.match(...)` at the call site. The call does not recompile each time: the `re` module caches compiled patterns (512 by default), so it pays a cache lookup, measured at 240 ns against 130 ns compiled for a small match on Python 3.14. That is worth removing on a hot path. It turns into a real recompile on every call only when more distinct patterns cycle through than the cache holds.
 
 #### 4c: Profile to Find Hot Functions
 
@@ -437,9 +437,11 @@ Parse the six output files from Step 4. Output format reference:
 
 Classify each finding by severity:
 
-- **SEVERE**: Unbounded memory / unsafe input (source confirmed able to grow unbounded) OR uncompiled regex in a hot function (in both regex + hotspots) OR harmful existing cache
-- **MEDIUM**: Priority cache candidate (confirmed by profiling) OR uncompiled regex in non-hot function OR ineffective existing cache
-- **MINOR**: Cache candidate NOT confirmed by profiling
+- **SEVERE**: Unbounded memory / unsafe input (source confirmed able to grow unbounded) OR harmful existing cache
+- **MEDIUM**: Priority cache candidate (confirmed by profiling) OR uncompiled regex in a hot function (in both regex + hotspots) OR ineffective existing cache
+- **MINOR**: Cache candidate NOT confirmed by profiling OR uncompiled regex in a non-hot function
+
+These follow the scale in `bitranox:coding-performance-review`: SEVERE can exhaust memory or time on real input, MEDIUM costs measurably on a hot path, MINOR is cheap to fix but not shown to be hot. More distinct patterns than the `re` cache holds (512 by default) recompile on every call: that stays MEDIUM, with the recompile named as the cost. A pattern built from untrusted input is reported instead as ONE SEVERE unsafe-input finding (catastrophic backtracking), whatever the count, with any recompile cost named inside it rather than filed as a second MEDIUM.
 
 Re-assess accepted items from Step 1 against ground truth (see Step 1): RESPECT them by default (do not present), but reclassify one as a propose-first "Reconsider" finding when concrete ground truth shows its premise no longer holds. Sort findings SEVERE -> MEDIUM -> MINOR.
 

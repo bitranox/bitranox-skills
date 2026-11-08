@@ -92,7 +92,14 @@ run for this skill. The `dhat` crate snippet is verified: it writes `dhat-heap.j
 - Allocations: `heaptrack ./target/release/app <args>`, or the `dhat` crate:
   `#[global_allocator] static ALLOC: dhat::Alloc = dhat::Alloc;` and
   `let _profiler = dhat::Profiler::new_heap();` at the top of `main`, which writes
-  `dhat-heap.json` for the DHAT viewer.
+  `dhat-heap.json` for the DHAT viewer. `dhat::Alloc` replaces the allocator for every
+  allocation, and the crate's own docs say the profiled program runs slower by an amount that
+  "can be large", so read no timings from a dhat build. Keep it out of the production build the
+  way the crate documents: a `dhat-heap = []` feature in `[features]`, `#[cfg(feature =
+  "dhat-heap")]` on both lines above, and `cargo run --release --features dhat-heap` to profile.
+  The docs list `dhat` itself as a plain dependency, so the crate is still compiled into a build
+  without the feature; only its allocator and profiler stay off. That feature pattern is read from
+  the dhat 0.3.3 crate docs, not run for this skill.
 
 ## What to flag in Rust code
 

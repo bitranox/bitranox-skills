@@ -80,7 +80,8 @@ it starts to hurt.
   must not blow up time or memory (catastrophic regex backtracking, quadratic blow-ups,
   out-of-memory); the bound is validated and tested.
 - **Untrusted structured input.** A map, JSON document or deserialised payload used without
-  parsing or validating its shape at the boundary.
+  parsing or validating its shape at the boundary, unless the project has deliberately accepted
+  skipping it.
 - **Quadratic work.** A nested loop over the same collection, a membership test against a list
   inside a loop, a repeated sort or search inside a loop, or string building by repeated
   concatenation where the language copies on every step.

@@ -30,6 +30,20 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.32.0]
+
+### Changed
+
+- coding-python-performance-review: an uncompiled regex in a hot function is now MEDIUM and in a
+  non-hot function MINOR, on the shared severity scale. The `re` module caches compiled patterns,
+  so the call pays a cache lookup rather than a recompile; more patterns than the cache holds
+  stays MEDIUM with the recompile named, and a pattern built from untrusted input is one SEVERE
+  unsafe-input finding.
+- coding-performance-review: the untrusted-structured-input item is again not raised where the
+  project has deliberately accepted skipping the validation.
+- coding-rust-performance-review: the dhat recipe says to read no timings from a dhat build and
+  keeps the profiling allocator behind a `dhat-heap` feature.
+
 ## [10.31.0]
 
 ### Fixed
