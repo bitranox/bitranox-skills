@@ -30,6 +30,19 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.34.0]
+
+### Fixed
+
+- Every path inside Claude's config dir now follows `CLAUDE_CONFIG_DIR` when it is set: the
+  memory settings file, the transcript and auto-memory roots, settings.json and the autoupdate
+  opt-out, the CI-watch opt-in, installed_plugins.json and the personal skills dir, the toolbox
+  dir, the plugin cache, the hookdoc cache, the transcript index and the default roots of the
+  corpus jigs. Before, they read `~/.claude` even when Claude Code kept its configuration
+  elsewhere.
+- The test session drops an inherited `CLAUDE_CONFIG_DIR`, so a suite run where it is set (an A/B
+  arm) no longer reads or writes that config dir from tests that isolate HOME.
+
 ## [10.33.0]
 
 ### Fixed

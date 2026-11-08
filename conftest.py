@@ -15,6 +15,13 @@ per-project state in the temp directory keyed by a hash of the project path, and
 its own `tmp_path` as the project, so every run left a few hundred files that nothing removed -
 enough to exhaust the inodes of a shared tmpfs /tmp. `tests/test_hermetic_tempdir.py` under
 `plugins/bitranox/hooks/` proves that end to end.
+
+It also drops CLAUDE_CONFIG_DIR. Every path inside Claude's config dir follows that variable
+(`hooks/claude_paths.py`), and the tests isolate the config dir by pointing HOME at a temp dir. A
+suite launched where the variable is set - an A/B arm sets it for the session it runs - would
+read and write the launcher's config dir instead of the test's HOME. A test that needs the
+variable sets it with monkeypatch. `tests/test_hermetic_claude_config.py` under
+`plugins/bitranox/hooks/` proves it end to end.
 """
 
 import os
@@ -34,6 +41,10 @@ GIT_REPOSITORY_VARIABLES = (
 )
 
 
+# Where Claude Code keeps its configuration when set; the tests isolate it through HOME instead.
+CLAUDE_CONFIG_VARIABLE = "CLAUDE_CONFIG_DIR"
+
+
 # Every name a temp API consults: TMPDIR on POSIX, TEMP and TMP on Windows. A subprocess reads
 # the environment, this process reads tempfile.tempdir, so all four move together.
 TEMP_DIRECTORY_VARIABLES = ("TMPDIR", "TEMP", "TMP")
@@ -45,6 +56,7 @@ def pytest_configure(config):  # noqa: ARG001 - pytest hook signature
     global _session_temp_dir
     for name in GIT_REPOSITORY_VARIABLES:
         os.environ.pop(name, None)
+    os.environ.pop(CLAUDE_CONFIG_VARIABLE, None)
     _session_temp_dir = tempfile.mkdtemp(prefix="bitranox-tests-")
     for name in TEMP_DIRECTORY_VARIABLES:
         os.environ[name] = _session_temp_dir
