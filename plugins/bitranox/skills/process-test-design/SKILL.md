@@ -191,6 +191,12 @@ hands you a coin flip. Fix that at the root by wiring the unwired family, not by
 markers in the one test that failed: the rename fixes today's file and leaves the trap armed for the
 next test someone writes.
 
+**A test of tooling that exists on one OS carries that OS's marker, never an OS-agnostic one.**
+A test that reads `/proc`, maps a POSIX path to a Wine drive or needs `pwd` otherwise fails only in
+the other OS's CI cell. Review a ported test module's markers against what each test touches before
+pushing. Where the code itself can degrade (no `/proc`, so `unknown`), fix the code instead of
+skipping.
+
 **What decides the tier is the dependency, not the realism.** A test belongs in the marked tier when
 it needs something the machine does not already provide - an external service, a shared DB, Docker,
 credentials, the real network - or when it is slow enough to hurt the default run. A dependency you
@@ -303,6 +309,14 @@ point is the TYPE (an iterator where a list is expected), use a small `range(3)`
 timeout (`ulimit -v 4000000` in KiB, plus `timeout`). For a LARGE cap (a walk capped at 1,000,000
 records), make the cap an injectable keyword and test at a small cap such as 3, plus one test that
 the default equals the shipped constant; feeding cap+1 real records takes minutes.
+
+**Never reach a recursion or depth-limit branch by feeding deep input.** How deep a decoder goes
+before it fails is a property of the interpreter build and the thread's stack: from Python 3.14 the
+C JSON decoder's limit is the real stack, so 100000 nested brackets raise under an 8 MiB stack and
+decode under an unlimited one (GitHub's Linux and macOS runners). Give the code a stand-in for the
+stdlib edge instead: point the module's `json` attribute at a namespace whose `loads` raises
+`RecursionError` for a marked line and delegates otherwise, then require a mutation that removes
+the except clause to turn the case RED.
 
 **How much is enough (the stopping rule).** Cover one case per BRANCH the code actually takes, not
 one per input you can imagine. For each failure the code distinguishes - a different error type, a
@@ -439,6 +453,10 @@ check the fixture's pairing before suspecting it.
 
   The port stays free after the probe because no `bind(0)` can be handed it; only a fixed-port
   bind can, so keep the suite's fixed-port servers off the ports just below the range.
+  A port the code under test will BIND comes from below the floor too: a released `bind(0)` port
+  is ephemeral, so any process's outbound connection can take it before the code binds it, and the
+  test flakes only on a busy host. Draw at random well below the floor (`secrets.randbelow`, since
+  `random.Random` trips ruff S311), probe the address the code will bind, and retry on `OSError`.
 - **No timer in a test: no `sleep`, no poll-until-deadline loop, no `*_timeout` wait.** A fixed
   `sleep(n)` is flaky or slow, and a deadline loop or `wait(timeout=5)` is the same bet against the
   machine's load with a longer fuse. Block on an event the code under test signals - a channel/queue
@@ -611,6 +629,14 @@ exists wherever the suite runs: `[sys.executable, "-c", "raise SystemExit(1)"]` 
 exits 1. When triaging Windows failures, run the suite on a real Windows machine rather than
 iterating against the CI log; where the two disagree, believe the real machine.
 
+**A test that needs a dependency to BEHAVE a version-specific way never uses `sys.executable` as
+the known-good environment.** The suite's own interpreter moves whenever its dependencies resolve,
+and a scheduled run takes the latest. Build a session-scoped venv pinned to the measured-good
+versions (`uv venv` plus `uv pip install` of exact pins, outside any project so its cooldown does
+not apply) beside one pinned to the measured-bad versions, make the helpers REQUIRE the interpreter
+instead of defaulting to `sys.executable`, and assert that the path under test actually ran (more
+than one worker, say), or the test passes vacuously when the code falls back.
+
 **A huge parametrize value breaks every Windows cell at setup.** Before each phase pytest writes
 `<node id> (<phase>)` into the `PYTEST_CURRENT_TEST` environment variable, and an id it builds
 from a str or bytes parameter is the whole value, escaped. Windows caps an environment entry
@@ -721,6 +747,9 @@ so a stale waiver cannot re-hide a fix.
 
 The same doubt applies to any gate: validate it against a KNOWN-BAD input once, so you have seen it
 go red. Otherwise "green for months" is equally consistent with "it stopped gating months ago".
+Plant that known-bad file in a throwaway repo or tree under `tmp_path`, never in the real tree the
+check scans: under pytest-xdist the real check runs in a parallel worker and sees the planted file,
+so either test can fail depending on scheduling.
 
 **An exemption or scope limit added to a guard, filter, or validator needs the same proof, run in
 the untouched direction.** Add a test where the trigger is present but the exemption must NOT
@@ -900,7 +929,8 @@ spawns a nested test runner or several writers appending to one file, asserts on
 verdict, relies on `tests/conftest.py` fixtures reaching `src/` doctests or on fixtures ported
 from a template, feeds a FIFO from a writer thread, or derives its input from a constant you are
 about to mutate. Read it too when a test proves an input was refused before any side effect,
-proves a timed wake or poll fires, or runs `git commit` under a sandboxed or fresh home directory.
+proves a timed wake or poll fires, runs `git commit` under a sandboxed or fresh home directory, or
+cancels an operation at every await or step to check what it leaves behind.
 
 ## Quick checklist
 

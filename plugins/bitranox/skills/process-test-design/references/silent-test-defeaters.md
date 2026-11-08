@@ -17,7 +17,8 @@ several writers to one file, asserts a real tool's verdict, relies on conftest f
 `src/` doctests or on fixtures ported from a template, feeds a FIFO from a writer thread, times a
 cost ratio or a growth ratio, or verifies a fix for a rare flake. Also when a test proves an input
 was refused before any side effect, proves a timed wake or poll fires, or runs `git commit` under a
-sandboxed or fresh home directory. Each entry names the trigger, the mechanism that makes the test
+sandboxed or fresh home directory, or cancels an operation at every await or step to check what
+it leaves behind. Each entry names the trigger, the mechanism that makes the test
 pass (or fail) for the wrong reason, and the fix.
 
 ## Determinism and environment
@@ -32,7 +33,9 @@ planted. Unbounded, either HANGS the suite when a regression makes its exit cond
 no failing assertion, only a timeout that names no cause. Bound it by a COUNT, never a wall-clock
 deadline (a deadline is the timer the SKILL.md rule forbids): give a spin a helper with a
 predicate, a message and a tick ceiling; give a production loop an independent backstop (a hard
-cap that never binds while the real guard works) and assert in the test that it never fired. Make the fake
+cap that never binds while the real guard works) and assert in the test that it never fired, or
+have a fake clock or sleep raise `AssertionError` past a small call count, so a loop that stops
+advancing ends in a named failure rather than a stuck CI job. Make the fake
 advance every counter the real system advances (distinct ids, growing totals), or a
 de-duplicating consumer freezes the loop for a reason unrelated to the change. Then mutate the
 guard the loop depends on and require a fast, NAMED failure.
@@ -760,6 +763,14 @@ make the code write to that sink before it validates, and require the test to fa
 assertion. A sink whose arm stays green has no assertion that can see it.
 
 ## Leaked and held resources
+
+### A drop-at-every-cancel-point assertion that a cancel before the start satisfies
+
+A test that cancels an operation at each point k and asserts "some point left resources behind" or
+"cleanup happened at least once" is satisfied by a cancel before the operation even started, so a
+defect in the later steps survives (a stop that takes its records too early passed such a test).
+Assert the expected PARTIAL state per point (what exists after step k), or require a full follow-up
+cycle on the same object to succeed, which fails on a double create, a double destroy or a leak.
 
 ### A lowest-free-descriptor check cannot see a leak behind a closed lower one
 

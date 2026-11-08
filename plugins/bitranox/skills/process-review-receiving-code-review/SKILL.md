@@ -152,6 +152,11 @@ FOR multi-item feedback:
   4. Verify no regressions
 ```
 
+**A finding that names an untested branch is closed by a test the reviewer's own named mutant
+fails** (none named: the line that branch guards, deleted). Run that mutation and say so in the
+reply, which makes the re-review a one-pass confirmation. A test that merely executes the branch
+closes nothing.
+
 **A round on an already-reviewed path that returns only Minor items is the stopping point.** Do
 not fix them and ask for yet another round. Each minor-only fix round is new code the next round
 reads afresh, so it surfaces new Minor edges on the same path and has no natural fixed point; the

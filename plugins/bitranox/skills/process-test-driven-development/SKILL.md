@@ -133,6 +133,9 @@ Confirm:
 
 **Test errors?** Fix error, re-run until it fails correctly.
 
+**A RED that drives a state-changing `main()` passes its `--dry-run` from the start.** The RED arm
+has lost the guard by design, so without the flag it takes the real path: a RED of a deploy deploys.
+
 **Failed, but for which reason?** A RED counts only when it fails ON the assertion you owe, and
 the word FAILED is all a checkbox reads. Two doors give a red that proves nothing. (1) The test
 could not run, which a runner can still report as a failure: an async test the runner does not

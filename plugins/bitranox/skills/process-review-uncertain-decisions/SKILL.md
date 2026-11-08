@@ -89,7 +89,8 @@ spends follow-ups asking what it means. Translate each one: "a picture already s
 printer", not "an image without bitmap"; "the setting that turns this off", not
 `reset_check=false`. A word of the person's own trade is not a code term: a barcode's "check
 digit" is what they print and scan, so keep it. Keep a code term only when the person works in the
-code themselves, and then say what it does as well.
+code themselves, and then say what it does as well. When the options turn on one distinction,
+define it in the question itself.
 
 The options ARE the alternatives you did not take. Cannot name a second real candidate? Then you
 do not understand the point well enough to ask about it - work it out, or drop it from the list.
