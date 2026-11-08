@@ -116,6 +116,14 @@ def test_backlog_close(repo, env):
     assert rc == 0 and [it["rank"] for it in out["data"]["items"]] == []
 
 
+def test_list_of_a_backlog_with_no_ranks_reports_the_lines(repo, env):
+    (repo / "OPEN-WORK.md").write_text("- [ ] (2026-10-01) USER: an item\n", encoding="utf-8")
+    rc, out = call(repo, env, "backlog_list")
+    assert rc == 0 and out["data"]["items"] == []
+    assert out["data"]["unranked"] == ["- [ ] (2026-10-01) USER: an item"]
+    assert "not empty" in out["data"]["note"]
+
+
 def test_list_without_a_backlog_says_so(repo, env):
     rc, out = call(repo, env, "backlog_list")
     assert rc == 0 and out["data"]["items"] == [] and "no OPEN-WORK.md" in out["data"]["note"]

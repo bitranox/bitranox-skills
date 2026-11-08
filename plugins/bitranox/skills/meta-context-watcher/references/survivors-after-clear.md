@@ -21,6 +21,16 @@ session that is gone costs a round trip and promises coordination that cannot ha
 gone, the question changes from "when to hand over" to "who does this now": present the item as
 unowned work, and rewrite its line to say so.
 
+**When the session that wrote the handover died, its agents are gone.** A session that crashed or
+was killed (no entry in `~/.claude/sessions/*.json` carries its session id, or that entry's `pid`
+fails `kill -0`) took its background agents with it, unlike a `/clear`, so do not wait for them.
+For each agent the handover names, find what it already delivered: the last `SendMessage` or
+`SubagentHandback` `tool_use` in its transcript (path below), and in the parent transcript the
+`queue-operation` enqueue and `queued_command` attachment records. Tick the delivered ones off
+against the handover's list. Give each agent with no delivered report a NEW named agent carrying
+its old brief (the `prompt` at the top of its transcript) and its old work dir, after a look at
+that dir's `git status` and log so the new agent continues from what is there.
+
 **After a `/clear`, look for survivors yourself; the handover may not name them.** Two kinds
 outlive the clear: background subagents and `run_in_background` shells. `ListAgents` does not
 show this session's shells, nor a subagent that has already finished (measured on Claude Code

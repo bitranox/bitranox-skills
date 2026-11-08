@@ -354,3 +354,52 @@ def test_an_existing_empty_file_gets_the_header(tmp_path):
     p.write_text("", encoding="utf-8")
     ow.add_item(p, 10, "USER", "w", "1", "o", "n")
     assert p.read_text(encoding="utf-8").startswith(ow.HEADER)
+
+
+def test_add_refuses_a_rank_another_lines_text_cites(tmp_path):
+    p = tmp_path / "OPEN-WORK.md"
+    _add(p, 20, what="same blocker as [170]")
+    with pytest.raises(ow.RankTaken, match="held or cited"):
+        _add(p, 170)
+    assert [it["rank"] for it in ow.list_items(p)] == [20]
+
+
+def test_free_ten_suggestion_skips_a_cited_rank(tmp_path):
+    p = tmp_path / "OPEN-WORK.md"
+    _add(p, 20, what="see [30]")
+    with pytest.raises(ow.RankTaken, match="10, 40"):
+        _add(p, 20)
+
+
+def test_add_refuses_a_found_item_above_an_open_user_item(tmp_path):
+    p = tmp_path / "OPEN-WORK.md"
+    _add(p, 40)
+    _add(p, 60)
+    with pytest.raises(ow.RankOrder, match="FOUND item above open USER item 60.*70"):
+        _add(p, 35, origin="FOUND")
+    assert [it["rank"] for it in ow.list_items(p)] == [40, 60]
+
+
+def test_add_takes_a_found_item_below_every_open_user_item(tmp_path):
+    p = tmp_path / "OPEN-WORK.md"
+    _add(p, 40)
+    assert _add(p, 70, origin="FOUND")["rank"] == 70
+
+
+def test_a_closed_user_line_does_not_hold_a_found_item_down(tmp_path):
+    p = tmp_path / "OPEN-WORK.md"
+    p.write_text("- [x] (2026-10-01) [90] USER: done\n", encoding="utf-8")
+    assert _add(p, 50, origin="FOUND")["rank"] == 50
+
+
+def test_unranked_lines_reports_the_old_format_and_skips_items_fences_and_the_template(tmp_path):
+    p = tmp_path / "OPEN-WORK.md"
+    p.write_text("- [ ] (YYYY-MM-DD) [rank] ORIGIN: template\n"
+                 "- [ ] (2026-10-01) USER: no rank here\n"
+                 "- [ ] (2026-10-02) [10] USER: ranked\n"
+                 "```\n- [ ] (2026-10-03) USER: fenced\n```\n"
+                 "- [x] (2026-10-04) FOUND: closed, no rank\n", encoding="utf-8")
+    assert ow.unranked_lines(p) == ["- [ ] (2026-10-01) USER: no rank here"]
+    assert ow.unranked_lines(p, state="closed") == ["- [x] (2026-10-04) FOUND: closed, no rank"]
+    assert len(ow.unranked_lines(p, state="all")) == 2
+    assert ow.unranked_lines(tmp_path / "missing.md") == []

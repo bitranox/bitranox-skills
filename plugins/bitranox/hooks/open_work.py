@@ -2,9 +2,18 @@
 
 The backlog's own header states its rules: one item per line, a rank no other line holds, a solved
 item's line deleted. This module enforces the mechanical ones, so a tool call cannot split a bullet,
-reuse a number another line holds, or delete any line but the one it closes. Which item outranks
-which stays the caller's judgment - nothing here chooses a rank. A `- [x]` line written by an older
-release still parses as closed and still holds its rank.
+reuse a number another line holds or cites, or delete any line but the one it closes. Nothing here
+chooses a rank; the one ordering it refuses is a FOUND item above an open USER item. A `- [x]` line
+written by an older release still parses as closed and still holds its rank.
+
+Decisions:
+    A FOUND item ranked above an open USER item is REFUSED, not warned about. Why: the backlog's
+    first ranking rule has no exception, a warning arrives after the line is written so the caller
+    still has to move it by hand, and a rank below the last open USER item always exists. Reopen
+    if a real backlog needs a FOUND item above a USER one and the hand edit is too costly. Pinned
+    by test_add_refuses_a_found_item_above_an_open_user_item.
+    The reverse direction (a USER item added below a FOUND one) is not refused: when a FOUND item
+    holds rank 1 no rank above it exists, so a refusal could leave no legal number.
 """
 import datetime
 import os
@@ -40,6 +49,9 @@ _ITEM_RX = re.compile(r"-\s*\[([ xX])\]\s*\(([^)]*)\)\s*\[(\d+)\]\s*(.*)$")
 _ORIGIN_RX = re.compile(r"(USER|FOUND):\s*(.*)$")
 _FIELD_RX = re.compile(r"\s+\|\s+(size|open|next|closed):\s*")
 _FENCE_RX = re.compile(r" {0,3}(`{3,}|~{3,})")
+_CHECKBOX_RX = re.compile(r"-\s*\[([ xX])\]\s")
+#: a rank an item's text cites, e.g. "same blocker as [60]"; at most MAX_RANK's six digits
+_CITED_RX = re.compile(r"\[(\d{1,6})\]")
 
 
 class BacklogError(ValueError):
@@ -51,6 +63,10 @@ class NotARepo(BacklogError):
 
 
 class RankTaken(BacklogError):
+    pass
+
+
+class RankOrder(BacklogError):
     pass
 
 
@@ -104,8 +120,8 @@ def item_text(line):
     return m.group(4).strip() if m else ""
 
 
-def iter_items(lines):
-    """(index, item) for every item line outside a fenced code block."""
+def _outside_fences(lines):
+    """(index, line) for every line outside a fenced code block."""
     fence = None
     for i, line in enumerate(lines):
         if fence is not None:
@@ -118,6 +134,12 @@ def iter_items(lines):
         if m:
             fence = m.group(1)
             continue
+        yield i, line
+
+
+def iter_items(lines):
+    """(index, item) for every item line outside a fenced code block."""
+    for i, line in _outside_fences(lines):
         item = parse_line(line)
         if item is not None:
             yield i, item
@@ -132,6 +154,28 @@ def list_items(path, state="open"):
         return []
     lines = path.read_text(encoding="utf-8").split("\n")
     return [it for _, it in iter_items(lines) if state == "all" or it["state"] == state]
+
+
+def unranked_lines(path, state="open"):
+    """Checkbox lines of the backlog at `path` that are NOT items because they carry no `[rank]`.
+
+    A backlog in an older shape ("- [ ] (date) ORIGIN: ...") parses to no items at all, and an empty
+    list reads as an empty backlog. The caller reports these so that cannot happen. The unfenced
+    format template (its literal `[rank]`) is not a line of work and is left out."""
+    if state not in STATES:
+        raise MalformedField("state must be one of %s, got %r" % (", ".join(STATES), state))
+    path = Path(path)
+    if not path.is_file():
+        return []
+    wanted = {"open": " ", "closed": "xX", "all": " xX"}[state]
+    lines = path.read_text(encoding="utf-8").split("\n")
+    found = []
+    for _, line in _outside_fences(lines):
+        bare = line.strip()
+        m = _CHECKBOX_RX.match(bare)
+        if m and m.group(1) in wanted and parse_line(line) is None and "[rank]" not in bare:
+            found.append(bare)
+    return found
 
 
 def backlog_path(cwd):
@@ -230,6 +274,10 @@ def _free_tens_near(rank, taken):
     return [r for r in (below, above) if r is not None]
 
 
+def _free_ten_after(rank, taken):
+    return next(r for r in range(rank - rank % 10 + 10, MAX_RANK + 10 ** 6, 10) if r not in taken)
+
+
 def _read(path):
     """(text with LF line ends, the file's line end) of the backlog at `path`.
 
@@ -274,10 +322,17 @@ def add_item(path, rank, origin, what, size, open_, next_, raised=None, today=No
             text = HEADER                       # a missing or empty file starts from the header
         lines = text.split("\n")
         items = list(iter_items(lines))
-        taken = {it["rank"] for _, it in items}
+        # a cited number is taken too: the citing line would otherwise point at the new item
+        taken = {it["rank"] for _, it in items} | {int(n) for ln in lines for n in _CITED_RX.findall(ln)}
         if rank in taken:
-            raise RankTaken("rank %d is already held by a line (closed lines count); free tens "
-                            "nearby: %s" % (rank, ", ".join(map(str, _free_tens_near(rank, taken)))))
+            raise RankTaken("rank %d is already held or cited by a line (closed lines count); free "
+                            "tens nearby: %s"
+                            % (rank, ", ".join(map(str, _free_tens_near(rank, taken)))))
+        users = [it["rank"] for _, it in items if it["state"] == "open" and it["origin"] == "USER"]
+        if origin == "FOUND" and users and rank < max(users):
+            raise RankOrder("rank %d would put a FOUND item above open USER item %d; a USER item "
+                            "outranks every FOUND one. Next free ten below it: %d"
+                            % (rank, max(users), _free_ten_after(max(users), taken)))
         smaller = [(it["rank"], i) for i, it in items if it["rank"] < rank]
         if smaller:
             at = max(smaller)[1] + 1

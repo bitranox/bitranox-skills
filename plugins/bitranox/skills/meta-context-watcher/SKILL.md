@@ -73,12 +73,19 @@ instead of restating it.
 `open`, `next`; optional `raised`, which you omit unless you know the first-raised date - the tool
 then writes today's with `?`) and `mcp__bitranox__backlog_close` (`rank`, `reason`). They act on
 the `OPEN-WORK.md` at the git top level of the session's cwd and write the line format above; they
-refuse a rank any line already holds, but the rank itself is still YOURS to choose by the rules
-below. They can sit in the deferred-tool list: load the schema first with ToolSearch
+refuse a rank any line already holds or cites as `[N]`, and `backlog_add` refuses a `FOUND:` item
+ranked above an open `USER:` item, but the rank itself is still YOURS to choose by the rules
+below. A checkbox line with no `[rank]` (an older format) is not an item: `backlog_list` returns
+it under `unranked` with a `note`, so read those before concluding the backlog is empty. They can
+sit in the deferred-tool list: load the schema first with ToolSearch
 (`select:mcp__bitranox__backlog_add`). They take no path, so an item that belongs in ANOTHER
 repo's backlog (see below) is a hand edit there. A session without them (the plugin's mod needs
 Claude Code 2.1.259 or newer) edits the file by hand under the same rules.
-Neither route commits.
+Neither route commits. In a checkout other sessions share, the file can hold a peer's uncommitted
+lines beside yours, and a pathspec commit takes the whole working-tree file under your message.
+Run `git diff OPEN-WORK.md` first; when it shows a line that is not yours, stage only your own:
+`git hash-object -w` a scratch copy of HEAD's text plus your lines, `git update-index --cacheinfo`
+it, and commit with no pathspec (the recipe is in `bitranox:compuse-git`).
 
 **In a linked worktree, the file written is the worktree's own copy.** A session working in
 `.claude/worktrees/<name>` adds and closes lines in that worktree's `OPEN-WORK.md`, and the main
@@ -160,7 +167,9 @@ keeps closed lines, a closed item keeps its number and the SessionStart listing 
 only, so a number a closed line holds looks free; take it and "rank 40" names two items in every
 handover and commit after. A deleted line holds no number, but prefer a fresh number to one just
 freed: old handovers and commit messages still name the deleted item by its rank. Read the
-whole file before picking.
+whole file before picking, and by hand grep it for the number you chose (`grep -n '\[170\]'
+OPEN-WORK.md`): a number another line's text cites ("see [170]") is not free either, because
+that citation would then point at your new item.
 The SessionStart block names any rank an open item shares with another line - give the open item
 a free number before citing it.
 
@@ -396,6 +405,13 @@ handover; where it is gitignored there is nothing to commit. Say in your reply t
 now carries an uncommitted STALE line, so the dirty tree has an owner instead of tripping the next
 gate or session.
 
+That line blocks `git merge --ff-only` only when the incoming range changes `handover.md`. Ask git
+first: `git diff --quiet HEAD..@{u} -- handover.md` exiting 0 means origin did not touch it, so
+fast-forward with the line in place. On exit 1 the merge is refused for that file. Put the original
+first line back with the Edit tool (`git show HEAD:handover.md | head -1` has it; auto mode can
+refuse a `git restore`, and `git stash` is shared with every worktree), fast-forward, then read the
+handover origin brought, which is the current one.
+
 **A checkpoint handed back after a compaction is your own work in progress.** After an automatic
 compaction, a `<BITRANOX-COMPACT-RESUME>` block carries the checkpoint THIS session
 wrote shortly before, mid-task. Take its exact next action at once and mark it STALE as the block
@@ -453,7 +469,12 @@ classification, not an afterthought to it:
    `git log --oneline --since=<raised date> -S '<a phrase or symbol unique to the item>'`, plus
    `git log --oneline --since=<raised date> -- <the paths it names>`. A hit means the work may
    have shipped; read the commit before offering the item, and re-run any measurement the line's
-   premise rests on (a tool version, a reported failure) rather than repeating its claim.
+   premise rests on (a tool version, a reported failure) rather than repeating its claim. A commit
+   that only touched `OPEN-WORK.md` is the line's own history, not the work. Where
+   the item names an evidence or output directory, check that directory's mtime too, since an
+   audit can be finished with no commit naming it. Run this for EVERY item you recommend as next,
+   and put its result beside the recommendation in your reply: the commits it hit, or `no hit
+   since <date>`.
 4. **Check which repo each line's fix lands in, for EVERY line you list.** A line whose fix lands
    elsewhere is other-repo (see "Before working an item" below). When a line you keep names
    another repo (carried over from a sibling's backlog, moved from a template), say in the listing
@@ -501,8 +522,8 @@ a merged PR or an upstream fix of its own closes it, a PR closed unmerged goes b
 with its close reason, and only when none of these exists is the question the user's. Either way,
 rewrite the item's line to what you found before you report it.
 
-**A background agent the handover names as running is LIVE.** It survived the `/clear`, may have
-committed or pushed since, and will report into this conversation. Check its branch
+**After a `/clear`, a background agent the handover names as running is LIVE.** It survived the
+clear, may have committed or pushed since, and will report into this conversation. Check its branch
 (`git log origin/<default>..<its branch>`) and origin for new commits, and wait for or message it
 (`SendMessage` to its name or id) instead of starting the same fix in parallel. When its report
 arrives, check it against the deliverables the handover expected from it (a review verdict, a
@@ -510,7 +531,9 @@ push, a proposed text) before acting on it. An agent resumed after the clear can
 BRIEF - it may even say so - and then reports only what it remembers: a gate run and a partial
 read look like the clean review a merge was waiting for. A missing deliverable is visible only
 against the handover's list; re-dispatch with a full brief rather than accepting the partial
-report.
+report. When the session that wrote the handover DIED rather than cleared, its agents died with
+it and will never report: read references/survivors-after-clear.md for how to recover what they
+delivered and restart the rest.
 
 **A peer session a backlog line names, and whatever survived a `/clear`, are checked, not
 assumed.** Before you ask the user when to hand an item to another Claude session, check that

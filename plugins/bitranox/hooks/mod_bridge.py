@@ -40,9 +40,16 @@ REFUSALS = (ow.BacklogError, BadInput, ME.SlugCollision, ME.HookTooLong, ME.Empt
 
 def _backlog_list(inp, cwd):
     path = ow.backlog_path(cwd)
-    data = {"path": str(path), "items": ow.list_items(path, state=inp.get("state", "open"))}
+    state = inp.get("state", "open")
+    data = {"path": str(path), "items": ow.list_items(path, state=state)}
     if not path.is_file():
         data["note"] = "no OPEN-WORK.md at %s yet; backlog_add creates it" % path.parent
+    unranked = ow.unranked_lines(path, state=state)
+    if unranked:
+        data["unranked"] = unranked
+        data["note"] = ("%d checkbox line(s) carry no [rank], so they are in `unranked`, not "
+                        "`items`: this backlog is not empty, its lines are in an older format"
+                        % len(unranked))
     return data
 
 

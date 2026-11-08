@@ -17,7 +17,7 @@ const TOOLS = [
   {
     name: "backlog_add",
     description:
-      "Add one item to this repo's OPEN-WORK.md backlog. YOU choose the rank: USER items above FOUND ones, a USER item the user deferred below the live USER items but above every FOUND one, bigger size first within an origin. The tool refuses a rank any line already holds (closed lines included) and suggests free tens. Omit `raised` unless you know when it was first raised: the tool then writes today's date with '?', never a guessed one. The result's `path` names the file written; in a linked worktree its `note` says the main checkout's copy lacks the line until the commit reaches it, so say where the line is before telling the user it was added.",
+      "Add one item to this repo's OPEN-WORK.md backlog. YOU choose the rank: USER items above FOUND ones, a USER item the user deferred below the live USER items but above every FOUND one, bigger size first within an origin. The tool refuses a rank any line already holds or cites as [N] (closed lines included) and suggests free tens, and refuses a FOUND item ranked above an open USER item. Omit `raised` unless you know when it was first raised: the tool then writes today's date with '?', never a guessed one. The result's `path` names the file written; in a linked worktree its `note` says the main checkout's copy lacks the line until the commit reaches it, so say where the line is before telling the user it was added.",
     inputSchema: {
       type: "object",
       required: ["rank", "origin", "what", "size", "open", "next"],
