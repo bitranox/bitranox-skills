@@ -129,6 +129,43 @@ def test_list_without_a_backlog_says_so(repo, env):
     assert rc == 0 and out["data"]["items"] == [] and "no OPEN-WORK.md" in out["data"]["note"]
 
 
+def test_list_of_a_fully_ranked_backlog_has_no_unranked_key(repo, env):
+    call(repo, env, "backlog_add", ITEM)
+    _, out = call(repo, env, "backlog_list")
+    assert "unranked" not in out["data"]
+
+
+def _nested_repo(parent):
+    nested = parent / "nested"
+    nested.mkdir()
+    subprocess.run(["git", "init", "-q", str(nested)], check=True)
+    return nested
+
+
+def test_add_refuses_a_new_file_when_a_directory_above_has_a_backlog(repo, env):
+    call(repo, env, "backlog_add", ITEM)
+    nested = _nested_repo(repo)
+    rc, out = call(nested, env, "backlog_add", ITEM)
+    assert (rc, out["error"]["kind"]) == (1, "BacklogElsewhere")
+    assert str(repo / "OPEN-WORK.md") in out["error"]["message"]
+    assert not (nested / "OPEN-WORK.md").exists()
+
+
+def test_create_new_starts_a_separate_backlog_and_says_it_did(repo, env):
+    call(repo, env, "backlog_add", ITEM)
+    nested = _nested_repo(repo)
+    rc, out = call(nested, env, "backlog_add", {**ITEM, "create_new": True})
+    assert (rc, out["data"]["created"]) == (0, True)
+    assert Path(out["data"]["path"]) == (nested / "OPEN-WORK.md").resolve()
+
+
+def test_a_first_add_reports_created_and_a_later_one_does_not(repo, env):
+    _, first = call(repo, env, "backlog_add", ITEM)
+    _, second = call(repo, env, "backlog_add", {**ITEM, "rank": ITEM["rank"] + 10})
+    assert first["data"]["created"] is True
+    assert "created" not in second["data"]
+
+
 def test_memory_add_creates_then_updates_with_advice(tmp_path, env):
     level = tmp_path / "proj"
     level.mkdir()

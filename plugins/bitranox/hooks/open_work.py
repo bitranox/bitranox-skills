@@ -46,6 +46,7 @@ HEADER = (
 )
 
 _ITEM_RX = re.compile(r"-\s*\[([ xX])\]\s*\(([^)]*)\)\s*\[(\d+)\]\s*(.*)$")
+_CHECKBOX_RX = re.compile(r"-\s*\[([ xX])\]\s*(.*)$")
 _ORIGIN_RX = re.compile(r"(USER|FOUND):\s*(.*)$")
 _FIELD_RX = re.compile(r"\s+\|\s+(size|open|next|closed):\s*")
 _FENCE_RX = re.compile(r" {0,3}(`{3,}|~{3,})")
@@ -83,6 +84,10 @@ class AmbiguousRank(BacklogError):
 
 
 class MalformedField(BacklogError):
+    pass
+
+
+class BacklogElsewhere(BacklogError):
     pass
 
 
@@ -176,6 +181,15 @@ def unranked_lines(path, state="open"):
         if m and m.group(1) in wanted and parse_line(line) is None and "[rank]" not in bare:
             found.append(bare)
     return found
+
+
+def enclosing_backlog(toplevel):
+    """The nearest OPEN-WORK.md in a directory above `toplevel`, or None."""
+    for parent in Path(toplevel).parents:
+        candidate = parent / FILENAME
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def backlog_path(cwd):

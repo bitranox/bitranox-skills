@@ -64,11 +64,30 @@ def _where(data, path, cwd):
     return data
 
 
+def _refuse_a_second_backlog(path, inp):
+    # The session's cwd can sit in a nested repo after a cd, and a fresh file there splits the
+    # backlog while the tool still answers ok; only an explicit create_new starts one on purpose.
+    if inp.get("create_new") is True:
+        return
+    enclosing = ow.enclosing_backlog(path.parent)
+    if enclosing is not None:
+        raise ow.BacklogElsewhere(
+            "%s has no OPEN-WORK.md, but %s exists above it; a new file here would split the "
+            "backlog. Run from that repository, or pass create_new: true to start a separate "
+            "backlog here" % (path.parent, enclosing))
+
+
 def _backlog_add(inp, cwd):
     path = ow.backlog_path(cwd)
-    return _where(ow.add_item(path, inp.get("rank"), inp.get("origin"), inp.get("what"),
+    created = not path.is_file()
+    if created:
+        _refuse_a_second_backlog(path, inp)
+    data = _where(ow.add_item(path, inp.get("rank"), inp.get("origin"), inp.get("what"),
                               inp.get("size"), inp.get("open"), inp.get("next"),
                               raised=inp.get("raised")), path, cwd)
+    if created:
+        data["created"] = True
+    return data
 
 
 def _backlog_close(inp, cwd):

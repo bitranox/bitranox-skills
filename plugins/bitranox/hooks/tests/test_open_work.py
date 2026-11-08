@@ -403,3 +403,11 @@ def test_unranked_lines_reports_the_old_format_and_skips_items_fences_and_the_te
     assert ow.unranked_lines(p, state="closed") == ["- [x] (2026-10-04) FOUND: closed, no rank"]
     assert len(ow.unranked_lines(p, state="all")) == 2
     assert ow.unranked_lines(tmp_path / "missing.md") == []
+
+
+def test_enclosing_backlog_finds_the_nearest_above_and_never_the_own_directory(tmp_path):
+    (tmp_path / "OPEN-WORK.md").write_text("x", encoding="utf-8")
+    inner = tmp_path / "a" / "b"
+    inner.mkdir(parents=True)
+    (inner / "OPEN-WORK.md").write_text("own", encoding="utf-8")
+    assert ow.enclosing_backlog(inner) == tmp_path / "OPEN-WORK.md"

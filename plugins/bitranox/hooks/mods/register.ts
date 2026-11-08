@@ -11,13 +11,13 @@ const TOOLS = [
   {
     name: "backlog_list",
     description:
-      "List this repo's OPEN-WORK.md backlog items (open by default). Read it before backlog_add to choose a rank.",
+      "List this repo's OPEN-WORK.md backlog items (open by default). Read it before backlog_add to choose a rank. Lines with no [rank] are not in `items`: they come back under `unranked` with a `note`, so an empty `items` alone does not mean an empty backlog.",
     inputSchema: { type: "object", properties: { state: { type: "string", enum: ["open", "closed", "all"] } } },
   },
   {
     name: "backlog_add",
     description:
-      "Add one item to this repo's OPEN-WORK.md backlog. YOU choose the rank: USER items above FOUND ones, a USER item the user deferred below the live USER items but above every FOUND one, bigger size first within an origin. The tool refuses a rank any line already holds or cites as [N] (closed lines included) and suggests free tens, and refuses a FOUND item ranked above an open USER item. Omit `raised` unless you know when it was first raised: the tool then writes today's date with '?', never a guessed one. The result's `path` names the file written; in a linked worktree its `note` says the main checkout's copy lacks the line until the commit reaches it, so say where the line is before telling the user it was added.",
+      "Add one item to this repo's OPEN-WORK.md backlog. YOU choose the rank: USER items above FOUND ones, a USER item the user deferred below the live USER items but above every FOUND one, bigger size first within an origin. The tool refuses a rank any line already holds or cites as [N] (closed lines included) and suggests free tens, and refuses a FOUND item ranked above an open USER item. Omit `raised` unless you know when it was first raised: the tool then writes today's date with '?', never a guessed one. The result's `path` names the file written; in a linked worktree its `note` says the main checkout's copy lacks the line until the commit reaches it, so say where the line is before telling the user it was added. When this repo has no backlog yet the result says `created`, and the call is refused if a directory above it holds an OPEN-WORK.md (the session's cwd may have drifted into a nested repo) unless you pass create_new.",
     inputSchema: {
       type: "object",
       required: ["rank", "origin", "what", "size", "open", "next"],
@@ -29,6 +29,7 @@ const TOOLS = [
         open: str("why it is still open"),
         next: str("the concrete next action"),
         raised: str("YYYY-MM-DD, YYYY-MM-DD? or unknown; omit for today with '?'"),
+        create_new: { type: "boolean", description: "start a separate backlog here even though a directory above holds one" },
       },
     },
   },
