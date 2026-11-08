@@ -1397,7 +1397,12 @@ output for the review artifact. A probe copies a snippet verbatim, so a broken o
 through it as compliance: a wait-loop whose check could never see the process gone (its `pgrep`
 exits 1 once nothing matches) was quoted word for word by a GREEN probe that read as a pass, and
 only a fake-ssh run caught it. A probe tests whether the text is FOLLOWED, never whether what it
-says WORKS.
+says WORKS. When the text DEFINES a placeholder or path (`<plugin>` as some directory, a working
+dir) and builds a command on it, substitute the text's own definition literally and run that
+command: a probe that writes a working command may have inferred past a wrong definition, so its
+pass does not prove the text. Measured: a step defined `<plugin>` as the checkout root, so its
+literal command named a script that does not exist (rc 2), while three GREEN probes wrote the
+right path and passed.
 
 **How to dispatch a verification test:**
 

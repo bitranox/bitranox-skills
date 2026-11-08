@@ -102,7 +102,7 @@ run for this skill. The `dhat` crate snippet is verified: it writes `dhat-heap.j
 | `Vec::new()` or `String::new()` then a push per iteration of known length           | `with_capacity(n)`, or `collect()` from an iterator with a size hint                                      |
 | `format!` into a temporary on every iteration (`out = out + &format!(..)`)          | `write!` into one `String`; `String + &str` alone already appends in place                                |
 | `collect()` into a `Vec` only to iterate once or take `len()`                       | Keep the iterator (`needless_collect`)                                                                    |
-| `Regex::new`, a parser or a client built inside a loop or per call                  | Build once: a `std::sync::LazyLock` static, or pass it in                                                 |
+| `Regex::new`, a parser or a client built inside a loop or per call                  | Build once: a `LazyLock` static (Rust 1.80+, see below), or pass it in                                    |
 | `dyn Trait` or `Box<dyn Fn>` called per element on a hot path                       | Generics for static dispatch; measure the speed against the code-size cost                                |
 | Default-hashed `HashMap` with integer keys on a profiled hot path                   | `rustc-hash` or `ahash`, only if the keys are not attacker-controlled (SipHash resists HashDoS)           |
 | A `std::sync::Mutex` or `RwLock` guard alive across `.await`                        | End the guard's scope before the await, or `tokio::sync::Mutex` if it must be held (`await_holding_lock`) |
@@ -111,3 +111,10 @@ run for this skill. The `dhat` crate snippet is verified: it writes `dhat-heap.j
 | `read_to_string`/`read_to_end` on a large input; `collect()` of an unbounded stream | Stream with `BufRead::lines` or fixed-size chunks (generic checklist: unbounded memory)                   |
 | `Arc<Mutex<_>>` updated from every task of a parallel loop                          | Per-thread accumulation, merged once at the end                                                           |
 | A large value moved by value; one enum variant far larger than the rest             | Pass a reference; box the large variant (`large_enum_variant`)                                            |
+
+Two of these fixes can break or change the code. `std::sync::LazyLock` needs Rust 1.80 or newer:
+check the crate's `rust-version` (and its CI toolchain) before suggesting it; on an older one use
+`std::sync::OnceLock` (1.70 or newer) or build the value once in the caller and pass it in.
+Rewriting a regex while moving it (`\d` to `[0-9]`, say) is not a free speedup: `\d` in the
+`regex` crate matches every Unicode decimal digit, so the swap changes results on non-ASCII digits
+and needs a test, not just a benchmark.

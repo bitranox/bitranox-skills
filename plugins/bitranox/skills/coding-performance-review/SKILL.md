@@ -27,7 +27,10 @@ in code. The language skills add their own tools on top of this one; the method 
    number. A probe that hits an early return is fast in both arms, so the fix looks enormous
    while the slow path never ran. If BEFORE is far too fast, count calls into the hot function
    to find the guard that returns early, change the input so it reaches the slow path, repeat
-   this check, and leave a comment in the test saying why its input has that shape.
+   this check, and leave a comment in the test saying why its input has that shape. When there is
+   no recorded figure, only a claim ("20 percent faster"), rebuild the before arm yourself from
+   the commit or diff the claim is about, run both arms on the same input (save one first when
+   none is recorded, per step 1), and apply this check to the before figure you measured.
 3. **Identical settings on both sides.** Same build mode and flags, input, data size, warm or cold
    state, host and concurrency. Diff what each side RESOLVED, defaults included, not its config
    file.
