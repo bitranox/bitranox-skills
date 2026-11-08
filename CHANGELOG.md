@@ -30,6 +30,17 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.24.1]
+
+### Changed
+
+- process-test-design: a `pytest.raises(match=...)` pattern must miss every other refusal the code
+  can raise. `match=` is `re.search`, so a word several refusals share (or an alternation such as
+  `"locale|regional"`) passes whichever fires. Check the pattern against every `raise` message in
+  the module and the layers it calls, anchor an inner rule's pattern against a wrapper that
+  interpolates it, and give a sentinel the test raises itself a sentence matched whole
+  (`references/silent-test-defeaters.md`).
+
 ## [10.24.0]
 
 ### Added

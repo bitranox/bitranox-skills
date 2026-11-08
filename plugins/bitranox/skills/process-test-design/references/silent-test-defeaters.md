@@ -385,7 +385,7 @@ it), with different messages. A pattern harvested from the first arm then fails 
 the failure reads like the code under test. Give every arm an impossible `match=` first and read
 what pytest prints for each - reading the raising code gets it wrong when the refusal comes from a
 lower layer - then parametrize the pattern alongside the input, or match only a substring every
-arm shares.
+arm shares and no other refusal contains (below).
 
 Match the VALIDATOR's own phrase for the rule under test, never a number or other piece of the
 input. pydantic, like most validators, echoes the input in its message (`input_value=11`), so a
@@ -393,6 +393,19 @@ bound test that passes `offset=11` and matches `"11"` is satisfied by a refusal 
 reason (an `extra="forbid"` model refusing the `offset` field the feature has not added yet), and
 the arm is green before the feature exists. Match the rule's wording
 (`match="less than or equal to 10"`) and run the arm against the pre-feature code, requiring RED.
+
+A pattern must also MISS every other refusal the code can raise. `match=` is `re.search`, so a
+word several refusals share (`"codepage"`, `"past"`, an alternation like `"locale|regional"`)
+passes whichever of them fires, and the test stays green when the code refuses for the wrong
+reason. The printed message gives the pattern; the code gives the messages it must miss: grep
+every `raise` in the module and the layers it calls, check the pattern with
+`re.search` against each message, and require it to match its own and no other; escape regex
+characters the message carries (`(`, `.`, `?`) or build the pattern with `re.escape`. A wrapper
+that interpolates a lower refusal (`f"field {n}: does not read back: {error}"`) carries that
+refusal's words, so a pattern for the inner rule also passes when the wrapper fires: anchor it at
+the start (`^`), and a pattern for the wrapper includes the wrapper's own words. A sentinel
+the test raises itself to end a block (`raise RuntimeError("boom")`) gets a sentence no other
+message contains, matched whole (`match=r"^...$"`).
 
 ### A substring assertion on a reworded message must fail on the OLD message
 
