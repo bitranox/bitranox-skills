@@ -17,11 +17,12 @@ tail bound inside a `+` chain, calls find/index twice and writes. The detector i
 `splice_span.unchecked_splices`, shared with the nudge's `SPAN_SHAPE`.
 
 The exemption (user decision 2026-10-30): a program that checks EVERY find/index anchor it uses
-is unique - `assert s.count(A) == 1`, or `if s.count(A) != 1: raise ...` - is let through,
-because that check is exactly what catches a repeated end marker. A partly checked program is
-refused, and an anchor that cannot be paired with its count (an f-string, a value built in a
-loop) counts as unchecked. Replayed over the transcript corpus: 29 of 1,287 splices checked
-every anchor this way.
+is unique - `assert s.count(A) == 1`, or `if s.count(A) != 1: raise ...` - AND asserts how many
+lines the cut region holds (`region = s[a:b]; assert region.count("\\n") == 12`, or the matching
+`if ...: raise`) is let through. Uniqueness alone does not bound the region: a unique end marker
+further down than meant deletes everything before it, and the program still exits 0. A partly
+checked program is refused, and an anchor that cannot be paired with its count (an f-string, a
+value built in a loop) counts as unchecked.
 
 What is NOT refused, and why the nudge stays for it: a script AUTHORED through Write/Edit or
 `cat > f.py <<EOF` (that is how a tool which legitimately splices, `anchor_edit.py` itself among
@@ -82,9 +83,11 @@ def _message():
         "`--dry-run` to see the line delta first. An insert at one anchor is `insert F "
         "--anchor-file a.txt --new-file n.txt --before|--after`, and many exact replacements "
         "across files are `batch --spec edits.json`.\n"
-        "Or keep the script and check EVERY anchor it finds is unique before cutting "
+        "Or keep the script, check EVERY anchor it finds is unique before cutting "
         "(`assert s.count(START) == 1 and s.count(END) == 1`, or `if s.count(X) != 1: raise "
-        "...`): a program that checks them all is let through."
+        "...`) and assert the cut region's line count (`region = s[a:b]; assert "
+        "region.count('\\n') == 12`): unique anchors alone do not bound the region, so a program "
+        "needs both to be let through."
     )
 
 

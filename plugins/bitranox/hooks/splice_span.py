@@ -23,8 +23,8 @@ import warnings
 
 import shell_text
 
-__all__ = ["SPAN_SHAPE", "every_anchor_checked", "programs_run_by", "runs_an_unchecked_splice",
-           "splices_between_found_anchors", "unchecked_splices"]
+__all__ = ["SPAN_SHAPE", "every_anchor_checked", "programs_run_by", "region_lines_checked",
+           "runs_an_unchecked_splice", "splices_between_found_anchors", "unchecked_splices"]
 
 # Every part is required (two finds, a head slice glued with `+`, a tail slice, a write), so
 # reading a span, or prose describing one, is not a match. `\A` anchors the lookaheads:
@@ -250,6 +250,88 @@ def every_anchor_checked(program):
     return bool(facts.anchors) and all(key is not None and key in checked for key in facts.anchors)
 
 
+def _region_bound_slice(node):
+    return (isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Slice)
+            and node.slice.lower is not None and node.slice.upper is not None
+            and node.slice.step is None)
+
+
+def _line_count_subject(node):
+    """X for `X.count("\\n")`, `len(X.splitlines())` or `len(X.split("\\n"))`, else None."""
+    if not isinstance(node, ast.Call):
+        return None
+    func = node.func
+    if isinstance(func, ast.Attribute) and func.attr == "count":
+        newline = len(node.args) == 1 and isinstance(node.args[0], ast.Constant) and node.args[0].value == "\n"
+        return func.value if newline else None
+    if isinstance(func, ast.Name) and func.id == "len" and len(node.args) == 1:
+        inner = node.args[0]
+        if isinstance(inner, ast.Call) and isinstance(inner.func, ast.Attribute):
+            if inner.func.attr == "splitlines" or (
+                    inner.func.attr == "split" and len(inner.args) == 1
+                    and isinstance(inner.args[0], ast.Constant) and inner.args[0].value == "\n"):
+                return inner.func.value
+    return None
+
+
+def _counts_a_region(node, regions):
+    subject = _line_count_subject(node)
+    if subject is None:
+        return False
+    if isinstance(subject, ast.Name):
+        return subject.id in regions
+    return _region_bound_slice(subject)
+
+
+def _bounds_region_lines(compare, regions, flipped_ops, ops):
+    """True when `compare` holds a region's line count against an int or a name, in the direction
+    `ops`; `flipped_ops` is the same direction read with the count on the right."""
+    if not (isinstance(compare, ast.Compare) and len(compare.ops) == 1):
+        return False
+    left, right, op = compare.left, compare.comparators[0], compare.ops[0]
+    fixed = lambda n: isinstance(n, ast.Name) or (  # noqa: E731 - one comparator test, two uses
+        isinstance(n, ast.Constant) and isinstance(n.value, int) and not isinstance(n.value, bool))
+    if isinstance(op, ops) and _counts_a_region(left, regions) and fixed(right):
+        return True
+    return isinstance(op, flipped_ops) and _counts_a_region(right, regions) and fixed(left)
+
+
+def region_lines_checked(program):
+    """True when `program` asserts how many lines the region it cuts holds.
+
+    Two unique anchors do not bound what lies between them: an END marker that is unique but sits
+    further down than meant deletes everything up to it. A region is a slice with both bounds,
+    used directly or through a name assigned one. Accepted: `assert region.count("\\n") == 12`
+    (or `<=`, or `len(region.splitlines())`), or the matching `if ...: raise`. anchor_edit's
+    `--expect-removed-lines` is the same check.
+
+    Examples:
+        >>> region_lines_checked("r = s[a:b]\\nassert r.count('\\\\n') == 12\\n")
+        True
+        >>> region_lines_checked("assert s.count('\\\\n') == 12\\n")
+        False
+    """
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", SyntaxWarning)
+            tree = ast.parse(program or "")
+    except (SyntaxError, ValueError):
+        return False
+    regions = {node.targets[0].id for node in ast.walk(tree)
+               if isinstance(node, ast.Assign) and len(node.targets) == 1
+               and isinstance(node.targets[0], ast.Name) and _region_bound_slice(node.value)}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assert):
+            parts = node.test.values if isinstance(node.test, ast.BoolOp) and isinstance(node.test.op, ast.And) else [node.test]
+            if any(_bounds_region_lines(part, regions, (ast.Eq, ast.GtE, ast.Gt), (ast.Eq, ast.LtE, ast.Lt)) for part in parts):
+                return True
+        elif isinstance(node, ast.If) and _stops(node.body):
+            parts = node.test.values if isinstance(node.test, ast.BoolOp) and isinstance(node.test.op, ast.Or) else [node.test]
+            if any(_bounds_region_lines(part, regions, (ast.NotEq, ast.Lt, ast.LtE), (ast.NotEq, ast.Gt, ast.GtE)) for part in parts):
+                return True
+    return False
+
+
 # The interpreter word, by basename: python, python3, python3.14, pypy3, py (the Windows
 # launcher), with or without `.exe`.
 _INTERPRETER = re.compile(r"(?:^|[\\/])(?:python(?:3(?:\.\d+)?)?|pypy3?|py)(?:\.exe)?$")
@@ -299,9 +381,10 @@ def programs_run_by(command):
 
 def unchecked_splices(command):
     """The programs `command` runs that splice between found anchors without checking every
-    anchor unique - what block-index-splice refuses."""
+    anchor unique AND the cut region's line count - what block-index-splice refuses."""
     return [program for program in programs_run_by(command)
-            if splices_between_found_anchors(program) and not every_anchor_checked(program)]
+            if splices_between_found_anchors(program)
+            and not (every_anchor_checked(program) and region_lines_checked(program))]
 
 
 def runs_an_unchecked_splice(command):

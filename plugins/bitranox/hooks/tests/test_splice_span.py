@@ -153,7 +153,9 @@ def _checked(*lines):
 def test_a_fully_checked_splice_is_exempt(program):
     assert S.splices_between_found_anchors(program)
     assert S.every_anchor_checked(program)
-    assert not S.runs_an_unchecked_splice(heredoc("python3 - ", program))
+    bounded = program.replace("p.write_text(", "assert s[a:b].count('\\n') == 12\np.write_text(", 1)
+    assert not S.runs_an_unchecked_splice(heredoc("python3 - ", bounded))
+    assert S.runs_an_unchecked_splice(heredoc("python3 - ", program))    # uniqueness alone refused
 
 
 @pytest.mark.parametrize("program", [
@@ -183,3 +185,26 @@ def test_a_splice_not_fully_checked_is_still_refused(program):
     assert S.splices_between_found_anchors(program)
     assert not S.every_anchor_checked(program)
     assert S.runs_an_unchecked_splice(heredoc("python3 - ", program))
+
+
+@pytest.mark.parametrize("program", [
+    "r = s[a:b]\nassert r.count('\\n') == 12\n",
+    "r = s[a:b]\nassert r.count('\\n') <= LIMIT\n",
+    "assert len(s[a:b].splitlines()) == 12\n",
+    "r = s[a:b]\nif r.count('\\n') != 12:\n    raise ValueError('x')\n",
+    "r = s[a:b]\nassert 12 >= r.count('\\n') and ok\n",
+])
+def test_region_lines_checked_accepts_a_bound_on_the_cut_region(program):
+    assert S.region_lines_checked(program)
+
+
+@pytest.mark.parametrize("program", [
+    "assert s.count('\\n') == 12\n",                     # the whole text, not the region
+    "r = s[:b]\nassert r.count('\\n') == 12\n",          # an open-ended slice
+    "r = s[a:b]\nassert r.count('x') == 12\n",            # not a line count
+    "r = s[a:b]\nassert r.count('\\n') > 12\n",          # a floor does not bound it
+    "r = s[a:b]\nif r.count('\\n') != 12:\n    print('x')\n",   # a check that does not stop
+    "not python (",
+])
+def test_region_lines_checked_refuses_anything_else(program):
+    assert not S.region_lines_checked(program)

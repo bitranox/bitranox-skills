@@ -948,7 +948,8 @@ def test_a_splice_the_guard_refuses_is_left_to_the_guard(home, monkeypatch, caps
 def test_a_fully_checked_splice_the_guard_lets_through_is_still_nudged(home, monkeypatch, capsys):
     checked = _SPAN_IN_A_HEREDOC.replace(
         "a = s.index(", "assert s.count('def natural_widths(') == 1\n"
-        "assert s.count('def render(') == 1\na = s.index(", 1)
+        "assert s.count('def render(') == 1\na = s.index(", 1).replace(
+        "p.write_text(", "assert s[a:b].count('\\n') == 12\np.write_text(", 1)
     _feed(monkeypatch, _ev(checked, "span3"))
     N.main()
     assert _SPAN_REASON in capsys.readouterr().out

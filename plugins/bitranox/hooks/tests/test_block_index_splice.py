@@ -138,16 +138,27 @@ def test_an_ordinary_splice_does_not_mention_conflict_resolve():
     assert "conflict_resolve" not in G.assess(SPLICE_CMD)
 
 
-# ---- the exemption (user decision 2026-10-30): every anchor asserted unique --------------------
-_CHECKED_CMD = SPLICE_CMD.replace(
+# ---- the exemption (user decision 2026-10-30): every anchor unique AND the region's line count ----
+_ANCHORS_ONLY_CMD = SPLICE_CMD.replace(
     "a = s.index('def natural_widths(')\n",
     "assert s.count('def natural_widths(') == 1\n"
     "assert s.count('    return widths') == 1\n"
     "a = s.index('def natural_widths(')\n")
+_CHECKED_CMD = _ANCHORS_ONLY_CMD.replace(
+    "b = s.index('    return widths')\n",
+    "b = s.index('    return widths')\n"
+    "region = s[a:b]\n"
+    "assert region.count('\\n') <= 6\n")
 
 
-def test_a_splice_checking_every_anchor_unique_is_let_through():
+def test_a_splice_checking_every_anchor_and_the_region_size_is_let_through():
+    assert "region.count" in _CHECKED_CMD                # the replace above found its anchor
     assert G.assess(_CHECKED_CMD) is None
+
+
+def test_unique_anchors_alone_do_not_bound_the_region():
+    # both anchors unique, the end marker further down than meant: the guard must still refuse
+    assert G.assess(_ANCHORS_ONLY_CMD) is not None
 
 
 def test_a_splice_checking_only_the_start_anchor_is_still_refused():
