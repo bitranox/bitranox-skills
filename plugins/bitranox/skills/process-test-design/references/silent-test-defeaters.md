@@ -15,8 +15,10 @@ path is untested, or a mutation survives. Also when a unit suite's code can reac
 user-facing service, a test guards a secret it might print, a test spawns a nested test runner or
 several writers to one file, asserts a real tool's verdict, relies on conftest fixtures reaching
 `src/` doctests or on fixtures ported from a template, feeds a FIFO from a writer thread, times a
-cost ratio or a growth ratio, or verifies a fix for a rare flake. Each entry names the trigger, the
-mechanism that makes the test pass (or fail) for the wrong reason, and the fix.
+cost ratio or a growth ratio, or verifies a fix for a rare flake. Also when a test proves an input
+was refused before any side effect, proves a timed wake or poll fires, or runs `git commit` under a
+sandboxed or fresh home directory. Each entry names the trigger, the mechanism that makes the test
+pass (or fail) for the wrong reason, and the fix.
 
 ## Determinism and environment
 
@@ -119,6 +121,19 @@ Verify before pushing by exporting the variables BEFORE pytest starts
 nothing and proves nothing. After a rich-click upgrade, re-list the globals it computes at import
 with `grep -n '_default()' rich_click/rich_click.py`. For any other library, grep its module
 level for `os.environ` and `os.getenv` before trusting a per-test `delenv`.
+
+### A test that commits under a fresh home sets the commit identity in its own env
+
+A test that runs `git commit` in a sandboxed or fresh `HOME` (or with the global config pointed
+away) sets `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL`
+in the environment it passes to git. A developer machine answers the identity from its
+`~/.gitconfig` or auto-detects one, so the test passes there; a CI runner carries no identity and
+git refuses the commit ("Author identity unknown"), so the same test goes red only in CI. Setting
+the variables in the child env, not `user.*` in a config file, also keeps the test from writing
+into a config that other tests or the developer share. Build that env from `os.environ` with every
+inherited `GIT_*` variable removed first (a push from a linked worktree exports `GIT_DIR` to its
+hooks, and `GIT_CONFIG_GLOBAL` points the global config back at the developer's), and put
+`XDG_CONFIG_HOME` under the temp dir too, since git also reads `$XDG_CONFIG_HOME/git/config`.
 
 ### A check-then-open race: make `stat` answer for another file
 
@@ -585,6 +600,20 @@ fail and the fixed form must not. Measured on a small worker: the flag form let 
 items even without the inserted sleep; waiting on the stop request processed none, with and without
 a 0.2 s sleep.
 
+### A timed-wake test needs a case where nothing else wakes the waiter
+
+A test that proves a TIMED wake or poll fires (a blocked main thread noticing Ctrl-C through a
+wait with a timeout, a poll loop noticing a stop flag) passes without that timeout whenever
+something else wakes the waiter: many short work items each complete and wake an untimed wait on
+their own, so the stop is seen at the next completion. Build the case so that nothing but the
+timeout can wake it, such as one long item instead of many short ones, and assert an outcome only
+the timed wake produces: the run returns interrupted with that item still unfinished (zero items
+completed), not merely "interrupted", which the untimed wait also reaches once the item ends. Then
+mutate the timeout to `None` (an untimed wait) and require the test to fail; bound that arm
+(`mutation_arm.py --timeout`, or the runner's per-test timeout) so a mutant that waits out the long
+item cannot hang the run. A RED taken against code that lacked several fixes at once does not show
+this one is needed; run the untimed-wait arm against the fixed code.
+
 ## Child processes, nested runners and shared files
 
 ### A nested test runner inherits the outer runner's environment
@@ -717,6 +746,18 @@ helper's result (`hits = token_offsets(read_output())`,
 `assert not hits, f"{len(hits)} token(s) at offsets {hits}"`). Then test the leak paths
 themselves: plant a known FAKE token so the test fails, run it with `--tb=long -vv -l`, and assert
 the captured output does not contain that token.
+
+### A refused-before-any-side-effect test asserts every sink the side effect could reach
+
+A test proving that bad input is refused BEFORE anything happens asserts on every place the work
+would have left a trace (a request log, a hit counter, a ban or state file, the output directory),
+not only the one the author expects first. The refusal can come from a later stage than intended,
+after a different side effect already ran: a zero timeout failed every connect before the origin
+saw a request, so `origin.log == []` held while every proxy was written to the ban file. List the
+sinks from the code path and assert each is untouched (a counter unchanged, a file absent or
+byte-identical to its content before the call). RED one arm per sink: in a scratch copy,
+make the code write to that sink before it validates, and require the test to fail on that sink's
+assertion. A sink whose arm stays green has no assertion that can see it.
 
 ## Leaked and held resources
 
