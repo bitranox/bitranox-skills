@@ -1274,6 +1274,21 @@ class TestTheRepoIsResolvedOnce:
         assert rc == 0 and seen == [None]
         assert "warning:" in capsys.readouterr().err
 
+    def test_a_checkout_with_no_github_remote_ends_before_any_poll(self, monkeypatch, capsys):
+        def lookup(**kw):
+            raise ci_wait.GhFailed("gh repo view exited 1: none of the git remotes configured for "
+                                   "this repository point to a known GitHub host")
+
+        def never(sha, **kw):
+            raise AssertionError("polled a checkout that has no GitHub remote")
+
+        monkeypatch.setattr(ci_wait, "resolve_repo", lookup)
+        monkeypatch.setattr(ci_wait, "sha_is_known_locally", lambda sha, **kw: True)
+        monkeypatch.setattr(ci_wait, "gh_runs", never)
+        assert ci_wait.main(["--sha", SHA, "--json"]) == 2
+        data = json.loads(capsys.readouterr().out)["data"]
+        assert data["state"] == "error" and "--repo OWNER/NAME" in data["summary"]
+
     def test_gh_missing_at_lookup_is_could_not_tell(self, monkeypatch, capsys):
         def lookup(**kw):
             raise ci_wait.GhUnavailable("could not run gh: not found")

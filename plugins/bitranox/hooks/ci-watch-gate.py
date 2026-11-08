@@ -23,6 +23,7 @@ Set BITRANOX_CI_WATCH to any value to bypass entirely.
 
 import json
 import os
+import shlex
 import sys
 from pathlib import Path
 
@@ -62,6 +63,10 @@ def verdict(pending: list[dict], attempt: int = 1) -> str | None:
     if not sha:
         return None
     branch = str(newest.get("branch") or "HEAD")
+    # The session cwd need not be the repo that was pushed. A worktree may be gone by Stop, and
+    # ci_wait refuses a --repo path that no longer exists, so a vanished one is left out.
+    repo = str(newest.get("repo") or "")
+    anchor = " --repo %s" % shlex.quote(repo) if repo and os.path.isdir(repo) else ""
     left = state.MAX_BLOCKS - attempt
     remaining = ("\nThis is the last reminder for this push; the gate releases after it."
                  if left <= 0 else
@@ -70,11 +75,11 @@ def verdict(pending: list[dict], attempt: int = 1) -> str | None:
              else "\n(%d pushes this session are still unchecked; this is the newest.)" % len(pending))
     return ("You pushed %s on %s and have not checked whether CI passed.%s\n\n"
             "A push is not the end of the change - watch the run and fix what it reports:\n"
-            "    uv run %s --sha %s\n\n"
+            "    uv run %s --sha %s%s\n\n"
             "Exit 0 every run passed, 1 at least one did not, 2 could not tell. If it reds, fix it\n"
             "on this branch rather than leaving it for the next session to find.%s\n"
             "Set BITRANOX_CI_WATCH=1 to bypass this gate."
-            % (sha[:12], branch, extra, _CI_WAIT, sha, remaining))
+            % (sha[:12], branch, extra, _CI_WAIT, sha, anchor, remaining))
 
 
 def main(raw: str | None = None) -> int:

@@ -46,6 +46,7 @@ Exits 0 always, and emits nothing when it has no opinion.
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -621,16 +622,16 @@ def notice(command, cwd: str = "", tool_name: str = "Bash") -> tuple[str, str, s
     if triggers == PR_ONLY:
         text = ("No `on: push` trigger in this repo names %s, so this push (%s) starts a run only "
                 "if an open pull request from that branch matches a pull_request trigger. Check "
-                "before moving on:\n    uv run %s --sha %s\n"
+                "before moving on:\n    uv run %s --sha %s --repo %s\n"
                 "`no-runs` (exit 2) then means no pull request runs it and nothing beyond the "
                 "local gate has validated it; 0 passed, 1 failed."
-                % (name, sha[:12], _CI_WAIT, sha))
+                % (name, sha[:12], _CI_WAIT, sha, shlex.quote(repo)))
         return text, sha, branch, repo, True
     text = ("CI is now running for the push you just made: %s (%s).\n"
             "Watch it before moving on - this repo's CI blocks on every cell:\n"
-            "    uv run %s --sha %s\n"
+            "    uv run %s --sha %s --repo %s\n"
             "Exit 0 every run passed, 1 something failed, 2 could not tell."
-            % (sha[:12], branch, _CI_WAIT, sha))
+            % (sha[:12], branch, _CI_WAIT, sha, shlex.quote(repo)))
     return text, sha, branch, repo, True
 
 

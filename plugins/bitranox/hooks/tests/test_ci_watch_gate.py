@@ -37,6 +37,21 @@ def test_a_pending_push_blocks_and_names_the_sha(tmp_path, capsys):
     assert "ci_wait.py" in payload["reason"]
 
 
+def test_the_reminder_names_the_pushed_repo_while_it_exists(tmp_path, capsys):
+    pushed = tmp_path / "pushed"
+    pushed.mkdir()
+    state.record_push(str(tmp_path), "sess-1", "a" * 40, repo=str(pushed), branch="master")
+    assert hook.main(_event(tmp_path)) == 0
+    assert "--repo %s" % pushed in json.loads(capsys.readouterr().out)["reason"]
+
+
+def test_the_reminder_leaves_out_a_repo_that_is_gone(tmp_path, capsys):
+    gone = tmp_path / "removed-worktree"
+    state.record_push(str(tmp_path), "sess-1", "a" * 40, repo=str(gone), branch="master")
+    assert hook.main(_event(tmp_path)) == 0
+    assert "--repo" not in json.loads(capsys.readouterr().out)["reason"]
+
+
 def test_nothing_pending_is_silent(tmp_path, capsys):
     assert hook.main(_event(tmp_path)) == 0
     assert capsys.readouterr().out == ""

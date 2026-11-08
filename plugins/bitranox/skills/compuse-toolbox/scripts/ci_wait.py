@@ -1536,6 +1536,10 @@ def _usual_durations(runs: Sequence[dict[str, object]], repo: str | None,
     return f" ({'; '.join(notes)}: the median of recent successful runs; raise --timeout above it)"
 
 
+#: gh's own words, untranslated in every locale, for a checkout with no remote on a known host.
+_NO_GITHUB_REMOTE = "none of the git remotes"
+
+
 def _resolve_repo_once(timeout_s: float) -> str | None:
     """The cwd's repo, so every poll names it; None (polling from the cwd) when gh answered badly.
 
@@ -1546,6 +1550,10 @@ def _resolve_repo_once(timeout_s: float) -> str | None:
     try:
         return resolve_repo(timeout_s=max(GH_CALL_FLOOR_S, min(GH_CALL_TIMEOUT_S, timeout_s)))
     except GhFailed as exc:
+        # Not weather: this checkout has no GitHub remote, so every poll would fail the same way.
+        if _NO_GITHUB_REMOTE in str(exc):
+            raise BadRepo(f"this checkout has no GitHub remote ({exc}); run from the checkout "
+                          f"that was pushed, or pass --repo OWNER/NAME") from None
         print(f"warning: could not resolve the repository once ({exc}); polling from the "
               f"current directory, so removing it mid-wait fails the polls. Pass --repo OWNER/NAME.",
               file=sys.stderr)
