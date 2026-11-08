@@ -39,6 +39,11 @@ that answer a different question.
 
 ## Use the tool
 
+**A request to clear or prune the plugin cache means run `--apply`.** It removes only what no live
+session holds, so it needs no dry run first and no question about which cache. A dry run that
+would remove nothing predicts nothing: sessions end between the two, and `--apply` then removes
+versions the dry run kept.
+
 `scripts/pluginprune.py` classifies every version directory AND every `temp_*` leftover in ONE
 pass, stating a reason per line. Paths here are relative to this skill's own directory, which
 is announced when the skill loads. Dry run by default. `--apply` builds the plan again in its
