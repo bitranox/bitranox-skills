@@ -32,6 +32,12 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 ## [10.26.0]
 
+### Added
+
+- coding-resilience: answers from untrusted peers (proxies, mirrors) may choose a value but never
+  stop a run, write a permanent ban, or discard saved progress; a first-contact value needs two
+  agreeing paths, and a resumed job trusts its own verified record over a fresh vote.
+
 ### Changed
 
 - `redcheck.py` weighs each shared term by how likely a document of that size is to hold it by
