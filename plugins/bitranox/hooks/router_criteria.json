@@ -29,7 +29,7 @@
   },
   "process-plan-writing-plans": {
     "what": "A spec or requirements already exist and an implementation plan is the next artifact.",
-    "not_for": "Design that is still unsettled, which needs brainstorming first; and executing a plan that already exists.",
+    "not_for": "Design that is still unsettled, which needs brainstorming first; executing a plan that already exists; and a goal already written as an ordered list of steps.",
     "examples": [
       "write a plan for this spec",
       "turn these requirements into steps"

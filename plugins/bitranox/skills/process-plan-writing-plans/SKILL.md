@@ -47,6 +47,8 @@ the plan take shape cannot know what was considered and rejected. See `bitranox:
 - You reason best about code you can hold in context at once, and your edits are more reliable when files are focused. Prefer smaller, focused files over large ones that do too much.
 - Files that change together should live together. Split by responsibility, not by technical layer.
 - In existing codebases, follow established patterns. If the codebase uses large files, don't unilaterally restructure, but if a file you're modifying has grown unwieldy, including a split in the plan is reasonable.
+- In an existing or template-derived repo, read its gate configuration before writing task code (type-checker include and exclude, lint per-file-ignores, selected rule families) and make every code block pass it. Test any glob-scope assumption on scratch files instead of reading the pattern.
+- When a cross-cutting check (a lease, a lock gate, an audit hook) must cover a resource the code reaches through more than one path, plan a task that unifies the paths FIRST and put the check in the one remaining path. A per-path check doubles what must stay in sync and keeps behaviour the paths already differ on.
 
 This structure informs the task decomposition. Each task should produce self-contained changes that make sense independently.
 
@@ -84,6 +86,8 @@ A task is the smallest unit that carries its own test cycle and is worth a fresh
 
 ---
 ```
+
+**Every version floor or pin in Global Constraints names what sets it** (a measured candidate, a user decision). A floor picked as a "safe low" for comfort is a plan defect: check what the target environment can actually run, and ask when it is unknown.
 
 ## Task Structure
 
@@ -177,7 +181,7 @@ After writing the complete plan, look at the spec with fresh eyes and check the 
 
 **2. Placeholder scan:** Search your plan for the red flags from the "No Placeholders" section above. Fix them.
 
-**3. Type consistency:** Do the types, method signatures, and property names you used in later tasks match what you defined in earlier tasks? A function called `clearLayers()` in Task 3 but `clearFullLayers()` in Task 7 is a bug.
+**3. Type consistency:** Do the types, method signatures, and property names you used in later tasks match what you defined in earlier tasks? A function called `clearLayers()` in Task 3 but `clearFullLayers()` in Task 7 is a bug. Every helper a task's code calls from ANOTHER module must be public there: if it is private (`_name`), the plan makes it public in the earliest task that needs it (a word-boundary rename across callers, `sed` with `\b`), instead of leaving the implementer to duplicate it or to import a name a strict type checker reports.
 
 **4. Absence checks:** A step that verifies a rename or removal with "`grep X` must print nothing" must not match what the plan itself leaves behind. A substring pattern still matches the NEW name (`grep '_reason'` hits `failure_reason`), so the step can never pass as written, and an executor following it literally stops or "fixes" correct code. Match whole identifiers (`grep -nw '_within\|_reason'`, or `\b` with `grep -E`), then dry-run each such check against the intended after-state, a scratch file holding the code the plan's own steps write: it must print nothing there, and print the line when each old name in turn is planted back. Measured: a plan checked `grep '_within\|_reason'` after renaming `_reason` to `failure_reason`, and the check matched the new name.
 
@@ -194,6 +198,10 @@ After writing the complete plan, look at the spec with fresh eyes and check the 
 **10. Platforms:** Read the repo's CI OS matrix (the workflow file, or the config it is generated from) and make every platform claim in Global Constraints agree with it: each prescribed test passes on every OS there or skips with a stated reason. A test that isolates `HOME` also sets `USERPROFILE`, which `Path.home()` reads on Windows. Measured: a plan said "Linux only" while CI ran Windows and macOS, and a test that set only `HOME` passed locally and failed on Windows after the release.
 
 **11. Code against the design text:** In a three-altitude plan, check each DETAILED step's code against every behavioural sentence the MID plan states for the same function (what happens at a limit, the order things are cut in, which fields a record carries). Implementers follow the brief's code, so a mismatch ships as the plan's intent, and only a reviewer who reads both documents catches it.
+
+**12. Tests that can show what they claim:** A test for an ORDER or STATE constraint (arms interleaved, a resource held open during a step) makes that order observable: a fake clock with distinct increasing deltas (arm A gets d1, d3, d5 and arm B d2, d4, d6) or a wrapper recording state at each call; counts and lengths under a uniform clock assert nothing about it. A RED step that runs two test files at once stops at a collection error in one, so the other's RED never shows: give each file its own RED command or add `--continue-on-collection-errors`, and say which failure each shows. A test that a CLI option rejects a bad value asserts the option's own name in stderr (`argument --max-rows`), never only exit code 2: argparse also exits 2 on an option it does not know yet, so that RED passes before any code exists.
+
+**13. Text replaced by a pointer:** When a task replaces a passage with a pointer to another file or skill, diff the removed text against the pointed-to text and keep or move every rule, remedy and threshold the target does not carry.
 
 If you find issues, fix them inline. No need to re-review, just fix and move on. If you find a spec requirement with no task, add the task - except for a milestone past the next decision checkpoint of a three-altitude plan: there the file's note that its tasks come once that checkpoint is decided is the intended state, not a gap or a placeholder.
 
