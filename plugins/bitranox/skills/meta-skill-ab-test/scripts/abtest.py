@@ -1056,6 +1056,27 @@ def _sandboxes(run_dir: Path) -> dict[str, str | None]:
             if r.get("step") == "arm" and r.get("status") in DONE_LIVE}
 
 
+def _bundle_branches(repo: Path, run_dir: Path, refs: list[str]) -> str | None:
+    """Write every branch of the run into <run_dir>/branches.bundle before any is deleted.
+
+    An arm's own bundle.git holds only its final branch, so the set-aside attempts, a killed arm's
+    branch and a parallel node's branch would be gone after the delete (measured: 17 of 62). A
+    second prune with nothing left writes no bundle; an existing bundle is never replaced.
+    Returns the error text, or None when the branches are bundled or there are none.
+    """
+    if not refs:
+        return None
+    target = run_dir / "branches.bundle"
+    n = 1
+    while target.exists():
+        n += 1
+        target = run_dir / f"branches-{n}.bundle"
+    made = git(repo, "bundle", "create", str(target), *refs)
+    if made.returncode != 0:
+        return f"bundle of the run's branches failed, none deleted: {' '.join(made.stderr.split())[:200]}"
+    return None
+
+
 def cmd_prune_run(args: argparse.Namespace) -> int:
     """Prune every arm worktree of the run, then delete its branches.
 
@@ -1086,6 +1107,10 @@ def cmd_prune_run(args: argparse.Namespace) -> int:
         elif branch:
             own_refs.append(branch)
     refs = [*_run_branches(repo, run_id), *own_refs]
+    bundle_error = _bundle_branches(repo, run_dir, refs)
+    if bundle_error:
+        errors.append(bundle_error)
+        refs = []  # nothing is deleted that no bundle holds
     deleted = [b for b in refs if git(repo, "branch", "-D", b).returncode == 0]
     errors += [f"branch {b} could not be deleted" for b in refs if b not in deleted]
     skipped = [f"frozen checkout {p} is left (release it from the skills repo)" for p in sorted((run_dir / "frozen").glob("*"))]

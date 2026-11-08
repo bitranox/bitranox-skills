@@ -3,6 +3,7 @@ import importlib.util
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tarfile
 import time
@@ -387,6 +388,26 @@ def test_prune_run_deletes_the_branches(tmp_path, scratch_repo, skills_repo, fak
     assert T.main(_run_args(run_dir, creds, skills_repo, "--dry-run")) == 0
     assert T.main(["prune-run", str(run_dir)]) == 0
     assert L.git(scratch_repo, "branch", "--list", f"abx/{run_dir.name}/*").stdout.strip() == ""
+
+
+def test_prune_run_bundles_every_branch_before_deleting_them(tmp_path, scratch_repo, skills_repo, fake_claude_path, monkeypatch):
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    env, creds = _env(fake_claude_path, tmp_path)
+    _use_env(monkeypatch, env)
+    assert T.main(["seal", str(run_dir)]) == 0
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--dry-run")) == 0
+    # a set-aside attempt branch: no arm's own bundle.git covers it, the run-wide bundle must
+    L.git(scratch_repo, "branch", f"abx/{run_dir.name}/r1-C.attempt-1", "HEAD")
+    before = sorted(L.git(scratch_repo, "branch", "--list", f"abx/{run_dir.name}/*", "--format=%(refname)").stdout.split())
+    assert len(before) >= 2
+    assert T.main(["prune-run", str(run_dir)]) == 0
+    bundle = run_dir / "branches.bundle"
+    assert bundle.is_file()
+    heads = subprocess.run(["git", "bundle", "list-heads", str(bundle)], capture_output=True, text=True, check=True).stdout
+    assert sorted(line.split()[1] for line in heads.splitlines()) == before
+    # a second prune finds no branch and must not replace the bundle with an empty one
+    assert T.main(["prune-run", str(run_dir)]) == 0
+    assert bundle.is_file() and len(heads.splitlines()) == len(before)
 
 
 # --- review round: pause on a refused request, leftovers of a killed attempt, refusals ------------

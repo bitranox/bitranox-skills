@@ -30,6 +30,12 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.37.1]
+
+### Fixed
+
+- meta-skill-ab-test: `prune-run` writes every branch of the run into `<run dir>/branches.bundle` before deleting any, and deletes none when the bundle fails. An arm's own `bundle.git` holds only its final branch, so set-aside attempts and killed arms were lost with the prune.
+
 ## [10.37.0]
 
 ### Fixed
