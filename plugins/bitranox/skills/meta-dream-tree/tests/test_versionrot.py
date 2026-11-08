@@ -257,3 +257,52 @@ class TestCli:
         rc, env = _run(capsys, "scan", "--chain", str(root), "--repos", str(tmp_path / "repos"))
         assert rc == 1
         assert env["data"]["superseded"][0]["claims"][0]["current"] == "2.0.0"
+
+
+@pytest.mark.parametrize("text", [
+    "Measured 2026-10-02: bmk 3.0.0 ran its checks first.",
+    "The gate broke (2026-10-27, bmk 3.0.0) on a peer's commit.",
+    "Measured in bmk 3.0.0 the shutdown hangs.",
+    "bmk 3.0.0 (uploaded 2026-10-26) refused it.",
+    "bmk covers this shape since 3.0.0.",
+    "This holds since bmk 3.0.0.",
+])
+def test_a_dated_or_since_claim_is_dated_not_superseded(text: str) -> None:
+    assert _only(versionrot.find_claims(text, _reg(bmk="3.21.1"))).status == "dated"
+
+
+@pytest.mark.parametrize("text", [
+    "fixed in bmk 3.0.0",
+    "verified on bmk 3.0.0",
+    "Note: bmk 3.0.0 streams delivery. Measured 2026-10-02 elsewhere.",
+])
+def test_an_undated_version_claim_stays_superseded(text: str) -> None:
+    claims = versionrot.find_claims(text, _reg(bmk="3.21.1"))
+    assert _only(claims).status == "superseded"
+
+
+def test_a_dated_claim_of_the_current_version_is_still_current() -> None:
+    claim = _only(versionrot.find_claims("Measured 2026-10-02 on bmk 3.21.1.", _reg(bmk="3.21.1")))
+    assert claim.status == "current"
+
+
+def test_pypi_replaces_an_unreleased_local_version() -> None:
+    reg = _reg(pwshpy="1.11.5")
+    asked: set[str] = set()
+    versionrot._resolve_online(["pwshpy 1.11.0 streams output"], reg, lambda _n: "1.11.0", asked)
+    assert asked == {"pwshpy"}
+    assert _only(versionrot.find_claims("pwshpy 1.11.0 streams", reg)).status == "current"
+
+
+def test_pypi_with_no_answer_keeps_the_local_version() -> None:
+    reg = _reg(pwshpy="1.11.5")
+    versionrot._resolve_online(["pwshpy 1.11.0 streams output"], reg, lambda _n: None, set())
+    assert _only(versionrot.find_claims("pwshpy 1.11.0 streams", reg)).status == "superseded"
+
+
+def test_pypi_is_not_asked_about_a_version_given_on_the_command_line() -> None:
+    reg = versionrot.Registry()
+    reg.known["pwshpy"] = versionrot.Known("1.11.5", "--current")
+    asked: set[str] = set()
+    versionrot._resolve_online(["pwshpy 1.11.0 streams output"], reg, lambda _n: "1.0.0", asked)
+    assert asked == set()

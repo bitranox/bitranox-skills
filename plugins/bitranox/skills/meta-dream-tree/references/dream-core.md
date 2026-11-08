@@ -162,8 +162,8 @@ blocks, tool output and system reminders, while the learnings sit in the user an
 results that FAILED (skill bodies and other `isMeta` records dropped, each record cut at 3,000
 characters with the cut named), and one prose part covers up to 64 MB of transcript, so a stretch
 of tens of MB is ONE review instead of a loop of 2 MB parts. Mark it with `dream_state.py
-session-reviewed "<cwd>" --prose`, which advances over exactly the window the prose review showed;
-without `--prose` it advances one raw 2 MB part only. The exit status and the `TRUNCATED` banner
+session-reviewed "<cwd>"`, which advances over exactly the window the last review showed, with or
+without `--prose`. The exit status and the `TRUNCATED` banner
 work as above. Read the raw part instead (no `--prose`) when the question is about a tool call's
 input or a successful tool's output, which the prose view leaves out. Do not hand-roll a
 transcript condenser: for a transcript that is not a review target (another project's, a
@@ -192,7 +192,8 @@ over the claimed range, first.
 **The owed transcript is usually NOT this session's.** The obligation is recorded per PROJECT and
 outlives the session that compacted, so it is routinely inherited by a later session that never
 compacted at all. `session-review` therefore targets the transcript that ACTUALLY compacted while it
-still has unreviewed bytes, and prints a `READING THE COMPACTED EARLIER SESSION` banner naming that
+still has unreviewed bytes (unless that session is still running, which leaves it to that
+session's own nap), and prints a `READING THE COMPACTED EARLIER SESSION` banner naming that
 file; `session-reviewed` marks the same file. Read the banner before deciding whose learnings these
 are, and do not clear the obligation any other way - discharging it without reading that file is how
 a compacted session's stretch is lost while the run reports itself consolidated.
@@ -204,8 +205,9 @@ ten with a count of the rest: an earlier session that never compacted is named b
 not the live one, so nothing else ever offers it. The list is an offer, not a quota - a project can
 hold dozens. Read the ones that may hold uncaptured learnings, newest first, as far as the run
 allows: `dream_state.py session-review "<cwd>" --transcript <path> > review.txt 2>&1`, capture,
-then `dream_state.py session-reviewed "<cwd>" --transcript <path>` with the SAME path - without the
-flag the mark lands on the owed or live transcript, not the file you read. Parts work as above.
+then `dream_state.py session-reviewed "<cwd>" --transcript <path>` with the SAME path. Parts work
+as above. A mark that landed on a stretch nobody read is undone with `session-reviewed "<cwd>"
+--transcript <path> --to <offset>`.
 Never mark a listed transcript reviewed without reading it, and report how many the run left
 unread.
 

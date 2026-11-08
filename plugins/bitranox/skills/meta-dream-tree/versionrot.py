@@ -16,6 +16,12 @@ version. Current versions come from the repos on disk (every `pyproject.toml` an
 `--current NAME=VERSION`, and with `--pypi` from PyPI. Nothing is guessed: a package it cannot
 resolve is reported `unresolved`, never compared.
 
+A claim that records evidence rather than asserts a current fact is reported `dated`, not
+superseded: a version in a sentence carrying an ISO date or "measured" (an incident on the version
+it happened on stays true) and a "since X" statement. With `--pypi`, a package PyPI knows is judged
+against its newest RELEASE, so an unreleased version in a local pyproject cannot call a correct fact
+stale.
+
 A superseded claim is a CANDIDATE. The dream re-checks it against the current release and then
 rewords it to the current state, archives it (a fixed bug, a finished migration, a test snapshot)
 or merges it with its siblings - see the meta-dream-tree prune step.
@@ -28,6 +34,14 @@ Run (from the plugin root):
   `uv run skills/meta-dream-tree/versionrot.py scan --tree /path/to/project --json`
   `uv run skills/meta-dream-tree/versionrot.py scan --chain . --current "claude-code=2.1.300"`
 Pure standard library; Python 3.14+.
+
+Decisions:
+    "Dated evidence" is a text rule, not a judgment: an ISO date or the word "measured" in the
+    version's sentence, or "since" right before the version or its package. Words like "verified"
+    or "confirmed" alone do not count, because "verified on Claude Code 2.1.198" is the stale claim
+    this scan exists for. Why: a re-check of one chain's 57 superseded claims kept all 57, each a
+    dated incident record or a "since X" statement. Reopen if a scan shows dated claims that were
+    really stale and were hidden. Pinned by test_a_dated_or_since_claim_is_dated_not_superseded.
 """
 
 import argparse
@@ -80,6 +94,11 @@ _NEAR = 2
 _LOOKBACK = 8
 _SKIP_DIRS = frozenset({"node_modules", "__pycache__", "site-packages", "dist", "build", "target"})
 # Names PyPI would answer for but that, in a fact, mean something else entirely.
+_EVIDENCE = re.compile(r"\b20\d\d-\d\d-\d\d\b|\bmeasured\b", re.IGNORECASE)
+_SINCE = re.compile(r"\bsince\s+(?:[\w.-]+\s+)?v?$", re.IGNORECASE)
+# A version these sources name is not a PyPI release question: the caller said so, or it is this
+# plugin's own version.
+_NOT_ASKED_SOURCES = frozenset({"--current", "this plugin"})
 _NOT_PYPI = frozenset({"python", "cpython", "kernel", "linux", "windows", "git", "node", "gh",
                        "powershell", "tpm", "uefi", "pve", "proxmox", "debian", "ubuntu"})
 
@@ -123,7 +142,7 @@ class Claim:
     pkg: str | None
     named: str
     current: str | None
-    status: str  # superseded | current | ahead | unresolved
+    status: str  # superseded | dated | current | ahead | unresolved
     context: str
     where: str = ""
 
@@ -158,6 +177,13 @@ def _sentence_prefix(text: str, start: int) -> str:
     for m in _SENTENCE_END.finditer(text, 0, start):
         cut = m.end()
     return text[cut:start]
+
+
+def _is_evidence(text: str, m: re.Match[str], prefix: str) -> bool:
+    """True when the version at `m` sits in a dated record or a "since X" statement."""
+    end = _SENTENCE_END.search(text, m.end())
+    sentence = prefix + text[m.start():end.start() if end else len(text)]
+    return bool(_EVIDENCE.search(sentence) or _SINCE.search(prefix))
 
 
 def _words(segment: str) -> list[str]:
@@ -223,8 +249,10 @@ def find_claims(text: str, reg: Registry, where: str = "") -> list[Claim]:
         if known is None:
             claims.append(Claim(pkg, named, None, "unresolved", context, where))
         else:
-            claims.append(Claim(pkg, named, known.version, compare(named, known.version),
-                                context, where))
+            status = compare(named, known.version)
+            if status == "superseded" and _is_evidence(text, m, sentence):
+                status = "dated"
+            claims.append(Claim(pkg, named, known.version, status, context, where))
     return claims
 
 
@@ -358,16 +386,25 @@ def scan_facts(levels: list[Path], store: Path | None, reg: Registry,
 
 def _resolve_online(texts: list[str], reg: Registry, fetch: Callable[[str], str | None],
                     asked: set[str]) -> None:
-    """Ask PyPI, once per name, about each unresolved package named before a version."""
+    """Ask PyPI, once per name, about each package a claim calls unresolved or superseded.
+
+    An answer REPLACES what the repos on disk said: the newest release is what "current" means,
+    and a local pyproject can hold a version that was never published. No answer (not on PyPI, or
+    offline) leaves the local version in place."""
     for text in texts:
         for claim in find_claims(text, reg):
             name = claim.pkg
-            if claim.status != "unresolved" or not name or name in _NOT_PYPI or name in asked:
+            if claim.status not in ("unresolved", "superseded"):
+                continue
+            if not name or name in _NOT_PYPI or name in asked:
+                continue
+            known = reg.lookup(name)
+            if known is not None and known.source in _NOT_ASKED_SOURCES:
                 continue
             asked.add(name)
             ver = fetch(name)
             if ver:
-                reg.add(name, ver, "pypi")
+                reg.known[reg.canonical(name)] = Known(ver, "pypi")
 
 
 def _envelope(ok: bool, data: dict, error: str | None = None) -> str:
@@ -456,7 +493,8 @@ def main(argv: list[str] | None = None) -> int:
     sc.add_argument("--alias", action="append", default=[], metavar="WORD=PACKAGE",
                     help="a word that names a package, e.g. plugin=bitranox (repeatable)")
     sc.add_argument("--pypi", action="store_true",
-                    help="ask PyPI for packages no repo or --current resolves")
+                    help="ask PyPI for the newest release of every unresolved or superseded "
+                         "package; its answer replaces a local checkout's version")
     sc.add_argument("--json", action="store_true", help="emit a JSON envelope")
     utf8_stdio()
     args = ap.parse_args(argv)

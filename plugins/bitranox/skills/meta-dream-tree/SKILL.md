@@ -177,7 +177,9 @@ the success line, abort-and-show on a miss).
    complete store. Read the `## Lessons for the next nap` heading of every `handover.md` on the
    chain as capture input too (repo roots under the anchor; `git log -p -- handover.md` reaches
    ones already overwritten since the last dream): a work session RECORDS its lessons there and
-   does not capture them itself, so a dream that skips the heading drops them.
+   does not capture them itself, so a dream that skips the heading drops them. Classify those
+   lessons before writing with one read-only `opus` agent: COVERED (with the quote from the store
+   that covers it), PARTIAL or UNCOVERED, so a lesson already captured is not written twice.
 
 2. **Back up + manifest.** Run `store_manifest.py backup` (home: `<plugin>/skills/meta-dream-tree/`,
    launch via `hooks/run-python.sh`) with `--scope tree` (a nap uses `--scope chain`):
@@ -195,7 +197,9 @@ the success line, abort-and-show on a miss).
    read as real levels to the engine, recall and `--check-tree`), or an existing dir that is not
    an earlier backup.
    Then commit the store's git repo (Durability pass) so the pre-dream state is one `git diff`
-   away.
+   away. Start step 4's `dedup_scan.py` now with `run_in_background`: over a large store it runs
+   for minutes, past the foreground Bash limit, and started here it finishes while step 3 reads and
+   still sees step 1's captures.
 
 3. **Load both tiers TREE-WIDE** - every level's pointer block under the anchor (the cwd's chain
    AND every sibling project/department; the central bodies are one store) plus the native raw
@@ -220,8 +224,9 @@ the success line, abort-and-show on a miss).
    the SECRETS carve-out (curated stores are git-tracked; the native tier is not - never stage
    credentials into a repo).
 
-4. **Dedup / merge ACROSS THE TREE.** Get the candidate pairs from `dedup_scan.py` (home:
-   `<plugin>/skills/meta-dream-tree/`, launch via `hooks/run-python.sh`):
+4. **Dedup / merge ACROSS THE TREE.** Get the candidate pairs from `dedup_scan.py`, started in
+   the background after step 2 (home: `<plugin>/skills/meta-dream-tree/`, launch via
+   `hooks/run-python.sh`):
 
        dedup_scan.py --from <anchor> --threshold 0.45
 
@@ -235,8 +240,10 @@ the success line, abort-and-show on a miss).
 
    The output is CANDIDATES, not duplicates - it scores words, so read BOTH bodies before folding
    anything, and pass every drafted merge through the loss-finding second pass in
-   references/dream-core.md "Dedup semantics". Fold near-duplicates into one sharpened entry
-   (engine `add`, same slug), comparing
+   references/dream-core.md "Dedup semantics". When a fold sentence credits where the lesson was
+   measured, copy the project and date from the DROPPED body's own text, never from the level the
+   dropped fact sits at. Fold near-duplicates into one sharpened entry (engine `add`, same slug),
+   comparing
    across ALL levels, especially SIBLING projects (the classic duplicate is the same lesson
    captured independently in two siblings; it merges at their common parent). Cross-link related
    entries with `[[slug]]`. Dedup runs TWICE - here, and again in step 8, because placement
@@ -359,7 +366,7 @@ the success line, abort-and-show on a miss).
    3. Is its lesson tied to one past version - a bug fixed in a named release, a finished
       upgrade or migration, a result measured on one version? These pass every other check (the
       claim was true, the file it names still exists, a named version even reads as re-testable),
-      so find them with `versionrot.py scan --tree <anchor> --json` (home:
+      so find them with `versionrot.py scan --tree <anchor> --pypi --json` (home:
       `<plugin>/skills/meta-dream-tree/`, launch via `hooks/run-python.sh`). Exit 1 lists the
       facts naming a version a newer release replaced, each with the level that owns its pointer;
       exit 0 lists none; exit 2 is an error to report, never a clean tree. A listed claim is a
@@ -367,6 +374,8 @@ the success line, abort-and-show on a miss).
       before acting, then do exactly one of:
       - **still true** -> reword it to the current state with the version history dropped:
         `factedit.py show --body --slug <slug> --level <its level>`, edit that text in a file,
+        (a reworded hook can be previewed with `factedit.py check --hook-file <f>`: exit 0 says
+        only that the engine would accept it, so read its `~ advisory:` lines too)
         then `factedit.py apply --slug <slug> --level <its level> --body-file <f>`, adding
         `--hook-file <f2>` when
         the HOOK names the version too - a body-only edit leaves the always-loaded line saying it
@@ -379,7 +388,8 @@ the success line, abort-and-show on a miss).
       - **several facts on one library that the re-check reduces to one current lesson** ->
         merge them as in step 4.
       Not candidates: a package it reports `unresolved` (nothing is guessed), `ahead` (the local
-      clone is stale, not the fact), a version given only as an example, and a Python boundary
+      clone is stale, not the fact), `dated` (a dated incident record or a "since X" statement,
+      true on the version it names), a version given only as an example, and a Python boundary
       ("before Python 3.14") that the supported range still spans.
 
    - **Jev shadow on those three questions** (only when step 0c found `jev_shadow.py status` on;
