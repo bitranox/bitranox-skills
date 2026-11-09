@@ -515,6 +515,20 @@ _AUTHORED_ONLY_RULES = [
 #: a QUESTION someone asks, not a command they type. "Costs more than the channel carries" means a
 #: shape exists and was measured too broad to ship.
 NO_COMMAND_SHAPE = {
+    "quotecheck": (
+        "the chore is 'did this subagent's quote really come from the text it cites?', which "
+        "arises when a probe's result comes back - an Agent result, not a command - so nothing on "
+        "a command line says one is being checked.",
+        "measured over 203,427 recorded Bash calls: candidate `quote.?back` fires 205 times "
+        "(0.10%, 79 sessions), and of six sampled firings five are checklist or changelog edits "
+        "that mention the word and one is a hand-rolled tally, so the intent is not on the "
+        "command line."),
+    "raisesmatch": (
+        "the chore is 'would any refusal satisfy this match pattern?', a question asked while "
+        "reading a test, and it is answered by reading rather than by a command with a shape.",
+        "measured over 203,427 recorded Bash calls: candidate grep or rg of `pytest.raises|warns` "
+        "with `match` fires 67 times (0.033%, 42 sessions), and the six sampled firings are "
+        "scripted test edits and import checks, none of them an audit of a pattern."),
     "fanout_crosscheck": (
         "the chore is 'did an agent of this fan-out write into a sibling's target?', which arises "
         "when a fan-out FINISHES - an Agent result, not a command - so its channel is the "

@@ -30,6 +30,14 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.44.0]
+
+### Added
+
+- compuse-toolbox: `quotecheck` checks a subagent's quote-back against the text it cites, and
+  `raisesmatch` reports a `pytest.raises` or `warns` `match=` pattern that any unrelated refusal
+  would satisfy.
+
 ## [10.43.0]
 
 ### Added
