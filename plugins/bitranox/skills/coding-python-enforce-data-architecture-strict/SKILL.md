@@ -356,6 +356,15 @@ each hit:
   the field. A CHANGELOG line saying a plain string "still works" is checked on each such path,
   not on the first one that passes.
 
+- **An unknown raw value falls through the branches of a PUBLIC function.** A value-mixin Enum
+  (`str`, `int`, `bytes`) equals its raw value, so an Enum-typed parameter of a function called
+  from untyped code still dispatches by `==`, and a raw value naming no member matches no branch
+  and lands in the last `else` as if it were that member, while pyright and the tests stay green.
+  Where a public function has a default branch, or the old code had a guard, its entry is the
+  boundary (Core Principle 6): parse with `x = TheEnum(x)`, which takes a member or a raw value and
+  raises `ValueError` for an unknown one. Do not write `if x not in TheEnum`: a raw value raises
+  `TypeError` there on Python 3.10 and 3.11.
+
 If any of these kinds of test or caller exists, the item belongs in the tier that touches tests.
 `str, Enum` wire-compatibility saves construction and lookup tests, never identity-dispatch,
 raises-on-invalid or `.value`-reading ones.
@@ -425,9 +434,14 @@ existing `==` assertion stays green while a test or caller still passes a plain 
 parameter now typed `Target` (and fails at runtime the moment the code reads `.host`). Only the
 type checker reports those call sites (pyright strict: "`tuple[...]` is not assignable to
 `Target`"), and a test proving the named type arrived needs `type(x) is Target` plus an attribute
-read, never `==`. Not this pattern: an OS sockaddr tuple
+read, never `==`. A field cannot be named `index` or `count`: it overrides the tuple method and
+pyright strict reports `reportIncompatibleMethodOverride` (use `row`, `records`). Not this pattern:
+an OS sockaddr tuple
 (what `socket` and `getaddrinfo` take and return), a tuple that never leaves one function (a
-local gather closure), and a variable-length `tuple[X, ...]`. A `str` parameter is found by its
+local gather closure), and a variable-length `tuple[X, ...]`. Use a frozen dataclass instead where
+a swapped unpack would still run wrongly (a `(column, row)` result among records written row
+first), or where a union must be told from a `tuple[str, ...]` arm: a one-string NamedTuple is that
+tuple to `isinstance`. A `str` parameter is found by its
 CALLERS, not its signature: grep the call sites, and when every one passes a literal from a small
 fixed set, the parameter is an Enum (see "Converting a `str` parameter to an Enum changes its
 contract").
@@ -678,6 +692,16 @@ INITIALIZATION:
          editing the rest of the repo concurrently so it must not edit anything outside that
          list. An agent that finds a needed fix in someone else's file REPORTS it instead of
          making it - that hand-off is how the last error gets found, not a failure.
+       * Instruction not to delete a public name other modules may still read: it leaves an
+         alias pointing at the new Enum member and lists it under `hand_offs`. The coordinator
+         greps the WHOLE repo for readers, moves them, then deletes the alias and any comment
+         that introduced the alias block before STEP C (Core Principle 7: no alias outlives the
+         run). A reader grep scoped to part of the tree misses a caller and fails collection.
+       * When rows move onto a strict boundary model, instruction to validate only the rows that
+         survive the skip/filter decision (type and size checks first, full parse after), with
+         a test each way: a skipped row holding an unrepresentable value stays skipped, a kept
+         one is refused. Validating every row first turns a row the old code skipped into an
+         aborted load, and a live run on clean data cannot show it.
        * Instruction to fix ALL violations
        * Instruction NOT to read or write `.data_arch_violations.json`: the coordinator owns it
          and writes it from the returned JSON (below)
@@ -934,6 +958,11 @@ Order of preference:
    naming WHY and the remove-when condition. Never reach first for `reportX = false`, a per-file
    rule-off, an `exclude` entry, or a bare `# type: ignore` - those blind the same scope to real
    errors too, and rot silently.
+
+A pin test for a PRIVATE table goes in a doctest beside it, in the module docstring
+(`pytest --doctest-modules` sees module privates and the checker does not read doctests), not in a
+`tests/` file needing `# pyright: ignore[reportPrivateUsage]`. Confirm the gate runs
+`--doctest-modules` first.
 
 Worked example - rich-click's `option`/`argument`/`version_option` decorators have a
 partially-unknown return type, so pyright strict reports `reportUnknownMemberType` at every

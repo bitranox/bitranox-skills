@@ -44,7 +44,7 @@ def find_validation_error(exc: BaseException) -> ValidationError | None:
 
 Fall back to the library's own first message line only when no `ValidationError` turns up.
 
-## Two traps inside `errors()`
+## Three traps inside `errors()`
 
 **A union field is refused once PER ARM.** Each arm's `loc` carries pydantic's tag for that arm as
 an extra part, for example `('styles', 'dict[str,str]', 'INFO')`, plus a `'[key]'` part when the
@@ -59,6 +59,13 @@ for the same reason.
 `msg == "Value error, <message>"`. When `item["type"] == "value_error"`, show
 `str(item["ctx"]["error"])`, which is the message exactly as the validator wrote it, instead of
 string-stripping the prefix.
+
+**A validator that replaces a built-in type check changes the error type.** Raising `ValueError`
+for a wrong type turns `string_type` into `value_error` and adds the `Value error, ` prefix, so
+every caller reading `item["type"]` sees a different error. Raise
+`pydantic_core.PydanticCustomError("string_type", msg)` instead, or
+`PydanticKnownError("string_type")` to keep pydantic's own message; `pydantic_core` is then a
+dependency of yours and needs its own declared entry.
 
 ## Check it
 
