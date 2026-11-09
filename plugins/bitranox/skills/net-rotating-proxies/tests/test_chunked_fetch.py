@@ -187,7 +187,8 @@ def test_mixed_pool_still_writes_an_identical_file_and_bans_only_the_dead(stand,
     kept = {stand.proxy(m) for m in ("clean", "429", "cut:5000", "stall")}
     store, pool = _pool(tmp_path, sorted({dead} | suspects | kept))
     out = tmp_path / "f.bin"
-    assert _fetch(origin, out, pool, max_attempts=40).ok
+    result = _fetch(origin, out, pool, max_attempts=40)
+    assert result.ok, vars(result)
     assert out.read_bytes() == origin.data
     assert pp._read(os.path.join(store, "bad.txt")) <= {dead}     # tolerates a missing file
     # Evicted at its first odd chunk answer: with no cool-down each of the 4 workers may already
