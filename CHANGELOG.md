@@ -30,6 +30,15 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.45.1]
+
+### Fixed
+
+- `infra-proxmox`: two PBS rows in the troubleshooting table. `datastore.cfg` refuses a `#` line at
+  any position, so it cannot carry a managed-by-repo header, with a way to test a change on a copy
+  in a private mount namespace. A one-off copy between two local datastores needs a sync job with
+  no remote, because `proxmox-backup-manager pull` requires one.
+
 ## [10.45.0]
 
 ### Added
