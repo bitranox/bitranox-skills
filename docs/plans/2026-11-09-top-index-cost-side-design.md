@@ -1,6 +1,7 @@
 # Top index cost side and topic placement - design
 
-Date: 2026-11-09. Status: design approved section by section; no implementation yet.
+Date: 2026-11-09. Status: design approved section by section, then amended after an independent
+review (phase 1 split, titles kept, firing test redesigned); no implementation yet.
 
 ## Problem
 
@@ -27,31 +28,41 @@ does not cover.
 
 ## Phase 1: cost report and compaction
 
-**Cost report.** Every dream and nap prints the top block's bytes and pointer count before and
-after, and how many pointers moved up and down. A move to the top names its cost in the report.
-Until phase 2 lands, no new gate is added; the report makes the cost visible.
+Phase 1 is split in three, each shipped on its own.
 
-**Compaction**, applied through the engine:
+**P1a: cost report, rule-text fixes, compaction.**
 
-- the merges, moves off the top and hook trims the semantic review proved safe;
-- dropping the title from pointer lines (the slug stays the link);
-- hooks shortened towards about 300 characters.
+- *Cost report.* `store_manifest.py verify` reports, for every in-scope level, the pointer block's
+  bytes and pointer count before and after, and the slugs that arrived at and left each level. It
+  compares per-level state (the backup's copy of each level against the live file) rather than
+  move events, because a lift that merges two copies into one is not a move to the diff, and
+  state counts keep working in phase 2. The figures go into the JSON `data` field; the exit code
+  keeps meaning "differs". The crosstree dreams, which add the most pointers to the top and still
+  hand-roll their backups, switch to `store_manifest` backup and verify like the tree dream and
+  the nap.
+- *Rule-text fixes.* The cost side reaches the rules that push facts up: a misplacement is no
+  longer re-homed to the top whatever the verdict says; a nap never moves a fact to the tree top
+  and proposes it instead; the soft-cap sentence of the tree dream stops contradicting the passes
+  note that size is met by representation; `reconcile_memory_index.py`'s large-index warning stops
+  recommending "lift".
+- *Titles kept as data.* Each title is copied into its body's frontmatter; pointer lines are
+  unchanged. Phase 2's renderer decides whether to print titles.
+- *Compaction*, through the engine with backup and verify: the merges, moves off the top and hook
+  trims the semantic review proved safe (re-checked against the live store at apply time, links
+  to a merged-away fact relinked before it is archived), and the renamed-skill names in hooks.
 
-The last two change what a session sees mid-work, because the hook is the only part of a fact in
-context then. They ship only if the firing test passes.
+**P1b: firing test** for shortened hooks, run after P1a's compaction so the baseline is the store
+that will exist. The 213 top hooks over the 350-character soft cap are rewritten to at most 350 in
+a scratch copy, each checked by a second pass for a lost trigger. Headless
+`claude -p --model opus` sessions with an isolated config, loading the real full chain rewritten
+per arm, built on the A/B harness the plugin already ships. A canary pair first proves the index
+loads. Twelve rules are drawn from the rewritten hooks and kept when a no-index screening shows
+they discriminate. Three interleaved arms, 6 runs per rule each: today, today again, shortened.
+The pass bound is fixed from the today-versus-today difference before the shortened arm is read
+(simulated: 5% false failure, a real 15-point drop caught 59% of the time). Model asserted from
+each run's init record. About 216 runs, about 14 million input tokens, price unmeasured.
 
-**Firing test.** Headless `claude -p --model opus` sessions in a throwaway directory with their own
-config and no plugins; the arm's index is that directory's `CLAUDE.local.md`. About 24 candidate
-rules are screened without any index, and the 12 that discriminate (the model does the wrong thing
-without the rule) are kept; a rule that does not fire in the today arm is reported as no signal.
-Four arms: today, no titles, hooks at 300, both. Arms are interleaved, 3 runs per rule per arm,
-and the model is asserted from each run's init record. The hooks-at-300 arm needs every long hook
-rewritten in a scratch copy.
-
-**Pass rule.** An arm passes when it fires at most 2 runs fewer than today (out of 36) and no rule
-falls from at least 2 of 3 to 0 of 3. Passing arms ship. If neither change passes, only the joins,
-moves and the cost report ship. The input-token estimate is about 9.6 million; the price is
-unmeasured.
+**P1c: ship the shortened hooks** through `factedit.py apply --batch` if P1b passes.
 
 ## Phase 2: placement by topic
 
@@ -132,5 +143,11 @@ with none of the bound topics about 49%. Phase 1 compaction comes on top and hel
 - Delivering command-tied rules from a PreToolUse hook: covers only rules tied to a command,
   arrives after planning, and is unprobed on the current Claude Code version.
 - A curated topic list: the user chose open tags with clustering.
+- Dropping titles from pointer lines in phase 1: a title exists nowhere else, so it would be
+  deleted, and phase 2 renders pointers anyway.
+- Four firing-test arms at 3 runs per rule with "at most 2 fewer of 36": an arm identical to
+  today fails that rule 38% of the time at a 70% firing rate.
+- Shortening hooks to 300 characters: 380 rewrites instead of 213, each a chance to lose a
+  trigger, for at most 29.9 KB instead of 15.0 KB.
 - Retiring pointers whose skill holds the detail: none passed the check that the trigger is
   reachable only through that skill.
