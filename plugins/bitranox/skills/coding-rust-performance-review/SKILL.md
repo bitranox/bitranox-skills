@@ -117,6 +117,7 @@ run for this skill. The `dhat` crate snippet is verified: it writes `dhat-heap.j
 | Small reads or writes on a `File`; `println!` in a hot loop                         | `BufReader`/`BufWriter`; lock stdout once (`let mut out = std::io::stdout().lock();`)                     |
 | `read_to_string`/`read_to_end` on a large input; `collect()` of an unbounded stream | Stream with `BufRead::lines` or fixed-size chunks (generic checklist: unbounded memory)                   |
 | `Arc<Mutex<_>>` updated from every task of a parallel loop                          | Per-thread accumulation, merged once at the end                                                           |
+| A `std::sync::Mutex` locked in async handlers only to bump one shared counter      | `AtomicU64` with `fetch_add(1, Ordering::Relaxed)`; per-thread accumulation is for parallel loops         |
 | A large value moved by value; one enum variant far larger than the rest             | Pass a reference; box the large variant (`large_enum_variant`)                                            |
 
 Two of these fixes can break or change the code. `std::sync::LazyLock` needs Rust 1.80 or newer:

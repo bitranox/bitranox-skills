@@ -36,7 +36,10 @@ in code. The language skills add their own tools on top of this one; the method 
    file.
 4. **Interleave the arms: A, B, A, B, at least three runs each.** All-A-then-all-B confounds the
    arm with the clock (thermal state, other load, caches). Report the median and the spread per
-   arm; a difference smaller than the spread within one arm is noise.
+   arm; a difference smaller than the spread within one arm is noise. On a shared or loaded host
+   a wall-clock suite timing cannot resolve a few-percent change: compare user CPU
+   (`/usr/bin/time -f %U`) on a serial subset that exercises the hot path, with the old arm in a
+   detached worktree proven to run its own code.
 5. **Pin the core on a hybrid CPU.** On a CPU with performance and efficiency cores (on Linux,
    compare `cpuinfo_max_freq` across `/sys/devices/system/cpu/cpu*/cpufreq/`), identical code
    spreads widely by core placement alone. Pin each run (`taskset -c N`, `sched_setaffinity`) or
@@ -52,7 +55,14 @@ in code. The language skills add their own tools on top of this one; the method 
 9. **Read current load from two samples, not from a lifetime average.** `ps -o pcpu` averages
    over the whole life of the process; use the second sample of `top -b -n2`, `pidstat`, or two
    reads of `/proc/<pid>/stat`.
-10. **Check every speed claim in a diff.** `validate_perf_claims.py` (in this skill's directory)
+10. **Prove a speed rewrite equal before timing it.** A rewrite that changes HOW the work runs
+    (compile once instead of re-parsing a program per call) needs a differential run: old and new
+    on random valid AND malformed inputs, comparing the result or the (exception type, message),
+    plus a planted one-character bug as the control that must show differences. Unit tests often
+    pass in every variant. If the old code evaluated while it parsed, prepare each constant while
+    reading its term, not lazily at first use: lazy preparation changes which error a malformed
+    input raises first.
+11. **Check every speed claim in a diff.** `validate_perf_claims.py` (in this skill's directory)
     extracts phrases like "40% faster", "3x speedup" or "reduced latency by 30%" from a unified
     diff's added lines and prints each with its `path:line`. It reaches no verdict: check each
     claim against a measured run and report the ones that are unproven or contradicted.
@@ -90,7 +100,8 @@ it starts to hurt.
 - **Per-item I/O.** An open, close, flush, fsync or system call per record; unbuffered writes.
 - **Repeated pure work.** The same parse, compile (a regex, a template) or lookup redone on every
   call with the same input. Hoist or cache it after confirming the work is pure and the hit rate
-  is real.
+  is real. A result derived from mutable I/O (a file's line count, an upstream response) is not
+  pure: key the cache on the file's length and mtime, or state the immutability assumption.
 - **Blocking calls on a hot or async path.** A sleep, synchronous network or disk I/O inside an
   event loop, or a lock held while waiting.
 - **Eager work that is mostly thrown away.** Building a full list to take its first element, or
