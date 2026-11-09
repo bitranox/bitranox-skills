@@ -876,6 +876,12 @@ class TestSeveralGatesChainedAfterDashDash:
             gate.main(["--log", str(tmp_path / "g.log"), "--gate-cwd", str(tmp_path), "--gate", OK])
         assert '--gate "<cmd>" --gate-cwd' in capsys.readouterr().err
 
+    def test_the_help_shows_the_per_gate_flags_after_their_gate(self, tmp_path, capsys):
+        with pytest.raises(SystemExit):
+            gate.main(["--help"])
+        text = " ".join(capsys.readouterr().out.split())
+        assert '--gate "make push" --gate-cwd DIR --gate-env MSG=@msgfile' in text
+
 
 class TestTheFollowUpPrintsAfterTheReport:
     def test_then_output_follows_the_report_when_stdout_is_a_pipe(self, tmp_path):

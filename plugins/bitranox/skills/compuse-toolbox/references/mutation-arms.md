@@ -33,6 +33,11 @@ Each of these has produced a verdict that looked right and meant nothing.
   build cache (cargo, make) would otherwise see the restored file as older than the mutant's build
   and keep running the mutant.
 
+- **A RED that fails only because a new helper is missing proves the helper is new, not the
+  property.** `--revert` to the old code and a test that cannot import the helper it calls goes red
+  on the missing name. Mutate the specific behaviour instead (drop the kwarg, restore the old
+  literal), so the failure names the property under test.
+
 ## When the tool is not in reach
 
 A `.pyc` is validated against the source's mtime SECOND and SIZE, so a length-preserving mutation

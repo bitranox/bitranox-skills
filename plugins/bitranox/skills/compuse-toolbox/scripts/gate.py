@@ -830,7 +830,9 @@ def _main(argv=None) -> int:
                "before '[PASS] <cmd> (rc=0)' or '[FAIL] <cmd> (rc=N)', so match it unanchored "
                "(grep -E '\\[(PASS|FAIL)\\]'), then the unindented closing line 'ALL GATES PASSED' "
                "or 'GATE RED - follow-up NOT run'. One command per --gate: a gate has no shell, so "
-               "'&&', '||', '|' and ';' as bare words are refused.")
+               "'&&', '||', '|' and ';' as bare words are refused. "
+               "Per-gate options follow the --gate they apply to: gate.py --gate \"make push\" "
+               "--gate-cwd DIR --gate-env MSG=@msgfile --then \"echo done\".")
     p.add_argument("--gate", action=_WrittenOrder, default=None,
                    help="a gate as one DOUBLE-quoted string (repeatable), split into argv by "
                         "the platform's rules (shlex on POSIX, CommandLineToArgvW on Windows, "

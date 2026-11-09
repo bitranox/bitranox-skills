@@ -35,6 +35,10 @@ a previous bad wrap leaves, and is repaired; a wrap never ends a line in a backs
 create a hard break. The paragraph's own leading indent is taken from its first line and preserved. A wrap
 that would still leave a block marker alone on a line after the repair is refused, never written.
 
+An inline code span stays on one line (a wrap inside it would break an exact-text grep for the span,
+and `old.split() == new.split()` cannot see that), so a span longer than the width runs over it and
+is listed in `notes`.
+
 `--width` is the TOTAL line length including the paragraph's leading indent, matching how the
 file is read and how a linter counts it - not the prose width alone.
 
@@ -99,6 +103,11 @@ _FENCE_OPEN = re.compile(r"(`{3,}|~{3,})(.*)$")
 _CODE_INDENT = 4
 _TAB_WIDTH = 4
 _LIST_ITEM = re.compile(r"[ \t]*(?:[-*+]|\d{1,9}[.)])(?:[ \t]+|$)")
+# A run of N backticks closed by a run of exactly N, the opener not backslash-escaped (CommonMark).
+_CODE_SPAN = re.compile(r"(?<![\\`])(`+)(?!`)(.+?)(?<!`)\1(?!`)")
+# Stands in for a space inside a code span while wrapping; NUL cannot occur in the paragraph text
+# a markdown editor saves, and textwrap treats it as an ordinary word character.
+_SPAN_SPACE = "\0"
 
 
 @dataclass
@@ -318,6 +327,18 @@ def _refusal(lines: list[str], lo: int, hi: int, fenced: set[int]) -> str:
     return _list_refusal(block)
 
 
+def _shield_code_spans(para: str) -> str:
+    """`para` with the spaces inside inline code spans swapped for _SPAN_SPACE, so that textwrap
+    and the pull-up repair both treat a span as one token. Undone by `_unshield`."""
+    if _SPAN_SPACE in para:
+        return para
+    return _CODE_SPAN.sub(lambda m: m.group(0).replace(" ", _SPAN_SPACE), para)
+
+
+def _unshield(lines: list[str]) -> list[str]:
+    return [line.replace(_SPAN_SPACE, " ") for line in lines]
+
+
 def _protect_dash_clauses(wrapped: list[str], indent: str) -> list[str]:
     """Never leave a line CommonMark would read as something other than this paragraph's text.
 
@@ -367,12 +388,12 @@ def rewrap(text: str, anchor: str, width: int = 98) -> Result:
         return Result(False, reason=reason, start_line=lo + 1, end_line=hi + 1)
 
     indent = lines[lo][: len(lines[lo]) - len(lines[lo].lstrip())]
-    para = " ".join(l.strip() for l in lines[lo : hi + 1])
+    para = _shield_code_spans(" ".join(l.strip() for l in lines[lo : hi + 1]))
     wrapped = textwrap.wrap(
         para, width=width, initial_indent=indent, subsequent_indent=indent,
         break_long_words=False, break_on_hyphens=False,
     ) or [indent + para.strip()]
-    wrapped = _protect_dash_clauses(wrapped, indent)
+    wrapped = _unshield(_protect_dash_clauses(wrapped, indent))
     if (bad := _marker_line(wrapped)) >= 0:
         # The repair ran out of tokens to pull up (a paragraph made only of marker runs, or a
         # pull-up that joined two short runs into a thematic break). Writing it would change what

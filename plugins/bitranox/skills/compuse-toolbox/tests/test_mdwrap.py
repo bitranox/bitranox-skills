@@ -22,6 +22,27 @@ DOC = """\
 """
 
 
+def test_an_inline_code_span_is_never_split_across_lines():
+    span = "`git rev-list --left-right --count HEAD...@{upstream}`"
+    para = "ANCHOR some words before it and then " + span + " and some more words after it here"
+    r = mdwrap.rewrap(para + "\n", "ANCHOR", width=50)
+    assert r.ok and span in r.text.replace("\n", "\n"), r.text
+    assert all(span in line or "`" not in line for line in r.text.splitlines())
+    assert r.text.split() == para.split()
+
+
+def test_a_span_longer_than_the_width_runs_over_and_is_noted():
+    span = "`" + "x " * 40 + "y`"
+    r = mdwrap.rewrap("ANCHOR before " + span + " after\n", "ANCHOR", width=20)
+    assert r.ok and span in r.text and r.notes
+
+
+def test_an_unclosed_backtick_is_not_a_span():
+    para = "ANCHOR has a stray ` backtick and then many more ordinary words that must still wrap"
+    r = mdwrap.rewrap(para + "\n", "ANCHOR", width=40)
+    assert r.ok and len(r.text.splitlines()) > 1 and r.text.split() == para.split()
+
+
 def test_rewraps_only_the_anchored_paragraph():
     r = mdwrap.rewrap(DOC, anchor="NEXT STEP", width=98)
     assert r.ok
