@@ -30,6 +30,23 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.41.0]
+
+### Changed
+
+- process-* skills: settle prerequisites before a fan-out, name a discriminating test before asking to
+  approve a fix, gate config in plans, floors that name their cause, close an untested branch with
+  the reviewer's mutant.
+- meta-skill-writer: check the outgoing probe prompt, headless output, reflow, and the split recipe.
+- meta-skill-ab-test: the judge is the verdict; score reports completeness and commits.
+- meta-claude-hooks: references refreshed against upstream, and wrong-answer guards priced.
+- Backlog tools refuse a cited rank and a FOUND item above an open USER one.
+- dream_state reviews and marks the calling session's transcript, and leaves a live peer's nap to it.
+- versionrot: dated evidence is not superseded, and PyPI's release decides what is current.
+- meta-prune-plugin-cache: a request to clear the cache means --apply.
+- meta-self-improve: dedup in its own call, check narratives against the transcript, fix tools in
+  the tool repo.
+
 ## [10.40.0]
 
 ### Fixed
