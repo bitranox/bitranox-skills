@@ -3,8 +3,9 @@
 > **For Claude:** REQUIRED SUB-SKILL: Use bitranox:process-agents-subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Give every dream and nap a cost side for the always-loaded pointer blocks, remove the
-rule texts that push facts to the tree top, keep pointer titles as data, and compact the tree-top
-block; then test and ship shortened hooks.
+rule texts that push facts to the tree top unasked (a move there follows the dream mode: proposed
+with its cost in propose mode, applied with its cost printed in auto), keep pointer titles as
+data, and compact the tree-top block; then test and ship shortened hooks.
 
 **Architecture:** The cost report extends `store_manifest.py verify`, which already diffs a
 pre-dream backup against the live tree, with per-level state counts. Rule texts change through
@@ -51,7 +52,13 @@ amended after review). Frozen inputs: the main checkout's gitignored
   --changelog <notes>` from the version origin holds at release time.
 - User decisions this plan implements (verbatim option labels, 2026-11-09): "Keep as data, decide
   in phase 2 (Recommended)" (titles); "Today twice + shortened, 6 runs (Recommended)" (firing
-  test); "Over 350, to 350 (Recommended)" (hook scope).
+  test); "Over 350, to 350 (Recommended)" (hook scope); and, 2026-11-10, "Propose in propose
+  mode, apply in auto" (a move of a fact to the tree top follows the dream mode: in propose mode
+  it is listed in the report with its cost, the bytes it adds to the top block, for the user's
+  approval and not applied; in auto mode it is applied and its cost printed in the report; a
+  manual run under `off` proposes it, as propose mode does (user, 2026-11-10: "Propose, like
+  propose"); re-homes below the top are unchanged in every mode; the nap
+  follows the same rule).
 
 ---
 
@@ -90,9 +97,12 @@ hand-rolled per-run backup with `store_manifest.py backup --scope tree` per tree
 the end, printing the cost lines in the report. Verified by the skill-writer probes.
 
 **M3 rule-text fixes.** `skills/meta-dream-tree/SKILL.md` (the soft-cap sentence; the
-rationalization row re-homing a misplacement "whatever the verdict"), `references/dream-core.md`
-(the report contract names the cost lines), `skills/meta-dream-nap/SKILL.md` (never move a fact to
-the tree top; propose it; print the cost lines), `skills/meta-self-improve/reconcile_memory_index.py`
+rationalization row re-homing a misplacement "whatever the verdict", which now re-homes to the
+tree top only as the mode says), `references/dream-core.md` (propose mode's carve-out: it still
+applies safe private-memory consolidation EXCEPT a move to the tree top, which it proposes with its
+cost, while auto mode applies that move and prints its cost; the report contract names the cost
+lines), `skills/meta-dream-nap/SKILL.md` (a move to the tree top follows the same mode rule; print
+the cost lines), `skills/meta-self-improve/reconcile_memory_index.py`
 (the large-index warning stops recommending "lift"). Verified by probes and, for reconcile, a test
 on the warning text.
 
@@ -1553,7 +1563,14 @@ names both commands.
 
   `cd <W> && git add plugins/bitranox/skills/meta-dream-crosstree/.skillwriter plugins/bitranox/skills/meta-dream-crosstree-deep/.skillwriter && git commit -F $SCRATCH/msg-t7.txt -- plugins/bitranox/skills/meta-dream-crosstree plugins/bitranox/skills/meta-dream-crosstree-deep plugins/bitranox/hooks/tests/test_dream_skill_contracts.py CHANGELOG.md`
 
-### Task 8: M3b - meta-dream-tree: no applied re-home to the top, length is a cost question
+### Task 8: M3b - meta-dream-tree: a re-home to the top follows the mode, length is a cost question
+
+User decision (2026-11-10, verbatim option label): "Propose in propose mode, apply in auto". A move
+of a fact TO the tree top follows the dream's mode knob (`dream_state.py mode`): in propose mode it
+is listed in the report with its cost (the bytes it adds to the top block) for the user's approval
+and not applied; in auto mode it is applied and its cost is printed in the report; a manual run
+under `off` proposes it, as propose mode does (user decision 2026-11-10, verbatim label:
+"Propose, like propose"). Re-homes to levels below the top are unchanged in every mode.
 
 **Files:**
 - Modify: `plugins/bitranox/skills/meta-dream-tree/SKILL.md` (misplacement bullet lines 275-278;
@@ -1561,11 +1578,12 @@ names both commands.
 - Create: `plugins/bitranox/skills/meta-dream-tree/.skillwriter/checklist-20261110-cost-side.md`
 - Modify: `CHANGELOG.md`
 
-**Interfaces:** points at Task 9's dream-core text (the misplacement row and the report contract);
-land Task 9 in the same commit or first.
+**Interfaces:** points at Task 9's dream-core text (the Mode carve-out, the misplacement row and
+the report contract); land Task 9 in the same commit or first.
 
 **Out of scope:** the corroboration gate itself; the 350/500 constants; P1b's question whether
-shortened hooks fire (this text never shortens a hook unasked).
+shortened hooks fire (this text never shortens a hook unasked); the mode knob's values (the
+`off` line gains its carve-out in Task 9).
 
 **STOP if:** Step 0b shows a decision that a misplacement is re-homed to the top (a `rule` whose
 anchor is the old bullet): supersede it in the ledger with the reason, never edit the ledger.
@@ -1573,10 +1591,13 @@ anchor is the old bullet): supersede it in the ledger with the reason, never edi
 - [ ] **Step 1: Skill-writer start** (receipt; `show meta-dream-tree --kind rejected,removed
   --full`; `show meta-dream-tree`).
 - [ ] **Step 2: RED probes** (opus, old passages pasted):
-  - A: "Tree dream. Fact F sits at /t/proj; its hook is written generally and /t/proj's PLACE-HERE
-    excludes it. The routing prompt's narrowest covering level is the tree top /t. should-promote
-    printed hold. What do you do with F, and what does the report say?" Expected RED: re-home F to
-    /t whatever the verdict.
+  - A (propose): "Tree dream, mode propose (`dream_state.py mode` prints `propose`). Fact F sits
+    at /t/proj; its hook is written generally and /t/proj's PLACE-HERE excludes it. The routing
+    prompt's narrowest covering level is the tree top /t. should-promote printed hold. What do you
+    do with F, and what does the report say?" Expected RED: re-home F to /t whatever the verdict,
+    no cost in the report.
+  - A2 (auto): the same prompt with mode `auto`. Expected RED: re-home F to /t, no cost in the
+    report.
   - B: "The firing check finds a complete, trigger-first hook of 430 characters at the tree top.
     Rewrite it? Report anything?" Expected RED: leave it, report nothing.
 - [ ] **Step 3: Edit.** Bullet: replace
@@ -1594,9 +1615,11 @@ anchor is the old bullet): supersede it in the ledger with the reason, never edi
    - a hook written generally, at a level whose PLACE-HERE EXCLUDES it, is a MISPLACEMENT:
      re-home it to the level the routing prompt picks, whatever `should-promote` says (a `hold`
      answers the promotion question, not this one), and still record the sighting with
-     `saw-promotable` - unless that level is the tree top: a re-home to the top is PROPOSED in
-     the report with its cost and never applied by this rule (references/dream-core.md, the
-     misplacement row);
+     `saw-promotable`. When that level is the tree top, the mode decides (references/dream-core.md,
+     Mode and the misplacement row): propose mode lists the move in the report with its cost (the
+     bytes it adds to the top block) for the user's approval and does not apply it; auto mode
+     applies it and prints its cost in the report; a manual run under `off` proposes it. A re-home
+     to any level below the top is applied in every mode;
 ```
 
   Soft-cap sentence: replace
@@ -1629,24 +1652,26 @@ anchor is the old bullet): supersede it in the ledger with the reason, never edi
 ```
 
   Rationalization row: replace its right cell with
-  `A `hold` answers the promotion question only. Classify first: a general hook at a level whose PLACE-HERE excludes it is a MISPLACEMENT and is re-homed whatever the verdict says - to any level but the tree top, where the re-home is proposed with its cost, not applied.`
+  `A `hold` answers the promotion question only. Classify first: a general hook at a level whose PLACE-HERE excludes it is a MISPLACEMENT and is re-homed whatever the verdict says. To the tree top the mode decides: propose mode lists the re-home with its cost for the user's approval and does not apply it, auto mode applies it and prints its cost.`
   and run `reformat_tables.py` on the file.
-- [ ] **Step 4: GREEN probes** A and B with the new passages (and Task 9's row). Expected: A -
-  F stays at /t/proj, the report proposes the move with F's hook length and /t's block bytes,
-  the sighting is recorded; B - not rewritten by the firing check, listed as a shortening proposal.
-  Control C in the same probe: "F's routing picks /t/team (not the top), same facts" - expected: F
-  is re-homed to /t/team (the rule still re-homes below the top).
+- [ ] **Step 4: GREEN probes** A, A2 and B with the new passages (and Task 9's Mode section and
+  row). Expected: A (propose) - F stays at /t/proj, the report lists the move with its cost (the
+  bytes it adds to /t's block) for the user's approval, the sighting is recorded; A2 (auto) - F is
+  re-homed to /t and the report prints its cost; B - not rewritten by the firing check, listed as
+  a shortening proposal. Control C in the same probe: "F's routing picks /t/team (not the top),
+  same facts", asked once with mode propose and once with mode auto - expected in both: F is
+  re-homed to /t/team (the rule still re-homes below the top in every mode).
 - [ ] **Step 5: Contract and gate.** `cd <W> && TEST plugins/bitranox/hooks/tests/test_dream_skill_contracts.py`
   must pass (no family literal duplicated).
 - [ ] **Step 6: Ledger** `$SCRATCH/dec-t8.json`:
 
 ```json
-[{"skill": "meta-dream-tree", "kind": "rule", "topic": "no-applied-rehome-to-top",
-  "decision": "A misplacement whose routed level is the tree top is proposed in the report with its cost, never re-homed there by the misplacement rule; below the top it is re-homed whatever should-promote says.",
-  "why": "The top's block loads in every session of the tree and the misplacement test passes for nearly any general lesson, so the ungated re-home was the main route facts took to the top.",
-  "evidence": {"tier": "measured", "text": "Store history 2026-11-09: 159 of 163 pointers arriving at the top in a day were moves up; moves up outnumbered moves down about 35 to 1."},
-  "reopen_if": "Pointer placement is generated from topics (phase 2), or the top's block stops loading in every session.",
-  "origin": "authored", "anchors": ["a re-home to the top is PROPOSED in the report with its cost and never applied by this rule"],
+[{"skill": "meta-dream-tree", "kind": "rule", "topic": "rehome-to-top-by-mode",
+  "decision": "A misplacement whose routed level is the tree top follows the dream mode: propose mode lists the re-home in the report with its cost (the bytes it adds to the top block) for the user's approval and does not apply it; auto mode applies it and prints its cost in the report; A manual run under `off` proposes it, as propose mode does. Below the top it is re-homed whatever should-promote says, in every mode.",
+  "why": "The top's block loads in every session of the tree and the misplacement test passes for nearly any general lesson, so the ungated re-home was the main route facts took to the top. The user chose to keep auto mode hands-off and make every move to the top carry its cost.",
+  "evidence": {"tier": "user", "text": "User decision 2026-11-10: Propose in propose mode, apply in auto. Measured: store history 2026-11-09, 159 of 163 pointers arriving at the top in a day were moves up; moves up outnumbered moves down about 35 to 1."},
+  "reopen_if": "Pointer placement is generated from topics (phase 2), the top's block stops loading in every session, or the top block's growth under auto mode makes the user revisit the choice.",
+  "origin": "authored", "anchors": ["propose mode lists the move in the report with its cost"],
   "supersedes": [], "refs": []},
  {"skill": "meta-dream-tree", "kind": "rule", "topic": "hook-length-is-a-cost",
   "decision": "The firing check never rewrites a hook for its length; a hook over the soft cap at a broad level is reported as a shortening proposal with its block bytes.",
@@ -1657,58 +1682,110 @@ anchor is the old bullet): supersede it in the ledger with the reason, never edi
   "supersedes": [], "refs": []}]
 ```
 
-  Any superseded id from Step 1 goes into `supersedes`.
-- [ ] **Step 7: Checklist** (with `Decisions:` both ids), receipt end, CHANGELOG under
-  `### Changed`:
+  Any superseded id from Step 1 goes into `supersedes`. Before `add`, check each anchor against
+  the edited file with whitespace collapsed: `cd <W> && python3 -c "import sys; t=' '.join(open('plugins/bitranox/skills/meta-dream-tree/SKILL.md', encoding='utf-8').read().split()); [print(a, a in t) for a in sys.argv[1:]]" "propose mode lists the move in the report with its cost" "Length is a COST question, met by representation"` - expected `True` for both.
+- [ ] **Step 7: Checklist** (with `Decisions:` all four ids of Tasks 8 and 9), receipt end,
+  CHANGELOG under `### Changed`:
 
 ```text
-- meta-dream-tree: a misplacement whose routed level is the tree top is proposed with its
-  cost instead of re-homed; the firing check no longer rewrites a hook for its length, and a
-  long hook at a broad level is reported as a shortening proposal; step 8 copies verify's
+- meta-dream-tree: a misplacement whose routed level is the tree top follows the dream mode:
+  propose mode lists the re-home with its cost (the bytes it adds to the top block) for
+  approval and does not apply it, auto mode applies it and prints its cost; a re-home below
+  the top is applied in every mode. The firing check no longer rewrites a hook for its length,
+  and a long hook at a broad level is reported as a shortening proposal; step 8 copies verify's
   pointer-block lines into the report.
 ```
 
 - [ ] **Step 8: Commit** together with Task 9 (same message file `$SCRATCH/msg-t8-9.txt`, below in
   Task 9).
 
-### Task 9: M3c - dream-core: the misplacement row and the report contract name the cost
+### Task 9: M3c - dream-core: propose mode's tree-top carve-out, the misplacement row and the report contract name the cost
 
 **Files:**
-- Modify: `plugins/bitranox/skills/meta-dream-tree/references/dream-core.md` (table row line 315
-  and the paragraph after it, lines 317-318; report contract lines 367-372)
+- Modify: `plugins/bitranox/skills/meta-dream-tree/references/dream-core.md` (Mode section, the
+  `propose` and `auto` bullets lines 79-82; Boundaries, the private-memory bullet line 87; table
+  row line 315 and the paragraph after it, lines 317-318; report contract lines 367-372)
 
 - Modify: `plugins/bitranox/hooks/tests/test_dream_skill_contracts.py` (append after line 113)
 
-**Interfaces:** the literal `pointer blocks` lives here, in the report contract.
+**Interfaces:** the literal `pointer blocks` lives here, in the report contract; the Mode
+carve-out for a move to the tree top lives here, and Tasks 8 and 10 point at it. The literal
+`**`propose`** (default)` stays here and only here (`test_family_literals_single_sourced_in_core`).
 
-**Out of scope:** the corroboration-gate paragraph's reasoning (kept), every other contract line.
+**Out of scope:** the corroboration-gate paragraph's reasoning (kept), every other contract line,
+the `off` bullet's first half (`no nudges; a manual run consolidates PRIVATE memory only`), which
+Step 2 extends, never rewrites.
 
-- [ ] **Step 0: Failing contract test** - append to `test_dream_skill_contracts.py`:
+- [ ] **Step 0: Failing contract tests** - append to `test_dream_skill_contracts.py`:
 
 ```python
 
 
 def test_the_report_contract_names_the_cost_lines():
     assert "pointer blocks" in _read(CORE), "dream-core.md's report contract lost the cost lines"
+
+
+def test_propose_mode_carves_out_a_move_to_the_tree_top():
+    core = " ".join(_read(CORE).split())
+    assert "EXCEPT a move of a fact to the tree top" in core, (
+        "dream-core.md's propose mode lost its carve-out for a move to the tree top")
+    assert "and PROPOSES a move of a fact to the tree top as propose mode does" in core, (
+        "dream-core.md's off mode lost its carve-out for a move to the tree top")
 ```
 
-  `cd <W> && TEST plugins/bitranox/hooks/tests/test_dream_skill_contracts.py -k cost_lines` -
-  expected: 1 failed, `dream-core.md's report contract lost the cost lines`.
+  `cd <W> && TEST plugins/bitranox/hooks/tests/test_dream_skill_contracts.py -k "cost_lines or carves_out"` -
+  expected: 2 failed, with `dream-core.md's report contract lost the cost lines` and
+  `dream-core.md's propose mode lost its carve-out for a move to the tree top`.
 
-- [ ] **Step 1: RED probe** (opus, old table + old report sentence): "What does a dream do with a
-  misplacement whose only covering level is the tree top, and what does its report say about the
-  pointer blocks?" Expected RED: re-homes it; counts only.
-- [ ] **Step 2: Edit.** In the table's misplacement row (padded cells `no`, `no`,
-  `a misplacement`, `re-home it, and record the sighting anyway`), the last cell becomes
-  `re-home it, and record the sighting anyway; to the tree top only as a proposal`; then
+- [ ] **Step 1: RED probes** (opus, old Mode section + old table + old report sentence):
+  - "Mode is propose. Is moving a fact up to the tree top safe private-memory consolidation that
+    propose mode applies?" Expected RED: yes, it applies it.
+  - "What does a dream do with a misplacement whose only covering level is the tree top, and what
+    does its report say about the pointer blocks?" asked once with mode propose and once with
+    mode auto. Expected RED in both: re-homes it; counts only.
+- [ ] **Step 2: Edit.** Mode section: replace the `propose` and `auto` bullets
+
+```text
+- **`propose`** (default): apply safe private-memory consolidation; apply CLAUDE.md consolidation
+  under the reachability invariant (see Boundaries) and REPORT every file touched; route skill
+  changes to a self-PR. Mention the `dream_mode` knob (`bitranox:meta-memory-settings`) at the end.
+- **`auto`**: no per-change prompts - CLAUDE.md edits as above, plus ship skill changes directly.
+```
+
+  with
+
+```text
+- **`propose`** (default): apply safe private-memory consolidation, EXCEPT a move of a fact to
+  the tree top (the anchor), which it PROPOSES: the report lists the fact and its cost (the bytes
+  it adds to the top block) for the user's approval, and the fact stays where it is. Moves to
+  every level below the top are applied. Apply CLAUDE.md consolidation under the reachability
+  invariant (see Boundaries) and REPORT every file touched; route skill changes to a self-PR.
+  Mention the `dream_mode` knob (`bitranox:meta-memory-settings`) at the end.
+- **`auto`**: no per-change prompts - CLAUDE.md edits as above, plus ship skill changes directly;
+  a move of a fact to the tree top is applied and its cost printed in the report.
+```
+
+  and the `off` bullet
+  `- **`off`**: no nudges; a manual run consolidates PRIVATE memory only.`
+  with
+  `- **`off`**: no nudges; a manual run consolidates PRIVATE memory only, and PROPOSES a move of a fact to the tree top as propose mode does.`
+  Boundaries: replace
+  `- **Private memory + the curated stores:** back up, then apply (reversible via the backup).`
+  with
+  `- **Private memory + the curated stores:** back up, then apply (reversible via the backup); a move of a fact to the tree top follows Mode (proposed in propose mode, applied with its cost in auto).`
+  In the table's misplacement row (padded cells `no`, `no`, `a misplacement`,
+  `re-home it, and record the sighting anyway`), the last cell becomes
+  `re-home it, and record the sighting anyway; to the tree top as the mode says`; then
   `reformat_tables.py`. After the paragraph `Record the sighting in the re-home case too - it
   costs nothing, and the fact may still be a genuine promotion candidate later.` add:
 
 ```text
-A re-home to the tree top is the one re-home this table does not apply. The top's block loads in
-every session of the tree, and the misplacement test passes for nearly any lesson written
-generally, so the move is PROPOSED in the report with its cost (the fact, its hook length, the
-top block's bytes) and the fact stays where it is until the user decides.
+A re-home to the tree top is the one re-home the mode decides (see Mode). The top's block loads
+in every session of the tree, and the misplacement test passes for nearly any lesson written
+generally, so in propose mode the move is PROPOSED in the report with its cost (the fact and the
+bytes it adds to the top block) for the user's approval and the fact stays where it is; in auto
+mode the move is applied and its cost is printed in the report; a manual run under `off`
+proposes it, as propose mode does. A re-home to any level below the top is applied in every mode.
 ```
 
   Report contract: replace `Report counts (merges, placements with direction, prunes,` and the
@@ -1718,58 +1795,73 @@ top block's bytes) and the fact stays where it is until the user decides.
 Report counts (merges, placements with direction, prunes, pinned untouched), then the `pointer
 blocks` lines `store_manifest.py verify` prints, as printed: one per level whose block changed,
 with bytes and pointers before and after and the slugs that arrived and left, top first, and every
-slug that arrived at the tree top named. Any proposed move to the top is listed beside them. When
+slug that arrived at the tree top named. Every move to the tree top is listed beside them with its
+cost: as a proposal awaiting the user's approval in propose mode, as applied in auto mode. When
 the run covered what the nudge asked for, run
 ```
 
   keeping the rest of that paragraph (`dream_state.py done --kind nap` ...) unchanged.
-- [ ] **Step 3: GREEN probe**, same question, new text: proposes, does not move; report carries the
-  pointer-blocks lines with the top's arrivals named.
+- [ ] **Step 3: GREEN probes**, same questions, new text: the first - no, propose mode proposes a
+  move to the tree top with its cost; the second, mode propose - proposes, does not move, the
+  cost is listed; mode auto - moves it and prints its cost; in both modes the report carries the
+  pointer-blocks lines with the top's arrivals named. Control in the same probe: "the only
+  covering level is /t/team, below the top" - expected in both modes: re-homed.
 - [ ] **Step 4: Run** `cd <W> && TEST plugins/bitranox/hooks/tests/test_dream_skill_contracts.py`
-  - expected all pass, the Step 0 test included.
+  - expected all pass, both Step 0 tests included.
 - [ ] **Step 5: Ledger and checklist.** The dream-core edit belongs to the `meta-dream-tree` skill
-  dir: add one more entry to `$SCRATCH/dec-t8.json` before running `add` (or a second file):
+  dir: add two more entries to `$SCRATCH/dec-t8.json` before running `add` (or a second file):
 
 ```json
+{"skill": "meta-dream-tree", "kind": "rule", "topic": "propose-mode-top-carve-out",
+ "decision": "Propose mode applies safe private-memory consolidation except a move of a fact to the tree top, which it proposes in the report with its cost (the bytes it adds to the top block) for the user's approval and does not apply; auto mode applies such a move and prints its cost in the report; A manual run under `off` proposes it, as propose mode does. Moves below the top are applied in every mode.",
+ "why": "The user chose to let the mode knob decide moves to the tree top. Propose mode already applied private-memory moves, so without this carve-out propose mode would have kept moving facts to the top unasked.",
+ "evidence": {"tier": "user", "text": "User decision 2026-11-10: Propose in propose mode, apply in auto; dream_state.py mode read propose at the time, and the option named that propose mode's meaning had to change."},
+ "reopen_if": "The user changes what a mode means, or pointer placement is generated from topics (phase 2).",
+ "origin": "authored", "anchors": ["EXCEPT a move of a fact to the tree top (the anchor), which it PROPOSES"],
+ "supersedes": [], "refs": []}
 {"skill": "meta-dream-tree", "kind": "rule", "topic": "report-cost-lines",
- "decision": "Every dream report carries the pointer-block lines store_manifest.py verify prints, the tree top's arrivals named, beside any proposed move to the top.",
- "why": "The store-growth rule counted facts, and a move to the top keeps the count while every session pays for the line; the cost has to be visible where the run is judged.",
- "evidence": {"tier": "argued", "text": "Design 2026-11-09, cost side; verify's cost lines tested in test_store_manifest.py."},
+ "decision": "Every dream report carries the pointer-block lines store_manifest.py verify prints, the tree top's arrivals named, and lists every move to the top with its cost: as a proposal in propose mode, as applied in auto mode.",
+ "why": "The store-growth rule counted facts, and a move to the top keeps the count while every session pays for the line; the cost has to be visible where the run is judged, in either mode.",
+ "evidence": {"tier": "argued", "text": "Design 2026-11-09, cost side; verify's cost lines tested in test_store_manifest.py; user decision 2026-11-10 that auto mode applies a move to the top and prints its cost."},
  "reopen_if": "verify stops printing per-level block lines, or placement is generated from topics.",
  "origin": "authored", "anchors": ["lines `store_manifest.py verify` prints, as printed"],
  "supersedes": [], "refs": []}
 ```
 
-  (`add` refuses an anchor the skill's text does not contain after whitespace normalisation, so a
-  refusal here means the edit and the anchor differ). The Task 8 checklist covers both files and lists all three ids.
+  (the two objects go into the JSON array, comma-separated; `add` refuses an anchor the skill's
+  text does not contain after whitespace normalisation, so a refusal here means the edit and the
+  anchor differ). Check both anchors first: `cd <W> && python3 -c "import sys; t=' '.join(open('plugins/bitranox/skills/meta-dream-tree/references/dream-core.md', encoding='utf-8').read().split()); [print(a, a in t) for a in sys.argv[1:]]" "EXCEPT a move of a fact to the tree top (the anchor), which it PROPOSES" 'lines `store_manifest.py verify` prints, as printed'` - expected `True` for both. The Task 8 checklist covers both files and lists all four ids.
 - [ ] **Step 6: Commit Tasks 8 and 9.** `$SCRATCH/msg-t8-9.txt`:
 
 ```text
-meta-dream-tree: give placement a cost side
+meta-dream-tree: give placement a cost side, a move to the top follows the mode
 
-A misplacement routed to the tree top is proposed with its cost instead of
-re-homed: the top's block loads in every session, and the ungated re-home was the
-main route facts took there. The firing check no longer rewrites a hook for its
-length; a long hook at a broad level is reported as a shortening proposal. The
-report contract in dream-core.md carries verify's pointer-block lines, the top's
-arrivals named.
+A move of a fact to the tree top now follows the dream mode. Propose mode keeps
+applying safe private-memory consolidation except that move, which it lists with
+its cost (the bytes it adds to the top block) for approval; auto mode applies it
+and prints the cost. The top's block loads in every session, and the ungated
+re-home was the main route facts took there. Re-homes below the top are applied
+in every mode. The firing check no longer rewrites a hook for its length; a long
+hook at a broad level is reported as a shortening proposal. The report contract
+in dream-core.md carries verify's pointer-block lines, the top's arrivals named.
 ```
 
   `cd <W> && git add plugins/bitranox/skills/meta-dream-tree/.skillwriter/checklist-20261110-cost-side.md && git commit -F $SCRATCH/msg-t8-9.txt -- plugins/bitranox/skills/meta-dream-tree/SKILL.md plugins/bitranox/skills/meta-dream-tree/references/dream-core.md plugins/bitranox/skills/meta-dream-tree/.skillwriter plugins/bitranox/hooks/tests/test_dream_skill_contracts.py CHANGELOG.md`
   Task 7 follows.
 
-### Task 10: M3d - a nap never moves a fact to the tree top, and prints the cost lines
+### Task 10: M3d - a nap moves a fact to the tree top only as the mode says, and prints the cost lines
 
 **Files:**
 - Modify: `plugins/bitranox/skills/meta-dream-nap/SKILL.md` (step 4 lines 131-134; step 6 lines
   142-144; deliverables after line 166; rationalizations table after line 179)
-- Create: `plugins/bitranox/skills/meta-dream-nap/.skillwriter/checklist-20261110-no-move-to-top.md`
+- Create: `plugins/bitranox/skills/meta-dream-nap/.skillwriter/checklist-20261110-move-to-top-by-mode.md`
 - Modify: `CHANGELOG.md`
 
-**Interfaces:** the report contract of Task 9.
+**Interfaces:** the Mode carve-out and the report contract of Task 9 (the nap reads its mode from
+the core).
 
-**Out of scope:** moves DOWN from the anchor (still allowed on the chain), and moves between
-non-anchor chain levels.
+**Out of scope:** moves DOWN from the anchor and moves between non-anchor chain levels (applied in
+every mode, unchanged); the mode knob's values (the `off` line gains its carve-out in Task 9).
 
 **STOP if:** Step 0b shows a decision that chain-internal placement includes moves to the anchor
 (supersede it with the reason; do not edit the ledger).
@@ -1777,17 +1869,19 @@ non-anchor chain levels.
 - [ ] **Step 1: Skill-writer start** (receipt; `show meta-dream-nap --kind rejected,removed --full`;
   `show meta-dream-nap`).
 - [ ] **Step 2: RED probe** (opus, old step 4 and step 6): "Nap at /t/a/proj, chain /t/a/proj ->
-  /t/a -> /t (the anchor). Routing sends fact G from /t/a to /t, confidence high, evidence clear.
-  Apply? What does the report say about pointer blocks?" Expected RED: applies the move; nothing
-  about block bytes.
+  /t/a -> /t (the anchor), mode propose (`dream_state.py mode` prints `propose`). Routing sends
+  fact G from /t/a to /t, confidence high, evidence clear. Apply? What does the report say about
+  pointer blocks?" Expected RED: applies the move; nothing about its cost or block bytes. Ask it a
+  second time with mode `auto`: expected RED: applies the move; no cost in the report.
 - [ ] **Step 3: Edit.** Step 4: replace `   (up or down). Low/UNSURE and anything involving a sibling
   stays put. A pinned fact re-levels` with:
 
 ```text
-   (up or down), except a move TO the tree top (the anchor): a nap never applies one. It lists the
-   fact, its hook length and the top block's bytes in the report as a proposal for the full
-   dream, because the top's block loads in every session of the tree. Low/UNSURE and anything
-   involving a sibling stays put. A pinned fact re-levels
+   (up or down). A move TO the tree top (the anchor) follows the core's Mode, because the top's
+   block loads in every session of the tree: in propose mode the nap lists the fact and its cost
+   (the bytes it adds to the top block) in the report for the user's approval and does not apply
+   it; in auto mode it applies the move and prints its cost in the report; under `off` it
+   proposes it, as in propose mode. Low/UNSURE and anything involving a sibling stays put. A pinned fact re-levels
 ```
 
   Step 6: replace `   manifest file), and `TOTAL problems: 0` from ONE` with:
@@ -1798,44 +1892,52 @@ non-anchor chain levels.
 ```
 
   Deliverables: after `- [ ] Manifest diff clean; reconcile `TOTAL problems: 0` over the chain.`
-  add `- [ ] No fact moved to the tree top (each such move listed as a proposal), and the `pointer blocks` lines in the report.`
+  add `- [ ] Every move to the tree top listed with its cost: as a proposal awaiting approval in propose mode, as applied in auto mode; and the `pointer blocks` lines in the report.`
   Rationalizations: add the row
-  `| "The anchor is on the chain, so moving a fact there is chain-internal" | It is, and it is the one chain move a nap never applies: the anchor's block loads in every session of the tree. List it as a proposal for the full dream. |`
+  `| "The anchor is on the chain, so moving a fact there is chain-internal" | It is, and it is the one chain move the mode decides: the anchor's block loads in every session of the tree. In propose mode list it with its cost for the user's approval and leave the fact where it is; in auto mode apply it and print its cost. |`
   and run `reformat_tables.py`.
-- [ ] **Step 4: GREEN probe**, same prompt, new text: G stays at /t/a, the report proposes it with
-  its hook length and /t's bytes, the pointer-blocks lines are in the report. Control in the same
-  probe: "routing sends fact H from /t to /t/a" - expected: applied (down-moves are unchanged).
+- [ ] **Step 4: GREEN probe**, same prompt, new text: mode propose - G stays at /t/a, the report
+  lists the move with its cost (the bytes it adds to /t's block) for the user's approval, the
+  pointer-blocks lines are in the report; mode auto - G moves to /t and the report prints its
+  cost beside the pointer-blocks lines. Control in the same probe: "routing sends fact H from /t
+  to /t/a", asked with mode propose and with mode auto - expected in both: applied (down-moves are
+  unchanged).
 - [ ] **Step 5: Contract test** `cd <W> && TEST plugins/bitranox/hooks/tests/test_dream_skill_contracts.py` passes.
 - [ ] **Step 6: Ledger** `$SCRATCH/dec-t10.json`:
 
 ```json
-[{"skill": "meta-dream-nap", "kind": "rule", "topic": "no-move-to-top",
-  "decision": "A nap never applies a move to the tree top (the anchor); it proposes it in the report for the full dream. Moves down from the anchor and between other chain levels are unchanged.",
-  "why": "The anchor's block loads in every session of the tree, and naps, run many times a day, moved the second most pointers to the top.",
-  "evidence": {"tier": "measured", "text": "Store backups 2026-11-09: nap intervals added 140 top pointers against 71 removed over 85 intervals."},
-  "reopen_if": "Pointer placement is generated from topics (phase 2), or naps stop running on the anchor's chain.",
-  "origin": "authored", "anchors": ["except a move TO the tree top (the anchor): a nap never applies one"],
+[{"skill": "meta-dream-nap", "kind": "rule", "topic": "move-to-top-by-mode",
+  "decision": "A nap follows the dream mode for a move to the tree top (the anchor): propose mode lists it in the report with its cost (the bytes it adds to the top block) for the user's approval and does not apply it; auto mode applies it and prints its cost in the report; A manual run under `off` proposes it, as propose mode does. Moves down from the anchor and between other chain levels are applied in every mode.",
+  "why": "The anchor's block loads in every session of the tree, and naps, run many times a day, moved the second most pointers to the top. The user chose to keep auto mode hands-off and make every move to the top carry its cost.",
+  "evidence": {"tier": "user", "text": "User decision 2026-11-10: Propose in propose mode, apply in auto. Measured: store backups 2026-11-09, nap intervals added 140 top pointers against 71 removed over 85 intervals."},
+  "reopen_if": "Pointer placement is generated from topics (phase 2), naps stop running on the anchor's chain, or the top block's growth under auto mode makes the user revisit the choice.",
+  "origin": "authored", "anchors": ["in propose mode the nap lists the fact and its cost"],
   "supersedes": [], "refs": []}]
 ```
 
+  Check the anchor first: `cd <W> && python3 -c "import sys; t=' '.join(open('plugins/bitranox/skills/meta-dream-nap/SKILL.md', encoding='utf-8').read().split()); [print(a, a in t) for a in sys.argv[1:]]" "in propose mode the nap lists the fact and its cost"` - expected `True`.
 - [ ] **Step 7: Checklist, receipt end, CHANGELOG** under `### Changed`:
 
 ```text
-- meta-dream-nap: a nap never moves a fact to the tree top; it lists such a move as a
-  proposal for the full dream, and its report carries verify's pointer-block lines.
+- meta-dream-nap: a move to the tree top follows the dream mode: propose mode lists it with
+  its cost (the bytes it adds to the top block) for approval and does not apply it, auto mode
+  applies it and prints its cost; moves below the top are unchanged. Its report carries
+  verify's pointer-block lines.
 ```
 
 - [ ] **Step 8: Commit.** `$SCRATCH/msg-t10.txt`:
 
 ```text
-meta-dream-nap: never move a fact to the tree top
+meta-dream-nap: a move to the tree top follows the mode
 
 The anchor is on every chain, so chain-internal placement let a nap move a fact to
-the block every session loads. A nap now lists such a move as a proposal for the
-full dream, and copies verify's pointer-block lines into its report.
+the block every session loads without a word. A nap now follows the dream mode for
+that move: propose mode lists it with its cost (the bytes it adds to the top
+block) for approval, auto mode applies it and prints the cost. Moves below the
+top are unchanged. The nap copies verify's pointer-block lines into its report.
 ```
 
-  `cd <W> && git add plugins/bitranox/skills/meta-dream-nap/.skillwriter/checklist-20261110-no-move-to-top.md && git commit -F $SCRATCH/msg-t10.txt -- plugins/bitranox/skills/meta-dream-nap CHANGELOG.md`
+  `cd <W> && git add plugins/bitranox/skills/meta-dream-nap/.skillwriter/checklist-20261110-move-to-top-by-mode.md && git commit -F $SCRATCH/msg-t10.txt -- plugins/bitranox/skills/meta-dream-nap CHANGELOG.md`
 
 ### Task 11: M5 - release
 
