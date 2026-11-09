@@ -30,6 +30,20 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.43.0]
+
+### Added
+
+- `compuse-toolbox` `gate.py`: each run writes a `##### gate run` marker to its log, and a report
+  over a log holding earlier runs says where this run starts.
+- `coding-bash-reference`: a heredoc inside `$(...)` needs balanced quotes on macOS bash 3.2, and
+  how to check it in a container.
+- `meta-dream-tree`: name a start-of-run baseline with the dream id; after a bulk up-move, replace
+  each downward `[[slug]]` with a backticked slug.
+- `process-agents-dispatching-parallel`: what to keep when a conflict means one defect was queued
+  twice.
+- `meta-audit-local-skills-and-hooks`: leave `--root` out for the personal half alone.
+
 ## [10.42.1]
 
 ### Fixed

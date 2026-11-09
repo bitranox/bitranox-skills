@@ -105,6 +105,7 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 from _cli_envelope import run_guarded
@@ -517,6 +518,7 @@ class GateResult:
 @dataclass
 class GateReport:
     results: list[GateResult]
+    appended_to_earlier_run: bool = False
 
     @property
     def ok(self) -> bool:
@@ -584,6 +586,9 @@ def _spawn(argv: list[str], settings: GateSettings = GateSettings()
                           env=settings.child_env())
 
 
+RUN_MARKER = "##### gate run"
+
+
 def run_gates(gates, log_path, summary: str = "") -> GateReport:
     """Run `gates` in order, appending all output to `log_path`; return the real statuses.
 
@@ -596,8 +601,11 @@ def run_gates(gates, log_path, summary: str = "") -> GateReport:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     pattern = re.compile(summary) if summary else None
     results: list[GateResult] = []
+    # A pinned --log keeps every earlier run, and a grep of it answers for all of them at once.
+    appended = log_path.exists() and log_path.stat().st_size > 0
 
     with log_path.open("a", encoding="utf-8") as log:
+        log.write(f"\n{RUN_MARKER} {datetime.now(timezone.utc).isoformat(timespec='seconds')} #####\n")
         for name, argv, *rest in gates:
             settings = rest[0] if rest else GateSettings()
             log.write(f"\n=== gate: {name} :: {' '.join(argv)} ===\n")
@@ -622,7 +630,7 @@ def run_gates(gates, log_path, summary: str = "") -> GateReport:
                                       summary_lines=lines, test_count=observed_test_count(out),
                                       started=started))
 
-    return GateReport(results=results)
+    return GateReport(results=results, appended_to_earlier_run=appended)
 
 
 def format_report(report: GateReport, log_path) -> str:
@@ -641,6 +649,9 @@ def format_report(report: GateReport, log_path) -> str:
     out.append("")
     out.append("ALL GATES PASSED" if report.ok else "GATE RED - follow-up NOT run")
     out.append(f"log: {log_path}")
+    if report.appended_to_earlier_run:
+        out.append(f"  holds earlier runs too: this run starts at the last '{RUN_MARKER}' line, "
+                   "and the verdict is the line above, not a grep of the log")
     return "\n".join(out)
 
 

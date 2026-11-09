@@ -160,6 +160,11 @@ mode, archive nothing: list it as a proposed retirement. Either way the dream re
 retirement or proposal with its (a) quote and (b) reason, since an always-loaded rule that leaves
 in `auto` gets no other human look.
 
+After a bulk up-move, run `--check-tree` at once: a moved fact can now cite one that stayed
+lower. Replace each such downward `[[slug]]` with a backticked slug, which is plain text and no
+reference. `ref_map.py --root <anchor> --moves <file>` names them before the move. A sideways
+move is two engine moves through the common ancestor.
+
 Prove "already covered" with a quote from SHIPPED skill text only - a `SKILL.md`, a reference
 file, a script's help. Exclude `*/.skillwriter/*`: those review checklists repeat rule text while
 testing it, so a quote from one makes a rule look shipped that no skill states

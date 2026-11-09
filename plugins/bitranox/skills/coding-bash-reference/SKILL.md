@@ -44,6 +44,11 @@ Complete reference for GNU Bash 5.3 (May 2025). Covers all shell syntax, builtin
   checks, not optional. `shellcheck -x script.sh` (follows `source`d files) catches quoting,
   word-splitting, and unset-variable bugs; `bash -n script.sh` catches syntax errors without executing
   it. Add `shfmt -i 4 -d script.sh` where the project formats shell.
+- **A script that may run on macOS meets bash 3.2 there, and `bash -n` on a newer bash cannot show
+  what breaks.** bash 3.2 scans a `$(...)` for quotes without knowing about a heredoc inside it, so
+  one apostrophe in the heredoc body makes the whole script a syntax error (`unexpected EOF while
+  looking for matching`). Keep quotes balanced in such a heredoc, and check with
+  `docker run --rm -v "$PWD:/s:ro" bash:3.2 bash -n /s/script.sh`.
 
 ## Reference Files
 

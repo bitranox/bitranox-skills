@@ -266,7 +266,9 @@ undoes the picks). Then, per branch:
    `git log <reported>..<branch>` before picking.
 2. **Expect conflicts where both sides only ADDED to one line** - two fixers each appending a name
    to the same import list or `__all__` - even where the plan predicted no overlap. Keep both
-   names, then re-run the linter (import order, unused imports) before continuing.
+   names, then re-run the linter (import order, unused imports) before continuing. A conflict can
+   also mean two batches fixed one defect that was queued twice under different targets: keep the
+   code already landed, take only the later batch's new tests, and close both entries.
 3. **Keep red commits off main, so it stays bisectable.** When a fixer reports a commit that is
    not green on its own because a later commit repairs it, squash the pair as you pick:
    `git cherry-pick -n A B`, then one commit. For a red commit already made, add the repair as a

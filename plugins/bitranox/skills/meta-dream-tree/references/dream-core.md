@@ -220,6 +220,9 @@ re-discovered as live memory), and record the ORDER-INDEPENDENT manifest: the se
 (level, slug, title, pin) tuples for the in-scope levels. The post-run check re-derives it; only
 `level` may change (placement), everything else only via an explicit merge/prune/reword decision.
 Commit the store's git repo (durability) so the pre-run state is one `git diff` away.
+A start-of-run state kept in the scratchpad (the store's dirty list, a status snapshot) takes a
+name carrying the dream id: a generic name reused later in the run overwrites the baseline, and
+telling this run's changes from a peer's then means rebuilding it from the backup.
 
 ## Dedup semantics
 

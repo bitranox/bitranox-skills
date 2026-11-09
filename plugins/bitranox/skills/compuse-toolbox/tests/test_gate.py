@@ -96,6 +96,16 @@ def test_every_gate_runs_and_one_red_fails_the_whole_report(tmp_path):
     assert [r.returncode for r in rep.results] == [0, 3]
 
 
+def test_a_pinned_log_marks_each_run_and_the_second_report_says_so(tmp_path):
+    log = tmp_path / "g.log"
+    gates = [("ok", [sys.executable, "-c", "pass"])]
+    first = gate.run_gates(gates, log)
+    assert "holds earlier runs" not in gate.format_report(first, log)
+    second = gate.run_gates(gates, log)
+    assert log.read_text(encoding="utf-8").count(gate.RUN_MARKER) == 2
+    assert "holds earlier runs" in gate.format_report(second, log)
+
+
 def test_the_log_keeps_every_gates_output_for_later_reading(tmp_path):
     log = tmp_path / "g.log"
     gate.run_gates([("one", [sys.executable, "-c", "print('HELLO-FROM-GATE')"])], log)

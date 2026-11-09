@@ -28,6 +28,9 @@ bash <plugin>/hooks/run-python.sh \
 ```
 
 (home: `skills/meta-audit-local-skills-and-hooks/`, launched through `hooks/run-python.sh`.)
+For the personal half alone, leave `--root` out: `~/.claude/skills` and `~/.claude/hooks` are
+selected without it, while `--root ~/.claude` walks job scratch dirs and fills the skipped list
+with plugin-owned directories.
 
 It prints what it selected AND what it skipped with the reason. Read both halves. The skipped list
 is the proof the ownership filter ran, not noise to scroll past.
