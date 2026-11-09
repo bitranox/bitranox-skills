@@ -1,5 +1,6 @@
 """Tests for skill-edit-guard.py: deny a SKILL.md edit (exit 2), allow else, env opt-out, fail-open."""
 
+import io
 import json
 import shlex
 import subprocess
@@ -697,3 +698,82 @@ def test_an_odd_line_in_the_load_check_still_denies(tmp_path, armed, depth_limit
         fh.write(line + "\n")
     reason = G.decide(_edit(main), {})
     assert reason is not None and "never loaded" in reason
+
+
+# ---- a Bash call that writes a SKILL.md is held to the same rule --------------------------------
+
+_SKILL = "plugins/bitranox/skills/foo/SKILL.md"
+
+
+@pytest.mark.parametrize("command", [
+    f"sed -i 's/a/b/' {_SKILL}",
+    f"echo x >> {_SKILL}",
+    f"cat new.md > '{_SKILL}'",
+    f"printf x | tee -a {_SKILL}",
+    f"cp /tmp/new.md {_SKILL}",
+    f"mv /tmp/new.md {_SKILL}",
+])
+def test_a_bash_write_to_a_skill_md_is_blocked(command):
+    event = {"tool_name": "Bash", "tool_input": {"command": command}, "session_id": "s"}
+    reason = G.decide(event, {})
+    assert reason is not None and "through Bash" in reason
+
+
+@pytest.mark.parametrize("command", [
+    f"grep -n TODO {_SKILL}",
+    f"cat {_SKILL}",
+    f"sed -n '1,5p' {_SKILL}",
+    f"wc -l {_SKILL} > /tmp/out",
+    f"git add {_SKILL}",
+    f"cp {_SKILL} /tmp/copy.md",
+    f"python3 - <<'PY'\nprint(open('{_SKILL}').read())\nPY\n",
+    "python3 - <<'PY'\nPath('x.txt').write_text('see SKILL.md for more')\nPY\n",
+    f"cat > note.txt <<'EOF'\nfor {_SKILL}\nEOF\n",
+    f"echo 'sed -i s/a/b/ {_SKILL}'",
+])
+def test_a_bash_call_that_only_reads_or_mentions_a_skill_md_passes(command):
+    event = {"tool_name": "Bash", "tool_input": {"command": command}, "session_id": "s"}
+    assert G.decide(event, {}) is None
+
+
+def test_a_bash_write_with_the_env_bypass_passes():
+    event = {"tool_name": "Bash", "tool_input": {"command": f"echo x > {_SKILL}"}}
+    assert G.decide(event, {G._BYPASS_ENV: "1"}) is None
+
+
+def test_a_bash_write_inside_the_skill_writer_process_passes(monkeypatch, tmp_path):
+    monkeypatch.setitem(sys.modules, "skill_receipt", _ReceiptStub(True))
+    main = _session(tmp_path, [_load_record(_CACHE + "meta-skill-writer")])
+    event = {"tool_name": "Bash", "tool_input": {"command": f"sed -i 's/a/b/' {_SKILL}"},
+             "session_id": "s", "transcript_path": str(main)}
+    assert G.decide(event, {}) is None
+
+
+def test_a_bash_write_with_a_receipt_the_agent_never_loaded_is_blocked(monkeypatch, tmp_path):
+    monkeypatch.setitem(sys.modules, "skill_receipt", _ReceiptStub(True))
+    main = _session(tmp_path, [])
+    event = {"tool_name": "Bash", "tool_input": {"command": f"sed -i 's/a/b/' {_SKILL}"},
+             "session_id": "s", "transcript_path": str(main)}
+    assert "through Bash" in G.decide(event, {})
+
+
+@pytest.mark.parametrize("command", [
+    f"python3 - <<'PY'\np = Path('{_SKILL}')\np.write_text('x')\nPY\n",
+    f"python3 - <<'PY'\nwith open('{_SKILL}', 'w') as fh:\n    fh.write('x')\nPY\n",
+])
+def test_a_python_program_writing_a_skill_md_is_nudged_not_refused(command, capsys, monkeypatch):
+    event = {"tool_name": "Bash", "tool_input": {"command": command}, "session_id": "s"}
+    assert G.decide(event, {}) is None
+    assert "meta-skill-writer" in G.python_nudge(event, {})
+
+
+def test_a_python_program_only_reading_a_skill_md_gets_no_nudge():
+    event = {"tool_name": "Bash", "tool_input": {"command": f"python3 - <<'PY'\nprint(open('{_SKILL}').read())\nPY\n"}}
+    assert G.python_nudge(event, {}) is None
+
+
+def test_main_prints_the_python_nudge_and_exits_zero(monkeypatch, capsys):
+    event = {"tool_name": "Bash", "tool_input": {"command": f"python3 - <<'PY'\np = Path('{_SKILL}')\np.write_text('x')\nPY\n"}}
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(event)))
+    assert G.main() == 0
+    assert "additionalContext" in capsys.readouterr().out

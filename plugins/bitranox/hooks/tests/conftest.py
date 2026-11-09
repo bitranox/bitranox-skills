@@ -25,6 +25,8 @@ _HOOK_MODULES = {
     "block-pgrep-self-match": "block_pgrep_self_match",
     "block-write-after-sibling-cd": "block_write_after_sibling_cd",
     "block-partial-typecheck": "block_partial_typecheck",
+    "block-unbounded-find": "block_unbounded_find",
+    "stamp-clock-nudge": "stamp_clock_nudge",
     "block-masked-gate-exit": "block_masked_gate_exit",
     "block-or-echo-verdict": "block_or_echo_verdict",
     "block-commit-beside-sibling-gate": "block_commit_beside_sibling_gate",

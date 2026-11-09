@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse(Edit|Write|MultiEdit|NotebookEdit) guard: a SKILL.md edit must go through the skill-writer process.
+"""PreToolUse(Edit|Write|MultiEdit|NotebookEdit|Bash|PowerShell) guard: a SKILL.md edit must go through the skill-writer process.
 
 Editing a shipped `SKILL.md` by hand - skipping `bitranox:meta-skill-writer`'s RED-GREEN-REFACTOR / Iron
 Law (baseline test first, sibling tests for any bundled script) - is the exact miss this guard prevents.
@@ -56,6 +56,13 @@ Decisions:
   a refuse-once nudge, accepted as such: an agent that wants to dodge one refusal can, and the
   commit gate, not this guard, is what holds the recorded decisions.
 
+A Bash call that writes a SKILL.md is held to the same rule: a redirect (`> .../SKILL.md`, `tee`),
+`sed -i`, or `cp`/`mv`/`install` onto one is refused without the receipt and the skill load. A
+Python program that names a SKILL.md path and calls a write only gets a NUDGE, because replaying
+202k recorded Bash calls found 131 such programs outside a skill-writer session, many writing
+another file and only mentioning the path, while the 10 shell-shape firings were all real writes.
+A script merely GIVEN a path is not judged: a reader and a writer look identical from outside it.
+
 Errors split by direction. Unparseable stdin and any error escaping `main` fail OPEN (exit 0): a broken
 guard must never wedge a turn. An error while consulting the receipt store, a transcript that cannot
 be read, and an `agent_id` that is not a plain name or matches in two workflows all fail CLOSED: they
@@ -72,6 +79,8 @@ import shlex
 import sys
 from pathlib import Path
 
+import shell_text
+import splice_span
 from transcript_siblings import agent_transcript
 
 # IGNORECASE because macOS and Windows filesystems are case-insensitive: there `Skills/x/skill.md`
@@ -298,8 +307,91 @@ def _brief_refusal(event, path):
     return _BRIEF % (label, brief, full_list)
 
 
+_SKILL_PATH = r"""(?:[^\s'"<>|;&]*/)?skills/[^/\s'"]+/SKILL\.md"""
+_REDIRECT_INTO = re.compile(r""">>?\s*['"]?(%s)""" % _SKILL_PATH, re.IGNORECASE)
+_NAMES_SKILL_LITERAL = re.compile(r"""SKILL\.md['"]""")
+_PY_WRITE = re.compile(r"""\bwrite_text\(|\bwrite_bytes\(|\.write\(|\bopen\([^)\n]*['"][wa]b?\+?['"]""")
+_FILE_WRITERS = ("sed", "gsed", "tee", "cp", "mv", "install", "dd")
+
+
+def _argv_writes_skill(tokens):
+    """The SKILL.md path this argv writes, when it is sed -i, tee, or a copy/move onto one."""
+    program = shell_text.basename_for_tool(tokens[0], "Bash")
+    if program not in _FILE_WRITERS:
+        return None
+    if program in ("sed", "gsed") and not any(t.startswith("-i") or t == "--in-place" for t in tokens):
+        return None
+    candidates = [t for t in tokens[1:] if _SKILL_MD.search(t.replace("\\", "/"))]
+    if program == "tee":
+        return candidates[0] if candidates else None
+    if program in ("cp", "mv", "install", "dd"):
+        last = tokens[-1].replace("\\", "/")
+        return tokens[-1] if _SKILL_MD.search(last) else None
+    return candidates[0] if candidates else None
+
+
+def python_skill_write(command):
+    """True when a Python program this Bash `command` runs names a SKILL.md and calls a write."""
+    if not isinstance(command, str) or "skill.md" not in command.lower():
+        return False
+    return any(_NAMES_SKILL_LITERAL.search(program) and _PY_WRITE.search(program)
+               for program in splice_span.programs_run_by(command))
+
+
+def bash_skill_write(command):
+    """The SKILL.md a Bash `command` writes through a shell shape, or None. PURE.
+
+    Examples:
+        >>> bash_skill_write("sed -i 's/a/b/' plugins/x/skills/foo/SKILL.md")
+        'plugins/x/skills/foo/SKILL.md'
+        >>> bash_skill_write("grep -n TODO plugins/x/skills/foo/SKILL.md") is None
+        True
+    """
+    if not isinstance(command, str) or "skill.md" not in command.lower():
+        return None
+    text = shell_text.strip_heredoc_bodies(command)
+    for _at, segment in shell_text.iter_segments(text, "Bash"):
+        redirect = _REDIRECT_INTO.search(segment)
+        if redirect:
+            return redirect.group(1)
+        tokens = shell_text.argv_for_match(segment.strip(), "Bash")
+        target = _argv_writes_skill(tokens) if tokens else None
+        if target:
+            return target
+    return None
+
+
+def _decide_bash(event, env):
+    target = bash_skill_write((event.get("tool_input") or {}).get("command"))
+    if target is None or env.get(_BYPASS_ENV):
+        return None
+    if _receipt_fresh(event) and _loaded_by_editing_agent(event):
+        return None
+    return ("Writing a SKILL.md through Bash is blocked for the same reason as the Edit tool: skills "
+            "change ONLY through bitranox:meta-skill-writer (RED-GREEN-REFACTOR + its checklist). "
+            "Invoke that skill via the Skill tool in this agent first - its step 0 issues the "
+            "session receipt this guard checks. Emergency bypass: relaunch with %s=1 set in the "
+            "environment (a shell `export` in a Bash tool call does NOT reach this hook). "
+            "File: %s" % (_BYPASS_ENV, target))
+
+
+def python_nudge(event, env):
+    """additionalContext for a Python program writing a SKILL.md, else None."""
+    if event.get("tool_name") != "Bash" or env.get(_BYPASS_ENV):
+        return None
+    if not python_skill_write((event.get("tool_input") or {}).get("command")):
+        return None
+    if _receipt_fresh(event) and _loaded_by_editing_agent(event):
+        return None
+    return ("This Python program names a SKILL.md and writes a file. If it rewrites that SKILL.md, "
+            "stop and do it through bitranox:meta-skill-writer: a SKILL.md changed outside it "
+            "skips the RED-GREEN steps and the checklist the commit gate expects.")
+
+
 def decide(event, env):
     """Pure: (event, env) -> a block-reason string (deny the tool call), or None to allow silently."""
+    if (event.get("tool_name") or "") == "Bash":
+        return _decide_bash(event, env)
     if (event.get("tool_name") or "") not in _TOOLS:
         return None
     # posixpath.normpath, not os.path: the separators are already forward slashes, and
@@ -338,8 +430,11 @@ def main():
         return 0
     reason = decide(event, os.environ)
     if reason is not None:
-        sys.stderr.write("SKILL-EDIT GUARD: " + reason + "\n")
-        return 2  # PreToolUse: non-zero blocks the tool call and feeds stderr back to the model
+        return shell_text.refuse("SKILL-EDIT GUARD: " + reason)
+    nudge = python_nudge(event, os.environ)
+    if nudge:
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                                                 "additionalContext": nudge}}))
     return 0
 
 
