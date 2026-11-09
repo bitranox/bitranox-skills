@@ -108,6 +108,11 @@ For the modern Python pick behind each, see `bitranox:coding-python-use-modern-l
 - **Degrade gracefully.** On partial failure return a partial result + a clear warning + a non-zero
   exit - never a silent wrong answer. If a target resolves somewhere unexpected (e.g. a public host
   to an internal IP), say so.
+- **Before a NON-IDEMPOTENT action, a busy target means wait, then refuse.** When a pre-check finds
+  the target busy right before a step that cannot be repeated (send a print job, post, charge),
+  wait for it under a bounded timeout, then REFUSE with an exit code that says nothing was done.
+  Never go ahead "with a warning". Measure first what the target does with a request while busy: a
+  device may accept and silently queue it, so the job goes out late and nothing reports an error.
 - **Guard resources.** Cap concurrency, memory, and payload/collection size (unbounded input is a
   DoS vector - see `bitranox:coding-input-sanitization`). Check disk / CPU / memory headroom before
   a heavy step (`shutil.disk_usage`, `os.cpu_count`, load) rather than assuming it is there; stream

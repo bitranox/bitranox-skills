@@ -47,6 +47,13 @@ DOES NOT APPLY - internal seams between trusted code:
   `bitranox:coding-resilience`.
 - **Handle arbitrary bytes/chars.** non-ASCII, emoji, CJK, control chars, NUL, binary: reject,
   normalize (e.g. Unicode NFC), or escape - never trust raw. Decide the allowed charset explicitly.
+  A per-character Python stripper of C0/DEL/C1, Cf/Zl/Zp and default-ignorables can skip the walk
+  when `value.isascii() and value.isprintable()` (below 0x80 the unsafe set is the C0 controls plus
+  DEL, which is what `isprintable` refuses); pair it with a test comparing the shortcut to the walk
+  on all 128 ASCII chars, so a char later added to the unsafe set cannot survive the shortcut.
+- **Parse CSV strictly.** `csv.reader(f, strict=True)` plus `except csv.Error` at the boundary:
+  without `strict`, one stray quote merges every following row into a single field and the loader
+  exits 0.
 
 Test the edge with the adversarial input battery (UTF/emoji/CJK/binary/wrong-type/oversized) in
 `bitranox:process-test-design`.
@@ -102,6 +109,7 @@ once at the edge.
 | Deserialization       | a safe format (JSON) parsed into a typed model                                                                                                  | `pickle` / `yaml.load` / `eval` on untrusted data                                                                      |
 | Outbound URL (SSRF)   | allowlist host + scheme; block internal/link-local ranges and redirects to them                                                                 | fetch a user-supplied URL unrestricted                                                                                 |
 | Log / response header | strip CR/LF + control chars before writing                                                                                                      | write user data into a header/log line raw (injection/forging)                                                         |
+| Device command stream | refuse control bytes (SOH, STX, ESC) in every field of a print or label job, or allowlist printable characters                                 | put a CSV or form value into a printer or device command raw (one value can reset it or clear its modules)            |
 
 **HTML built by hand: pick the escape mode per location.** Python's `html.escape(s)` defaults to
 `quote=True`, which also turns `"` and `'` into `&quot;` and `&#x27;`. Inside a quoted attribute
@@ -167,6 +175,10 @@ numeric, IDNA, trailing-dot and backslash/userinfo spellings of a forbidden host
   no shell anywhere. Likewise a name beginning with `-` is parsed as an OPTION by `useradd`/`gpasswd`
   rather than as a name. Reject `\n` in a password at the boundary and allowlist account names to a
   POSIX pattern. The sink here is a line-oriented parser; treat it like any other sink.
+- **Redacting after you cut a text window.** A size cap is not a neutral step at a boundary that
+  also scrubs. Run the redactor on the WHOLE text and cut the excerpt from the redacted result: a
+  window that starts past a private key's `BEGIN` line leaves key material that a delimiter-anchored
+  pattern cannot recognise.
 - **A regex or `isdigit()` that reads as a complete check.** `re.match(r"...$", s)` accepts
   `"<valid>\n"`: `match` anchors only the start and `$` also matches just before a final newline,
   so `re.compile(r"(\d{4})-(\d{2})-(\d{2})$").match("2024-01-31\n")` passes and the caller then

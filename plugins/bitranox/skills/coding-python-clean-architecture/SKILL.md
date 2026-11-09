@@ -97,6 +97,8 @@ Adapters/edges are the only place external data enters, so two rules are enforce
   database result sets, or huge log files, stream/iterate/chunk/paginate - never load the whole
   thing into memory or accumulate an unbounded collection. Ports expose iterators/pagination, not
   fully-materialized lists. Materialize only when the dataset is provably and safely bounded.
+  Decide this at design time, beside the layering: a use case over caller-sized input takes and
+  yields an iterable and holds one item at a time, so peak memory does not grow with the input.
 - **Never trust structured input.** Structured data crossing the boundary (a dict, JSON, an
   API/IPC payload, a deserialized object) is parsed into a typed model at the edge (Pydantic,
   then a domain type) - never consumed raw on the assumption its keys, types, or shape are

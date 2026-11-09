@@ -427,6 +427,8 @@ for i in "${!arr[@]}"; do echo "$i: ${arr[$i]}"; done # index: value
 diff <(sort file1) <(sort file2)
 while IFS= read -r line; do ...; done < <(cmd)  # avoid subshell
 ```
+The substitution is expanded once, when the loop STARTS: an array the loop body fills is still
+empty inside `done < <(cmd "${arr[@]}")`, so build any array the substitution reads BEFORE the loop.
 
 ### Associative Array Check
 ```bash
@@ -620,4 +622,12 @@ trap 'echo cleanup' EXIT
 (echo "subshell")  # EXIT trap does NOT fire here
 # Subshells inherit the parent's traps but reset EXIT/ERR/DEBUG/RETURN.
 # If you need cleanup in a subshell, set a new trap inside it.
+```
+
+### `find . -name '.*' -prune` prunes the starting point
+
+```bash
+find . -name '.*' -prune -o -type f -print     # prints NOTHING, exit 0: '.' itself matches '.*'
+find . -name '.?*' -prune -o -type f -print    # correct: '.?*' cannot match '.'
+find . -mindepth 1 -name '.*' -prune -o -type f -print  # correct too (GNU find)
 ```
