@@ -15,7 +15,7 @@ import block_unbounded_find as G
     "sudo find / -type f -name x",
     "cd /tmp && find / -name x | head",
     "ls; find -L / -name x",
-    "find /home/x / -name y",
+    "find /opt/x / -name y",
 ])
 def test_an_unbounded_walk_of_the_root_is_refused(command):
     assert "UNBOUNDED FIND" in G.assess(command)

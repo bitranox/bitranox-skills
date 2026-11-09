@@ -101,6 +101,10 @@ coordinate. (Past "wrong pixel" failures came from reading coordinates off a sca
   "unchanged" screenshot is weak evidence. Only when two screenshots a few seconds apart show a genuinely
   identical, idle screen is "dropped input" the diagnosis - then retry ONCE with increased delays and
   re-read the screen.
+- **A Windows UAC consent prompt is keyboard-only.** Clicks may not register on a Windows guest
+  while keys do. Press Tab or Left until the Ja/Yes button is outlined, `screenshot` to confirm,
+  then Space: Enter fires the default No. A black framebuffer can be display power-save with the
+  prompt still up, and one click wakes it.
 - **A VNC console is a flaky external resource** - it can freeze, drop, or lag mid-session. Verify the
   screen state before acting on it, retry under a timeout, and never assume a keystroke landed. For the
   self-healing patterns, see `bitranox:coding-resilience`.

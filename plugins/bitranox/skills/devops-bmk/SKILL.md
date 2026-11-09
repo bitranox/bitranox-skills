@@ -595,7 +595,10 @@ forwarded (e.g. `make push fix login bug`). Most have short aliases.
   wildcard (`==1.*`) requirements, a third-party one only to a release older than the project's
   `[tool.uv]` cooldown. An exact pin (`pkg==1.5.0`, `pkg===1.5.0`) is left as written and reported
   pinned (`[==]` in the `bmk deps` report), so it never fails the `deps` stage either. Use one for
-  a release you hold on purpose, such as a test that compares the bytes one release produces.
+  a release you hold on purpose, such as a test that compares the bytes one release produces. To
+  hold a dependency BELOW a release, write the ceiling in `pyproject.toml` (`pkg>=X,<Y`, or an exact
+  `==`) with a comment naming the check that lifts it: bmk honours a `<` bound, while a hold kept
+  only in a backlog or a note is undone by the next `make test`.
 - **The floor update also writes the project's `[tool.uv]` cooldown block.** Before it locks, it
   adds `exclude-newer` when the project has none, and an `exclude-newer-package` entry set to
   `false` for every package named in `[bmk.supply_chain] own_packages` that the project reaches,
@@ -605,8 +608,12 @@ forwarded (e.g. `make push fix login bug`). Most have short aliases.
   the default, so list the bitranox libraries the project uses as well) or they get no exemption. A
   third-party floor younger than the cooldown gets a per-package pin, a timestamp one second after
   that release's upload, so the lock can take it; in a bmk project declare the floor and let bmk
-  write the pin. A pin of bmk's that no declared floor needs any more is removed once the cooldown
-  admits the release it served. bmk recognises its pins by VALUE, so a hand pin at upload time plus
+  write the pin. A release whose files straddle the cooldown cutoff (first wheels older than it,
+  last ones younger, so the lock would see a half-uploaded release) gets a pin BACK to one second
+  after the newest file of the latest release wholly before the cutoff: older than the cooldown and
+  narrowing on purpose, and gone once the cut release clears the cooldown. A pin of bmk's that
+  no declared floor needs any more is removed once the cooldown admits the release it served. bmk
+  recognises its pins by VALUE, so a hand pin at upload time plus
   one second counts as bmk's; any other entry is left alone, and so is the whole block when PyPI
   does not answer (bmk says so on stderr). Never lower a floor to get under the cooldown: the
   release the floor names is the one the project needs, and the pin is what admits it.
@@ -725,8 +732,10 @@ visible", that is JSON mode succeeding -- add `--human` to watch it work.
 **A passing JSON-mode log looks truncated; prove the pass, do not re-run it.** It shows the
 dependency install and then almost nothing: no ruff summary, no pyright count, no pytest `passed`
 line. The verdict is one line, `{"result":"pass","stages":N,"scripts":M}`, written only in JSON mode
-and only on success. Read it as the verdict only when it is the LAST line of the log: with `2>&1`
-into one file, stdout is block-buffered while stderr is not, so the two streams' lines can land out
+and only on success; it counts stages and scripts, not tests, so to quote a test count read the
+pytest stage's own output (`--human`). Read it as the verdict only when it is the LAST line of the
+log: with `2>&1` into one file, stdout is block-buffered while stderr is not, so the two streams'
+lines can land out
 of order. The independent control is the coverage report: bmk deletes `coverage.xml` (the
 `[tool.scripts.test] coverage-report-file` setting, which defaults to it) before pytest runs and
 writes it again only after the tests AND the `fail_under` floor passed, so an mtime inside the run's

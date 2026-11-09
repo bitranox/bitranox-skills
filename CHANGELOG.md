@@ -30,6 +30,29 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.42.0]
+
+### Added
+
+- Guards: refuse an unbounded `find /`, hold shell writes to a SKILL.md to the skill-writer rule,
+  refuse a sed frame-strip that writes a file, and nudge on stale time stamps and on a background
+  job's cd leak.
+- Skill rules from the contribution queue across the coding, compuse, git-worktrees, infra and
+  devops-bmk skills.
+
+### Changed
+
+- block-index-splice asks for an asserted region line count as well as unique anchors.
+- A typed `--force-with-lease` value now counts as a literal sha.
+- user-decision-log writes at the session's launch root rather than the shell's current repo.
+- The backlog tools refuse a second backlog in a nested repo unless `create_new` is passed.
+
+### Fixed
+
+- ci-watch names the pushed repo in the printed `ci_wait` command, and `ci_wait` exits at once on
+  gh's "none of the git remotes" answer.
+- mdwrap keeps inline code spans whole, and `gate.py --help` shows the per-gate flag order.
+
 ## [10.41.0]
 
 ### Changed
