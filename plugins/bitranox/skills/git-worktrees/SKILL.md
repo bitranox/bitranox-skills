@@ -127,8 +127,10 @@ Follow this priority order. Explicit user preference always beats observed files
 ```bash
 # Check the directory you CHOSE, not both names. `git check-ignore` matches a PATHNAME and
 # does not care whether it exists, so testing both with `||` reports "ignored" whenever
-# EITHER name is listed - including the one you are not about to use.
-git check-ignore -q "$LOCATION" 2>/dev/null
+# EITHER name is listed - including the one you are not about to use. The trailing slash is
+# required: the path does not exist yet, so a directory-only pattern (`/wt-*/`) only matches
+# the name written as a directory.
+git check-ignore -q "$LOCATION/" 2>/dev/null
 ```
 
 **If NOT ignored:** Add to .gitignore, commit the change, then proceed.
@@ -166,7 +168,11 @@ if [ -f package.json ]; then npm install; fi
 if [ -f Cargo.toml ]; then cargo build; fi
 
 # Python (prefer uv)
-if [ -f pyproject.toml ]; then uv sync 2>/dev/null || uv pip install -e .; fi
+# Test deps kept in an optional `dev` extra are absent from a bare `uv sync`, and the first
+# `uv run pytest` then fails on a dev-only import in conftest (no such extra: the next form runs).
+if [ -f pyproject.toml ]; then
+  uv sync --extra dev 2>/dev/null || uv sync 2>/dev/null || uv pip install -e .
+fi
 if [ -f requirements.txt ]; then uv pip install -r requirements.txt 2>/dev/null || pip install -r requirements.txt; fi
 
 # Go
@@ -186,6 +192,14 @@ npm test / cargo test / pytest / go test ./...
 
 **If tests pass:** Report ready.
 
+**In a bmk-managed project a red baseline can be the dependency update.** The baseline `make test`
+raises dependency floors and rewrites the Makefile and `pyproject.toml` first, so a failure there
+can come from a release it just took, not from a pre-existing fault or your feature. Read the
+floor-raise diff (`git diff pyproject.toml`) before diagnosing. Fix such a break on main in its own
+worktree, `git restore` the floor churn in the feature worktree, and rebase it onto the fix. bmk
+reports a pyright failure and carries on into pytest, so read every stage's `(exit code: N)`
+header, not only the pytest summary.
+
 **A new worktree does not have the main checkout's GITIGNORED files.** `git worktree add` checks
 out tracked files only, so a gitignored file the tests read in the main checkout - a private token
 or deny list, a `.env`, a local fixture - is simply absent there. A test written to SKIP when its
@@ -204,6 +218,11 @@ checkout, which reads as a broken repository. For a worktree that will run the p
 prefer a base outside `$HOME` (a `mktemp -d` directory) or the project-local layout; if a test
 fails only in the worktree, re-run it from a worktree elsewhere before calling the repository
 broken.
+
+**A tool that takes the project's identity from the checkout FOLDER NAME** (a `rename-project` or
+`rename.sh` with no name option) gives the project the worktree's name inside
+`.claude/worktrees/<name>`. Run such a tool in a scratch folder named after the project and copy
+the result in.
 
 **A worktree nested in the main checkout inherits the tool config ABOVE it.** A project-local
 worktree (`.worktrees/<name>`, `.claude/worktrees/<name>`) sits inside the main checkout, so a
@@ -312,6 +331,48 @@ is the sha you recorded before removing (a branch removed with it leaves no ref 
 branch if it survived, never `HEAD`, which there is the main checkout's own. The
 count covers commits only: uncommitted and ignored files went with the worktree, and git cannot
 bring them back.
+
+**Removing many finished worktrees and branches at once.** Resolve each repo's base by asking it
+(`git symbolic-ref --short refs/remotes/origin/HEAD`, or `git rev-parse --verify -q <ref>`), never
+one assumed name: repos in one sweep differ (`main`, `master`). Judge each branch with `landed.py`,
+which reports a failure as exit 2. A hand-rolled `n=$(git cherry BASE BR | grep -c '^+')` prints 0
+when `git cherry` itself FAILS (a wrong base, exit 128), so the delete runs on a vacuous zero:
+capture cherry's output and exit status, and refuse on failure. Check every DETACHED worktree HEAD
+too (`git log HEAD --not --remotes`), since no branch holds its commits, and park anything found on
+a remote branch first. After deleting, confirm nothing went unreachable with
+`LC_ALL=C git fsck --unreachable --no-reflogs` (a parser reading localized `fsck` output misses it).
+
+**A worktree whose registration was pruned** (its directory and `.git` link file exist,
+`.git/worktrees/<name>` is gone, `git status` refuses and `landed.py` exits 2). `git worktree add`
+on the existing directory refuses and `git worktree repair` cannot recreate a missing admin dir.
+
+To get it back with its files untouched, borrow a fresh admin dir:
+
+```bash
+git worktree add --no-checkout "$tmp" <branch>    # or --detach <sha>; run in the main checkout
+cp "$tmp/.git" "$dir/.git"
+echo "$dir/.git" > "$common/worktrees/$(basename "$tmp")/gitdir"
+rm -rf "$tmp"             # plain rm: `git worktree remove` would drop the admin dir just linked
+git -C "$dir" reset       # mixed: rebuilds the index from HEAD and touches no file
+git -C "$dir" status --short
+```
+
+To prove it holds no unique work before deleting it, hash the directory into a throwaway tree
+(`$common` is `git rev-parse --absolute-git-dir` in the main checkout):
+
+```bash
+export GIT_INDEX_FILE="$(mktemp -u)"
+git --git-dir="$common" --work-tree="$dir" add -A
+tree=$(git --git-dir="$common" --work-tree="$dir" write-tree)
+unset GIT_INDEX_FILE
+git --git-dir="$common" diff --raw --no-abbrev <candidate-commit> "$tree"
+git --git-dir="$common" --work-tree="$dir" ls-files -o -i --exclude-standard   # ignored files
+```
+
+Compare blob shas, not names: a mode-only exec-bit flip (common on a tree exported over SMB) fills a
+`--name-status` list, and only the rows whose blob sha differs are content. Run
+`git --git-dir="$common" log --all --find-object=<blob>` for each remaining blob; a shared file
+that matches no blob, compare by its hunk lines against the topic's own diff.
 
 ## Step 5: Finishing - Reclaim the Per-Topic Build Cache (wtclean)
 
