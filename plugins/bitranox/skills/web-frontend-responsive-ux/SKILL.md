@@ -26,6 +26,12 @@ The skill owns these dimensions and nothing else:
 7. **a11y baseline** - an `axe-core` pass per profile.
 8. **i18n layout robustness** - layout survives long/expanded text and `dir="rtl"` (layout only).
 
+**HTML email is out of scope.** Mail clients need inline styles, table layout, no script and
+their own dark-mode handling, and honour media queries unevenly, so the page patterns here do not
+transfer. What does: render the mail HTML with `audit_responsive.py` over the device matrix for
+horizontal overflow; no bundled skill covers mail client quirks, so take those from an
+email-specific guide.
+
 Read the reference files (below) for the concrete patterns and thresholds before proposing fixes.
 
 ## Reference files

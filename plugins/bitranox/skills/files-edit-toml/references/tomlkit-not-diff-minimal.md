@@ -67,6 +67,7 @@ catches a comment that was dropped, stranded or left beside the wrong value (mea
 | `arr[i] = "new"` on a value with an inline comment                | The comment stays on that line, now beside the new value it does not describe     |
 | `del arr[i]` below a whole-line `# comment`                       | The comment stays, now above the next value it does not describe                  |
 | Remove a whole-line comment itself                                | No public API: it sits in an internal `_ArrayItemGroup` that `del` cannot address |
+| Rebuild the array (`tomlkit.array()` + `append`, or assign a list) | EVERY comment inside it is gone, commented-out lines included; `del` in place keeps them |
 
 So add a commented value with `add_line(..., comment=...)` when the end of the array is an acceptable
 place, and otherwise edit the comment lines by exact text and verify the values with a parser:

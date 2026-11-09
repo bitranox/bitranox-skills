@@ -54,7 +54,9 @@ on a file that interleaves table families it can be False, because tomlkit regro
 with no edit, and such a file is edited by exact text at an asserted unique anchor instead. A new
 `[tool.x]` table and a `del` also produce surprise diffs, and no array operation carries a comment with
 its value: `insert`/`append` drop a comment set with `item.comment()`, while a replaced or deleted value
-leaves its comment beside the wrong one. Read `references/tomlkit-not-diff-minimal.md` when that check
+leaves its comment beside the wrong one. Rebuilding an array (`tomlkit.array()` plus `append`, or assigning
+a new list) drops EVERY comment inside it: filter or replace items in place, then read the diff.
+Read `references/tomlkit-not-diff-minimal.md` when that check
 is False, when a diff shows tables moved that you did not touch, after adding a table or deleting a
 key, and before adding, replacing or removing a commented array value or an array comment.
 

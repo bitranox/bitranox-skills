@@ -117,7 +117,9 @@ Docker tags and `uv_build` pins name. Each gotcha names the uv it was measured o
 | **"Lock reproducibility / --exclude-newer"**                           | `05-resolution.md`, `02-projects.md`                                                              |
 | **"Project dependency cooldown (exclude-newer)"**                      | `05-resolution.md` (Dependency Cooldowns: `pyproject.toml`, not `uv add`)                         |
 | **"Cooldown for uvx / uv tool install (exclude-newer order)"**         | `07-tools-and-scripts.md` (A Supply-Chain Cooldown: flag before the package spec)                 |
+| **"System-wide uv tool: bad interpreter, Permission denied"**          | `07-tools-and-scripts.md` (Gotcha: a system-wide tool links to the installer's Python)            |
 | **"uv lock refuses a raised floor (only X<=N available)"**             | `05-resolution.md` (Dependency Cooldowns), `02-projects.md`                                       |
+| **"Does this uv.toml or env var change my lock?"**                     | `05-resolution.md` (Probe a config input's effect from a fresh lock)                              |
 | **"Cooldown locks an older release of your own package"**              | `05-resolution.md` (Exempting your own packages from a cooldown)                                  |
 | **"Lock fine here, --locked fails in CI (machine uv.toml)"**           | `10-configuration.md` (A machine-wide `uv.toml` cooldown and the project's lock)                  |
 | **"Analyser via `uvx --with .` reports a removed defect"**             | `07-tools-and-scripts.md` (Including Additional Dependencies)                                     |

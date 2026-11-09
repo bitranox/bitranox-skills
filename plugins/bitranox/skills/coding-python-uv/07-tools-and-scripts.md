@@ -125,6 +125,14 @@ $ uv tool install --exclude-newer "14 days" ruff@latest
   resolving `build-system.requires`, so without `--no-cache` the floor gap above stays hidden until
   a host with a cold cache installs it. Measured on uv 0.13.0.
 
+**Gotcha: a system-wide tool still links to the installer's own Python (measured on uv 0.13.0).**
+`UV_TOOL_DIR=/opt/...` moves the tool venv, not the interpreter: the venv links to a uv-managed
+Python under the installing user's `UV_PYTHON_INSTALL_DIR` (default `~/.local/share/uv/python`), so
+a tool installed as root fails for everyone else with `bad interpreter: Permission denied`, because
+`/root` is 0700. Set `UV_PYTHON_INSTALL_DIR` to a world-readable directory (`/opt/uv/python`) and
+pass `--managed-python`; without the flag an empty install dir silently falls back to a Python
+already on the machine.
+
 ### Requesting Extras
 
 The `--from` option can be used to run a tool with extras:

@@ -580,6 +580,12 @@ number as proof of either cause below.
   re-resolves a raised floor without it, so reach for it once the control has ruled the cooldown
   out.
 
+**Probe a config input's effect on the lock from a fresh lock, not an existing one.** A config
+source such as an `exclude-newer-package` table in a system or user `uv.toml` leaves an existing
+`uv.lock` byte-identical when the locked versions still satisfy it, while a freshly created lock
+records the table (measured on uv 0.13.0), so "the lock did not change" says nothing about that
+input. Delete `uv.lock` before each arm, and include a planted control that must change the lock.
+
 When no `hint:` names a filter, run the control and `--upgrade-package` before you loosen the
 cooldown or clear the cache. Do not lower the floor to get past either cause (see "A floor younger
 than the cooldown" below).
