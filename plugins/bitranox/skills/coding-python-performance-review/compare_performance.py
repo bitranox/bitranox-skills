@@ -5,7 +5,12 @@ Stashes current changes (untracked files included), checks out the previous comm
 the test suite, restores the branch and the changes, then times it again, and reports the
 delta. The restore runs whatever happens in between - a failed checkout, a crash, Ctrl-C.
 
-Usage: python compare_performance.py
+Usage: python compare_performance.py [-- PYTEST_ARGS ...]
+
+Everything after ``--`` replaces the default test path and flags, so pass the repo's own
+invocation, for example ``-- -m "not local_only"``: naming no path keeps its ``testpaths`` and
+``addopts``, which a named ``tests/`` would drop (a repo with ``--doctest-modules`` loses its
+src doctests that way). Without ``--`` it times ``pytest tests/ -v``.
 
 Exit codes: 0 both suite runs passed and the delta is reported; 2 no comparison was
 possible - not a git repository, no commits, no parent commit, a git step failed, a suite
@@ -50,14 +55,17 @@ def _rev(ref):
     return r.stdout.strip() if r.returncode == 0 else None
 
 
-def _pytest_argv():
+def _pytest_argv(extra=None):
     """Build the pytest argv, only naming a test dir when one exists.
 
+    *extra* (the caller's ``-- ...`` arguments), when given, replaces the path and flags.
     If neither ``tests/`` nor ``test/`` is present, omit the path so pytest
     discovers tests itself (honouring any pyproject testpaths). The cache
     provider is off so a run leaves no .pytest_cache behind to collide with the
     untracked files the stash restores."""
     argv = [sys.executable, "-m", "pytest", "-p", "no:cacheprovider"]
+    if extra is not None:
+        return argv + list(extra)
     testdir = next((d for d in ("tests", "test") if os.path.isdir(d)), None)
     if testdir:
         argv.append(testdir)
@@ -65,13 +73,13 @@ def _pytest_argv():
     return argv
 
 
-def _time_pytest_ms():
+def _time_pytest_ms(extra=None):
     """Run the suite; return (elapsed milliseconds, pytest exit code)."""
     # No bytecode writes: a __pycache__ created while the old commit is checked out would
     # collide with the untracked __pycache__ the stash puts back.
     env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
     start = time.perf_counter()
-    rc = subprocess.run(_pytest_argv(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    rc = subprocess.run(_pytest_argv(extra), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                         env=env, check=False).returncode
     return int((time.perf_counter() - start) * 1000), rc
 
@@ -220,16 +228,16 @@ def _restore(ref, stash_sha):
     return []
 
 
-def _time_before(before_sha):
+def _time_before(before_sha, extra=None):
     """Check out *before_sha* and time the suite there; raises CompareError on failure."""
     checkout = _git("checkout", "-q", before_sha, "--")
     if checkout.returncode != 0:
         raise CompareError(f"git checkout of the previous commit failed: {checkout.stderr.strip()}")
     print("Running tests on BEFORE version...")
-    return _time_pytest_ms()
+    return _time_pytest_ms(extra)
 
 
-def _compare():
+def _compare(extra=None):
     """Run both timings; return (before ms, before rc, after ms, after rc)."""
     if _rev("HEAD^{commit}") is None:
         raise CompareError("Not a git repository, or no commits yet.")
@@ -241,7 +249,7 @@ def _compare():
     stash_sha = _stash_changes()
     problems = []
     try:
-        before, before_rc = _time_before(before_sha)
+        before, before_rc = _time_before(before_sha, extra)
     finally:
         problems = _restore(start_ref, stash_sha)
         for problem in problems:
@@ -250,7 +258,7 @@ def _compare():
         raise CompareError("the working tree was not fully restored (see above)")
 
     print("Running tests on AFTER version...")
-    after, after_rc = _time_pytest_ms()
+    after, after_rc = _time_pytest_ms(extra)
     return before, before_rc, after, after_rc
 
 
@@ -283,14 +291,23 @@ def _utf8_output():
             pass
 
 
-def main():
+def _parse_args(argv):
+    """The pytest arguments after ``--``; ``None`` when no ``--`` was given."""
+    if not argv:
+        return None
+    if argv[0] != "--":
+        raise CompareError(f"unexpected argument {argv[0]!r}; pass pytest arguments after --")
+    return argv[1:]
+
+
+def main(argv=()):
     _utf8_output()
     try:
-        return _report(*_compare())
+        return _report(*_compare(_parse_args(list(argv))))
     except CompareError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))

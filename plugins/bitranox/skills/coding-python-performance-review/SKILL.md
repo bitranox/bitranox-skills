@@ -95,6 +95,8 @@ discovery steps and use the two checker tools directly:
   files, it re-applies nothing and names that file: move it out of the way before those
   commands. If it says PART of your changes was re-applied, it prints no command to run: the
   stash still holds all of them, and the rest is restored by hand.
+  Pass the repo's own invocation after `--` (`compare_performance.py -- -m "not local_only"`):
+  without it the script times `pytest tests/ -v`, which drops `src` doctests and runs every marker.
 
 Before trusting an AFTER figure, follow the method in `bitranox:coding-performance-review`:
 reproduce the recorded BEFORE figure with the same probe, interleave the arms and pin the core.
@@ -181,6 +183,18 @@ PYTHON_CMD="$(read_field python)" && BX_PERF_TMPDIR="$(read_field tmpdir)" \
 
 ### Step 3: Validate Prerequisites and Profile
 
+Profile with the repo's own test invocation (Step 1's instructions, `addopts`, its Makefile), not
+a guessed one. A named path overrides `testpaths`, so naming `tests/` in a repo whose `addopts`
+carry `--doctest-modules` drops the `src` doctests: the block below names no path when `testpaths`
+or `--doctest-modules` is configured. A `local_only` marker usually means the test reaches real
+hosts: skip that block below, and pass the repo's marker exclusion to the unit run, unless its
+docs say they are safe on this machine.
+
+A suite profile is a proxy. Before reporting no hot spot left, check whether the suite's inputs
+are production-shaped (record width, batch size, data volume); when a documented live benchmark or
+production workload exists (`docs/performance.md`, a speed tool), reproduce its per-item cost
+offline with real data and profile THAT, or say the suite profile is a proxy.
+
 ```bash
 # Re-load paths from session.json (set BX_PERF_SESSION in Step 2). All stdlib, no jq.
 bx_py() { local c; for c in python3 python "py -3"; do $c -c "" >/dev/null 2>&1 && { $c "$@"; return; }; done
@@ -199,8 +213,9 @@ if ! "$PYTHON_CMD" -c "import pytest" 2>/dev/null; then
         || true
 fi
 
-# Detect the test directory portably: prefer pyproject [tool.pytest.ini_options]
-# testpaths, else the first existing of tests/ test/, else let pytest discover.
+# Detect the test directory portably: name no path when pyproject configures testpaths or
+# --doctest-modules (a named path would override them), else the first existing of tests/ test/,
+# else let pytest discover.
 TESTDIR="$("$PYTHON_CMD" - <<'PY'
 import os
 try:
@@ -208,20 +223,22 @@ try:
 except ModuleNotFoundError:
     tomllib = None
 paths = []
+doctests = False
 if tomllib and os.path.isfile("pyproject.toml"):
     try:
         with open("pyproject.toml", "rb") as fh:
             data = tomllib.load(fh)
-        tp = data.get("tool", {}).get("pytest", {}).get("ini_options", {}).get("testpaths")
+        ini = data.get("tool", {}).get("pytest", {}).get("ini_options", {})
+        tp = ini.get("testpaths")
+        doctests = "--doctest-modules" in str(ini.get("addopts", ""))
         if isinstance(tp, str):
             paths = tp.split()
         elif isinstance(tp, list):
             paths = list(tp)
     except Exception:
         paths = []
-chosen = next((p for p in paths if os.path.isdir(p)), None)
-if chosen is None:
-    chosen = next((d for d in ("tests", "test") if os.path.isdir(d)), "")
+# testpaths or --doctest-modules configured: pytest's own config decides, so name no path.
+chosen = "" if paths or doctests else next((d for d in ("tests", "test") if os.path.isdir(d)), "")
 print(chosen)
 PY
 )"
@@ -244,6 +261,12 @@ echo "Profiling integrationtest tests..."
 echo "Prerequisites validated"
 ```
 
+**Import-time findings.** When `python -X importtime` charges a large CUMULATIVE time to a module,
+read its SELF column and what nests under it before reporting that as the module's cost: the first
+import of a shared dependency is charged to whichever module imports it first. Prove an
+import-cost finding by removing the import in a scratch copy, timing interleaved fresh-interpreter
+runs and diffing `sys.modules`, before proposing a lazy import.
+
 ### Step 4: Run Analysis Pipeline
 
 #### 4a: Identify Pure Function Candidates
@@ -252,6 +275,10 @@ Run `find_cache_candidates.py` from the skill directory against the project's Py
 function that returns a list, dict, set or ndarray it builds is never reported: `lru_cache`
 would hand every caller that one object, so one caller's edit changes every later result.
 Return a tuple or frozenset first if such a function should be cached.
+
+The purity check is a heuristic: I/O hidden behind a helper in another module is seen only through
+the helper's name (`read_capped_bytes`, `load_config`). Read each candidate's body and what it
+calls before proposing a cache.
 
 ```bash
 # Re-load paths from session.json (see Step 2 for read_field / BX_PERF_SESSION).
@@ -520,8 +547,8 @@ bx_py() { local c; for c in python3 python "py -3"; do $c -c "" >/dev/null 2>&1 
 read_field() { bx_py -c "import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])" "$BX_PERF_SESSION" "$1"; }
 BX_PERF_TMPDIR="$(read_field tmpdir)" && PYTHON_CMD="$(read_field python)" || { echo "cannot read session file '$BX_PERF_SESSION'" >&2; exit 2; }
 
-# Detect the test directory portably (same logic as Step 3): prefer pyproject
-# testpaths, else first existing of tests/ test/, else let pytest discover.
+# Detect the test directory portably (same logic as Step 3): no path when pyproject configures
+# testpaths or --doctest-modules, else first existing of tests/ test/, else let pytest discover.
 TESTDIR="$("$PYTHON_CMD" - <<'PY'
 import os
 try:
@@ -529,20 +556,22 @@ try:
 except ModuleNotFoundError:
     tomllib = None
 paths = []
+doctests = False
 if tomllib and os.path.isfile("pyproject.toml"):
     try:
         with open("pyproject.toml", "rb") as fh:
             data = tomllib.load(fh)
-        tp = data.get("tool", {}).get("pytest", {}).get("ini_options", {}).get("testpaths")
+        ini = data.get("tool", {}).get("pytest", {}).get("ini_options", {})
+        tp = ini.get("testpaths")
+        doctests = "--doctest-modules" in str(ini.get("addopts", ""))
         if isinstance(tp, str):
             paths = tp.split()
         elif isinstance(tp, list):
             paths = list(tp)
     except Exception:
         paths = []
-chosen = next((p for p in paths if os.path.isdir(p)), None)
-if chosen is None:
-    chosen = next((d for d in ("tests", "test") if os.path.isdir(d)), "")
+# testpaths or --doctest-modules configured: pytest's own config decides, so name no path.
+chosen = "" if paths or doctests else next((d for d in ("tests", "test") if os.path.isdir(d)), "")
 print(chosen)
 PY
 )"

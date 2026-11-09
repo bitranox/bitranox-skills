@@ -40,12 +40,26 @@ _MUTATING_METHODS = frozenset({
 })
 
 
-def _is_impure_call(node):
+# A helper does the I/O where this AST cannot follow it, so its NAME is the only evidence left:
+# a callee whose name holds one of these words (read_capped_bytes, Path.read_text, load_config) is
+# treated as I/O. Matched on whole underscore-separated words, so json.loads ("loads") stays pure.
+# A misnamed pure helper only loses a cache suggestion; a missed reader yields a cache that serves
+# stale file contents.
+_IO_NAME_WORDS = frozenset({'read', 'write', 'open', 'load', 'save', 'fetch', 'download',
+                            'upload', 'send', 'recv'})
+
+
+def _names_io(name):
+    """True when *name* (a callee) reads as I/O by one of its underscore-separated words."""
+    return any(word in _IO_NAME_WORDS for word in name.lower().split('_'))
+
+
+def _is_impure_call(node, impure_helpers=frozenset()):
     func = node.func
     if isinstance(func, ast.Name):
-        return func.id in _IMPURE_NAME_CALLS
+        return func.id in _IMPURE_NAME_CALLS or func.id in impure_helpers or _names_io(func.id)
     if isinstance(func, ast.Attribute):
-        if func.attr in _IMPURE_ATTR_CALLS:
+        if func.attr in _IMPURE_ATTR_CALLS or _names_io(func.attr):
             return True
         return isinstance(func.value, ast.Name) and func.value.id in _IMPURE_MODULES
     return False
@@ -295,18 +309,19 @@ def _stores_into_shared_object(node, local_depths):
     return False
 
 
-def is_pure_function(func_node, modules=None):
+def is_pure_function(func_node, modules=None, impure_helpers=frozenset()):
     """Heuristic to detect pure functions - no I/O, no global state, no clock, no generator.
 
     A store into a container the function created itself (a DP table, a local tally dict), or
     a mutating method called on one (``out.append(x)``), stays pure; either one aimed at a
     parameter, a global, a closure variable or an attribute (self.x) does not. *modules* names
     the imported modules, whose functions are not methods of a container (default: the
-    modules the function imports itself)."""
+    modules the function imports itself). *impure_helpers* names functions in the same module
+    already known to be impure: a call to one is impure too."""
     modules = _module_aliases(func_node) if modules is None else modules
     local_depths = _local_container_depths(func_node)
     for node in _body_nodes(func_node):
-        if isinstance(node, ast.Call) and (_is_impure_call(node)
+        if isinstance(node, ast.Call) and (_is_impure_call(node, impure_helpers)
                                            or _mutates_shared_object(node, local_depths, modules)
                                            or _mutates_via_first_arg(node, local_depths)):
             return False
@@ -419,6 +434,25 @@ def _parse(file_path):
         return ast.parse(f.read(), filename=file_path)
 
 
+def _impure_module_functions(tree, modules):
+    """Names of the module-level functions that are impure, directly or through one another.
+
+    A plain purity check on one body cannot see that a helper it calls does the I/O, so this
+    runs to a fixpoint: a function calling an impure one is impure, however deep the chain.
+    Module-level only: a nested function's store into its enclosing frame says nothing about
+    the enclosing function's callers, and a bare call to such a name is a local closure."""
+    functions = [n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    impure = set()
+    changed = True
+    while changed:
+        changed = False
+        for func in functions:
+            if func.name not in impure and not is_pure_function(func, modules, frozenset(impure)):
+                impure.add(func.name)
+                changed = True
+    return frozenset(impure)
+
+
 def find_cache_candidates(file_path):
     """Find functions that might benefit from caching.
 
@@ -427,29 +461,24 @@ def find_cache_candidates(file_path):
     """
     tree = _parse(file_path)
     modules = _module_aliases(tree)
+    impure_helpers = _impure_module_functions(tree, modules)
     candidates = []
 
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            # Skip if already decorated with cache
-            has_cache = any(_is_cache_decorator(dec) for dec in node.decorator_list)
-
-            if has_cache:
-                continue
-
-            # Check if pure
-            if is_pure_function(node, modules) and not returns_new_mutable(node):
-                expensive = is_expensive_computation(node)
-
-                if expensive:
-                    unique = sorted(set(expensive))  # dedupe: avoid "recursion, recursion"
-                    candidates.append({
-                        'file': file_path,
-                        'function': node.name,
-                        'line': node.lineno,
-                        'reason': f"Pure function with: {', '.join(unique)}",
-                        'indicators': unique
-                    })
+    for node in (n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))):
+        if any(_is_cache_decorator(dec) for dec in node.decorator_list):
+            continue
+        if not is_pure_function(node, modules, impure_helpers) or returns_new_mutable(node):
+            continue
+        expensive = is_expensive_computation(node)
+        if expensive:
+            unique = sorted(set(expensive))  # dedupe: avoid "recursion, recursion"
+            candidates.append({
+                'file': file_path,
+                'function': node.name,
+                'line': node.lineno,
+                'reason': f"Pure function with: {', '.join(unique)}",
+                'indicators': unique
+            })
 
     return candidates
 

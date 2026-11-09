@@ -519,6 +519,74 @@ def test_a_module_function_named_like_a_method_is_no_mutation_and_aliases_are_fo
     assert _names(p) == {"summed"}
 
 
+# --- I/O through a helper: nothing in the body says open() -------------------------------
+
+HELPER_IO = textwrap.dedent('''
+    from .files import read_capped_bytes, read_text_cached
+
+    def _parse_dotenv(path, *, flag=False):
+        raw = read_capped_bytes(path)
+        out = 0
+        for line in raw.split(b"\\n"):
+            for ch in line:
+                out += ch
+        return out
+
+    def via_method(path):
+        out = 0
+        for ch in path.read_text():
+            for c in ch:
+                out += ord(c)
+        return out
+
+    def stays_pure(s):
+        total = 0
+        for i in range(len(s)):
+            for j in range(3):
+                total += i * j
+        return total
+
+    def uses_json(text):
+        import json
+        total = 0
+        for k in json.loads(text):
+            for j in k:
+                total += 1
+        return total
+''')
+
+
+def test_a_function_reading_through_a_helper_is_not_a_candidate(tmp_path):
+    """read_capped_bytes(path) and path.read_text() are named I/O; json.loads stays pure."""
+    p = tmp_path / "helpers.py"
+    p.write_text(HELPER_IO, encoding="utf-8")
+    assert _names(p) == {"stays_pure", "uses_json"}
+
+
+IN_MODULE_HELPER = textwrap.dedent('''
+    def _slurp(p):
+        with open(p) as f:
+            return f.read()
+
+    def _via(p):
+        return _slurp(p)
+
+    def caller(p):
+        data = _via(p)
+        total = 0
+        for i in range(3):
+            for j in range(3):
+                total += i * j
+        return total, data
+''')
+
+
+def test_a_function_calling_an_impure_same_module_helper_is_impure_through_the_chain(tmp_path):
+    p = tmp_path / "chain.py"
+    p.write_text(IN_MODULE_HELPER, encoding="utf-8")
+    assert _names(p) == set()
+
+
 def test_open_makes_a_function_impure_and_file_io_is_not_an_indicator(tmp_path):
     p = tmp_path / "io.py"
     p.write_text("def reader(p):\n    for _ in range(3):\n        with open(p) as f:\n            f\n",

@@ -96,6 +96,39 @@ def test_restores_branch_changes_and_untracked_files(repo, run_script):
     assert sorted(_seen(root)) == ["tracked:c1", "tracked:c2", "untracked:c2"]
 
 
+def _add_marked_failing_test(root, git):
+    (root / "tests" / "test_marked.py").write_text(
+        "import pytest\n\n\n@pytest.mark.real_hosts\ndef test_reaches_a_real_host():\n"
+        "    raise AssertionError('must be excluded')\n", encoding="utf-8")
+    (root / "pytest.ini").write_text("[pytest]\nmarkers =\n    real_hosts: reaches a real host\n",
+                                     encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-q", "-m", "marked test")
+
+
+def test_pytest_arguments_after_a_double_dash_replace_the_default_invocation(make_repo, run_script):
+    """The repo's own marker exclusion reaches both runs, so a test it excludes cannot fail them."""
+    root, env, git = make_repo(versions=("c1", "c2"))
+    _add_marked_failing_test(root, git)
+    r = run_script(SCRIPT, "--", "-m", "not real_hosts", cwd=str(root), env=env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert b"Improvement:" in r.stdout
+
+
+def test_without_arguments_the_marked_test_still_runs_and_fails_the_comparison(make_repo, run_script):
+    root, env, git = make_repo(versions=("c1", "c2"))
+    _add_marked_failing_test(root, git)
+    r = run_script(SCRIPT, cwd=str(root), env=env)
+    assert r.returncode == 2, r.stdout + r.stderr
+
+
+def test_an_argument_without_a_double_dash_exits_2(repo, run_script):
+    root, env, _ = repo
+    r = run_script(SCRIPT, "-k", "x", cwd=str(root), env=env)
+    assert r.returncode == 2
+    assert b"pass pytest arguments after --" in r.stderr
+
+
 def test_a_second_run_restores_cleanly_too(repo, run_script):
     """No .pytest_cache or __pycache__ from one run may block the next stash pop."""
     root, env, git = repo
