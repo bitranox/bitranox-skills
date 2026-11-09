@@ -60,10 +60,12 @@ assistant's OWN text back and so do not count:
 
 What does NOT fire, deliberately: a literal every one of whose uses is a REVISION operand of a
 local git command that resolves it (`git show <sha>`, `git log -1 <sha>`, `git diff A <sha>`,
-`git branch --contains <sha>`, `git update-ref ...`), and the expected value of a lease
-(`git push --force-with-lease=<ref>:<sha>`), which the remote compares and refuses as stale when it
-differs. Git refuses a nonexistent object LOUDLY there, so the invented sha costs one round trip and
-cannot become a silent wait. The same verbs
+`git branch --contains <sha>`, `git update-ref ...`). Git refuses a nonexistent object LOUDLY
+there, so the invented sha costs one round trip and cannot become a silent wait. The expected
+value of a lease (`git push --force-with-lease=<ref>:<sha>`) is deliberately NOT in that set: it
+is the value a force-push trusts, and a typed one is the shape the literal keeps recurring in, so
+it fires like the silent consumers unless the same command derives it or the transcript shows it.
+The same verbs
 do not resolve every operand: `git log --grep=<sha>` / `-S<sha>` / `--author=` match TEXT and
 exit 0 on nothing, anything after `--` is a pathspec, and `git branch <sha>`, `git tag <sha>`,
 `git checkout -b <sha>` create a ref of that NAME. Those fire, as do the other silent consumers -
@@ -132,7 +134,6 @@ LOUD_GIT_VERBS = frozenset({
 # Options whose value IS a revision, resolved as loudly as a positional one.
 _REVISION_OPTIONS = frozenset({
     "--contains", "--no-contains", "--merged", "--no-merged", "--points-at", "--onto", "--source",
-    "--force-with-lease",
 })
 
 # Options whose separate VALUE is text, a pattern or a date - matched, never resolved.

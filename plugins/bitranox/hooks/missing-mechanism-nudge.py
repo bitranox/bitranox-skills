@@ -100,8 +100,10 @@ QUESTION_REFUSAL = (
     "is refused once on purpose; the user chose this on 2026-10-12): read every option's "
     "description. Any premise about a tool, OS, library or the build ('X cannot', 'Y is missing', "
     "'Z defaults off', 'this will stay at N') must have been measured with a named instrument - "
-    "measure it now - or the option must say 'unverified' in its own text. Then re-send the "
-    "question, revised or unchanged; the re-send is not refused."
+    "measure it now - or the option must say 'unverified' in its own text. Before writing "
+    "'unverified', grep the project's own notes, design docs and memory for the claim: it may "
+    "already be sourced there. Then re-send the question, revised or unchanged; the re-send is "
+    "not refused."
 )
 
 # Suffix of the per-session flag that says "this session's previous AskUserQuestion was refused".

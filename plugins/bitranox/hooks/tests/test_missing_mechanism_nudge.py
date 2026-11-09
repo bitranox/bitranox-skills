@@ -336,3 +336,7 @@ def test_hooks_json_registers_this_hook_for_askuserquestion():
                 for h in g["hooks"] if h["command"].endswith('/hooks/missing-mechanism-nudge.py"')]
     assert any("AskUserQuestion" in m for m in matchers)
     assert any({"Bash", "PowerShell"} <= m for m in matchers)
+
+
+def test_the_refusal_says_to_check_the_projects_own_docs_before_writing_unverified():
+    assert "grep the project's own notes" in N.QUESTION_REFUSAL

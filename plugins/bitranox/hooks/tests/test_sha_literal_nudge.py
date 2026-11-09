@@ -61,7 +61,6 @@ def test_a_literal_is_judged_on_its_own_not_on_the_rest_of_the_command(command):
 @pytest.mark.parametrize("command", [
     f"git show --stat {S}",
     f"git update-ref refs/heads/topic {OTHER} {S}",
-    f"git push --force-with-lease=topic:{S} origin topic",
     f"cd /repo && git log -1 {S}",
     f"git -C /repo diff {OTHER} {S}",
     f"git branch --contains {S}",                          # 129 "no such commit"
@@ -697,3 +696,12 @@ def test_control_a_nudge_that_refuses_nothing_carries_no_footer(monkeypatch, cap
     payload = json.loads(out)["hookSpecificOutput"]
     assert "permissionDecision" not in payload
     assert shell_text.WHOLE_CALL_REFUSED not in payload["additionalContext"]
+
+
+def test_a_lease_value_counts_as_a_literal_unless_the_command_derives_it():
+    # A typed lease is the value a force-push is trusted on: the same check as a silent consumer.
+    assert N.notice(f"git push --force-with-lease=topic:{S} origin topic") is not None
+    derived = "git push --force-with-lease=topic:$(git rev-parse --verify -q origin/topic) origin topic"
+    assert N.notice(derived) is None
+    asserted = f"git cat-file -e {S}^{{commit}} && git push --force-with-lease=topic:{S} origin topic"
+    assert N.notice(asserted) is None
