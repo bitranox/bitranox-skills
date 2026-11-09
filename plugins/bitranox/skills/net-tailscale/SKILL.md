@@ -48,7 +48,8 @@ A clone usually shares TWO more identities that cause collisions later and get m
 Tailscale - fix them in the same pass:
 
 ```bash
-# machine-id: DHCP client-id, journald, D-Bus key. Duplicate = lease/log confusion.
+# machine-id: journald and D-Bus identity (and a DHCP client-id on clients that derive it from
+# the machine-id ALONE). See below for when a duplicate really collides on DHCP.
 rm -f /etc/machine-id /var/lib/dbus/machine-id
 systemd-machine-id-setup
 dbus-uuidgen --ensure
@@ -60,6 +61,12 @@ dbus-uuidgen --ensure
 #   pct set <ctid> -net0 name=eth0,bridge=vmbr0,hwaddr=00:00:5e:00:53:af
 # (use a real fresh address; 00:00:5e:00:53:00-ff is the RFC 7042 documentation range)
 ```
+
+A shared machine-id collides on DHCP only where the client-id is derived from the machine-id
+alone: systemd-networkd sends 0xff + IAID + DUID with a per-interface IAID, so guests with distinct
+MACs that share a machine-id still hold distinct client-ids and leases. To decide, read the DHCP
+server's lease uid per MAC (`uid` in `dhcpd.leases`) rather than treating machine-id equality as a
+collision. Regenerate the id anyway, for journald and D-Bus.
 
 Then set the node's own hostname so `tailscale up` without `--hostname` still fingerprints
 right: `hostnamectl set-hostname node-example` and fix any stale `127.0.1.1` line in
@@ -219,7 +226,7 @@ deploy a managed `/etc/resolv.conf`:
 |----------------------------------------------------------------------|-------------------------------------------------------------------------|
 | Baking Tailscale into a clone base / template                        | Every clone inherits one identity; collisions forever                   |
 | Starting the clone without wiping `tailscaled.state`                 | Clone resumes the SOURCE's identity; original drops off the tailnet     |
-| Fixing state but not machine-id / MAC                                | DHCP-lease and journald collisions later, misblamed on Tailscale        |
+| Fixing state but not machine-id / MAC                                | journald and MAC-level DHCP collisions later, misblamed on Tailscale   |
 | `--hostname=new` with the old state still present                    | Renames the shared device; no new node is created                       |
 | Assuming `pct clone` copied the host `.conf`                         | Clone has no `/dev/net/tun` grant; tailscaled cannot start              |
 | Inline `--auth-key=tskey-...` on the command line                    | Key leaks into shell history and logs                                   |

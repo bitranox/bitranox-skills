@@ -148,6 +148,23 @@ roughly the memory their eviction freed.
 what you are willing to lose to a full device, not by what looks generous: at ~1.16x a full
 device is close to a 1:1 RAM sink.
 
+## Resizing an active disk swap zvol
+
+`swapoff` forces the swap's contents back into RAM. When they do not fit, the kernel pushes them
+to the remaining swap or stalls on the zvol, which is the freeze path above. Before it, find out
+who holds the swap: one guest can hold nearly all of it, and stopping that guest empties the swap
+and makes the `swapoff` cheap. Compare the used size with `MemAvailable`; if it does not fit, free
+memory first.
+
+```bash
+grep VmSwap /proc/[0-9]*/status 2>/dev/null | sort -k2 -n | tail   # kB, per process
+grep -E 'MemAvailable|SwapTotal|SwapFree' /proc/meminfo
+swapoff /dev/zvol/<pool>/<swap>
+zfs set volsize=<new> <pool>/<swap>
+mkswap /dev/zvol/<pool>/<swap>      # the old signature keeps the old size
+swapon /dev/zvol/<pool>/<swap>
+```
+
 ## Verify from outside the deploy
 
 A configuration-management run reports its own success, not the kernel's. Check the kernel:

@@ -18,6 +18,7 @@ do not tell you.
 | Symptom                                         | The obvious reading               | What it usually is                                                                                          |
 |-------------------------------------------------|-----------------------------------|-------------------------------------------------------------------------------------------------------------|
 | Update fails, `ScanHealth` clean                | not corruption, so look elsewhere | **disk headroom** - a cumulative update needs far more free space than its own size                         |
+| `CheckHealth` reads "repairable"                | the store is damaged              | **a stored flag, not a scan** - run `ScanHealth` first; it can find 0 corruption and clear it               |
 | "Access is denied" on a delete                  | ACL or ownership                  | the **read-only attribute** - not a permission, so `takeown`/`icacls` cannot fix it                         |
 | Permission command says success, op still fails | need a bigger permission pass     | the **diagnosis is wrong** - inspect the object                                                             |
 | Access denied under a SYSTEM task               | not privileged enough             | **SYSTEM is a different principal** and often has less access than an admin                                 |
@@ -454,6 +455,23 @@ install plus reboot until a scan reports nothing pending. Choose by what refused
 denied to SYSTEM goes to an admin session, the update agent refusing the ssh session goes to
 SYSTEM.
 
+### Simulating a Windows Update outage for a negative test
+
+Point the policy at a dead address and restart the service; the WUA search then throws `0x80240438`
+and keeps throwing it. Disabling `wuauserv` does not hold: Windows flips it back to Manual during
+the search (event 7040), so a negative arm built that way reads a real count and proves nothing.
+
+```powershell
+$wu = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate'
+New-Item "$wu\AU" -Force | Out-Null
+Set-ItemProperty $wu WUServer 'http://127.0.0.1:1'
+Set-ItemProperty $wu WUStatusServer 'http://127.0.0.1:1'
+Set-ItemProperty "$wu\AU" UseWUServer 1
+Restart-Service wuauserv
+```
+
+Remove the three values and restart `wuauserv` again when the test is done.
+
 ## Growing C: when the Recovery partition is in the way, and re-enabling WinRE
 
 **The disk got bigger but C: cannot grow.** The standard layout puts a small Recovery (WinRE)
@@ -505,6 +523,11 @@ Light damage: repair. Widespread payload corruption: upgrade. There is no numeri
 judge it by whether `RestoreHealth` can actually resolve what it wants, which is one run, so
 try the repair first and let `0x800F0915` make the decision for you. On a fleet, run it on ONE
 machine as a cheap probe before committing to the expensive path everywhere.
+
+`0x800F0915` does not mean nothing was repaired: `RestoreHealth` can exit with it having repaired
+nearly every payload. Before choosing a remedy on it, read Setup events 1014 and 1015 (the repaired
+count) and the CBS `CSI Payload Corrupt` lines of the next `ScanHealth`; a handful of
+language-resource payloads left is a small problem, not a case for a rebuild.
 
 The upgrade is the stronger end state even when the repair succeeds: `RestoreHealth` leaves a
 patched store, with any damage DISM did not detect still in it, so after hundreds of
