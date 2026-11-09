@@ -62,7 +62,28 @@ in code. The language skills add their own tools on top of this one; the method 
     pass in every variant. If the old code evaluated while it parsed, prepare each constant while
     reading its term, not lazily at first use: lazy preparation changes which error a malformed
     input raises first.
-11. **Check every speed claim in a diff.** `validate_perf_claims.py` (in this skill's directory)
+
+    Before believing a zero-difference result, tabulate per input kind how many inputs were
+    refused and by which exception type. A valid kind refused 100 percent, or any kind refused
+    only by a type the code under test does not raise for it, means the harness answered, not the
+    code: a `TypeError` from passing a keyword-only argument positionally makes both trees refuse
+    every call and report 0 differences. Measured: 500 of 500 and 9000 of 9000 refused, 0 differ;
+    with the call fixed, 500 parsed, 4380 refused, 0 differ, and the plants fired.
+
+    Run the control as a real copy of the tree carrying the planted bug, assert the plant's anchor
+    occurs exactly once, and compare its output per kind with the real run. Output identical to
+    the real run means the control did not run or the plant cannot change behaviour: check the
+    plant first (padding a value to a width no larger than the value is an equivalent mutant),
+    then treat the harness as faulty. Measured: a `--plant` flag existed only in a script's
+    docstring, argv ignored it and the run printed the same table; a real planted tree showed
+    28192 differences across 7 kinds.
+11. **Re-measure a candidate on top of what you already adopted.** Before dropping a candidate
+    that shows nothing against today's code, re-measure it on the tree holding the changes already
+    adopted: less remaining work makes a fixed saving a larger share. Re-measure one that wins
+    alone there too, since an adopted change may already have removed the work it saves. Measured:
+    one cache read went from -1.6 percent alone (noise) to -5.6 percent on the adopted tree; two
+    other candidates, +0.2 and -0.5 percent alone, stayed no-gain there.
+12. **Check every speed claim in a diff.** `validate_perf_claims.py` (in this skill's directory)
     extracts phrases like "40% faster", "3x speedup" or "reduced latency by 30%" from a unified
     diff's added lines and prints each with its `path:line`. It reaches no verdict: check each
     claim against a measured run and report the ones that are unproven or contradicted.

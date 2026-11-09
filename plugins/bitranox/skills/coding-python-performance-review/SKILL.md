@@ -501,7 +501,14 @@ Wait for the user's response before proceeding to the next finding.
 3. Run tests, show diff
 
 **On accept  -  Cache Candidate:**
-1. **Measure first - this is what "never cache without evidence" means in practice.** Copy
+1. **If an error names a caller-only value** (a path, a line number), take it out of the cache key
+   before measuring: raise the value-free refusal inside the function you will cache, add the
+   value in a thin uncached wrapper (`raise X(f"{path}: {exc}") from exc.__cause__`), and point
+   step 2 at the inner function. `lru_cache` does not cache a raise, so each caller still gets
+   its own message. The differential (`bitranox:coding-performance-review`, step 10) calls the
+   wrapper under two different values. Measured: 86.4 percent hits, reachable only because the
+   path left the key.
+2. **Measure first - this is what "never cache without evidence" means in practice.** Copy
    `profile_with_cache_template.py` (this skill's own directory) to
    `$BX_PERF_TMPDIR/cache/profile_cache_<function>.py`, set its `MODULE_NAME` and
    `FUNCTION_NAME` to the candidate, and run it with `$PYTHON_CMD` from the project root. After
@@ -510,16 +517,16 @@ Wait for the user's response before proceeding to the next finding.
    RECOMMEND/REJECT verdict: it recommends only when the hit rate is >20%, the median
    improvement is >5%, AND every cached run beat every uncached run - otherwise REJECT as
    run-to-run noise (raise `REPEATS` for a noisy suite).
-2. **On REJECT: do not add the cache.** Report the measured numbers and move on - a measured
+3. **On REJECT: do not add the cache.** Report the measured numbers and move on - a measured
    rejection is a successful finding, not a failure. **On ABORT (exit 2)** there is no
    measurement, so do not add the cache. Either a suite run failed, with or without the cache
    (if only the cached run failed, the cache changes behaviour - report that instead), or the
    copy could not start: pytest is missing from that interpreter, or `MODULE_NAME` /
    `FUNCTION_NAME` do not import. The ABORT line names which; fix the copy and re-run.
-3. On RECOMMEND: add `from functools import lru_cache` if missing
-4. Add `@lru_cache` decorator above function
-5. If mutable args (list/dict), convert to tuples or use wrapper
-6. Run tests, show diff, and quote the measured hit rate and improvement as the evidence
+4. On RECOMMEND: add `from functools import lru_cache` if missing
+5. Add `@lru_cache` decorator above function
+6. If mutable args (list/dict), convert to tuples or use wrapper
+7. Run tests, show diff, and quote the measured hit rate and improvement as the evidence
 
 **On accept  -  Ineffective Cache (removal):**
 1. Remove `@lru_cache` / `@cache` decorator from the function

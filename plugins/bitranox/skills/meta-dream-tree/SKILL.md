@@ -304,6 +304,15 @@ the success line, abort-and-show on a miss).
    `amend-pinned` on its behalf. `move` carries the pin through unchanged and never refuses on it,
    so re-leveling a pinned fact is ordinary placement work like any other entry - no exception, no
    separate approval step.
+   - **State what the batch costs the tree top, before applying it.** The routing prompt judges
+     one fact at a time and cannot see the sum. Add up the bytes of the full pointer lines (hook,
+     title and link) the batch adds to the tree-top index, net of those it removes, and state the
+     always-loaded delta in KB and as a percent of that index beside the propose-diff. Measured:
+     83 moves took a tree-top index from 225894 to 267600 bytes (+18 percent), about 1.5x an
+     estimate from the mean hook length, which leaves out the title and link.
+   - **A down-move never takes a hook a CLAUDE.md trim relies on.** Exclude from any down-move a
+     hook that a CLAUDE.md trim of this dream names as its covering home
+     (references/dream-passes.md, "The reachability invariant").
    - **Most moves going to the tree top is not by itself a router defect** - in a tree whose
      top-level children are non-nested siblings it is the expected reading. Before calling the
      router biased, run the check in references/dream-core.md, "Reading a high tree-top share".

@@ -30,6 +30,18 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.45.0]
+
+### Added
+
+- `coding-performance-review`: step 10 tabulates refusals per input kind and exception type before
+  a zero-difference result counts, and requires the control to be a real planted copy of the tree;
+  new step 11 re-measures a candidate on top of the changes already adopted.
+- `coding-python-performance-review`: a cache candidate whose error names a caller-only value is
+  split first, so the value stays out of the `lru_cache` key.
+- `meta-dream-tree`: step 5 states the always-loaded cost of a batch of moves, summed over full
+  pointer lines; a hook a `CLAUDE.md` trim of the same dream relies on is excluded from a down-move.
+
 ## [10.44.0]
 
 ### Added

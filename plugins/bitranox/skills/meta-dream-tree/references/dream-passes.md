@@ -92,7 +92,7 @@ from emptiness or a new-entry-only grep. For a rule found in the chain:
 > merge) and KEEP the rule where it is.
 
 Ancestor `CLAUDE.md` and `CLAUDE.local.md` text loads into every session started at or below that
-directory, via the native cascade. Three ways a trim still loses a rule:
+directory, via the native cascade. Four ways a trim still loses a rule:
 
 - **A SIBLING or CHILD is not a covering home.** It never loads where the trimmed file loaded,
   however adjacent it looks. Test it as path arithmetic: the covering home's directory must be an
@@ -104,6 +104,12 @@ directory, via the native cascade. Three ways a trim still loses a rule:
   trigger - which ENHANCE-BEFORE-DELETE above already requires.
 - **An ancestor's `@import` whose target sits ABOVE the workspace root is silently skipped** (only
   the raw `@...` line travels as text). Prefer the ancestor's own TEXT as the covering home.
+- **A down-move in the same dream takes the home away.** Placement can send a hook down to one
+  project while this pass relies on it at the tree top, and neither report alone shows the
+  conflict. Intersect the slugs the dream's trims name as covering homes with its down-moves,
+  proposed ones included, and exclude each match from the down-move. Measured: a reviewer proposed
+  moving a hook down to one project while a `CLAUDE.md` had just been shortened to rely on that
+  hook at the tree top; only reading the two reports together caught it.
 
 Git plays no part in this decision: not tracked-vs-ignored, not the remote, not who could clone it.
 Those affect whether an edit needs a commit, never whether a rule reaches context.
