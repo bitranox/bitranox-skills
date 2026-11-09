@@ -220,3 +220,35 @@ def test_a_call_inside_a_subagent_is_judged_against_the_subagent_s_own_siblings(
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(event)))
 
     assert guard.main() == 2
+
+
+@pytest.mark.parametrize("command", [
+    "cd /abs && V=x && lane1 & lane2 $V & wait",
+    "cd /abs && lane1 & python3 ./tool.py & wait",
+    "cd /abs && lane1 & ./lane2 & wait",
+    "cd /abs && lane1 & cat logs/run.log & wait",
+])
+def test_a_later_job_relying_on_a_backgrounded_setup_is_reported(command):
+    assert guard.background_job_leak(command)
+
+
+@pytest.mark.parametrize("command", [
+    "cd /abs && lane1",                                       # nothing backgrounded
+    "cd /abs && lane1; lane2 ./x",                            # no background job
+    "cd /abs && lane1 & cd /abs && ./lane2 & wait",           # the later job sets its own
+    "V=x; cd /abs && lane1 & lane2 $V & wait",                # V is set before the job
+    "cd /abs && lane1 & gh run list & wait",                  # no relative path, no variable
+    "cd /abs && lane1 &\ncd /abs && tail -F driver.log; tail -5 driver.log",  # a later foreground cd moved the shell
+    "cd /abs && lane1 & pgrep -af interleave.py & wait",      # a bare word is not a path
+    "cd /abs & ls ./x & wait",                                # the cd is the job's only statement
+    'cd /abs && echo "./a & b"',                              # the & is inside quotes
+])
+def test_a_job_that_does_not_depend_on_the_setup_is_not_reported(command):
+    assert guard.background_job_leak(command) is None
+
+
+def test_the_leak_is_a_nudge_not_a_refusal(capsys, monkeypatch):
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(
+        {"tool_name": "Bash", "tool_input": {"command": "cd /abs && V=x && lane1 & lane2 $V & wait"}})))
+    assert guard.main() == 0
+    assert "ONE COMMAND, TWO JOBS" in capsys.readouterr().out

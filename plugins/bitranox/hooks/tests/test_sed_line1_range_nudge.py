@@ -7,6 +7,8 @@ parsing and still rendering, so the loss was invisible until the sizes were comp
 """
 import json
 
+import pytest
+
 
 import sed_line1_range_nudge as N
 
@@ -87,6 +89,30 @@ def test_main_emits_additional_context_and_exits_zero(capsys):
     payload = json.loads(capsys.readouterr().out)
     assert payload["hookSpecificOutput"]["hookEventName"] == "PreToolUse"
     assert "permissionDecision" not in payload["hookSpecificOutput"]
+
+
+@pytest.mark.parametrize("command", [
+    "sed -i '1,/^---$/d' fact.md",
+    "gsed --in-place '1,/^---$/d' fact.md",
+    "cat f.md | sed '1,/^---$/d' | sed '1,/^---$/d' > body.md",
+    "sed '1,/^---$/d' f.md >> out.md",
+])
+def test_a_command_that_also_writes_a_file_is_refused(command, capsys):
+    event = {"tool_name": "Bash", "tool_input": {"command": command}}
+    assert N.main(json.dumps(event)) == 2
+    assert "REFUSED" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("command", [
+    "sed '1,/^---$/d' f.md",
+    "sed '1,/^---$/d' f.md 2>/dev/null",
+    "sed '1,/^---$/d' f.md > /dev/null",
+    "sed '1,/^---$/d' f.md | wc -l",
+])
+def test_a_command_that_only_prints_stays_a_nudge(command, capsys):
+    event = {"tool_name": "Bash", "tool_input": {"command": command}}
+    assert N.main(json.dumps(event)) == 0
+    assert "additionalContext" in capsys.readouterr().out
 
 
 def test_main_is_silent_for_a_clean_command(capsys):

@@ -48,9 +48,16 @@ tool's rules, since one session drives one shell.
 
 Data regions are masked first, so a `cd` inside a heredoc body or a quoted string is text, not a
 statement. BLOCKING: exit 2 with the reason on stderr. Fail-open on any error. ASCII only.
+
+A SECOND, NON-BLOCKING check covers the same leak inside ONE command. A `cd` or `VAR=value` in an
+`&&` chain that a trailing `&` backgrounds belongs only to that background job: in
+`cd /abs && V=x && lane1 & lane2 & lane3`, lane 2 and lane 3 start in the harness cwd without V and
+fail silently. So a later job of the command that uses a relative path after such a cd, or that
+variable, gets `additionalContext` naming both.
 """
 
 import json
+import re
 import sys
 
 import shell_text
@@ -186,6 +193,83 @@ def _write_target(tokens, here, tool_name):
     return False, here
 
 
+_RELATIVE_PATH = re.compile(r"^(?:\.{1,2}/|[\w.-]+/)[^=]*$")
+_ASSIGNMENT = re.compile(r"^[A-Za-z_]\w*=")
+_SEPARATED = re.compile(r"\s*(&&|\|\||;|\n|&|\|)\s*$")
+
+
+def _jobs(command, tool_name):
+    """The command's jobs in order: (statements as (text, argv), ended_by_background)."""
+    text = blank_heredoc_bodies(command or "")
+    segments = list(iter_segments(text, tool_name))
+    jobs, current = [], []
+    for index, (at, segment) in enumerate(segments):
+        stripped = segment.strip()
+        tokens = argv_for_match(stripped.lstrip("(").strip(), tool_name)
+        if tokens:
+            current.append((stripped, tokens))
+        end = segments[index + 1][0] if index + 1 < len(segments) else len(text)
+        gap = text[at + len(segment):end]
+        sep = _SEPARATED.search(gap)
+        if sep and sep.group(1) in ("&&", "||", "|"):
+            continue
+        if current:
+            jobs.append((current, bool(sep) and sep.group(1) == "&"))
+        current = []
+    if current:
+        jobs.append((current, False))
+    return jobs
+
+
+def _setups_of_background_job(job, tool_name):
+    """(statement, the variable it sets, or None for a cd) of each cd/assignment before the job's last."""
+    statements, backgrounded = job
+    if not backgrounded or len(statements) < 2:
+        return []
+    setups = []
+    for text, tokens in statements[:-1]:
+        if all(_ASSIGNMENT.match(word) for word in tokens):
+            setups.extend((text, word.split("=", 1)[0]) for word in tokens)
+        elif directory_change(text, None, tool_name)[0]:
+            setups.append((text, None))
+    return setups
+
+
+def _job_uses(job, variable):
+    """The statement of `job` that relies on a setup: a relative path (for a cd), or `variable`."""
+    for text, tokens in job[0]:
+        if variable is not None:
+            if re.search(r"\$\{?%s\b" % re.escape(variable), text):
+                return text
+            continue
+        if directory_change(text, None)[0]:
+            return None                             # this job sets its own directory
+        words = tokens[1:] + ([tokens[0]] if tokens[0].startswith(("./", "../")) else [])
+        if any(_RELATIVE_PATH.match(word) for word in words):
+            return text
+    return None
+
+
+def _foreground_cd(job, tool_name):
+    return not job[1] and any(directory_change(text, None, tool_name)[0] for text, _tokens in job[0])
+
+
+def background_job_leak(command, tool_name="Bash"):
+    """(setup statement, later statement) when a backgrounded job's cd/assignment cannot reach a later job, else None."""
+    if tool_name != "Bash" or "&" not in (command or ""):
+        return None
+    jobs = _jobs(command, tool_name)
+    for at, job in enumerate(jobs):
+        for setup, variable in _setups_of_background_job(job, tool_name):
+            for later in jobs[at + 1:]:
+                used = _job_uses(later, variable)
+                if used:
+                    return setup, used
+                if variable is None and _foreground_cd(later, tool_name):
+                    break                           # the shell moved: later relative paths are its own
+    return None
+
+
 def targetless_write(command, tool_name="Bash"):
     """The first statement of `command` that writes to a repository with no absolute target, or None.
 
@@ -240,6 +324,16 @@ def refusal(statement, moved):
     ])
 
 
+def _nudge(leak):
+    if leak:
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": (
+            "ONE COMMAND, TWO JOBS: `%s` belongs to a job that a trailing `&` backgrounds, so its "
+            "directory change or variable does not reach `%s`, which starts in the shell's own "
+            "cwd without it. Give each background job its own `cd /abs &&` and assignment, or "
+            "put the setup before the first `&` on its own." % leak)}}))
+    return 0
+
+
 def main() -> int:
     try:
         event = json.load(sys.stdin)
@@ -249,11 +343,12 @@ def main() -> int:
     if not is_shell_tool(tool_name):
         return 0
     command = (event.get("tool_input") or {}).get("command") or ""
+    leak = background_job_leak(command, tool_name)
     if targetless_write(command, tool_name) is None:
-        return 0                                    # the common case never opens the transcript
+        return _nudge(leak)                         # the common case never opens the transcript
     found = verdict(command, siblings_for_event(event) or [], tool_name)
     if found is None:
-        return 0
+        return _nudge(leak)
     return shell_text.refuse(refusal(*found))
 
 

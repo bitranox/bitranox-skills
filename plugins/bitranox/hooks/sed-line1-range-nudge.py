@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse(Bash|PowerShell) nudge: `sed '1,/re/d'` deletes one block more than you meant.
+"""PreToolUse(Bash|PowerShell) guard: `sed '1,/re/d'` deletes one block more than you meant.
 
 sed's `1,/re/` range starts hunting for the END pattern at line 2. So on a file whose line 1 is the
 opening delimiter, the range already closes on the CLOSING delimiter - the frame is gone in ONE
@@ -10,8 +10,11 @@ and 28 -> 13 lines). Both still parsed and still rendered as valid entries, so t
 invisible until the line counts were compared against the originals. That silence is why this is
 worth a hook rather than another line of prose.
 
-NUDGE, not a block: `1,/re/d` has legitimate uses, and a guard that false-fires on a correct command
-teaches the reader to ignore the channel. It emits `additionalContext` and exits 0.
+A command that only PRINTS the result stays a NUDGE (`additionalContext`, exit 0): `1,/re/d` has
+legitimate uses and a printed result can be read. A command that also WRITES a file - `sed -i`, or
+an output redirect anywhere in the command, chained seds included - is REFUSED with exit 2, because
+the truncated text lands where a later step consumes it: 2026-11-06 the nudge arrived, the command
+ran anyway, and a memory fact body was truncated and applied before a manual cat caught it.
 
 Only the DELETE form is flagged. `1,/re/p` shows you what it selected, so an off-by-one is visible
 rather than silent. An exact `1,5d` has no regex end and cannot overshoot.
@@ -24,7 +27,7 @@ import json
 import re
 import sys
 
-from shell_text import is_shell_tool, strip_data_sink_statements, strip_heredoc_bodies
+from shell_text import commands_only, is_shell_tool, refuse, strip_data_sink_statements, strip_heredoc_bodies
 
 # `sed`/`gsed` at a command position, then a 1,/regex/ range ending in `d`. The end pattern is
 # matched non-greedily up to an unescaped `/`, so `1,/^---$/d` and `1,/^BEGIN$/d` both hit while
@@ -43,9 +46,20 @@ from shell_text import is_shell_tool, strip_data_sink_statements, strip_heredoc_
 # tolerable direction for a nudge; it is NOT the exec-carrier recursion that was declined, because
 # nothing here re-interprets the quoted text or changes what any other guard sees.
 _TRAP = re.compile(
-    r"""(?<![\w-])g?sed\b(?:\s+-[^\s]+)*\s*['"]?\s*1\s*,\s*/(?P<end>(?:\\.|[^/\\])+)/\s*d""",
+    r"""(?<![\w-])g?sed\b(?P<flags>(?:\s+-[^\s]+)*)\s*['"]?\s*1\s*,\s*/(?P<end>(?:\\.|[^/\\])+)/\s*d""",
     re.M,
 )
+
+# An output redirect on the masked command: `>` or `>>` at a word start, not `2>`, `&>`-free `>&2`,
+# and not to /dev/null, where nothing is written that a later step could consume.
+_WRITES = re.compile(r"(?<![\w&<>])>>?\s*(?!&|/dev/null\b)[^\s<>&|]")
+
+
+def _writes_a_file(text, match, tool_name):
+    """True when the trap's sed edits in place or the command redirects output to a file."""
+    if re.search(r"(?:^|\s)-(?:i\S*|-in-place\S*)", match.group("flags")):
+        return True
+    return bool(_WRITES.search(commands_only(text, tool_name or "Bash")))
 
 
 def notice(command, tool_name=None):
@@ -83,6 +97,16 @@ def notice(command, tool_name=None):
     )
 
 
+def refused(command, tool_name=None):
+    """True when `notice` fires AND the same command writes the result to a file."""
+    try:
+        text = strip_data_sink_statements(strip_heredoc_bodies(command), tool_name)
+    except Exception:  # noqa: BLE001 - a guard must never wedge a turn
+        return False
+    match = _TRAP.search(text)
+    return bool(match) and _writes_a_file(text, match, tool_name)
+
+
 def main(raw=None) -> int:
     """Read the hook event, emit additionalContext when the shape matches. Always exits 0."""
     try:
@@ -99,6 +123,10 @@ def main(raw=None) -> int:
         return 0
     if not text:
         return 0
+    if refused(command, payload.get("tool_name")):
+        return refuse("REFUSED: this command also writes the result to a file, so the truncation "
+                      "would land where a later step reads it. An exact numeric range (`1,5d`) "
+                      "is not refused.\n" + text)
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
                                              "additionalContext": text}}))
     return 0
