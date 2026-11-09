@@ -74,7 +74,7 @@ For any structured data in a Python app, parse untrusted/external input into `py
 every boundary, and use `dataclasses` for pure internal layers. Do NOT use `attrs`, hand-woven
 classes, or raw `dict`s for structured data. For the full end-to-end discipline (parse once at the
 boundary, typed models throughout, Enums for fixed values, minimal conversions), use the
-`bitranox:coding-python-enforce-data-architecture-strict` skill.
+`bitranox:coding-python-data-architecture` skill.
 
 ## HTTP example (httpx2)
 

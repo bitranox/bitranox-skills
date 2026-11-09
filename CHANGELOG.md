@@ -30,6 +30,33 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.0.0]
+
+### Changed
+
+- `coding-python-enforce-data-architecture-strict` is renamed to `coding-python-data-architecture`
+  and holds the Python mechanisms only (Pydantic, enum and datetime wire forms, aliases, unions,
+  pyright facades). Invoke it as `bitranox:coding-python-data-architecture`; the old name has no
+  alias.
+
+### Added
+
+- `coding-data-architecture`: the language-neutral data-architecture rules (typed models at every
+  boundary, no internal maps, enums for fixed values, one parse in and one export out, no
+  compatibility shims), the definition of done and the analyse-refactor-verify workflow, with a
+  route to the Python and Rust skills.
+- `coding-rust-data-architecture`: a Rust data-architecture checklist with tool recipes for parsing
+  at the boundary (newtypes, `TryFrom` and `FromStr`, `Option` and `NonZero`), closed enums inside
+  a crate and open ones at the wire, typestate, the serde boundary (DTO and domain,
+  `deny_unknown_fields`, `untagged`, size and depth limits), zerocopy wire structs, errors,
+  builders and the lint setup, with every lint name checked against clippy.
+- Tests: no live file names a retired skill name; the Python data-architecture skill holds no copy
+  of the generic rules; the front matter and cross-references of the three Rust skills.
+
+### Fixed
+
+- The Rust and generic data-architecture skills agree on versioned wire records (a boundary, not a compatibility shim), and the Rust skill supplies the gate commands, candidate sweeps and baseline recipe the generic workflow asks a language skill for.
+
 ## [10.45.1]
 
 ### Fixed

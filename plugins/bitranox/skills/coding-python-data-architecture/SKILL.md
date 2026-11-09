@@ -1,11 +1,21 @@
 ---
-name: coding-python-enforce-data-architecture-strict
-description: Use when refactoring or reviewing Python code to enforce a strict data architecture - Pydantic models at every external boundary, typed models (never raw dicts) inside the app, Enums for all fixed categorical values, and minimal input-to-output conversions. Use when asked to eliminate dict parameters, stringly-typed status/mode values, Model->dict->Model conversion chains, or compatibility shims, or to make a Python data flow type-safe end to end.
+name: coding-python-data-architecture
+description: Use when refactoring or reviewing Python code for a strict data architecture - Pydantic models at every external boundary, typed models (never raw dicts) inside the app, StrEnum or str-Enum for fixed categorical values, minimal input-to-output conversions; when eliminating dict parameters, stringly-typed status/mode values, Model->dict->Model chains or compatibility shims; or when a Pydantic dump, alias, union, datetime or enum wire form, or a pyright strict stub gap, needs the right fix.
 ---
 
-# Data Architecture Enforcement
+# Data architecture in Python
 
-Refactor Python code to follow strict data architecture rules using Pydantic models and Enums.
+The Python mechanisms of a strict data architecture: Pydantic at the boundaries, enums and
+datetimes that keep their wire form across 3.10 and 3.11+, unions and aliases that parse what you
+meant, and typed facades instead of checker suppressions.
+
+## Load bitranox:coding-data-architecture alongside this skill
+
+The language-neutral rules live there, once: the Core Principles 1-7 cited below by number, the
+anti-pattern list, the Instructions checklist (Definition of Done), and the Workflow with STEP A
+to STEP D and the `.data_arch_violations.json` state file. Every "Core Principle N", "STEP X",
+"Instructions" or "Workflow" reference in this skill names that skill's text. This skill adds what
+Python needs on top of it.
 
 > Pydantic-at-the-boundary is also the input-sanitization edge. For the full per-sink output escaping
 > (parametrized SQL, HTML autoescape, shell argv) and the boundary-vs-internal-libs scope, see
@@ -15,15 +25,24 @@ Refactor Python code to follow strict data architecture rules using Pydantic mod
 
 ## Architecture Rules
 
-### Core Principles
+### The core principles in Python
 
-1. **Pydantic at Boundaries**: All external data (API requests, file reads, env vars, CLI args) must be parsed into Pydantic models immediately upon entry
-2. **Pydantic for Export**: All outputs (API responses, file writes, serialization) must use Pydantic's `.model_dump()` or `.model_dump_json()`. On a wire that already exists, `.model_dump_json()` changes bytes and exception types: read "On an existing wire, `model_dump_json()` is not a drop-in" below before swapping a serializer call
-3. **No Internal Dicts**: Inside the application, never use raw dicts (or `Mapping`s) for structured data - always typed models. The two kinds listed under **Exceptions** in the Instructions checklist are exempt from this rule
-4. **Enums for Constants**: All string literals representing categories, statuses, modes, or fixed values must be Enums. For values that cross an external boundary as strings, use `StrEnum` (Python 3.11+) or `class X(str, Enum)` so Pydantic parses and serializes them without changing the wire format; reserve `IntEnum` for values that are genuinely integers on the wire. **If your floor is 3.10 and you take the `class X(str, Enum)` fallback, its default string form is version-dependent** - read "The `str, Enum` fallback formats differently on 3.10 and 3.11+" below before you interpolate a member anywhere.
-5. **Minimize Conversions**: Ideal flow is ONE parse at input, ONE dump at output - nothing in between
-6. **String-to-Enum at Edges Only**: Convert strings to Enums only at system boundaries (input parsing). All functions and methods must accept and use the Enum type directly - never convert str->Enum inside business logic. This mirrors the class/Pydantic rule: parse once at entry, use typed objects throughout
-7. **No Compatibility Shims**: Remove all compatibility shims - code must use dataclass fields and enums directly. No wrapper methods, aliases, or backward-compatibility layers that accept old formats
+- **Principle 1, typed model at every boundary**: parse API requests, file reads, env vars and CLI
+  args into a Pydantic `BaseModel` on entry.
+- **Principle 2, typed export**: produce every output with `.model_dump()` or
+  `.model_dump_json()`. On a wire that already exists, `.model_dump_json()` changes bytes and
+  exception types: read "On an existing wire, `model_dump_json()` is not a drop-in" below before
+  swapping a serializer call.
+- **Principle 3, no internal maps**: no raw `dict` or `Mapping` for structured data inside the
+  application; a Pydantic model or a `@dataclass`.
+- **Principle 4, enums for constants**: for a value that crosses an external boundary as a string,
+  use `StrEnum` (Python 3.11+) or `class X(str, Enum)` so Pydantic parses and serializes it without
+  changing the wire format; reserve `IntEnum` for values that are integers on the wire. **If your
+  floor is 3.10 and you take the `class X(str, Enum)` fallback, its default string form is
+  version-dependent** - read "The `str, Enum` fallback formats differently on 3.10 and 3.11+" below
+  before you interpolate a member anywhere.
+- **Principle 7, no compatibility shims**: code uses dataclass fields, model fields and enums
+  directly.
 
 ### What to Use When
 
@@ -54,11 +73,12 @@ Python 3.11 made `__format__` follow `__str__` for mixed-in enums. So a member i
 a key, a filename, a log line or any hand-built payload silently changes shape across the version
 matrix, and the 3.10 lane is the one that looks correct.
 
-This is the one place the "avoid unnecessary `.value` access" guidance above does NOT apply.
-Comparisons, assignments and Pydantic serialization take the member directly; **anything that
-builds a string by interpolation takes `.value`.** Measured cost of getting it wrong: an alert-state
-key built as `f"{pool}:{category}"` wrote `rpool:IssueCategory.CAPACITY` instead of `rpool:capacity`
-on 3.11+, which orphans every previously-written state entry and re-fires every open alert.
+This is the one place the "avoid unnecessary `.value` access" guidance (under "Python violation
+patterns") does NOT apply. Comparisons, assignments and Pydantic serialization take the member
+directly; **anything that builds a string by interpolation takes `.value`.** Measured cost of
+getting it wrong: an alert-state key built as `f"{pool}:{category}"` wrote
+`rpool:IssueCategory.CAPACITY` instead of `rpool:capacity` on 3.11+, which orphans every
+previously-written state entry and re-fires every open alert.
 
 **The interpolation can happen far from the member, behind a `str` parameter.** A member passed
 into a `str`-annotated parameter type-checks, because the member IS a `str`, and the log context,
@@ -125,8 +145,8 @@ Two fixes, and they are not interchangeable:
 - **Export at the boundary** - keep the field a plain mapping and call `.model_dump()` on the
   payload yourself in the function that emits the envelope - is the better default when the
   envelope exists only to be dumped (a CLI's `{ok, command, data, skipped}` response, an API
-  reply). That is Rule 5's "one dump at output, nothing in between" applied to the payload too,
-  and it needs no extra annotation.
+  reply). That is Core Principle 5's "one dump at output, nothing in between" applied to the
+  payload too, and it needs no extra annotation.
 
 Do not widen either fix into `SerializeAsAny[BaseModel] | dict` expecting a permissive fallback: a
 raw dict validates against the bare `BaseModel` arm (an empty base model accepts any mapping), and
@@ -146,10 +166,11 @@ emits `schema` too; passing `by_alias=True` at each call covers only the calls t
 
 ### On an existing wire, `model_dump_json()` is not a drop-in for the old serializer call
 
-Rules 2 and 5 point new output at `model_dump_json()`. When a model REPLACES a dataclass or dict on a
-wire that already exists (a JSONL file, a `--json` CLI envelope, a cache), or you collapse an
-existing `json.dumps(m.model_dump(mode="json"))` or `orjson.dumps(m.model_dump(mode="json"))` into
-`model_dump_json()`, the bytes change. Measured on pydantic 2.14.2 and orjson 3.13.0:
+Core Principles 2 and 5 point new output at `model_dump_json()`. When a model REPLACES a dataclass
+or dict on a wire that already exists (a JSONL file, a `--json` CLI envelope, a cache), or you
+collapse an existing `json.dumps(m.model_dump(mode="json"))` or
+`orjson.dumps(m.model_dump(mode="json"))` into `model_dump_json()`, the bytes change. Measured on
+pydantic 2.14.2 and orjson 3.13.0:
 
 | Input                                                                                      | `model_dump_json()`                                  | `orjson.dumps(m.model_dump(mode="json"))` | `json.dumps(m.model_dump(mode="json"))`                                                           |
 |--------------------------------------------------------------------------------------------|------------------------------------------------------|-------------------------------------------|---------------------------------------------------------------------------------------------------|
@@ -469,287 +490,92 @@ arm), read `references/validation-error-messages.md`.
 
 ---
 
-## Instructions
+## Python additions to the Instructions checklist
 
-1. **Create a Todo List** with the following Definition of Done (DoD) items to track refactoring progress:
+Add these items to the Definition of Done from Instructions step 1 of
+bitranox:coding-data-architecture:
 
-   **Input/Output Boundaries:**
-   - [ ] Parse all external inputs into Pydantic models at system boundaries
-   - [ ] Produce all outputs through Pydantic export methods (`.model_dump()`, `.model_dump_json()`)
-   - [ ] Each boundary model that replaced a `.get()` walk declares every field the consumer must
-     distinguish, not only the fields the old code read (step 3), and a test feeds it an input
-     where that field decides the answer
-   - [ ] Your own new and rewritten code got the same adversarial read as the code you set out to
-     fix: a faithful port passes every existing test while keeping the old bug
+**Input/Output Boundaries:**
+- [ ] Parse all external inputs into Pydantic models at system boundaries
+- [ ] Produce all outputs through Pydantic export methods (`.model_dump()`, `.model_dump_json()`)
 
-   **Internal Data Handling:**
-   - [ ] Eliminate all internal dict processing - no `data["key"]` access
-   - [ ] All functions/methods use typed fields from Pydantic models or dataclasses
-   - [ ] Use `@dataclass` only for pure internal logic with no serialization needs
+**Internal Data Handling:**
+- [ ] All functions/methods use typed fields from Pydantic models or dataclasses
+- [ ] Use `@dataclass` only for pure internal logic with no serialization needs
 
-   **Type Safety:**
-   - [ ] Replace all string literals (statuses, modes, categories) with Enums
-   - [ ] Ensure all function signatures use typed models, not `dict`
+**Conversion Optimization:**
+- [ ] Eliminate Pydantic->dataclass->Pydantic conversions (use Pydantic throughout)
 
-   **Conversion Optimization:**
-   - [ ] Remove redundant Model->dict->Model chains
-   - [ ] Eliminate Pydantic->dataclass->Pydantic conversions (use Pydantic throughout)
-   - [ ] Verify minimum conversions: ideally 1 at input, 1 at output
+**Exceptions - the Enum-keyed lookup table in Python:** all four conditions of the generic
+exception hold (read-only, keyed by the Enum itself, a fully typed value type, a pin test). In
+Python, read-only takes all three of: annotated
+`Mapping[...]` (`Final[Mapping[...]]` at module level), built as `MappingProxyType({...})`, and
+nothing writes to it after it is built. The proxy is not optional: pyright strict narrows a
+`Final` name to the plain dict it was assigned and accepts `TABLE[key] = value` through it, while
+it rejects that write on a `MappingProxyType`. A fully typed value type has no `Any` and no
+`object`. The pin test is `assert set(TABLE) == set(TheEnum)`.
 
-   **Exceptions:**
-   - [ ] Small local dicts (few items, single function scope) may remain - convert if used across functions/modules
-   - [ ] A lookup table keyed by a closed Enum may remain at any scope when ALL four hold: it is
-     read-only; its key type is the Enum itself; its value type is fully typed (no `Any`, no
-     `object`); and a test pins that every member has an entry
-     (`assert set(TABLE) == set(TheEnum)`). Read-only takes all three of: annotated
-     `Mapping[...]` (`Final[Mapping[...]]` at module level), built as `MappingProxyType({...})`,
-     and nothing writes to it after it is built. The proxy is not optional: pyright strict
-     narrows a `Final` name to the plain dict it was assigned and accepts `TABLE[key] = value`
-     through it, while it rejects that write on a `MappingProxyType`. Missing any one of the
-     four, it is a violation: add the missing property or convert the table. A table keyed by
-     `str` spellings of an Enum's values is not this exception - key it by the Enum
+**Verification:**
+- [ ] Run `make test` OR pyproject.toml tools (pytest, ruff, mypy, etc.) - fix all errors until passing
+- [ ] Verify type checking passes and Pydantic validation works
 
-   **Verification:**
-   - [ ] Run `make test` OR pyproject.toml tools (pytest, ruff, mypy, etc.) - fix all errors until passing
-   - [ ] Verify type checking passes and Pydantic validation works
-   - [ ] If the refactor moved WHERE input is validated: every single-fault input the old code
-     refused keeps its exception type, exit code and message, or each change is listed in the
-     CHANGELOG (STEP C item 5)
+### Python violation patterns (Instructions steps 2 and 3)
 
-2. **Analyze the Code** and identify violations:
-   - Functions accepting `dict` parameters instead of typed models
-   - Raw dict key access (`data["key"]`) instead of field access (`data.key`)
-   - String literals used as identifiers, modes, or status values
-   - `str` parameters of a function called from another function or module whose call sites all
-     pass literals from a small fixed set (grep the callers; the signature alone looks fine)
-   - Fixed-shape records returned as bare tuples across a function boundary
-     (`-> tuple[str, str | None]`), with the exclusions under "Anti-Patterns to Eliminate"
-   - Unnecessary conversions between dicts and dataclasses
-   - Missing Pydantic validation at input boundaries
-   - Missing Pydantic export methods at output boundaries
-   - **Unnecessary data conversions** - AGGRESSIVELY detect and eliminate:
-     * Model -> dict -> Model chains (pass the model directly)
-     * Multiple `.model_dump()` calls on the same object
-     * Converting to dict just to access fields
-     * Redundant serialization/deserialization cycles
-     * Intermediate dict structures that serve no purpose
-     * **Pydantic <-> dataclass conversions**: If code converts Pydantic -> dataclass or dataclass -> Pydantic, refactor to use Pydantic throughout. Remove compatibility shims for dict/dataclasses/Pydantic (no wrapper methods, aliases, or backward-compatibility layers)
-     * Unnecessary dataclass wrappers when Pydantic can be used directly
-     * Any conversion that doesn't add value - minimize total conversions
-     * **Count total conversions** in the data flow - goal is MINIMUM possible (ideally: 1 at input, 1 at output)
-     * **Enum usage**: Use `StrEnum`/`str, Enum` for string-valued fields and `IntEnum` only for integer-valued ones. Avoid unnecessary `.value` access or conversions - use the enum member directly in comparisons and assignments. The exception is string INTERPOLATION under the `str, Enum` fallback, where `.value` is required and not optional (see "The `str, Enum` fallback formats differently on 3.10 and 3.11+"). Remove compatibility shims for enums (no wrapper methods, aliases, or backward-compatibility layers)
+Look for these beside the generic list:
+- Missing Pydantic validation at input boundaries, missing Pydantic export methods at output
+  boundaries
+- Multiple `.model_dump()` calls on the same object
+- **Pydantic <-> dataclass conversions**: if code converts Pydantic -> dataclass or dataclass ->
+  Pydantic, refactor to use Pydantic throughout. Remove compatibility shims for
+  dict/dataclasses/Pydantic (no wrapper methods, aliases, or backward-compatibility layers)
+- Unnecessary dataclass wrappers when Pydantic can be used directly
+- **Enum usage**: use `StrEnum`/`str, Enum` for string-valued fields and `IntEnum` only for
+  integer-valued ones. Avoid unnecessary `.value` access or conversions - use the enum member
+  directly in comparisons and assignments. The exception is string INTERPOLATION under the
+  `str, Enum` fallback, where `.value` is required and not optional (see "The `str, Enum`
+  fallback formats differently on 3.10 and 3.11+"). Remove compatibility shims for enums (no
+  wrapper methods, aliases, or backward-compatibility layers)
 
-3. **Refactor the Code** following these rules:
-   - Import external data immediately into Pydantic models with validation
-   - Export data using Pydantic's built-in dump methods
-   - **Prefer Pydantic over dataclass** - only use `@dataclass` when there's a clear benefit and no Pydantic conversion needed
-   - If you see Pydantic -> dataclass -> Pydantic, eliminate the dataclass and use Pydantic throughout
-   - Never create or handle internal dict structures
-   - Convert dict inputs to Pydantic models as early as possible
-   - All functions must operate on dataclasses or Pydantic fields
-   - **Minimize total conversions** - count them, ideal is ONE at input boundary, ONE at output boundary
-   - Replace fixed string sets with `Enum` classes
-   - **Declare what the consumer must DISTINGUISH, not only what the old code read.** When a
-     Pydantic model replaces a hand-rolled `.get()` walk over external JSON, the old field list
-     records what the old code looked at, not what it needed. For each decision the consumer makes
-     on the parsed data, ask what it must tell apart and whether the source exposes a field for it
-     that the walk dropped; declare that field and filter on it. A faithful migration carries the
-     latent bug forward. Example: a model of `uv python list --output-format json` declaring only
-     `version` and `version_parts` keeps an implementation-blind "newest installed patch" pick: a
-     PyPy build with a higher patch is reported as newest, and a free-threaded build of the same
-     patch cannot be told apart from the default one. The listing exposes both discriminators
-     (`implementation`, `variant`), so a migration that declares only what the old walk read
-     drops them.
-   - **When the decision is "which X will tool T pick", ask T, do not re-derive T's choice.**
-     Declaring more discriminators and filtering T's listing re-implements T's selection rules and
-     stays wrong wherever T applies a rule the listing does not show. The `uv python list` pick
-     above is that case even with every discriminator declared: `uv venv --python X.Y` chooses by
-     `python-preference` (env, `uv.toml`, `[tool.uv]`) and discovery order, not by newest patch,
-     so under `UV_PYTHON_PREFERENCE=system` it built on the distro 3.14.4 while the listing's
-     newest was 3.14.8, and a check comparing the venv with the listing rebuilt it on every run.
-     The fix is to ask uv: `uv python find --system --no-python-downloads --show-version 3.14`
-     printed the version `uv venv --python 3.14` built on in all six cells measured (uv 0.13.0,
-     preference unset/managed/system, with and without an active `VIRTUAL_ENV`); without
-     `--system` it answers with the current venv. Look for such a query command (`find`,
-     `--dry-run`, `--print-*`, `--show-*`) before modelling a listing.
+And refactor with these rules:
+- Import external data immediately into Pydantic models with validation
+- Export data using Pydantic's built-in dump methods
+- **Prefer Pydantic over dataclass** - only use `@dataclass` when there's a clear benefit and no
+  Pydantic conversion needed
+- If you see Pydantic -> dataclass -> Pydantic, eliminate the dataclass and use Pydantic throughout
+- Convert dict inputs to Pydantic models as early as possible
+- All functions must operate on dataclasses or Pydantic fields
 
-4. **Mark Todo Items Complete** as each DoD criterion is satisfied.
+## Python tooling for the Workflow
 
-## Workflow
+What each step of the Workflow in bitranox:coding-data-architecture runs on a Python project:
 
-**CRITICAL: This is an iterative process. You MUST loop until ZERO violations remain. Do NOT stop early.**
+- **INITIALIZATION step 2:** read `pyproject.toml` (if it exists) to identify configured tools.
+- **STEP A, the CANDIDATE SWEEP:** `grep -rnE -- '-> tuple\[|: dict|-> dict'` over the target
+  files. Measured: 9 analysers called 46 of 49 modules clean, and a grep for `-> tuple[` found 13
+  fixed-shape tuple records none of them had flagged.
+- **STEP A, the analysis subagent's Python patterns** (in place of `{the language skill's
+  patterns}` in the template):
 
-**State is tracked in `.data_arch_violations.json` - always read before and write after each phase.**
+  ```
+  - dict parameters (`: dict`, `-> dict`)
+  - dict key access (`["key"]`, `['key']`)
+  - string literals for statuses/modes (`== "..."`, `!= "..."`)
+  - fixed-shape records returned as bare tuples (`-> tuple[str, str | None]`); NOT an OS
+    sockaddr, a local gather closure, or a variable-length `tuple[X, ...]`
+  - missing Pydantic at boundaries
+  - unnecessary Model->dict->Model conversions
+  ```
 
-```
-INITIALIZATION:
-  1. Read all target files
-  2. Read pyproject.toml (if exists) to identify configured tools
-  3. Use TodoWrite to add one item per target file to the DoD checklist from Instructions
-     step 1 (one list, extended - not a second, competing list)
-  4. Create state file `.data_arch_violations.json` (the `//` notes explain fields; leave them
-     out of the file). `base` is the commit the request starts from: the tag or commit it names
-     when it asks about a change set ("since v2.0.0", a branch), otherwise HEAD at
-     INITIALIZATION:
-     {
-       "pass": 0,
-       "base": "<commit or tag the request starts from>",
-       "pass_start_rev": null,  // HEAD when the current STEP B began (STEP B sets it)
-       "total_violations": 0,
-       "files": {
-         "path/to/file.py": {
-           "violations": [],
-           "out_of_scope": [],  // findings on lines not changed since "base" (STEP A, SCOPE)
-           "status": "pending"  // pending (never analysed) | in_progress (open findings, or
-                                // changed since its last analysis) | clean
-         }
-       }
-     }
-
-================================================================================
-|  MAIN LOOP - REPEAT STEPS A->B UNTIL total_violations == 0                    |
-================================================================================
-
-  STEP A - PARALLEL ANALYSIS (use subagents):
-     - Read `.data_arch_violations.json`
-     - Increment "pass" counter
-     - Launch subagents (Task tool, subagent_type="Explore", model="opus", effort="medium") in
-       PARALLEL for each file whose status is `pending` or `in_progress` (pin both; per-file
-       analysis judges code already written, a review dispatch - see "Concrete tiers" and
-       "Review dispatches" in bitranox:process-agents-subagent-driven-development). A `clean`
-       file is skipped, which is safe only because STEP B re-opens every file a fixer changed.
-     - Each subagent prompt MUST include:
-       * The file path to analyze
-       * The violation patterns to search for (from Architecture Rules above)
-       * The patterns that are NOT violations, spelled out - a small single-function local
-         dict, a free-form external JSON envelope, and DYNAMICALLY-keyed maps (queue index to
-         count, metric name to value, MAC to address); for tuples, an OS sockaddr, a local
-         gather closure and a variable-length `tuple[X, ...]`. Without this an analyser reports
-         every `dict[str, X]` it sees, and you spend the loop re-judging its false positives.
-         Parameter ORDER is not a data-structure finding either: two positional parameters of
-         the same type are a keyword-only style question, so keep the brief to records and
-         values, or an analyser asked for "same-type pairs" reports function signatures.
-       * The CALL-SITE SWEEP, named as a required step: for every `str` parameter of a function
-         called from another function or module, grep its call sites and report it when every
-         caller passes a literal from a small fixed set. A per-file read never sees this, because
-         the signature looks fine and the evidence is in other files.
-       * Instruction to return JSON: {"file": "path", "sweep": {"tuple_returns": N, "str_params":
-         N, "literal_only": N}, "violations": [{"line": N, "type": "...", "description": "..."}]}
-         - the `sweep` counts are what the agent grepped, so a zero shows it looked
-       * **"Reply with the JSON object and NOTHING else - no preamble, no summary, no markdown
-         fence."** Say it explicitly. An analyser that answers in prose ("Findings reported
-         above: 8 items across 4 files") loses every finding, because the detail it refers to
-         was never in what you received - and the count it cites makes the loss look like a
-         result. Re-run that agent; do not reconstruct its numbers.
-     - Collect all subagent results
-     - Run your own CANDIDATE SWEEP beside the agents: `grep -rnE -- '-> tuple\[|: dict|-> dict'`
-       over the target files, and hold each hit against the agents' verdicts. A file reported
-       clean that holds an unjudged hit goes back to an analyser with the hit named. An
-       all-clean verdict returned in seconds cannot be told from a blind one; the sweep tells
-       them apart. Measured: 9 analysers called 46 of 49 modules clean, and a grep for
-       `-> tuple[` found 13 fixed-shape tuple records none of them had flagged.
-     - SCOPE: on pass 1 of a request over whole files or a package, every finding counts. From
-       pass 2 on, and on every pass of a change-set request, a finding counts only on a line
-       changed since `base`. Rules such as "defined once" and "refuse impossible values" apply
-       to a whole file, so later analysers widen into code no fix touched and the count stops
-       converging. Attribute every finding before you count: `git blame <base>..HEAD -- <file>`
-       prefixes each line NOT changed since `base` with `^`. Move findings on such lines to
-       `out_of_scope`; they do not count toward total_violations. Put the collected list to the
-       user ONCE, when the in-scope count reaches zero, instead of looping on it; a finding the
-       user rules in scope moves back into `violations`. Measured: pass 4 found 73 and pass 5
-       found 86 findings; 59 of the 86 sat on lines older than the base.
-     - Update `.data_arch_violations.json` with violations from each subagent; a file with no
-       in-scope violation becomes `clean`, any other `in_progress`
-     - Calculate total_violations = sum of all in-scope violations across files
-
-     >>> If total_violations == 0: put any `out_of_scope` list to the user (SCOPE); when
-         nothing comes back in scope, EXIT LOOP, GOTO STEP C
-     >>> If total_violations > 0: CONTINUE TO STEP B
-
-  STEP B - PARALLEL REFACTORING (use subagents):
-     - Read `.data_arch_violations.json`, set `pass_start_rev` to `git rev-parse HEAD` and write
-       it back BEFORE launching any fixer (the re-open step at the end of STEP B diffs against it)
-     - REPRODUCE every claimed runtime failure before it goes into a brief. When a finding says
-       what happens at runtime (an uncaught exception, a crash, a wrong result), make one real
-       call through the public entry point that should trigger it, and brief the fixer on the
-       MEASURED behaviour, not the analyser's wording. Measured: an analyser said an oversized
-       payload surfaced as an uncaught `OSError`; the call raised nothing and instead reported a
-       live host as unreachable, so a fixer briefed from the claim would have added `OSError`
-       handling and left the misreport.
-     - PARTITION the work into NON-OVERLAPPING file sets, one per subagent, BEFORE launching
-       anything. This refactor is not per-file independent: an Enum lives in `enums.py` and a
-       model in `models.py`, so several agents will reach for the SAME shared file. Give each
-       shared file exactly ONE owner (or edit it yourself first and let the others only
-       import from it). Measured: three agents editing one checkout in parallel produced a
-       transient test failure from a half-written sibling edit, and one agent had to re-read
-       files before every write to avoid clobbering another's work.
-     - Launch subagents (Task tool, subagent_type="general-purpose", model="opus") in PARALLEL,
-       one per file SET (per-file refactor is bounded judgment, an `opus` job; pin the tier)
-     - Each subagent prompt MUST include:
-       * The full Architecture Rules section (copy from this document)
-       * The specific violations for that file (from state file)
-       * The EXPLICIT list of files it may touch, and a statement that other agents are
-         editing the rest of the repo concurrently so it must not edit anything outside that
-         list. An agent that finds a needed fix in someone else's file REPORTS it instead of
-         making it - that hand-off is how the last error gets found, not a failure.
-       * Instruction not to delete a public name other modules may still read: it leaves an
-         alias pointing at the new Enum member and lists it under `hand_offs`. The coordinator
-         greps the WHOLE repo for readers, moves them, then deletes the alias and any comment
-         that introduced the alias block before STEP C (Core Principle 7: no alias outlives the
-         run). A reader grep scoped to part of the tree misses a caller and fails collection.
-       * When rows move onto a strict boundary model, instruction to validate only the rows that
-         survive the skip/filter decision (type and size checks first, full parse after), with
-         a test each way: a skipped row holding an unrepresentable value stays skipped, a kept
-         one is refused. Validating every row first turns a row the old code skipped into an
-         aborted load, and a live run on clean data cannot show it.
-       * Instruction to fix ALL violations
-       * Instruction NOT to read or write `.data_arch_violations.json`: the coordinator owns it
-         and writes it from the returned JSON (below)
-       * **Instruction to run the TYPE CHECKER as well as the tests, and to report the error
-         count.** Tests alone cannot verify this refactor: a `StrEnum` member compares and
-         hashes equal to its string value, so every call site still passing a raw string, and
-         every assertion on it, stays green wherever the code compares by value (`==`, `match`
-         on the members, a dict or set lookup) rather than by identity (`is`), while the type
-         checker errors on the changed signature.
-         Measured: three agents each reported "731 passed" while pyright had 24 errors, all
-         of them call sites still passing raw literals into newly-Enum-typed parameters.
-         A `NamedTuple` replacing a plain tuple is the same trap: it compares equal to the
-         tuple it replaced, so tests still passing plain tuples into the newly typed parameter
-         stay green and only the type checker lists them.
-       * Instruction to return JSON and nothing else, one entry per file in its set:
-         {"files": {"path": {"fixed": ["violation1", ...], "remaining": [...]}},
-         "hand_offs": [{"file": "path", "line": N, "description": "..."}], "type_errors": N}
-     - After all subagents complete, WRITE THE STATE FILE YOURSELF, once, from their returned
-       JSON: each file's `violations` becomes its `remaining` list, each `hand_offs` file is set
-       to `in_progress` with the hand-off named in that file's next analyser brief, and
-       `total_violations` is recomputed as the sum. Never let parallel fixers update the shared
-       file themselves: two agents that both read it before either writes each write back a
-       copy missing the other's change, and recomputing the total instead of decrementing it
-       does not help, because the arrays it sums were already clobbered. One writer after all
-       fixers return has no race to lose.
-     - RE-OPEN EVERY FILE THE PASS CHANGED, not only the briefed ones. A pass edits files
-       outside the violation list - a shared enum or model, the call sites of a signature a
-       fixer changed, a hand-off you applied yourself - and a file left `clean` is one the next
-       STEP A skips. List `git diff --name-only <pass_start_rev>` plus
-       `git ls-files --others --exclude-standard` (a new module is untracked, so the diff alone
-       misses it) and set every listed target-language file to `in_progress`, adding it to
-       `files` when absent. While the work stays uncommitted the diff also lists files earlier
-       passes changed; re-analysing those once more is the safe direction. Example: a fixer
-       that turns a `str` parameter into an Enum edits the enums module and every caller; with
-       only its own file re-opened, all of those keep their `clean` status and the next pass
-       never reads them. Measured: after one pass, 8 files the fixers had changed still read
-       `clean`, found only by diffing the changed-file list against the state file by hand.
-     - **Re-run the gate YOURSELF.** A subagent's green is not the gate's green: it may have
-       sampled mid-flight while a sibling was still writing, and agents' reported counts will
-       disagree with each other for exactly that reason. Yours is the only authoritative one.
-
-     >>> GOTO STEP A (MANDATORY - must re-analyze to verify fixes and catch new issues)
-     >>> DO NOT proceed to STEP C until analysis shows total_violations == 0
-
-STEP C - RUN TESTS:
-  **THIS STEP IS MANDATORY - DO NOT SKIP**
-
-  Execute these commands using the Bash tool:
+- **STEP B, the type checker:** tests alone cannot verify this refactor. A `StrEnum` member
+  compares and hashes equal to its string value, so every call site still passing a raw string,
+  and every assertion on it, stays green wherever the code compares by value (`==`, `match` on the
+  members, a dict or set lookup) rather than by identity (`is`), while the type checker errors on
+  the changed signature. Measured: three agents each reported "731 passed" while pyright had 24
+  errors, all of them call sites still passing raw literals into newly-Enum-typed parameters. A
+  `NamedTuple` replacing a plain tuple is the same trap: it compares equal to the tuple it
+  replaced, so tests still passing plain tuples into the newly typed parameter stay green and only
+  the type checker lists them.
+- **STEP C, the gate:**
 
   1. First, check if Makefile exists with test target:
      ```bash
@@ -771,139 +597,27 @@ STEP C - RUN TESTS:
      isort --check .               # if [tool.isort] exists
      ```
 
-  4. ON FAILURE:
-     - Read the error output
-     - Fix the code causing the failure
-     - Re-run the failed command
-     - REPEAT until all commands pass
-
-  5. ERROR SURFACE - required whenever the refactor moved WHERE input is validated (a boundary
-     model now refuses what a deeper call used to refuse). A green suite cannot see this: the
-     tests assert on the new path, and a model's refusal changes what a caller observes.
-     The test is whether any refusal now comes from a different place than before - a check
-     moved into the model, or a model check added in front of one that still exists (the first
-     one to refuse is the one the caller sees). A refactor that leaves every refusal where it
-     was, such as renaming internal fields, does not need this item.
-     What changes:
-     - the exception TYPE, and through a CLI wrapper the EXIT CODE - a `ValidationError`, or the
-       framework error you wrap it in, is not the `ValueError` the old call raised;
-     - the MESSAGE - pydantic adds its own error-type tags and a versioned docs URL, and a model
-       that redacts secret-bearing fields hides a value the old message quoted;
-     - the ORDER - with several faults in one input, the setting the boundary checks first is
-       now the one reported.
-     Check it two ways:
-     a. Read every doc that promises an error contract and hold the new code to it:
-        `grep -rniE 'exit code|raises|refused' docs/ README*`
-     b. Run ONE malformed value at a time through the real entry point of a baseline and of the
-        working tree, and diff exception type / exit code / last error line per input. Use TWO
-        baselines, HEAD and the LAST RELEASE tag: a change committed earlier in the same refactor
-        is invisible against HEAD. Get each baseline's source without touching the checkout:
-        `git archive <HEAD or tag> src | tar -x -C <tmpdir>`, then run with
-        `PYTHONPATH=<tmpdir>/src`, never with `python -I` - isolated mode ignores PYTHONPATH, so
-        both arms import the installed (editable) working tree and every case reads "same". Print
-        each arm's `<package>.__file__` first and require it to sit under that arm's tree.
-        Feed wrong-TYPE values beside out-of-range ones: `True` for a count, `"1"` for a
-        timeout, `3.0` for an int. A lax-mode model accepts all three silently (`True` becomes
-        `1`); only `strict=True` or a strict field type refuses them. Mark one input whose result
-        you changed on purpose as the LIVENESS CONTROL: if it does not show up as different, the
-        harness is broken, not the code. Measured: a run under `python -I` reported 20 of 20
-        inputs "same", and only the control exposed it; the harness against the last release
-        found a request model still accepting `times=True` and `timeout="1"` after five analysis
-        passes, and four behaviour changes the CHANGELOG did not list.
-     Every single-fault input the old code refused keeps its type, exit code and message, or the
-     change is listed in the CHANGELOG with the input, the old result and the new one. To keep
-     it, re-raise the model's refusal as the old exception type carrying the validator's own
-     text (`item["msg"]`, or `str(item["ctx"]["error"])` for a `value_error` entry; never
-     `str(exc)`; one line per
-     entry when there are several - see `references/validation-error-messages.md`), and run a
-     check ahead of the model where the model would redact what the old message quoted.
-     Multi-fault ORDER is inherent to parsing at the boundary: document it, do not fight it.
-
-  >>> DO NOT proceed to STEP D until all tests/linters pass and the error-surface diff shows no
-      unlisted change
-
-STEP D - FINAL VERIFICATION:
-  - Read `.data_arch_violations.json` and confirm total_violations == 0
-  - Grep only to surface candidates: `-> dict`, `: dict`, `-> tuple[` in signatures. A hit is a
-    lead, not proof - `: dict` also matches the permitted small local dicts and Enum-keyed
-    lookup tables (both under the Exceptions rule) and annotations that are not signatures at
-    all, and `-> tuple[` matches the tuple exclusions under "Anti-Patterns to Eliminate". Judge
-    each hit against the Exceptions rule and those exclusions; do NOT auto-loop on raw match
-    count.
-  - A module-level table annotated `Mapping[...]` or `Final[dict[...]]` matches none of those
-    patterns, so also grep `^[A-Za-z_][A-Za-z0-9_]*: .*(dict|Mapping)\[` and judge each hit the
-    same way. A type alias is not a table; skip it.
-  - Write one verdict line per hit, `<file:line> real|permitted - <reason>`, where a permitted
-    hit names the exclusion it falls under. A hit that fits no named exclusion is real, whatever
-    the analysers reported for its file: reaching STEP D means they already called every file
-    clean, so their zero is not evidence about any hit you are looking at.
-  - If a real violation is found: attribute it under STEP A's SCOPE rule. Out of scope, it joins
-    `out_of_scope` and goes to the user. In scope, add it to `.data_arch_violations.json` as a
-    violation of its file (status `in_progress`, the line and your reason as its description)
-    and GOTO STEP B. Not STEP A: its analysers already passed that line as clean, and their fresh
-    results would replace the entry you just wrote. STEP B's own loop back to STEP A re-checks
-    the fix.
-  - If clean:
-    * Update state file: all files status = "clean"
-    * Delete `.data_arch_violations.json`
-    * Mark todos complete
-    * Report: "[OK] Complete after {pass} passes - all violations fixed - tests passing"
-```
-
-**IMPORTANT RULES:**
-1. ALWAYS read state file before each step
-2. ALWAYS write state file after each step - the coordinator writes it; subagents never do
-3. ALWAYS loop back to STEP A after STEP B - never skip re-analysis
-4. Do NOT proceed to STEP C until total_violations == 0
-5. **ALWAYS run STEP C** - execute `make test` or pyproject.toml tools
-6. Do NOT proceed to STEP D until all tests pass
-7. Delete state file only after successful completion
-
-**LOOP ENFORCEMENT:**
-```
-STEP A -> found violations? -> STEP B -> STEP A (again!)
-STEP A -> no violations? -> STEP C (run make test!) -> STEP D -> DONE
-STEP D -> real violation in scope? -> recorded in the state file -> STEP B -> STEP A
-```
-
-**Subagent Prompt Templates:**
-
-Analysis subagent (`model: "opus"`, `effort: "medium"` - review dispatch, see
-bitranox:process-agents-subagent-driven-development "Review dispatches"):
-```
-Analyze {file_path} for data architecture violations:
-- dict parameters (`: dict`, `-> dict`)
-- dict key access (`["key"]`, `['key']`)
-- string literals for statuses/modes (`== "..."`, `!= "..."`)
-- fixed-shape records returned as bare tuples (`-> tuple[str, str | None]`); NOT an OS
-  sockaddr, a local gather closure, or a variable-length `tuple[X, ...]`
-- missing Pydantic at boundaries
-- unnecessary Model->dict->Model conversions
-
-Call-site sweep (required): for every `str` parameter of a function called from another function
-or module, grep its call sites across the repo; report it when every caller passes a literal from
-a small fixed set.
-
-Return JSON only: {"file": "{file_path}", "sweep": {"tuple_returns": N, "str_params": N,
-"literal_only": N}, "violations": [{"line": N, "type": "...", "description": "..."}]}
-```
-
-Refactoring subagent:
-```
-Fix these violations in your file set ({file_set}):
-{violations_list}
-
-Rules: [paste Architecture Rules section]
-
-You may edit only: {file_set}. Other agents are editing the rest of the repo; report a needed
-fix elsewhere as a hand-off instead of making it. Do not read or write
-`.data_arch_violations.json` - the coordinator writes it from your reply.
-
-Fix ALL violations, then run the type checker as well as the tests and report its error count.
-Return JSON and nothing else, one "files" entry per file in your set:
-{"files": {"<path>": {"fixed": [...], "remaining": [...]}},
- "hand_offs": [{"file": "...", "line": N, "description": "..."}], "type_errors": N}
-```
+- **STEP C item 5, the error surface in Python:** a `ValidationError`, or the framework error you
+  wrap it in, is not the `ValueError` the old call raised; pydantic adds its own error-type tags
+  and a versioned docs URL to the message. Get each baseline's source with
+  `git archive <HEAD or tag> src | tar -x -C <tmpdir>`, then run with `PYTHONPATH=<tmpdir>/src`,
+  never with `python -I` - isolated mode ignores PYTHONPATH, so both arms import the installed
+  (editable) working tree and every case reads "same". Print each arm's `<package>.__file__`
+  first and require it to sit under that arm's tree. Feed wrong-TYPE values beside out-of-range
+  ones: `True` for a count, `"1"` for a timeout, `3.0` for an int. A lax-mode model accepts all
+  three silently (`True` becomes `1`); only `strict=True` or a strict field type refuses them.
+  Measured: a run under `python -I` reported 20 of 20 inputs "same", and only the liveness
+  control exposed it; the harness against the last release found a request model still
+  accepting `times=True` and `timeout="1"` after five analysis passes. To keep an old refusal,
+  re-raise the model's refusal as the old exception type carrying the validator's own text
+  (`item["msg"]`, or `str(item["ctx"]["error"])` for a `value_error` entry; never `str(exc)`;
+  one line per entry when there are several - see `references/validation-error-messages.md`).
+- **STEP D, the candidate greps:** `-> dict`, `: dict`, `-> tuple[` in signatures. `: dict` also
+  matches the permitted small local dicts and Enum-keyed lookup tables and annotations that are
+  not signatures at all, and `-> tuple[` matches the tuple exclusions under "Anti-Patterns to
+  Eliminate". A module-level table annotated `Mapping[...]` or `Final[dict[...]]` matches none of
+  those patterns, so also grep `^[A-Za-z_][A-Za-z0-9_]*: .*(dict|Mapping)\[` and judge each hit
+  the same way. A type alias is not a table; skip it.
 
 ## Example Transformations
 
@@ -1174,57 +888,13 @@ callers and tests are untouched; first confirm nothing uses it AS a dataclass
 dataclasses. Re-run pyright before converting after a pyright upgrade, since a newer release may
 infer the type from the annotation.
 
+
 ---
 
 ## Rationalizations (pressure-tested; these do not fly)
 
-Forced-choice pressure runs (deadline + sunk cost + green suite + a reviewer's LGTM) produced
-exactly these excuses - two baseline subjects shipped incomplete conversions using them:
+The generic table is in bitranox:coding-data-architecture. The Python-only row:
 
-| Excuse                                                                              | Reality                                                                                                                                                                                                                                                                                                                        |
-|-------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| "The remaining dict params are internal helpers - do not gold-plate"                | An internal helper with multiple callers is where an untyped dict is riskiest (shape drift = runtime KeyError). "Internal" names the call site, not an exemption; only a small single-function local dict is exempt.                                                                                                           |
-| "The reviewer's LGTM overrode the definition of done"                               | A reviewer comment does not rewrite the mandate you were invoked under. Reframing the unfinished 5/23 as "an explicit, reviewed scope decision" is the capitulation itself, dressed as governance.                                                                                                                             |
-| "I'm basically done - the last functions do not matter"                             | Sunk cost makes "basically done" feel true regardless of whether the remainder matters. The DoD was every function; the last mile is mechanical because the hard work is already verified.                                                                                                                                     |
-| "Shipping verified-green beats an unverified conversion"                            | The conversion is mechanical and re-verified by the same suite in minutes. This excuse converts a 15-minute completion into a permanent gap.                                                                                                                                                                                   |
-| "Converting under deadline pressure is riskier - ship the gap, finish next release" | Maybe - but that trade is the HUMAN's to make, not yours. Surface the DoD-vs-deadline conflict explicitly and ASK ("ship 18/23 now, or slip the window?"); a unilateral "ship partial, track the rest" is silent downscoping of the mandate you were invoked under.                                                            |
-| "A StrEnum on the wire is risky - keep a shim accepting both"                       | StrEnum members ARE str: the wire bytes are identical. The shim adds no safety, silently swallows stray raw strings, and becomes permanent. Pin the wire value with a test instead. (True for `enum.StrEnum`. The `class X(str, Enum)` fallback formats as `C.A` on 3.11+ when interpolated - use `.value` there, not a shim.) |
-| "The enum conversion is code-only - no test churn"                                  | It changes the function's contract: validation moves to the boundary. `grep -rn <func_name> tests/` first - a raises-`ValueError` test, or a raw-string call into an identity (`is`) dispatch, breaks. See "Converting a `str` parameter to an Enum changes its contract".                                                     |
-| "Enum internally, but DB/API stay raw strings - feels safer"                        | That leaves the write path and response body - where a status typo causes the incident - unprotected. Backwards.                                                                                                                                                                                                               |
-| "Tests pass, so the conversion chain does not matter"                               | The defect is architectural, not behavioral - "tests pass" was never in question. Green tests do not make Model->dict->Model round-trips acceptable.                                                                                                                                                                           |
-| "0 violations and the gate is green, so behaviour is unchanged"                     | The suite tests the NEW path. Moving validation into a model changes who raises: exception type, exit code, message wording and redaction - and no existing test pins those for the old entry point. Run the STEP C item 5 diff.                                                                                               |
-| "TODO + follow-up ticket, clean it after the demo"                                  | A TODO on shipped code has no forcing function. If a genuine freeze (a live demo in minutes) blocks the fix, do it immediately AFTER in the SAME working session - never a ticket.                                                                                                                                             |
-
-Catch yourself forming these phrases mid-run - "basically done", "internal helpers are fine",
-"tests are green so it's correct", "feels safer to accept both", "we'll get it later", "the
-reviewer signed off" - and treat the phrase itself as the signal to continue the loop instead
-of stopping.
-
-## Execution Summary
-
-```
-1. INIT: Read files, read pyproject.toml, create todos, create .data_arch_violations.json
-2. LOOP: Parallel analyze (subagents) -> Update state -> Parallel fix (subagents) -> Re-analyze
-3. TEST: Run make test OR pyproject.toml tools (loop until all pass); diff the error surface
-   against HEAD and the last release when validation moved (STEP C item 5)
-4. VERIFY: Final grep check, confirm state file shows 0 violations
-5. DONE: Delete state file, report "[OK] Complete after N passes"
-```
-
-**DO NOT STOP** until:
-- `.data_arch_violations.json` shows total_violations == 0
-- Every `out_of_scope` finding was put to the user once and ruled on (STEP A, SCOPE)
-- All tests/linters pass
-- The error-surface diff (STEP C item 5) shows no change that is not listed in the CHANGELOG,
-  whenever the refactor moved where input is validated
-- Final verification finds no remaining REAL violation - judge each grep hit as STEP D
-  requires ("a hit is a lead, not proof"); a raw match count is not the gate
-
-**Start now** (this is INITIALIZATION - do all four):
-1. Read the target files
-2. Read `pyproject.toml` (if it exists) to identify configured tools
-3. Use TodoWrite to add one item per target file to the DoD checklist from Instructions step 1
-4. Create `.data_arch_violations.json` with initial state
-
-Then enter the MAIN LOOP at STEP A, which begins by reading that state file and
-incrementing the pass counter before it launches any subagent.
+| Excuse                                                        | Reality                                                                                                                                                                                                                                                                                                                        |
+|---------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| "A StrEnum on the wire is risky - keep a shim accepting both" | StrEnum members ARE str: the wire bytes are identical. The shim adds no safety, silently swallows stray raw strings, and becomes permanent. Pin the wire value with a test instead. (True for `enum.StrEnum`. The `class X(str, Enum)` fallback formats as `C.A` on 3.11+ when interpolated - use `.value` there, not a shim.) |

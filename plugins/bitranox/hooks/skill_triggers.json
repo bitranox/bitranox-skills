@@ -48,6 +48,25 @@
   "redirections",
   "builtins"
  ],
+ "coding-data-architecture": [
+  "refactoring",
+  "reviewing",
+  "code",
+  "language",
+  "strict",
+  "data",
+  "architecture",
+  "dict",
+  "parameters",
+  "json",
+  "values",
+  "passed",
+  "around",
+  "inside",
+  "fixed-shape",
+  "type-safe",
+  "coding-rust-data-architecture"
+ ],
  "coding-input-sanitization": [
   "handling",
   "untrusted",
@@ -64,8 +83,7 @@
   "upload",
   "webhook",
   "unbounded-input",
-  "boundary-parsing",
-  "coding-python-enforce-data-architecture-strict"
+  "boundary-parsing"
  ],
  "coding-performance-review": [
   "slow",
@@ -102,12 +120,11 @@
   "domain-driven",
   "designs"
  ],
- "coding-python-enforce-data-architecture-strict": [
+ "coding-python-data-architecture": [
   "refactoring",
   "reviewing",
   "python",
   "code",
-  "enforce",
   "strict",
   "data",
   "architecture",
@@ -117,9 +134,9 @@
   "boundary",
   "typed",
   "dicts",
-  "input-to-output",
-  "stringly-typed",
-  "type-safe"
+  "inside",
+  "str-enum",
+  "input-to-output"
  ],
  "coding-python-gitignore": [
   "parsing",
@@ -382,6 +399,23 @@
   "review",
   "non-io",
   "non-constant-time"
+ ],
+ "coding-rust-data-architecture": [
+  "rust",
+  "newtype",
+  "tryfrom",
+  "fromstr",
+  "serde",
+  "deserialize",
+  "deny_unknown_fields",
+  "untagged",
+  "enum",
+  "zerocopy",
+  "bitfield",
+  "num_enum",
+  "thiserror",
+  "anyhow",
+  "data-architecture"
  ],
  "coding-rust-performance-review": [
   "rust",

@@ -1,6 +1,6 @@
 ---
 name: coding-input-sanitization
-description: Use when handling untrusted or external input at an application or facing-API boundary - an HTTP/REST endpoint, web form, file upload, webhook, CLI taking user data, queue/broker message, or data from a third-party or legacy system - or when emitting into SQL, HTML, a shell, a file path, or another sink. Keywords - SQL injection, XSS, command injection, path traversal, deserialization, SSRF, unbounded-input DoS. For boundary-parsing architecture see coding-python-clean-architecture and coding-python-enforce-data-architecture-strict.
+description: Use when handling untrusted or external input at an application or facing-API boundary - an HTTP/REST endpoint, web form, file upload, webhook, CLI taking user data, queue/broker message, or data from a third-party or legacy system - or when emitting into SQL, HTML, a shell, a file path, or another sink. Keywords - SQL injection, XSS, command injection, path traversal, deserialization, SSRF, unbounded-input DoS. For boundary-parsing architecture see coding-python-clean-architecture, coding-data-architecture and coding-python-data-architecture.
 ---
 
 # coding-input-sanitization
@@ -202,4 +202,5 @@ numeric, IDNA, trailing-dot and backslash/userinfo spellings of a forbidden host
 Examples are Python (the primary stack); the principle is language-agnostic. Rust:
 `bitranox:coding-rust`. Bash: `bitranox:coding-bash-reference` (quoting, never eval untrusted
 input); `shlex` is Python's, for building an argv from a string - see the shell sink above. Boundary-parsing architecture (where the edge is, typed models flowing inward):
-`bitranox:coding-python-clean-architecture`, `bitranox:coding-python-enforce-data-architecture-strict`.
+`bitranox:coding-python-clean-architecture`, `bitranox:coding-data-architecture` (any language) and
+`bitranox:coding-python-data-architecture` (Python).

@@ -77,3 +77,5 @@ boundary, not in the libraries between.
 
 - `bitranox:coding-rust-performance-review` - performance: clippy's perf lints, criterion,
   profilers, release-profile settings and a Rust hot-path checklist.
+- `bitranox:coding-rust-data-architecture` - data architecture: newtypes, open and closed enums,
+  the serde boundary, zerocopy wire structs, error types and the clippy lints that enforce them.

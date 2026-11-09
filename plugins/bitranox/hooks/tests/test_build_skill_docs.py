@@ -192,3 +192,80 @@ def test_reference_doc_documents_every_config_knob():
     ref = (REPO_ROOT / "docs" / "reference.md").read_text(encoding="utf-8")
     for knob in S.DEFAULT_CONFIG:
         assert ("`%s`" % knob) in ref
+
+
+# ---- a renamed skill leaves no live pointer at its old name ----------------------------------
+
+# The Python data-architecture skill was renamed with no alias, so a pointer at the old name
+# resolves to nothing for the reader who follows it. Ledgers, old checklists and CHANGELOG
+# entries are historical records and keep the old name.
+RETIRED_SKILL_NAMES = ("coding-python-enforce-data-architecture-strict",)
+
+
+def _live_mentions(root, name):
+    """Files under plugins/, plus docs/skills.md and README.md, that name `name`.
+
+    Skips .skillwriter/ records, CHANGELOG files, caches and this test file, whose own
+    constant has to spell the retired name."""
+    this_file = Path(__file__).resolve()
+    candidates = [p for p in (root / "plugins").rglob("*") if p.is_file()]
+    candidates += [root / "docs" / "skills.md", root / "README.md"]
+    hits = []
+    for path in candidates:
+        rel = path.relative_to(root).as_posix()
+        if (".skillwriter/" in rel or path.name == "CHANGELOG.md" or "__pycache__" in rel
+                or "/.pytest_cache/" in rel or not path.is_file()
+                or path.resolve() == this_file):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        if name in text:
+            hits.append(rel)
+    return hits
+
+
+@pytest.mark.parametrize("name", RETIRED_SKILL_NAMES)
+def test_no_live_file_names_a_retired_skill(name):
+    assert _live_mentions(REPO_ROOT, name) == []
+
+
+def test_the_retired_name_scan_finds_one_planted_occurrence(tmp_path):
+    name = RETIRED_SKILL_NAMES[0]
+    skill = tmp_path / "plugins" / "bitranox" / "skills" / "demo"
+    (skill / ".skillwriter").mkdir(parents=True)
+    (skill / "SKILL.md").write_text("see bitranox:%s\n" % name, encoding="utf-8")
+    (skill / ".skillwriter" / "checklist-x.md").write_text(name, encoding="utf-8")
+    (tmp_path / "plugins" / "CHANGELOG.md").write_text(name, encoding="utf-8")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "skills.md").write_text("clean\n", encoding="utf-8")
+    (tmp_path / "README.md").write_text("clean\n", encoding="utf-8")
+    assert _live_mentions(tmp_path, name) == ["plugins/bitranox/skills/demo/SKILL.md"]
+
+
+# ---- the Python data-architecture skill defers its generic rules to the generic skill ---------
+
+_SKILLS = REPO_ROOT / "plugins" / "bitranox" / "skills"
+# Markers of the language-neutral text that lives once, in coding-data-architecture.
+_GENERIC_MARKERS = ("MAIN LOOP - REPEAT STEPS A->B", "## Execution Summary", "### Core Principles",
+                    "## Instructions\n")
+
+
+def _defers_to_the_generic_skill(python_text):
+    return ("bitranox:coding-data-architecture" in python_text
+            and not any(m in python_text for m in _GENERIC_MARKERS))
+
+
+def test_the_python_data_architecture_skill_holds_no_copy_of_the_generic_rules():
+    python_text = (_SKILLS / "coding-python-data-architecture" / "SKILL.md").read_text(
+        encoding="utf-8")
+    generic_text = (_SKILLS / "coding-data-architecture" / "SKILL.md").read_text(encoding="utf-8")
+    assert _defers_to_the_generic_skill(python_text)
+    assert all(m in generic_text for m in _GENERIC_MARKERS)
+
+
+def test_the_deferral_check_refuses_a_skill_that_still_carries_the_workflow():
+    carrying = "see bitranox:coding-data-architecture\n\n## Workflow\nMAIN LOOP - REPEAT STEPS A->B\n"
+    assert not _defers_to_the_generic_skill(carrying)
+    assert not _defers_to_the_generic_skill("no pointer at all\n")
