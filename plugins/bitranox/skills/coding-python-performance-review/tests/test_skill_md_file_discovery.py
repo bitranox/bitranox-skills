@@ -247,6 +247,17 @@ def test_step2_without_a_project_venv_records_the_users_python_not_uvs_throwaway
     assert recorded == str(tmp_path / "bin" / "python3"), recorded
 
 
+def test_no_heredoc_inside_a_command_substitution_holds_an_unbalanced_quote():
+    # macOS ships bash 3.2, which scans a $(...) for quotes without knowing about the heredoc in
+    # it: one apostrophe in a Python comment is a syntax error for the whole block there, and no
+    # newer bash can show it.
+    found = re.findall(r"\$\([^\n]*<<-?\s*'?(\w+)'?[^\n]*\n(.*?)\n\s*\1\n",
+                       "".join(_bash_blocks()), re.DOTALL)
+    assert found, "no heredoc inside a command substitution found, so this checked nothing"
+    unbalanced = [body for _, body in found if body.count("'") % 2 or body.count('"') % 2]
+    assert not unbalanced, unbalanced
+
+
 def test_step7_final_run_uses_the_recorded_interpreter(tmp_path):
     project = tmp_path / "proj"
     (project / "tests").mkdir(parents=True)
@@ -255,6 +266,7 @@ def test_step7_final_run_uses_the_recorded_interpreter(tmp_path):
     env, marker = _shim_env(tmp_path, session)
     result = _run(_block("### Step 7: Final Verification"), project, env)
     assert not marker.exists(), marker.read_text(encoding="utf-8")
-    status = (scratch / "cache" / "status.txt").read_text(encoding="utf-8").strip()
-    assert status == "SUCCESS", result.stdout + result.stderr
+    status_file = scratch / "cache" / "status.txt"
+    assert status_file.exists(), result.stdout + result.stderr
+    assert status_file.read_text(encoding="utf-8").strip() == "SUCCESS", result.stdout + result.stderr
     assert "tests/test_ok.py" in result.stdout, result.stdout

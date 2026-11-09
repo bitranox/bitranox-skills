@@ -30,6 +30,16 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [10.42.1]
+
+### Fixed
+
+- `coding-python-performance-review`: Steps 3 and 7 no longer fail with a syntax error on macOS.
+  An apostrophe in a Python comment inside a heredoc inside `$(...)` reads as an unterminated
+  quote to bash 3.2.
+- The ci-watch tests compare the shell-quoted `--repo` path, which is what the hooks print and
+  what differs on Windows.
+
 ## [10.42.0]
 
 ### Added

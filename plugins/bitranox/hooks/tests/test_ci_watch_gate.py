@@ -3,6 +3,7 @@
 import errno
 import json
 import os
+import shlex
 import time
 from pathlib import Path
 
@@ -42,7 +43,7 @@ def test_the_reminder_names_the_pushed_repo_while_it_exists(tmp_path, capsys):
     pushed.mkdir()
     state.record_push(str(tmp_path), "sess-1", "a" * 40, repo=str(pushed), branch="master")
     assert hook.main(_event(tmp_path)) == 0
-    assert "--repo %s" % pushed in json.loads(capsys.readouterr().out)["reason"]
+    assert "--repo %s" % shlex.quote(str(pushed)) in json.loads(capsys.readouterr().out)["reason"]
 
 
 def test_the_reminder_leaves_out_a_repo_that_is_gone(tmp_path, capsys):

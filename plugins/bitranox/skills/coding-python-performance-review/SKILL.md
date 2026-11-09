@@ -237,7 +237,7 @@ if tomllib and os.path.isfile("pyproject.toml"):
             paths = list(tp)
     except Exception:
         paths = []
-# testpaths or --doctest-modules configured: pytest's own config decides, so name no path.
+# testpaths or --doctest-modules configured: the pytest config decides, so name no path.
 chosen = "" if paths or doctests else next((d for d in ("tests", "test") if os.path.isdir(d)), "")
 print(chosen)
 PY
@@ -570,7 +570,7 @@ if tomllib and os.path.isfile("pyproject.toml"):
             paths = list(tp)
     except Exception:
         paths = []
-# testpaths or --doctest-modules configured: pytest's own config decides, so name no path.
+# testpaths or --doctest-modules configured: the pytest config decides, so name no path.
 chosen = "" if paths or doctests else next((d for d in ("tests", "test") if os.path.isdir(d)), "")
 print(chosen)
 PY
