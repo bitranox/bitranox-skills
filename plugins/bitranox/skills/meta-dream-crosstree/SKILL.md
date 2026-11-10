@@ -61,12 +61,15 @@ Create one todo per step.
        store_manifest.py backup --from <that tree's anchor> --scope tree \
          --out ~/.claude/self-improve-audit/backups/<key>-<ts>
 
-   The `--out` dir lies outside every tree, so a backup is never re-discovered as live memory, and
-   is new for each tree. It copies the tree's store and every in-scope `CLAUDE.local.md` and
-   records the manifest step 8 verifies against; never hand-roll the snapshot (meta-dream-tree
-   step 2 says why). A native `memory/` dir you will write is not covered: copy it beside the
-   backup by hand. Curated writes go through the engine, not a hand-edit. The one-time whole-store
-   backup is the safety net; this is the per-run one.
+   `<key>` is `crosstree-<name of that tree's anchor dir>`, one per tree (add a number when two
+   anchors share a name), and `<ts>` the time that backup starts, as `YYYYMMDD-HHMM`. A second tree
+   never reuses a backup dir: a backup into a dir that already holds one replaces it, and that was
+   the first tree's only restore source. The `--out` dir lies outside every tree, so a backup is
+   never re-discovered as live memory. It copies the tree's store and every in-scope
+   `CLAUDE.local.md` and records the manifest step 8 verifies against; never hand-roll the
+   snapshot (meta-dream-tree step 2 says why). A native `memory/` dir you will write is not
+   covered: copy it beside the backup by hand. Curated writes go through the engine, not a
+   hand-edit. The one-time whole-store backup is the safety net; this is the per-run one.
 2. **Inbound gather (delegate).** For each project that should be enriched, run
    `bitranox:meta-collect-knowledge` (the grep -> inspect -> gather funnel): pull knowledge from OTHER
    trees relevant to that project and bring it in by **lifting broadly-useful hits to a common ancestor**
@@ -137,6 +140,10 @@ Create one todo per step.
    legitimately cite a neighbour - so JUDGE each candidate against its body before acting; expect
    to reject some. For a confirmed misfile use the engine's `relocate` verb (NOT a copy: a copy
    leaves the stale original, which is the bug). Propose-first in `propose`; apply in `auto`.
+   A relocate whose target level is that tree's TOP is a misplacement re-home to the tree top
+   (dream-core.md, Mode): list it in the report with its cost (the bytes it adds to the top block:
+   the UTF-8 length of its pointer line plus the newline), PROPOSED in `propose`, applied in
+   `auto`.
    - **Jev shadow on that judgement** (only when `jev_shadow.py status` exits 0; home
      `<plugin>/skills/meta-self-improve/`, launch via `hooks/run-python.sh`; procedure in its
      `references/jev-shadow.md`), per tree, each in a fresh `D=$(mktemp -d)` of its own outside any
@@ -197,8 +204,9 @@ Create one todo per step.
    output is what the report states, never a silent gap. Then, once per tree, run
    `store_manifest.py verify --out <that tree's step 1 dir>`: exit 0 is identical, exit 1 names
    each difference, and every one is a decided merge, move, prune or reword, or a loss to explain
-   (meta-dream-tree step 8).
-   Its `pointer blocks` lines (per changed level: bytes and pointers before and after, and
+   (meta-dream-tree step 8). A 4b relocate is an expected difference: it shows as removed in its
+   source tree's verify and added in its target tree's.
+   Verify's `pointer blocks` lines (per changed level: bytes and pointers before and after, and
    `arrived N  left N` counts) go into the report as printed, per tree, naming the slugs that
    arrived at each tree top from `data.levels[]` under `--json` (dream-core.md, report contract);
    a promotion shows there as an arrival at its ancestor, which lies within its tree (step 5), so

@@ -327,11 +327,11 @@ Decide which question you are asking from the fact's HOOK and the level's PLACE-
 Record the sighting in the re-home case too - it costs nothing, and the fact may still be a
 genuine promotion candidate later.
 
-A re-home to the tree top is the one re-home the mode decides (see Mode). The top's block loads
-in every session of the tree, and the misplacement test passes for nearly any lesson written
-generally, so in propose mode the move is PROPOSED in the report with its cost (the fact and the
-bytes it adds to the top block) for the user's approval and the fact stays where it is; in auto
-mode the move is applied and its cost is printed in the report; a manual run under `off`
+A misplacement re-home to the tree top is the one re-home the mode decides (see Mode). The top's
+block loads in every session of the tree, and the misplacement test passes for nearly any lesson
+written generally, so in propose mode the move is PROPOSED in the report with its cost (the fact
+and the bytes it adds to the top block) for the user's approval and the fact stays where it is; in
+auto mode the move is applied and its cost is printed in the report; a manual run under `off`
 proposes it, as propose mode does. A re-home to any level below the top is applied in every mode.
 
 **Reading a high tree-top share.** When a placement pass sends most upward moves to the tree top

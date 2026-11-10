@@ -135,10 +135,10 @@ than deleting it.
    block loads in every session of the tree: in propose mode the nap lists the fact and its cost
    (the bytes it adds to the top block) in the report for the user's approval and does not apply
    it; in auto mode it applies the move and prints its cost in the report; under `off` it
-   proposes it, as in propose mode. Every other chain move, a move down from the anchor
-   included, is applied in every mode. Low/UNSURE and anything involving a sibling stays put. A
-   pinned fact re-levels like any other entry, pin intact; only its CONTENT is out of reach (per
-   the core's Boundaries).
+   proposes it, as in propose mode. Every other evidence-clear chain move, a move down from the
+   anchor included, is applied in every mode. Low/UNSURE and anything involving a sibling stays
+   put. A pinned fact re-levels like any other entry, pin intact; only its CONTENT is out of reach
+   (per the core's Boundaries).
 5. **Prune the obvious**: leaked task-state and dead-content entries AT the chain's levels
    (propose-first per the removal policy in `bitranox:meta-dream-tree` -> references/dream-passes.md).
    Include version-bound facts: run `versionrot.py scan --chain <cwd> --pypi --json` (home:
