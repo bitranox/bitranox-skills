@@ -260,10 +260,12 @@ the success line, abort-and-show on a miss).
 5. **PLACEMENT (re-level every entry, pinned included; up AND down).** Route each fact through
    THE routing prompt in references/dream-core.md against the descriptor ladder (leaf -> anchor);
    the tier note (inline judgment at opus-class or above; switch-model-or-continue) is in the
-   core too. Batch the high-confidence moves into ONE propose-diff (auto mode: apply); apply each
-   via engine
-   `move --from-level A --to-level B --slug s` and require its success line (`! refused:` aborts
-   that move - a down-move with inbound refs needs the refs re-pointed first, or stays). When the
+   core too. Batch the high-confidence moves into ONE propose-diff and apply each via engine
+   `move --from-level A --to-level B --slug s` - a re-home below the top and a corroborated
+   promotion in every mode, a misplacement re-home to the tree top only as Mode says
+   (references/dream-core.md: proposed in propose mode and under `off`, applied in auto) - and
+   require its success line (`! refused:` aborts that move - a down-move with inbound refs needs the
+   refs re-pointed first, or stays). When the
    citer blocking a down-move belongs at the target TOO, move them in ONE call by repeating
    `--slug`: the guard then judges each member by where the WHOLE set lands, which is the only way
    a mutually-citing pair goes down at all (no ordering releases it). Never reach for `--force`
@@ -289,10 +291,9 @@ the success line, abort-and-show on a miss).
      `hold` exits 1 - an answer, not a failure), with one exception: a `promote` resting on a
      project key you cannot resolve to a real directory is a `hold` (how to resolve the keys:
      references/dream-core.md, "A `promote` is only as good as the keys behind it"). `promote`:
-     move it to the tree top as the mode says (references/dream-core.md, Mode: auto mode applies
-     the move and prints its cost; propose mode and a manual run under `off` list it with its
-     cost for the user's approval and leave the fact where it is), and once it has moved, run
-     `dream_state.py promoted <slug>` to clear every project's sighting.
+     move it to the tree top in every mode (the report prints its cost for information,
+     references/dream-core.md, report contract), then run `dream_state.py promoted <slug>` to
+     clear every project's sighting.
      `hold`: it STAYS at its project level - no move to the tree top and no move part-way up as
      a compromise, however general its body reads; report it as held. A fact that looks
      universal on ONE project's evidence is exactly what the gate exists to stop, so "it plainly
@@ -311,11 +312,15 @@ the success line, abort-and-show on a miss).
    so re-leveling a pinned fact is ordinary placement work like any other entry - no exception, no
    separate approval step.
    - **State what the batch costs the tree top, before applying it.** The routing prompt judges
-     one fact at a time and cannot see the sum. Add up the bytes of the full pointer lines (hook,
-     title and link) the batch adds to the tree-top index, net of those it removes, and state the
-     always-loaded delta in KB and as a percent of that index beside the propose-diff. Measured:
-     83 moves took a tree-top index from 225894 to 267600 bytes (+18 percent), about 1.5x an
-     estimate from the mean hook length, which leaves out the title and link.
+     one fact at a time and cannot see the sum. In propose mode and under `off` a misplacement
+     re-home to the top in the batch is listed with its cost for the user's approval and not applied
+     (references/dream-core.md, Mode). Add up the bytes of the full pointer lines (hook, title and
+     link, each line's UTF-8 bytes plus its newline, the measure Mode uses for one fact) the batch's
+     APPLIED moves add to the tree-top index, net of those it removes, and state the always-loaded
+     delta in KB and as a percent of that index beside the propose-diff; each proposed move carries
+     its own cost line instead. Measured: 83 moves took a tree-top index from 225894 to 267600 bytes
+     (+18 percent), about 1.5x an estimate from the mean hook length, which leaves out the title and
+     link.
    - **A down-move never takes a hook a CLAUDE.md trim relies on.** Exclude from any down-move a
      hook that a CLAUDE.md trim of this dream names as its covering home
      (references/dream-passes.md, "The reachability invariant").
@@ -451,7 +456,9 @@ the success line, abort-and-show on a miss).
    `<plugin>/skills/meta-self-improve/reconcile_memory_index.py`) and require `TOTAL problems: 0`,
    AND `reconcile_memory_index.py --check-tree "<cwd>"` for `TOTAL tree problems: 0` (the cross-sibling
    duplicate/orphan check the chain-only `--check` cannot make); fix integrity failures via the engine
-   (re-point a downward ref, resolve an orphan, dedup a duplicate pointer). Size warnings are advisory.
+   (re-point a downward ref, resolve an orphan, dedup a duplicate pointer). Size warnings are
+   advisory: a large-index warning's advice to trim long hooks is met by step 6's shortening
+   proposal, reported and never applied unasked.
    A `decoy anchor` line is never fixed by deleting the directory: drain it first, then move it
    out of the tree and assert one store remains, per references/dream-core.md "Verification
    contract".

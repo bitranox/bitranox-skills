@@ -37,9 +37,10 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 - `store_manifest.py backup` copies every in-scope level, pointers or not, and records them in
   the manifest's `levels` list.
 - `store_manifest.py verify` reports the cost of every level's always-loaded pointer block:
-  bytes and pointer count before and after, and the slugs that arrived and left, one line per
-  changed level, top first (`data.levels[]` under `--json`). A level the backup holds no copy of
-  reports its bytes before as unknown, never as 0. The exit codes are unchanged.
+  bytes and pointer count before and after, and how many slugs arrived and left (the slugs
+  themselves in `data.levels[]` under `--json`), one line per changed level, top first. A level the
+  backup holds no copy of reports its bytes before as unknown, never as 0. The exit codes are
+  unchanged.
 - A fact's body frontmatter carries its title (`title:`, after `description:`), written by
   `add` and kept equal to the pointer's title by every engine write: `amend-pinned`, `retitle`
   and `factedit.py apply` included. Pointer lines are unchanged.
@@ -52,10 +53,11 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 - `reconcile_memory_index.py --check`: the large-index warning says to shrink the block in
   place (fold near-duplicates, trim long hooks) and no longer recommends lifting facts to a
   broader level, which loads them in more sessions.
-- meta-dream-tree: a move of a fact to the tree top follows the dream mode: propose mode, and a
-  manual run under `off`, lists the move with its cost (the bytes it adds to the top block) for
-  approval and does not apply it, auto mode applies it and prints its cost; a re-home below the
-  top is applied in every mode. The firing check no longer rewrites a hook for its length, and a
+- meta-dream-tree: a misplacement re-home to the tree top follows the dream mode: propose mode,
+  and a manual run under `off`, lists the move with its cost (the bytes it adds to the top block)
+  for approval and does not apply it, auto mode applies it and prints its cost; a re-home below
+  the top and a corroborated promotion to the top are applied in every mode, the promotion's cost
+  printed in the report. The firing check no longer rewrites a hook for its length, and a
   long hook at a broad level is reported as a shortening proposal; step 8 copies verify's
   pointer-block lines into the report, naming the slugs that arrived at the tree top.
 

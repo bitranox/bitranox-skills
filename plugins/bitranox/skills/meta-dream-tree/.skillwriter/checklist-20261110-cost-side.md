@@ -34,12 +34,13 @@ Covers SKILL.md and references/dream-core.md.
       hook for exceeding the 350 SOFT cap" and "shortening proposal, never shortened unasked"; D
       "EXCEPT a move of a fact to the tree top (the anchor), which it PROPOSES"; E the verify lines
       as printed, the top's arrivals named, `?` never 0.
-- [x] GREEN gap closed: both tiers reported that "`promote`: move it to the tree top" disagreed
-      with the Mode carve-out. The promotion branch now reads "move it to the tree top as the mode
-      says" and runs `promoted` "once it has moved". Re-probe (opus and haiku, 5 questions x 2
-      tiers): P (propose) proposes G and does not run `promoted`; P2 (auto) moves G and runs it;
-      opus "Do any two lines disagree? NONE", haiku "These do not conflict once the 'as the mode
-      says' clause is read".
+- [x] (Superseded by Fix round 1, where the carve-out is narrowed to misplacements and the
+      promotion branch is unconditional.) GREEN gap closed: both tiers reported that "`promote`:
+      move it to the tree top" disagreed with the Mode carve-out. The promotion branch now reads
+      "move it to the tree top as the mode says" and runs `promoted` "once it has moved". Re-probe
+      (opus and haiku, 5 questions x 2 tiers): P (propose) proposes G and does not run `promoted`;
+      P2 (auto) moves G and runs it; opus "Do any two lines disagree? NONE", haiku "These do not
+      conflict once the 'as the mode says' clause is read".
 - [x] GREEN gap closed: both tiers could not compute a proposed move's cost. Mode now defines it
       as "the UTF-8 length of its pointer line plus the newline"; re-probe K gives 313 bytes for a
       312-character ASCII line on both tiers.
@@ -68,4 +69,36 @@ Covers SKILL.md and references/dream-core.md.
 - [x] Description unchanged (`git diff -U0 -- '*SKILL.md' | grep -E '^[+-](name|description):'`
       prints nothing); ASCII only; present tense; no private host, path or repo name added.
 - [x] Mirror check: `repo-gate.py --mirrors` lists 12 pairs, none of them this skill.
-- Decisions: d-20261110-d3af596b, d-20261110-cba0045b, d-20261110-10169b53, d-20261110-50088a4b
+
+## Fix round 1: only a misplacement to the top follows the mode
+
+- [x] Change (user decision 2026-11-10, "Misplacements only"): every generic "a move of a fact to
+      the tree top" rule is narrowed to a MISPLACEMENT re-home to the tree top, in dream-core.md's
+      propose, auto and off bullets, Boundaries and the report contract. A corroborated promotion
+      to the top is applied in every mode, its cost printed for information, and `promoted` runs
+      after the move; the promotion branch in SKILL.md is unconditional again. The contract tests
+      assert the misplacement-scoped wording and fail on both earlier texts (checked: absent from
+      the pre-task text and from the first round's text).
+- [x] Step 5's batch line no longer says "auto mode: apply" for every move: a re-home below the
+      top and a corroborated promotion apply in every mode, a misplacement re-home to the top only
+      as Mode says. The batch cost bullet carries the mode qualifier, uses Mode's measure (UTF-8
+      bytes plus the newline), and counts only APPLIED moves; each proposed move carries its own
+      cost line. Step 8's size-warning line points reconcile's trim-long-hooks advice at step 6's
+      shortening proposal. CHANGELOG: this change's bullet narrowed; the 11.1.0 verify bullet now
+      says the text form prints how many slugs arrived and left, the slugs in `data.levels[]`.
+- [x] GREEN (opus, final passages pasted, 8 questions): A (propose) F is not moved and is "listed
+      as a proposal ... with its cost"; A2 (auto) moved, "listed as applied, with its cost"; A3
+      (off) proposed; P (propose) G is moved and `promoted G` runs, quoting "`promote`: move it to
+      the tree top in every mode"; P2 (off) the same; C below the top applied in propose, auto and
+      off; BATCH applies G and H, proposes F.
+- [x] Re-probe of the touched cost bullet (opus): the delta is +201 bytes from G alone ("It covers
+      only applied moves, and F is proposed"); F carries 301 bytes; both texts use one measure.
+- [x] Gaps declined: `off` "PRIVATE memory only" against "applied in every mode" for below-top
+      re-homes and promotions predates this edit, and the user decision's own question treats a
+      manual `off` run as consolidating the store; a refused promotion `move` keeps the original
+      "then run `promoted`" order; the backup step is step 2; KB base and percent denominator are
+      unstated in the measured example's sentence that predates this edit; what applies an
+      approved proposal stays unstated (unruled).
+- [x] Width and fence check over the added lines prints nothing; ASCII only; tables unchanged in
+      this round.
+- Decisions: d-20261110-d3af596b, d-20261110-442234ef, d-20261110-a7f3f64a, d-20261110-e935dc0b

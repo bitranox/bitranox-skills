@@ -76,23 +76,25 @@ holds only the stale version you were replacing, so it is your only restore sour
 
 Read the mode first (`dream_state.py mode`; knobs in `~/.claude/.bitranox-memory.json` via
 `self_improve_signals.load_config()`):
-- **`propose`** (default): apply safe private-memory consolidation, EXCEPT a move of a fact to
-  the tree top (the anchor), which it PROPOSES: the report lists the fact and its cost (the bytes
-  it adds to the top block: the UTF-8 length of its pointer line plus the newline) for the user's
-  approval, and the fact stays where it is. Moves to every level below the top are applied. Apply
-  CLAUDE.md consolidation under the reachability invariant (see Boundaries) and REPORT every file
-  touched; route skill changes to a self-PR. Mention the `dream_mode` knob
-  (`bitranox:meta-memory-settings`) at the end.
+- **`propose`** (default): apply safe private-memory consolidation, EXCEPT a misplacement
+  re-home to the tree top (the anchor), which it PROPOSES: the report lists the fact and its cost
+  (the bytes it adds to the top block: the UTF-8 length of its pointer line plus the newline) for
+  the user's approval, and the fact stays where it is. Re-homes to every level below the top are
+  applied, and so is a corroborated promotion to the top (`should-promote` printed `promote`), whose
+  cost the report prints for information. Apply CLAUDE.md consolidation under the reachability
+  invariant (see Boundaries) and REPORT every file touched; route skill changes to a self-PR.
+  Mention the `dream_mode` knob (`bitranox:meta-memory-settings`) at the end.
 - **`auto`**: no per-change prompts - CLAUDE.md edits as above, plus ship skill changes directly;
-  a move of a fact to the tree top is applied and its cost printed in the report.
-- **`off`**: no nudges; a manual run consolidates PRIVATE memory only, and PROPOSES a move of a
-  fact to the tree top as propose mode does.
+  a misplacement re-home to the tree top is applied and its cost printed in the report.
+- **`off`**: no nudges; a manual run consolidates PRIVATE memory only, and PROPOSES a misplacement
+  re-home to the tree top as propose mode does.
 
 ## Boundaries (the whole family; skills point here, they do not restate it)
 
 - **Private memory + the curated stores:** back up, then apply (reversible via the backup); a
-  move of a fact to the tree top follows Mode (proposed in propose mode and under `off`, applied
-  with its cost in auto).
+  misplacement re-home to the tree top follows Mode (proposed in propose mode and under `off`,
+  applied with its cost in auto), while a corroborated promotion to the top is applied in every
+  mode.
 - **`CLAUDE.md`:** back up, then apply, then REPORT per file. A rule may be REMOVED only when the
   reachability invariant holds (`dream-passes.md` -> "CLAUDE.md reconciliation"): a covering rule at
   an ANCESTOR directory, delivered as always-loaded text. Otherwise rewrite in place and keep it.
@@ -385,8 +387,9 @@ Report counts (merges, placements with direction, prunes, pinned untouched), the
 `pointer blocks` lines `store_manifest.py verify` prints, as printed: one per level whose block
 changed, top first, with bytes and pointers before and after and how many slugs arrived and left.
 Name every slug that arrived at the tree top (verify's `--json` lists them in `data.levels[]`).
-Every move to the tree top is listed beside them with its cost: as a proposal awaiting the user's
-approval in propose mode and under `off`, as applied in auto mode. When the run covered what the
+Every misplacement re-home to the tree top is listed beside them with its cost: as a proposal
+awaiting the user's approval in propose mode and under `off`, as applied in auto mode. A
+corroborated promotion to the top is listed as applied, with its cost. When the run covered what the
 nudge asked for, run `dream_state.py done --kind nap` (a nap) or
 `dream_state.py done --kind tree --dream <dream id>` (meta-dream-tree, whose `done` refuses until
 each of its Jev shadow sites logged rows for that id or was skipped with a reason); a bare `done` is

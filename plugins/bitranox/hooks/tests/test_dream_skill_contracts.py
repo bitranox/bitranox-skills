@@ -123,7 +123,7 @@ def test_the_report_contract_names_the_cost_lines():
 
 def test_propose_mode_carves_out_a_move_to_the_tree_top():
     core = " ".join(_read(CORE).split())
-    assert "EXCEPT a move of a fact to the tree top" in core, (
+    assert "EXCEPT a misplacement re-home to the tree top" in core, (
         "dream-core.md's propose mode lost its carve-out for a move to the tree top")
-    assert "and PROPOSES a move of a fact to the tree top as propose mode does" in core, (
+    assert "and PROPOSES a misplacement re-home to the tree top as propose mode does" in core, (
         "dream-core.md's off mode lost its carve-out for a move to the tree top")
