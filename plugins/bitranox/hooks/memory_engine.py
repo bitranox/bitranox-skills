@@ -1280,10 +1280,12 @@ def backfill_titles(proj):
     [slugs], 'untitled': [slugs], 'missing': [slugs]}; `untitled` is a framed body whose pointer
     has an empty link text, so there is no title to copy (kept apart from `unframed`, which would
     report a frame that is there as absent). A slug pointed at from two levels is filled from the
-    first level the walk meets. Each body is read and written under the same lock as the level
-    that points at it, so a concurrent engine write to that level cannot be lost in between.
+    first level the walk meets, and each body is read and written under the lock of that first
+    level only: an engine write to the same slug through another level holds that level's lock.
     Raises TreeWalkError (exit 2 on the CLI) when a level or a body cannot be read: a back-fill
-    that skipped part of the tree would read as done."""
+    that skipped part of the tree would read as done. Missing is decided by the read itself, never
+    by a `Path.is_file()` pre-check, which answers False for a body it cannot stat (EACCES) and
+    would report an unreadable store as a store of missing bodies."""
     sig.refuse_if_memory_writes_off()
     anchor = _anchor(proj)
     rep = {"filled": [], "kept": 0, "unframed": [], "untitled": [], "missing": []}
@@ -1295,11 +1297,11 @@ def backfill_titles(proj):
                 if ptr.legacy or ptr.slug in seen:
                     continue
                 seen.add(ptr.slug)
-                path = us.body_path(anchor, ptr.slug)
-                if not path.is_file():
+                raw = read_store_text(us.body_path(anchor, ptr.slug))   # "" only when absent
+                if raw == "":
                     rep["missing"].append(ptr.slug)
                     continue
-                body = read_store_text(path).rstrip("\n")
+                body = raw.rstrip("\n")
                 if _body_title(body):
                     rep["kept"] += 1
                     continue

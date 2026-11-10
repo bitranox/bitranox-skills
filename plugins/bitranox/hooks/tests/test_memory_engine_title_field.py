@@ -216,3 +216,24 @@ def test_backfill_reports_a_pointer_with_no_title_apart_from_an_unframed_body(tm
     out = capsys.readouterr().out
     assert "pointer has no title to copy, body left as it is: untitled" in out
     assert "no frontmatter" not in out
+
+
+@pytest.mark.skipif(os.name == "nt" or os.geteuid() == 0,
+                    reason="POSIX permission bits; root reads through them")
+def test_backfill_refuses_when_the_bodies_cannot_be_reached(tmp_path, capsys):
+    """A facts dir that can be LISTED but not SEARCHED (r without x): the tree walk still lists it,
+    while every body stat fails EACCES - which `Path.is_file()` answers False for, so a pre-check
+    reported every body missing, back-filled 0 and exited 0 over a tree it never read. Mode 000
+    would not show it: the walk itself cannot list the dir and raises first."""
+    anchor, proj = _tree(tmp_path)
+    _pre_title_fact(proj, "Old fact title", "old-fact")
+    facts = us.body_path(anchor, "old-fact").parent
+    facts.chmod(0o444)
+    try:
+        with pytest.raises(E.TreeWalkError):
+            E.backfill_titles(proj)
+        assert E.main(["heal", "--proj", proj, "--backfill-titles"]) == 2
+        assert "missing central body" not in capsys.readouterr().out
+    finally:
+        facts.chmod(0o755)
+    assert E._body_title(_body(anchor, "old-fact")) == ""
