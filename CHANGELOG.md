@@ -60,6 +60,9 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   printed in the report. The firing check no longer rewrites a hook for its length, and a
   long hook at a broad level is reported as a shortening proposal; step 8 copies verify's
   pointer-block lines into the report, naming the slugs that arrived at the tree top.
+- meta-dream-crosstree and meta-dream-crosstree-deep back up each tree they write with
+  `store_manifest.py backup --scope tree` and verify against it before the report, printing the
+  pointer-block cost lines, instead of a hand-rolled snapshot.
 
 ## [11.0.0]
 

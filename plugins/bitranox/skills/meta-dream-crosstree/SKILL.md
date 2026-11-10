@@ -55,11 +55,18 @@ Create one todo per step.
    other dream modes, so if a nap already reviewed this session this costs nothing. Earlier
    sessions it lists under `OTHER UNREVIEWED TRANSCRIPTS` are read and marked with the same
    `--transcript <path>` on both verbs (dream-core "Capture-first").
-1. **Back up first.** Snapshot every store this run may touch - each affected tree's TOP store and, for any level you will write, the anchor's central
-   `.claude-memory/` note bodies + that level's `CLAUDE.local.md` pointer block (+ native `memory/`) - to
-   timestamped copies OUT of the project trees (`~/.claude/self-improve-audit/backups/`, so a backup is
-   never re-discovered as live memory) before any edit. Curated writes go through the engine, not a
-   hand-edit. The one-time whole-store backup is the safety net; this is the per-run one.
+1. **Back up first, with `store_manifest.py backup`** (home: `<plugin>/skills/meta-dream-tree/`,
+   launch via `hooks/run-python.sh`), once per tree this run may write, before any edit:
+
+       store_manifest.py backup --from <that tree's anchor> --scope tree \
+         --out ~/.claude/self-improve-audit/backups/<key>-<ts>
+
+   The `--out` dir lies outside every tree, so a backup is never re-discovered as live memory, and
+   is new for each tree. It copies the tree's store and every in-scope `CLAUDE.local.md` and
+   records the manifest step 8 verifies against; never hand-roll the snapshot (meta-dream-tree
+   step 2 says why). A native `memory/` dir you will write is not covered: copy it beside the
+   backup by hand. Curated writes go through the engine, not a hand-edit. The one-time whole-store
+   backup is the safety net; this is the per-run one.
 2. **Inbound gather (delegate).** For each project that should be enriched, run
    `bitranox:meta-collect-knowledge` (the grep -> inspect -> gather funnel): pull knowledge from OTHER
    trees relevant to that project and bring it in by **lifting broadly-useful hits to a common ancestor**
@@ -187,7 +194,16 @@ Create one todo per step.
    (only when step 4b found shadow on). Exit 1 means no tree logged rows for this run: feed a
    tree's sample per 4b, or, when no tree had a candidate or none could be fed, re-run it with
    `--skip crosstree-misplaced=<reason>` (`no items on any tree`, or the error) - the receipt's
-   output is what the report states, never a silent gap. Counts: stores scanned, items gathered (lift vs local copy), promotions to global,
+   output is what the report states, never a silent gap. Then, once per tree, run
+   `store_manifest.py verify --out <that tree's step 1 dir>`: exit 0 is identical, exit 1 names
+   each difference, and every one is a decided merge, move, prune or reword, or a loss to explain
+   (meta-dream-tree step 8).
+   Its `pointer blocks` lines (per changed level: bytes and pointers before and after, and
+   `arrived N  left N` counts) go into the report as printed, per tree, naming the slugs that
+   arrived at each tree top from `data.levels[]` under `--json` (dream-core.md, report contract);
+   a promotion shows there as an arrival at its ancestor, which lies within its tree (step 5), so
+   that tree's verify reports it.
+   Counts: stores scanned, items gathered (lift vs local copy), promotions to global,
    cross-pollinations, normalizations, any skill change,
    toolbox proposals (contribute / new tool), and any contribution still queued (only those blocked
    on user input or `off`-mode - deliverable ones are shipped THIS run, not left pending), and

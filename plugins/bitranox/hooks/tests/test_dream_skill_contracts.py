@@ -127,3 +127,12 @@ def test_propose_mode_carves_out_a_move_to_the_tree_top():
         "dream-core.md's propose mode lost its carve-out for a move to the tree top")
     assert "and PROPOSES a misplacement re-home to the tree top as propose mode does" in core, (
         "dream-core.md's off mode lost its carve-out for a move to the tree top")
+
+
+@pytest.mark.parametrize("name", sorted(FAMILY))
+def test_every_dream_backs_up_and_verifies_with_store_manifest(name):
+    """A hand-rolled snapshot records no manifest, so the run can never be verified against it
+    and its cost lines cannot be printed."""
+    text = _read(FAMILY[name])
+    assert "store_manifest.py backup" in text, "%s hand-rolls its backup" % name
+    assert "store_manifest.py verify" in text, "%s never verifies against its backup" % name

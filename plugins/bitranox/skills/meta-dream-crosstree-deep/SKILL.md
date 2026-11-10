@@ -21,7 +21,9 @@ duplication to avoid. Everything else, do not duplicate: follow crosstree.
 
 ## What changes vs meta-dream-crosstree
 
-1. **Back up first** (per-run snapshot of each affected tree's TOP store + any store you will write) - unchanged.
+1. **Back up first** with `store_manifest.py backup --scope tree`, once per tree you will write,
+   and verify against each backup with `store_manifest.py verify` before the report - unchanged
+   from meta-dream-crosstree steps 1 and 8.
 2. **Always run the semantic fan-out - no convergence shortcut, no asking.** FAN OUT one **`opus`**
    subagent per project store, OR (for many stores) one per thematic batch, in parallel. Each reads its
    stores and returns ONLY cross-project-generalizable candidates (general dev/tooling/test/security/
