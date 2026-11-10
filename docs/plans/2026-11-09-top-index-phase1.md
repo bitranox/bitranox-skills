@@ -3372,7 +3372,11 @@ after Task 27 passes.
   (T1, T2, S, CAN and 20 N files); commit `arms/` in `$RUN2`.
 - [ ] **Step 2:** For each phase: `python3 "$RUN2/tool/firing.py" run --run-dir "$RUN2" --phase <p> --dry-run`.
   Expected: exit 0, every printed row `probe_ok: true`. A dry run installs the plugin and builds
-  a worktree per cell but starts no session; it writes only `$RUN2/dry-<phase>/`.
+  a worktree per cell but starts no session; it writes only `$RUN2/dry-<phase>/`. The grid reads
+  `rules.json`, which only Task 26 writes: dry-run it with a stand-in `rules.json` holding the
+  first 12 rules of `candidates.json`, and delete the stand-in afterwards (the dry run checks the
+  T1, T2 and S binds, not the rules). Measured 2026-11-10: canary 2, screen 40, grid 36 rows, all
+  `probe_ok: true`, about a minute per phase.
 - [ ] **Step 3:** `git -C <repo> worktree list | grep -c "$WS_ROOT"` -> `0` (every worktree removed).
 
 ### Task 25: P1b R6 - canary and the measured cost
