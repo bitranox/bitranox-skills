@@ -1269,6 +1269,52 @@ def heal(proj):
     return report
 
 
+def backfill_titles(proj):
+    """Copy each pointer's title into its body's frontmatter where the body has none, across the
+    WHOLE tree of `proj`'s anchor. A body that already has a `title:` is never rewritten, an
+    unframed body is left alone and counted, and a missing body is counted, never fabricated.
+
+    Separate from `heal`, which SessionStart runs on every start and which never opens a body: a
+    back-fill reads every body of the tree and writes most of them once, a one-off for stores
+    written before titles were kept as data. Returns {'filled': [slugs], 'kept': n, 'unframed':
+    [slugs], 'untitled': [slugs], 'missing': [slugs]}; `untitled` is a framed body whose pointer
+    has an empty link text, so there is no title to copy (kept apart from `unframed`, which would
+    report a frame that is there as absent). A slug pointed at from two levels is filled from the
+    first level the walk meets. Each body is read and written under the same lock as the level
+    that points at it, so a concurrent engine write to that level cannot be lost in between.
+    Raises TreeWalkError (exit 2 on the CLI) when a level or a body cannot be read: a back-fill
+    that skipped part of the tree would read as done."""
+    sig.refuse_if_memory_writes_off()
+    anchor = _anchor(proj)
+    rep = {"filled": [], "kept": 0, "unframed": [], "untitled": [], "missing": []}
+    seen = set()
+    for level in curated_levels_under(anchor):
+        with sig.memory_lock(sig.claude_local_md_path(level)):
+            text = read_store_text(sig.claude_local_md_path(level))
+            for ptr in us.parse_pointer_index(text)[1]:
+                if ptr.legacy or ptr.slug in seen:
+                    continue
+                seen.add(ptr.slug)
+                path = us.body_path(anchor, ptr.slug)
+                if not path.is_file():
+                    rep["missing"].append(ptr.slug)
+                    continue
+                body = read_store_text(path).rstrip("\n")
+                if _body_title(body):
+                    rep["kept"] += 1
+                    continue
+                if _frontmatter(body)[1] is None:
+                    rep["unframed"].append(ptr.slug)
+                    continue
+                filled = _with_title(body, ptr.title)
+                if filled == body:
+                    rep["untitled"].append(ptr.slug)
+                    continue
+                us.put_body(str(anchor), ptr.slug, filled)
+                rep["filled"].append(ptr.slug)
+    return rep
+
+
 def _heal_one_level(level, report):
     """heal's per-level pass: record invalid pointers, repair the level if it needs it, then list
     pointers whose body is missing. Raises TreeWalkError before any write when the level's files
@@ -2025,6 +2071,10 @@ def _main(argv=None):
                           "it re-types the stored body; omit it to keep the stored kind")
     h = sub.add_parser("heal", help="self-heal missing/malformed pointer blocks/markers across the chain")
     h.add_argument("--proj", required=True, help="project cwd (heals its whole altitude chain)")
+    h.add_argument("--backfill-titles", action="store_true", dest="backfill_titles",
+                   help="instead of healing the chain, copy each pointer's title into its body's "
+                        "frontmatter where the body has none, across the WHOLE tree (a one-off for "
+                        "stores written before titles were kept as data; reads every body)")
     s = sub.add_parser("set-scope", help="upsert (overwrite) a level's pointer-block scope descriptor")
     s.add_argument("--proj", required=True, help="the altitude dir whose scope to set")
     s.add_argument("--scope", default=None, help="the scope-descriptor text (what this level is about)")
@@ -2197,6 +2247,18 @@ def _main(argv=None):
         _scope, pointers = us.parse_pointer_index(text)
         changed = us.write_if_changed(local, us.upsert_pointer_block(text, scope.strip(), pointers))
         print("scope %s: %s" % ("updated" if changed else "unchanged", local))
+        return 0
+
+    if args.cmd == "heal" and args.backfill_titles:
+        rep = backfill_titles(args.proj)
+        print("back-filled %d title(s); %d body(ies) already had one"
+              % (len(rep["filled"]), rep["kept"]))
+        for slug in rep["unframed"]:
+            print("    ~ body has no frontmatter, left as it is: %s" % slug)
+        for slug in rep["untitled"]:
+            print("    ~ pointer has no title to copy, body left as it is: %s" % slug)
+        for slug in rep["missing"]:
+            print("    ! missing central body (not fabricated): %s" % slug)
         return 0
 
     if args.cmd == "heal":

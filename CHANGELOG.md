@@ -43,6 +43,9 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 - A fact's body frontmatter carries its title (`title:`, after `description:`), written by
   `add` and kept equal to the pointer's title by every engine write: `amend-pinned`, `retitle`
   and `factedit.py apply` included. Pointer lines are unchanged.
+- `memory_engine.py heal --backfill-titles` copies each pointer's title into its body's
+  frontmatter where the body has none, across the whole tree; a body that has one is never
+  rewritten. Plain `heal` still never opens a body.
 
 ### Changed
 

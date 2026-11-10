@@ -7,11 +7,13 @@ and `heal --backfill-titles` fills it into bodies written before. Pointer lines 
 all of this. All content ASCII.
 """
 
+import os
 from pathlib import Path
 
 import pytest
 
 import memory_engine as E
+import self_improve_signals as sig
 import uuid_store as us
 
 
@@ -118,7 +120,99 @@ def test_a_move_leaves_the_body_and_its_title_byte_identical(tmp_path):
 
 
 def test_the_pointer_line_is_unchanged_by_the_title_field(tmp_path):
-    anchor, proj = _tree(tmp_path)
+    _, proj = _tree(tmp_path)
     slug = E.add_or_update_entry(proj, "Use the jig", "When counting, use the jig.", body="B")
     text = (Path(proj) / "CLAUDE.local.md").read_text(encoding="utf-8")
     assert "- [Use the jig](mem:%s) - When counting, use the jig.\n" % slug in text
+
+
+# ---- the back-fill: bodies written before titles were kept ---------------------------------
+
+def _pre_title_fact(level, title, slug, extra=""):
+    """A fact as every engine before this change left it: written through the engine, then its
+    body reset to the frame those engines wrote, which has no `title:` (or `extra` in its place)."""
+    E.add_or_update_entry(level, title, "When x, do y.", body="P.", slug=slug, type_="feedback")
+    anchor = E._anchor(level)
+    us.body_path(anchor, slug).write_text(
+        "---\nname: %s\ndescription: When x, do y.\n%smetadata:\n  type: feedback\n---\n\nP.\n"
+        % (slug, extra), encoding="utf-8")
+    return us.body_path(anchor, slug)
+
+
+def test_backfill_copies_the_pointer_title_into_a_body_without_one(tmp_path, capsys):
+    anchor, proj = _tree(tmp_path)
+    _pre_title_fact(proj, "Old fact title", "old-fact")
+    assert E.main(["heal", "--proj", proj, "--backfill-titles"]) == 0
+    assert "back-filled 1 title(s)" in capsys.readouterr().out
+    assert E._body_title(_body(anchor, "old-fact")) == "Old fact title"
+    assert _body(anchor, "old-fact").endswith("---\n\nP.\n")
+
+
+def test_backfill_never_rewrites_a_body_that_already_has_a_title(tmp_path):
+    _, proj = _tree(tmp_path)
+    path = _pre_title_fact(proj, "A different pointer title", "kept-fact",
+                           extra="title: Its own title\n")
+    os.utime(path, (1_000_000, 1_000_000))
+    before = path.read_bytes()
+    rep = E.backfill_titles(proj)
+    assert rep["filled"] == [] and rep["kept"] == 1
+    assert path.read_bytes() == before and path.stat().st_mtime == 1_000_000
+
+
+def test_backfill_covers_every_level_of_the_tree_not_only_the_chain(tmp_path):
+    anchor, proj = _tree(tmp_path)
+    sibling = Path(anchor) / "sibling"
+    sibling.mkdir()
+    (sibling / "CLAUDE.md").write_text("x\n", encoding="utf-8")
+    _pre_title_fact(str(sibling), "Sibling fact", "sib-fact")
+    assert E.backfill_titles(proj)["filled"] == ["sib-fact"]
+
+
+def test_backfill_leaves_an_unframed_body_and_reports_a_missing_one(tmp_path):
+    anchor, proj = _tree(tmp_path)
+    bare = _pre_title_fact(proj, "Bare", "bare")
+    bare.write_text("just prose\n", encoding="utf-8")
+    _pre_title_fact(proj, "Gone", "gone").unlink()
+    rep = E.backfill_titles(proj)
+    assert rep["unframed"] == ["bare"] and rep["missing"] == ["gone"]
+    assert _body(anchor, "bare") == "just prose\n"
+
+
+def test_plain_heal_still_never_opens_a_body(tmp_path):
+    """SessionStart runs `heal` on every start; the back-fill must not ride along with it."""
+    _, proj = _tree(tmp_path)
+    path = _pre_title_fact(proj, "Old fact title", "old-fact")
+    before = path.read_bytes()
+    E.heal(proj)
+    assert path.read_bytes() == before
+
+
+def test_backfill_is_refused_under_memory_writes_off(tmp_path, monkeypatch, capsys):
+    anchor, proj = _tree(tmp_path)
+    _pre_title_fact(proj, "Old fact title", "old-fact")
+    monkeypatch.setenv("BITRANOX_MEMORY_WRITES", "off")
+    assert E.main(["heal", "--proj", proj, "--backfill-titles"]) == 2
+    capsys.readouterr()
+    # The CLI refuses every `heal` before parsing, so call the function too: it refuses on its own.
+    with pytest.raises(sig.MemoryWritesOff):
+        E.backfill_titles(proj)
+    assert E._body_title(_body(anchor, "old-fact")) == ""
+
+
+def test_backfill_reports_a_pointer_with_no_title_apart_from_an_unframed_body(tmp_path, capsys):
+    """An empty link text gives nothing to copy; the body is framed, so 'no frontmatter' is false."""
+    _, proj = _tree(tmp_path)
+    path = _pre_title_fact(proj, "Untitled", "untitled")
+    local = Path(proj) / "CLAUDE.local.md"
+    text = local.read_text(encoding="utf-8")
+    assert text.count("- [Untitled](mem:untitled)") == 1
+    local.write_text(text.replace("- [Untitled](mem:untitled)", "- [](mem:untitled)"),
+                     encoding="utf-8")
+    before = path.read_bytes()
+    rep = E.backfill_titles(proj)
+    assert rep["unframed"] == [] and rep["untitled"] == ["untitled"] and rep["filled"] == []
+    assert path.read_bytes() == before
+    assert E.main(["heal", "--proj", proj, "--backfill-titles"]) == 0
+    out = capsys.readouterr().out
+    assert "pointer has no title to copy, body left as it is: untitled" in out
+    assert "no frontmatter" not in out
