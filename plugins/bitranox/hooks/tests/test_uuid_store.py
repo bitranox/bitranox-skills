@@ -668,3 +668,12 @@ def test_parse_keeps_the_first_of_two_legacy_copies():
     text = ("- [X](uuid:1111) - When one <!-- bx:slug=x -->\n"
             "- [X](uuid:2222) - When two <!-- bx:slug=x -->\n")
     assert [(p.uuid, p.hook) for p in us.parse_pointer_index(text)[1]] == [("1111", "When one")]
+
+
+def test_pointer_region_is_the_managed_block_else_the_whole_text_and_empty_for_none():
+    block = "%s\n# Memory index\n- [X](mem:x) - When x, do x.\n%s" % (us.INDEX_BEGIN,
+                                                                      us.INDEX_END)
+    assert us.pointer_region("prose before\n\n" + block + "\n\nprose after\n") == block
+    assert us.pointer_region("# Memory index\n- [X](mem:x) - When x.\n") == (
+        "# Memory index\n- [X](mem:x) - When x.\n")
+    assert us.pointer_region(None) == ""

@@ -68,8 +68,8 @@ import uuid_store
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from tree_support import STORE_DIR, EnvelopeArgumentParser, store_anchor, utf8_stdio
 
-__all__ = ["Entry", "Diff", "NoAnchor", "Unreadable", "derive", "diff", "manifest_key",
-           "scope_levels", "main"]
+__all__ = ["Entry", "Diff", "LevelCost", "NoAnchor", "Unreadable", "block_bytes", "cost_report",
+           "derive", "diff", "manifest_key", "scope_levels", "main"]
 
 LEVEL_FILE = "CLAUDE.local.md"
 
@@ -508,6 +508,126 @@ def verify(out: Path) -> Diff:
     return diff(before, after)
 
 
+# ---- the cost report: what each level's always-loaded block weighs, before and after -----------
+
+@dataclass(frozen=True)
+class LevelCost:
+    """One level's pointer block before the run and now. `bytes_before` is None when the backup
+    holds no readable copy of the level, so an unknown is never printed as a zero."""
+
+    level: str
+    bytes_before: int | None
+    bytes_after: int
+    pointers_before: int
+    pointers_after: int
+    arrived: tuple[str, ...] = ()
+    left: tuple[str, ...] = ()
+
+    @property
+    def changed(self) -> bool:
+        return (self.bytes_before != self.bytes_after
+                or self.pointers_before != self.pointers_after or bool(self.arrived or self.left))
+
+    def as_dict(self) -> dict:
+        return {"level": self.level, "bytes_before": self.bytes_before,
+                "bytes_after": self.bytes_after, "pointers_before": self.pointers_before,
+                "pointers_after": self.pointers_after, "arrived": list(self.arrived),
+                "left": list(self.left)}
+
+
+def block_bytes(text: str) -> int:
+    """UTF-8 bytes of the pointer block as the engine bounds it (the managed fences when present,
+    else the whole text). PURE. Prose around the block is not counted: the cost this reports is
+    the index a dream changes, not hand-written text beside it."""
+    return len(uuid_store.pointer_region(text).encode("utf-8"))
+
+
+def _copy_text(out: Path, anchor: Path, level: str) -> str | None:
+    """The backup's copy of one level, or None when it is missing or cannot be read."""
+    try:
+        rel = Path(level).relative_to(anchor)
+        return (Path(out) / "levels" / rel / LEVEL_FILE).read_text(encoding="utf-8-sig")
+    except (ValueError, OSError, UnicodeDecodeError):
+        return None
+
+
+def _live_texts(anchor: Path, data: dict) -> dict[str, str]:
+    """Every in-scope live level's text, read with the manifest's own scope. Raises Unreadable."""
+    unreadable: list[str] = []
+    levels = scope_levels(anchor, scope=data.get("scope", "tree"),
+                          start=Path(data.get("start", str(anchor))),
+                          exclude=tuple(Path(p) for p in data.get("exclude", [])),
+                          unreadable=unreadable)
+    texts: dict[str, str] = {}
+    for lvl in levels:
+        text = read_level_text(lvl / LEVEL_FILE, unreadable)
+        if text is not None:
+            texts[str(lvl)] = text
+    if unreadable:
+        raise Unreadable(sorted(unreadable))
+    return texts
+
+
+def _depth_key(level: str) -> tuple[int, str]:
+    return (len(Path(level).parts), level)
+
+
+def cost_report(out: Path) -> tuple[list[LevelCost], list[str]]:
+    """Per-level block state, backup copy against the live file, top first; plus `skipped` lines.
+
+    State, not move events: a lift that merges two sibling copies into one top copy is an add and
+    two removes to the diff, while here it is one slug ARRIVED at the top and LEFT at both
+    siblings. Pointer counts and slugs before come from the manifest entries, which every manifest
+    has; only the bytes need the level copy. A level with no readable copy reports
+    `bytes_before` None and is named in `skipped`. A level absent from a manifest's recorded
+    `levels` list did not exist at backup time, so its bytes before are a true 0; a manifest
+    written before that list existed cannot prove it, so there it is None too."""
+    data = load_manifest(out)
+    anchor = Path(data["anchor"])
+    slugs_before: dict[str, set[str]] = {}
+    for e in data["entries"]:
+        slugs_before.setdefault(e["level"], set()).add(e["slug"])
+    recorded = data.get("levels")
+    copied = set(recorded) if recorded is not None else set(slugs_before)
+    live = _live_texts(anchor, data)
+    costs: list[LevelCost] = []
+    unknown: list[str] = []
+    for level in sorted(copied | set(slugs_before) | set(live), key=_depth_key):
+        if level in copied:
+            text = _copy_text(out, anchor, level)
+            before_bytes = None if text is None else block_bytes(text)
+        else:
+            before_bytes = 0 if recorded is not None else None
+        if before_bytes is None:
+            unknown.append(level)
+        after_text = live.get(level, "")
+        after = {e.slug for e in parse_level(after_text, level)}
+        before = slugs_before.get(level, set())
+        costs.append(LevelCost(level=level, bytes_before=before_bytes,
+                               bytes_after=block_bytes(after_text) if level in live else 0,
+                               pointers_before=len(before), pointers_after=len(after),
+                               arrived=tuple(sorted(after - before)),
+                               left=tuple(sorted(before - after))))
+    skipped = [] if not unknown else [
+        f"block bytes before not known for {len(unknown)} level(s): the backup holds no readable "
+        "copy of them, so their bytes_before is null rather than 0: " + "; ".join(unknown)]
+    return costs, skipped
+
+
+def _render_costs(costs: list[LevelCost]) -> str:
+    changed = [c for c in costs if c.changed]
+    if not changed:
+        return "pointer blocks: no level changed"
+    lines = ["pointer blocks (changed levels, top first):"]
+    for c in changed:
+        before = "?" if c.bytes_before is None else str(c.bytes_before)
+        delta = "" if c.bytes_before is None else f" ({c.bytes_after - c.bytes_before:+d})"
+        lines.append(f"  {c.level}  bytes {before} -> {c.bytes_after}{delta}  pointers "
+                     f"{c.pointers_before} -> {c.pointers_after}  arrived {len(c.arrived)}  "
+                     f"left {len(c.left)}")
+    return "\n".join(lines)
+
+
 # ---- CLI ---------------------------------------------------------------------------------------
 
 def _emit(as_json: bool, ok: bool, command: str, data: dict, text: str,
@@ -571,11 +691,16 @@ def main(argv: list[str] | None = None) -> int:
         out = Path(args.out).expanduser()
         d = verify(out)
         compared = content_compared(load_manifest(out))
+        costs, cost_skipped = cost_report(out)
         skipped = [] if compared else [
             "hooks and bodies not compared: the manifest predates their digests, so only level, "
             "slug, title and pin were checked"]
-        data = dict(d.as_dict(), content_compared=compared)
-        text = _render_diff(d) + ("" if compared else "\n(" + skipped[0] + ")")
+        data = dict(d.as_dict(), content_compared=compared,
+                    levels=[c.as_dict() for c in costs])
+        text = (_render_diff(d) + ("" if compared else "\n(" + skipped[0] + ")")
+                + "\n" + _render_costs(costs)
+                + "".join("\n(" + line + ")" for line in cost_skipped))
+        skipped += cost_skipped
         # ok means "ran without error" (false only on exit 2); "differs" is the answer, exit 1
         _emit(args.as_json, True, "verify", data, text, skipped)
         return 0 if d.identical else 1

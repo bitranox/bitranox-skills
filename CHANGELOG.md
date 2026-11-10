@@ -36,6 +36,10 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 - `store_manifest.py backup` copies every in-scope level, pointers or not, and records them in
   the manifest's `levels` list.
+- `store_manifest.py verify` reports the cost of every level's always-loaded pointer block:
+  bytes and pointer count before and after, and the slugs that arrived and left, one line per
+  changed level, top first (`data.levels[]` under `--json`). A level the backup holds no copy of
+  reports its bytes before as unknown, never as 0. The exit codes are unchanged.
 
 ## [11.0.0]
 
