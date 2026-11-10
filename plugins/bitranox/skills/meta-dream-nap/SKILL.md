@@ -130,8 +130,15 @@ than deleting it.
    deferred list as not done, with that reason.
 4. **Chain-internal placement only**: route entries whose EVIDENCE is already clear through the
    routing prompt (in the core), applying only moves whose from AND to levels are ON the chain
-   (up or down). Low/UNSURE and anything involving a sibling stays put. A pinned fact re-levels
-   like any other entry, pin intact; only its CONTENT is out of reach (per the core's Boundaries).
+   (up or down). A move TO the tree top (the anchor) is a misplacement re-home in the core's
+   sense, since a nap runs no promotion gate, and follows the core's Mode, because the top's
+   block loads in every session of the tree: in propose mode the nap lists the fact and its cost
+   (the bytes it adds to the top block) in the report for the user's approval and does not apply
+   it; in auto mode it applies the move and prints its cost in the report; under `off` it
+   proposes it, as in propose mode. Every other chain move, a move down from the anchor
+   included, is applied in every mode. Low/UNSURE and anything involving a sibling stays put. A
+   pinned fact re-levels like any other entry, pin intact; only its CONTENT is out of reach (per
+   the core's Boundaries).
 5. **Prune the obvious**: leaked task-state and dead-content entries AT the chain's levels
    (propose-first per the removal policy in `bitranox:meta-dream-tree` -> references/dream-passes.md).
    Include version-bound facts: run `versionrot.py scan --chain <cwd> --pypi --json` (home:
@@ -141,10 +148,11 @@ than deleting it.
    then reword, archive or merge.
 6. **Verify + report + state the leftovers**: the core's verification contract - the manifest
    diff, `store_manifest.py verify --out <the step 2 dir>` (`--out` is the backup dir, not the
-   manifest file), and `TOTAL problems: 0` from ONE `reconcile_memory_index.py --check` call
-   given the whole chain, narrowest first: the cwd's level, each ancestor level, and the anchor
-   (home: `<plugin>/skills/meta-self-improve/`, not `hooks/`); one call per level checks no
-   reference between levels. When the store is committed, `git add` only the paths this nap wrote,
+   manifest file; its `pointer blocks` lines go into the report as printed, per the core's report
+   contract), and `TOTAL problems: 0` from ONE `reconcile_memory_index.py --check` call (home:
+   `<plugin>/skills/meta-self-improve/`, not `hooks/`) given the whole chain, narrowest first: the
+   cwd's level, each ancestor level, and the anchor; one call per level checks no reference
+   between levels. When the store is committed, `git add` only the paths this nap wrote,
    never `git add -A`, and compare `git diff --cached --name-only` with the nap's own list first
    (the store is shared, per the core's verification contract) - then report counts AND an explicit
    "deferred to the full dream" list (sibling dedup, tree-wide placement, descriptor synthesis,
@@ -165,18 +173,21 @@ than deleting it.
 - [ ] Sibling branches and other trees untouched by steps 2b-6 (the capture carve-out is the only
       write allowed outside the chain, and only at a fact's owning level - name it in the report).
 - [ ] Manifest diff clean; reconcile `TOTAL problems: 0` over the chain.
+- [ ] Every move to the tree top listed with its cost: as a proposal awaiting approval in propose
+      mode and under `off`, as applied in auto mode; and the `pointer blocks` lines in the report.
 - [ ] The report ends with the explicit DEFERRED list for the next full dream.
 
 ## Rationalizations (these do not fly)
 
-| Excuse                                                      | Reality                                                                                                        |
-|-------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------|
-| "While I'm here, that sibling duplicate is one quick merge" | Out of scope by design - the sibling snapshot assertion fails and the nap becomes a slow dream.                |
-| "No time even for a nap - skip consolidation"               | The nap exists precisely for this budget; capture + chain dedup is minutes.                                    |
-| "I'll just cherry-pick the full dream's steps"              | That is the silent-partial trap the nap replaces: run the nap, get the DEFERRED list stated.                   |
-| "The nap ran, so consolidation is done"                     | A nap is partial by design; the consolidation-due nudge still means the full dream.                            |
-| "The toolbox pass is deferred, so skip the list"            | Deferred means the CONSOLIDATE half. The READ is step 2b and guards steps 3-5. One command.                    |
-| "A quick regex is faster than finding the right tool"       | Measured twice: the hand-rolled scan missed state the tool persists, and its clean result read as reassurance. |
+| Excuse                                                                 | Reality                                                                                                                                                                                                                                                                |
+|------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| "While I'm here, that sibling duplicate is one quick merge"            | Out of scope by design - the sibling snapshot assertion fails and the nap becomes a slow dream.                                                                                                                                                                        |
+| "No time even for a nap - skip consolidation"                          | The nap exists precisely for this budget; capture + chain dedup is minutes.                                                                                                                                                                                            |
+| "I'll just cherry-pick the full dream's steps"                         | That is the silent-partial trap the nap replaces: run the nap, get the DEFERRED list stated.                                                                                                                                                                           |
+| "The nap ran, so consolidation is done"                                | A nap is partial by design; the consolidation-due nudge still means the full dream.                                                                                                                                                                                    |
+| "The toolbox pass is deferred, so skip the list"                       | Deferred means the CONSOLIDATE half. The READ is step 2b and guards steps 3-5. One command.                                                                                                                                                                            |
+| "A quick regex is faster than finding the right tool"                  | Measured twice: the hand-rolled scan missed state the tool persists, and its clean result read as reassurance.                                                                                                                                                         |
+| "The anchor is on the chain, so moving a fact there is chain-internal" | It is, and it is the one chain move the mode decides: the anchor's block loads in every session of the tree. In propose mode (and under `off`) list it with its cost for the user's approval and leave the fact where it is; in auto mode apply it and print its cost. |
 
 ## Common mistakes
 
