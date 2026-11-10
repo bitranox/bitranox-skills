@@ -273,8 +273,10 @@ def has_inbound_refs(dirs, slug):
 def over_cap(level_dir, max_bytes=_WARN_BYTES):
     """(within, lines, bytes) for a level's always-loaded pointer block (the managed span in its
     CLAUDE.local.md). NOT hard-capped: `within` is False only to raise an ADVISORY warning when the
-    block grows large; the remedy is to let the dream lift/dedup/promote. Bodies are central (not in
-    the block), so only the pointer lines count toward the always-loaded budget."""
+    block grows large; the remedy is to shrink the block where it is (fold near-duplicates, trim
+    long hooks), never to lift its facts to a broader level, which loads them in more sessions.
+    Bodies are central (not in the block), so only the pointer lines count toward the always-loaded
+    budget."""
     text = ME.read_store_text(Path(level_dir) / "CLAUDE.local.md")
     b = text.find(us.INDEX_BEGIN)
     endm = us.INDEX_END
@@ -1160,7 +1162,8 @@ def _main(argv=None):
                 within, lines, nbytes = over_cap(d)
                 if not within:
                     print("    ~ warning: %s pointer block is %d bytes / %d lines - large always-loaded "
-                          "index; let the dream lift/dedup/promote, else it loads only for this project"
+                          "index; shrink it in place (fold near-duplicates, trim long hooks) - lifting "
+                          "a fact to a broader level loads it in more sessions, not fewer"
                           % (d, nbytes, lines))
                     warnings += 1
         danglers = find_dangling_bodies(ME._anchor(args.dirs[0]))

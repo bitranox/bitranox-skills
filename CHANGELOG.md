@@ -41,6 +41,12 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   changed level, top first (`data.levels[]` under `--json`). A level the backup holds no copy of
   reports its bytes before as unknown, never as 0. The exit codes are unchanged.
 
+### Changed
+
+- `reconcile_memory_index.py --check`: the large-index warning says to shrink the block in
+  place (fold near-duplicates, trim long hooks) and no longer recommends lifting facts to a
+  broader level, which loads them in more sessions.
+
 ## [11.0.0]
 
 ### Changed

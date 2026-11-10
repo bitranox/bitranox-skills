@@ -875,3 +875,18 @@ def test_repair_on_a_clean_tree_is_a_no_op(tmp_path, capsys):
     ME.add_or_update_entry(str(proj), "Fine", "When fine, do fine.", body="fine")
     assert R.main(["--repair-appended-type", str(proj)]) == 0
     assert "TOTAL repaired: 0" in capsys.readouterr().out
+
+
+def test_the_large_index_warning_never_recommends_lifting_facts(proj, capsys):
+    """A lift moves a fact to a level more sessions load, so a size warning that recommends one
+    grows the always-loaded cost it is warning about."""
+    local = ME.sig.claude_local_md_path(proj)
+    lines = "\n".join("- [T%d](uuid:0000000%d-0000-5000-8000-000000000000) - a hook <!-- bx:slug=t%d -->"
+                      % (i, i % 10, i) for i in range(3000))
+    local.write_text("%s\n# Memory index\n\n%s\n%s\n" % (us.INDEX_BEGIN, lines, us.INDEX_END),
+                     encoding="utf-8")
+    assert R.main(["--check", proj]) == 0
+    warning = [ln for ln in capsys.readouterr().out.splitlines() if "~ warning:" in ln]
+    assert len(warning) == 1
+    assert "lift/" not in warning[0] and "promote" not in warning[0]
+    assert "fold near-duplicates, trim long hooks" in warning[0]
