@@ -7,8 +7,8 @@ path: `add` demands `--hook`/`--hook-file` on every call, so a title fix meant r
 changes the slug and never the title; and `amend-pinned` deliberately kept the stored title, which
 left a pinned iron rule - the most-read title in the store - with no path at all.
 
-A retitle touches ONE field of ONE line per level. The body must come back byte-identical, which is
-the promise the `add` workaround could not make. All content ASCII.
+A retitle touches ONE field of ONE line per level. The body changes in its `title:` line only,
+which is the promise the `add` workaround could not make. All content ASCII.
 """
 
 from pathlib import Path
@@ -68,15 +68,17 @@ def test_retitle_changes_the_title_and_nothing_else_on_the_pointer(tmp_path):
     assert ptr.pin is False
 
 
-def test_the_body_file_is_byte_identical_after_a_retitle(tmp_path):
-    """The invariant the `add` workaround cannot promise: a title fix must not touch the body."""
+def test_a_retitle_changes_only_the_title_line_of_the_body(tmp_path):
+    """The invariant the `add` workaround cannot promise: a title fix touches nothing in the body
+    but the `title:` line that carries the title as data."""
     anchor, _mid, proj = _three_levels(tmp_path)
     E.add_or_update_entry(proj, "Stale title", "When testing, do the thing.", body="the body")
-    before = us.body_path(anchor, "stale-title").read_bytes()
+    before = us.body_path(anchor, "stale-title").read_text(encoding="utf-8")
 
     E.retitle_entry(proj, "stale-title", "Accurate title")
 
-    assert us.body_path(anchor, "stale-title").read_bytes() == before
+    assert us.body_path(anchor, "stale-title").read_text(encoding="utf-8") == before.replace(
+        "title: Stale title", "title: Accurate title")
 
 
 def test_the_slug_is_untouched_so_inbound_refs_still_resolve(tmp_path):
@@ -255,7 +257,7 @@ def test_amend_pinned_title_changes_the_title_and_keeps_everything_else(tmp_path
     anchor, _mid, proj = _three_levels(tmp_path)
     slug = E.add_or_update_entry(proj, "Stale iron rule", "When testing, do the thing.",
                                  body="the body", pin=True)
-    before = us.body_path(anchor, slug).read_bytes()
+    before = us.body_path(anchor, slug).read_text(encoding="utf-8")
 
     rc = E.main(["amend-pinned", "--proj", proj, "--slug", slug, "--title", "Accurate iron rule"])
     out = capsys.readouterr().out
@@ -265,7 +267,8 @@ def test_amend_pinned_title_changes_the_title_and_keeps_everything_else(tmp_path
     assert ptr.title == "Accurate iron rule"
     assert ptr.hook == "When testing, do the thing."
     assert ptr.pin is True, "amend-pinned must not silently unpin the fact"
-    assert us.body_path(anchor, slug).read_bytes() == before
+    assert us.body_path(anchor, slug).read_text(encoding="utf-8") == before.replace(
+        "title: Stale iron rule", "title: Accurate iron rule")
 
 
 def test_amend_pinned_without_a_title_keeps_the_stored_one(tmp_path, capsys):

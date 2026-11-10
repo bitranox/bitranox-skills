@@ -118,6 +118,7 @@ def make_tree(tmp_path: Path, *, pin: bool = False) -> Path:
     (anchor / ".claude-memory" / "facts" / "feedback-demo.md").write_text(
         "---\nname: feedback-demo\n"
         "description: When something happens, do the thing.\n"
+        "title: A Title\n"
         "metadata:\n  type: feedback\n---\n\nThe body prose.\n", encoding="utf-8")
     return level
 

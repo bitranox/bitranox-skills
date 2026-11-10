@@ -462,6 +462,9 @@ def upsert_entry(proj, title, hook, body="", type_=None, pin=False,
                                                      _framed_body(slug, hook, type_, body)),
                                        skill), pin=pin)
             entries.append(e)
+        # The body carries the pointer's title as data (`title:`); every write through here,
+        # amend-pinned and factedit's apply included, keeps the two equal.
+        e.body = _with_title(e.body, e.title)
         bodies[slug] = e.body
         _commit_store(proj, scope or scope_default, entries, bodies)
     if not store_existed and store_dir.exists():      # this add created a brand-new store dir:
@@ -662,6 +665,40 @@ def _reframe_description(text, hook):
     inner, n = re.subn(r"(?m)^(description:)[ \t]*[^\r\n]*",
                        lambda d: "%s %s" % (d.group(1), desc), m.group(1), count=1)
     return _with_frame(head, m, inner) if n else text
+
+
+def _body_title(text):
+    """The `title:` value from a framed body's frontmatter, or '' if absent. Scoped to the leading
+    frontmatter block (see `_frontmatter`), like `_body_description`."""
+    _head, m = _frontmatter(text)
+    if m is None:
+        return ""
+    t = re.search(r"(?m)^title:[ \t]*([^\r\n]*)", m.group(1))
+    return t.group(1).strip() if t else ""
+
+
+def _with_title(text, title):
+    """Return framed `text` with its frontmatter `title:` set to `title` (one line), prose untouched.
+
+    The pointer line is the title's only other home, so the title is kept in the body as data and a
+    pointer line can be rebuilt from the body alone. A frame without the key gains it after
+    `description:` (or after `name:` when there is no description). An unframed `text`, or an empty
+    title, is returned unchanged: every write path frames first, and a title is never invented.
+    The replacement is a lambda, as in `_reframe_description`: a title can carry backslashes."""
+    head, m = _frontmatter(text)
+    title = _normalised_title(title)
+    if m is None or not title:
+        return text
+    inner = m.group(1)
+    nl = "\r\n" if inner.endswith("\r\n") else "\n"
+    new_inner, n = re.subn(r"(?m)^(title:)[ \t]*[^\r\n]*", lambda t: "%s %s" % (t.group(1), title),
+                           inner, count=1)
+    for key in ("description", "name"):
+        if n:
+            break
+        new_inner, n = re.subn(r"(?m)^(%s:[^\r\n]*)(?=\r?$)" % key,
+                               lambda t: "%s%stitle: %s" % (t.group(1), nl, title), inner, count=1)
+    return _with_frame(head, m, new_inner) if n else text
 
 
 def _retype_body(slug, hook, type_, text):
@@ -1606,9 +1643,8 @@ def retitle_entry(level, slug, to_title):
     call, so a title fix meant re-supplying the stored 500-char text and risking a drift in what
     actually fires, and `rename` changes the slug and never the title.
 
-    Same slug, same body, same hook: only the label changes. The body is not opened at all - a title
-    is stored ONLY in the pointer line (`_framed_body` writes `name:` and `description:`, never a
-    title), so there is nothing else to keep in sync.
+    Same slug, same hook, same prose: only the label changes - in the pointer line and in the
+    body's frontmatter `title:`, which carries it as data. A body with no frame is left as it is.
 
     A PINNED fact is refused here and goes through `amend_pinned_entry` instead, which is the single
     deliberate route through the pin gate. Returns
@@ -1651,6 +1687,9 @@ def retitle_entry(level, slug, to_title):
     us.add_pointer(str(lvl), slug=slug, title=title, hook=entry.hook,
                    pin=entry.pin)
     rep["levels"].append(str(lvl))
+    retitled_body = _with_title(entry.body, title)
+    if retitled_body != entry.body:          # a missing body reads as "": writing it back would
+        us.put_body(str(anchor), slug, retitled_body)   # create a body for a dangling pointer
 
     # A slug carried by more than one level is a pre-existing violation, but leaving the OTHER
     # pointers on the old title is not neutral: `move_entry` and `relocate_entry` both refuse when

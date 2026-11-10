@@ -207,3 +207,18 @@ def test_the_owner_search_skips_vendored_and_hidden_dirs(tmp_path):
     owners, complete = FE.find_pointer_owners(anchor, "feedback-demo",
                                               FE.load_rules(make_engine_dir(tmp_path)).parse_index)
     assert complete and owners == [level.resolve()]
+
+
+def test_apply_writes_the_pointer_title_into_a_body_that_predates_titles(tmp_path):
+    """A body stored before titles were kept as data gains `title:` on its next apply, taken from
+    the pointer: factedit re-sends the stored title, and the engine's write path copies it."""
+    level = make_tree(tmp_path)
+    body = _body_file(level)
+    body.write_text(body.read_text(encoding="utf-8").replace("title: A Title\n", ""),
+                    encoding="utf-8")
+    f = tmp_path / "body.md"
+    f.write_text("The body prose, extended.\n", encoding="utf-8")
+    r = _real(["apply", "--slug", "feedback-demo", "--from", str(level), "--body-file", str(f)],
+              tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "\ntitle: A Title\n" in body.read_text(encoding="utf-8")

@@ -40,6 +40,9 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   bytes and pointer count before and after, and the slugs that arrived and left, one line per
   changed level, top first (`data.levels[]` under `--json`). A level the backup holds no copy of
   reports its bytes before as unknown, never as 0. The exit codes are unchanged.
+- A fact's body frontmatter carries its title (`title:`, after `description:`), written by
+  `add` and kept equal to the pointer's title by every engine write: `amend-pinned`, `retitle`
+  and `factedit.py apply` included. Pointer lines are unchanged.
 
 ### Changed
 
