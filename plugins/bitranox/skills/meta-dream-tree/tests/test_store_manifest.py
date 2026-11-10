@@ -543,3 +543,53 @@ def test_a_usage_error_without_json_prints_no_envelope():
     proc = _usage_run("backup")
     assert proc.returncode == 2
     assert proc.stdout == "" and "usage:" in proc.stderr
+
+
+# ---- the cost report: per-level block state, backup copy against the live file ----------------
+
+def make_siblings(root: Path) -> tuple[Path, Path]:
+    """An anchor with an empty top block and two sibling levels that each hold a copy of one slug:
+    the shape a dream lift merges into one top copy."""
+    (root / "CLAUDE.md").write_text("anchor\n", encoding="utf-8")
+    (root / ".claude-memory" / "facts").mkdir(parents=True)
+    (root / ".claude-memory" / "facts" / "shared.md").write_text("body\n", encoding="utf-8")
+    (root / ".claude-memory" / "facts" / "own-a.md").write_text("body a\n", encoding="utf-8")
+    (root / "CLAUDE.local.md").write_text("# Memory index\n", encoding="utf-8")
+    sib_a, sib_b = root / "a", root / "b"
+    for sib, extra in ((sib_a, "- [Own](mem:own-a) - When own, do own.\n"), (sib_b, "")):
+        sib.mkdir()
+        (sib / "CLAUDE.local.md").write_text(
+            "# Memory index\n- [Shared](mem:shared) - When shared, do shared.\n" + extra,
+            encoding="utf-8")
+    return sib_a, sib_b
+
+
+def test_backup_copies_a_level_whose_block_holds_no_pointer(tmp_path):
+    """Its bytes before are what the cost report subtracts from when the run adds a pointer."""
+    make_siblings(tmp_path)
+    out = outside(tmp_path)
+    assert run_cli(["backup", "--from", str(tmp_path), "--out", str(out)], tmp_path).returncode == 0
+    assert (out / "levels" / "CLAUDE.local.md").is_file()
+    data = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
+    assert str(tmp_path) in data["levels"]
+
+
+def test_a_manifest_whose_levels_is_not_a_list_of_strings_is_refused(tmp_path):
+    make_siblings(tmp_path)
+    out = outside(tmp_path)
+    assert run_cli(["backup", "--from", str(tmp_path), "--out", str(out)], tmp_path).returncode == 0
+    manifest = out / "manifest.json"
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    data["levels"] = "not a list"
+    manifest.write_text(json.dumps(data), encoding="utf-8")
+    r = run_cli(["verify", "--out", str(out)], tmp_path)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "'levels' is not a list of strings" in r.stdout + r.stderr
+
+
+def test_scope_levels_is_the_set_derive_walks(tmp_path):
+    sib_a, sib_b = make_siblings(tmp_path)
+    tree = SM.scope_levels(tmp_path, scope="tree", start=tmp_path)
+    chain = SM.scope_levels(tmp_path, scope="chain", start=sib_a)
+    assert sorted(tree) == sorted([tmp_path, sib_a, sib_b])
+    assert sorted(chain) == sorted([tmp_path, sib_a])

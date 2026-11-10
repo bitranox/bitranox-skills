@@ -422,6 +422,12 @@ def _pointer_region(text):
     return "\n".join(text[b:e] for b, e in spans) if spans else text
 
 
+def pointer_region(text):
+    """The text pointers are read from (see `_pointer_region`), for a caller outside this module
+    that measures the always-loaded block exactly as the parser bounds it."""
+    return _pointer_region(text or "")
+
+
 def _pointer_from_line(raw):
     """A Pointer for one pointer line, or None when the line is not a pointer or names a path that
     is not a plain store file."""

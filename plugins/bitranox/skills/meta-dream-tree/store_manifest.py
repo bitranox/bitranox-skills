@@ -68,7 +68,8 @@ import uuid_store
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from tree_support import STORE_DIR, EnvelopeArgumentParser, store_anchor, utf8_stdio
 
-__all__ = ["Entry", "Diff", "NoAnchor", "Unreadable", "derive", "diff", "manifest_key", "main"]
+__all__ = ["Entry", "Diff", "NoAnchor", "Unreadable", "derive", "diff", "manifest_key",
+           "scope_levels", "main"]
 
 LEVEL_FILE = "CLAUDE.local.md"
 
@@ -281,6 +282,16 @@ def read_level_text(path: Path, unreadable: list[str]) -> str | None:
         return None
 
 
+def scope_levels(anchor: Path, *, scope: str, start: Path, exclude: tuple[Path, ...] = (),
+                 unreadable: list[str] | None = None) -> list[Path]:
+    """Every level dir a manifest of `scope` covers: the tree under `anchor`, or the chain from
+    `start` up to it. One definition for derive, backup and the cost report, so the three can never
+    disagree about which levels exist."""
+    if scope == "tree":
+        return levels_under(anchor, exclude, unreadable)
+    return levels_on_chain(start, anchor)
+
+
 def derive(root: Path, *, scope: str = "tree", start: Path | None = None,
            exclude: tuple[Path, ...] = ()) -> list[Entry]:
     """The manifest entries for the live tree, sorted so the result is order-independent.
@@ -292,8 +303,8 @@ def derive(root: Path, *, scope: str = "tree", start: Path | None = None,
     anchor = anchor_dir(root)
     begin = Path(start) if start is not None else Path(root)
     unreadable: list[str] = []
-    levels = (levels_under(anchor, exclude, unreadable) if scope == "tree"
-              else levels_on_chain(begin, anchor))
+    levels = scope_levels(anchor, scope=scope, start=begin, exclude=exclude,
+                          unreadable=unreadable)
     entries: list[Entry] = []
     bodies: dict[str, str] = {}
     for lvl in levels:
@@ -373,12 +384,15 @@ def diff(before: list[Entry], after: list[Entry]) -> Diff:
 # ---- backup and verify ---------------------------------------------------------------------
 
 def _write_manifest(out: Path, *, anchor: Path, scope: str, start: Path,
-                    entries: list[Entry]) -> Path:
+                    entries: list[Entry], levels: list[Path]) -> Path:
     # `exclude` is recorded, not recomputed: verify runs later, possibly from another cwd, and
     # must skip exactly the dir this backup wrote - otherwise it re-reads its own copies.
     payload = {"scope": scope, "anchor": str(anchor), "start": str(start),
                "exclude": [str(Path(out).resolve())],
                "generated": time.strftime("%Y-%m-%dT%H:%M:%S"),
+               # Every level the backup COPIED, pointers or not: the cost report reads a level
+               # absent from this list as "did not exist", which only this list can prove.
+               "levels": [str(lvl) for lvl in levels],
                "entries": [e.as_dict() for e in entries]}
     out.mkdir(parents=True, exist_ok=True)
     path = out / "manifest.json"
@@ -427,13 +441,17 @@ def backup(*, root: Path, scope: str, start: Path, out: Path) -> tuple[list[Entr
         if stale.exists():
             shutil.rmtree(stale)
     shutil.copytree(store_src, out / "store")
-    # Every in-scope level sits under the anchor: the tree walk starts there and the chain walk
-    # stops there, so relative_to cannot fail.
-    for lvl in sorted({Path(e.level) for e in entries}):
+    # EVERY in-scope level, not only those holding a pointer: a level whose block is empty now
+    # can gain pointers in the run, and the cost report needs its bytes before. Every in-scope
+    # level sits under the anchor (the tree walk starts there, the chain walk stops there), so
+    # relative_to cannot fail.
+    levels = scope_levels(anchor, scope=scope, start=start, exclude=(Path(out).expanduser(),))
+    for lvl in levels:
         dst = out / "levels" / lvl.relative_to(anchor)
         dst.mkdir(parents=True, exist_ok=True)
         shutil.copy2(lvl / LEVEL_FILE, dst / LEVEL_FILE)
-    return entries, _write_manifest(out, anchor=anchor, scope=scope, start=start, entries=entries)
+    return entries, _write_manifest(out, anchor=anchor, scope=scope, start=start,
+                                    entries=entries, levels=levels)
 
 
 def _manifest_shape_error(data: object) -> str | None:
@@ -448,9 +466,10 @@ def _manifest_shape_error(data: object) -> str | None:
     for key in ("scope", "start"):
         if key in data and not isinstance(data[key], str):
             return f"its '{key}' is not a string"
-    exclude = data.get("exclude", [])
-    if not (isinstance(exclude, list) and all(isinstance(p, str) for p in exclude)):
-        return "its 'exclude' is not a list of strings"
+    for key in ("exclude", "levels"):
+        value = data.get(key, [])
+        if not (isinstance(value, list) and all(isinstance(p, str) for p in value)):
+            return f"its '{key}' is not a list of strings"
     for i, e in enumerate(entries):
         if not (isinstance(e, dict) and isinstance(e.get("level"), str)
                 and isinstance(e.get("slug"), str)):

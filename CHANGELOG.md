@@ -30,6 +30,13 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.1.0]
+
+### Added
+
+- `store_manifest.py backup` copies every in-scope level, pointers or not, and records them in
+  the manifest's `levels` list.
+
 ## [11.0.0]
 
 ### Changed
