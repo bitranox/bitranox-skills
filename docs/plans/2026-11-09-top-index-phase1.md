@@ -63,6 +63,9 @@ amended after review). Frozen inputs: the main checkout's gitignored
   prints `promote`) is applied in every mode as before, its cost printed for information; only a
   misplacement to the top follows the mode. Where Tasks 8-10 below still say "a move of a fact
   to the tree top", read "a misplacement re-home to the tree top" (commit a09c16ce).
+- User decision 2026-11-10, verbatim label "Run P1b as designed": asked after P1a-run, with the
+  measurement that cutting every tree-top hook to 350 characters saves at most 13,038 bytes (about
+  5% of the block) and the recommended option "Skip P1b, go to phase 2 (Recommended)" declined.
 
 ---
 
@@ -72,7 +75,7 @@ amended after review). Frozen inputs: the main checkout's gitignored
 |-----------|--------------------------------------------------------------------------------------------------------------------------------------------|---------------|--------------------------------------|
 | P1a       | cost report in `verify`; crosstree dreams use backup+verify; rule-text fixes; reconcile warning; titles copied into frontmatter; release   | plugin minor  | none                                 |
 | P1a-run   | the compaction run on the store (merges, moves off the top, trims, renamed-skill names), verified with the new cost report                 | store commit  | none                                 |
-| P1b       | 213 hooks over 350 rewritten in scratch, loss-checked; harness adapted from the A/B scripts; canary; screening; 3 arms x 12 rules x 6 runs | evidence only | CHECKPOINT: do shortened hooks pass? |
+| P1b       | 186 hooks over 350 rewritten in scratch, loss-checked; harness adapted from the A/B scripts; canary; screening; 3 arms x 12 rules x 6 runs | evidence only | CHECKPOINT: do shortened hooks pass? |
 | P1c       | the rewrites applied with `factedit.py apply --batch`, verified                                                                            | store commit  | none                                 |
 
 MVP slice: P1a plus P1a-run. Cut from phase 1: dropping titles, the 300-character cap, all phase 2
@@ -131,6 +134,15 @@ move` the 11 facts off the top; rename the renamed skill in hooks;
 `verify` (the cost lines must show the top block shrinking); `reconcile --check-tree` with 0
 problems; commit the store. Verified by the cost lines and the manifest diff matching the plan's
 list of slugs, both ways.
+
+**M6 firing test (P1b, evidence only).** A driver outside `plugins/` (`$RUN2/tool/firing.py` with a
+pure core `firecore.py`) runs headless opus sessions the way the A/B harness runs an arm, importing
+`abarm`, `abguard`, `_ablib` and `abtest._pause_trigger` from a frozen plugin checkout. The arms
+differ only in the tree-top pointer file, laid over the real one by a read-only bubblewrap bind;
+the rest of the chain is live. Phases: canary (does the bound file load), screening (which
+candidate rules fire with their pointer and not without it), grid (T1, T2, S interleaved). Verified
+by the tool's tests and a mutation battery, a dry run per phase that hashes the bound file inside
+the sandbox, and the canary before any paid phase.
 
 ---
 
@@ -2154,3 +2166,1246 @@ reference-judge-windows-domain-membership-by-partofdomain-never-by-the-domain-na
   answers, and the check-tree result. Record the result and its artifact paths in the backlog line
   [35] at once.
 - [ ] **Step 3:** P1b's detailed tasks are written next, against the store this run left.
+
+## DETAILED: P1b tasks
+
+Written after P1a-run was verified, against the store it left: 508 tree-top
+pointers, 186 hooks over 350 characters (12 of them pinned), none over 500, 13,038 characters
+over 350 in total. P1c gets its tasks once Task 27's checkpoint is decided.
+
+**Run size and cost.** Canary 2 runs; screening 20 candidates x 2 arms x 3 rounds = 120 runs;
+grid 12 rules x 3 arms x 6 rounds = 216 runs: 338 paid runs. The design's "about 216 runs, about
+14 million input tokens" counted the grid only; at the same scaling the whole test is about 22
+million input tokens. Both figures are estimates; Task 25 replaces them with the canary's measured
+tokens per run and asks the user to approve the measured total before screening starts.
+
+**Paths.** `$RUN2` is a new directory `$HOME/.claude/self-improve-audit/p1b-<UTC stamp>`, its own
+git repo for the sealed inputs; the tool lives in `$RUN2/tool/`. `$WS_ROOT` is
+`<repo>/.claude/worktrees/p1b` (ignored by `**/.claude/worktrees/` in the repo's info/exclude):
+every session runs in a detached worktree of `<repo>` there, so it loads the real chain from the
+main checkout up to `$ANCHOR`. `$TOP` is `$ANCHOR/CLAUDE.local.md`.
+
+**What a session sees.** Each run: a fresh detached worktree at the frozen base, the rule's
+fixture files written into it, a config dir with the FROZEN plugin installed (verified byte for
+byte), a HOME of its own, `BITRANOX_MEMORY_WRITES=off`, bubblewrap (`bwrap-host-proc` here)
+hiding the real home, and one read-only bind laying the arm's file over `$TOP`. Measured
+2026-11-10 with the harness's own `sandbox_argv`: without the bind `sha256sum $TOP` inside the
+sandbox printed the live file's sha, with it the arm file's, its source under the hidden home.
+Arms differ only in that file: `T1` and `T2` are byte-identical copies of the frozen top block,
+`S` has the 186 shortened hooks, `N-<rule>` lacks one candidate's pointer, `CAN` adds one canary
+pointer. The rest of the chain is live; interleaving spreads any change in it across the arms.
+
+**Pass rule (pre-registered, `firecore.verdict`).** Per arm, the total of runs that fired over
+72 trials. Bound = the 95th percentile of the difference between two Binomial(72, p) draws, p the
+pooled today rate, 20000 draws, seed 20261110. VOID_NOISE when |T1 - T2| > bound. FAIL when
+(T1 + T2) / 2 - S > bound, or a rule fires in 8 or more of its 12 today runs and in 0 of 6 S
+runs. PASS otherwise. INCOMPLETE while any cell has fewer than 6 valid runs. A run is valid when
+the session finished, no pause trigger fired, and its init record names an opus model.
+
+### Task 20: P1b R1 - the run dir and the firing tool
+
+**Files:**
+- Create: `$RUN2/tool/firecore.py`, `$RUN2/tool/firing.py`, `$RUN2/tool/tests/conftest.py`,
+  `$RUN2/tool/tests/test_firecore.py`, `$RUN2/tool/tests/test_firing.py`, `$RUN2/tool/battery.json`
+
+**Interfaces:**
+- Consumes: the frozen harness (`abarm`, `abguard`, `_ablib`, `abtest._pause_trigger`) by the
+  path `config.json` names.
+- Produces: `firing.py build-arms|run|score --run-dir $RUN2 [--phase canary|screen|grid] [--dry-run]`;
+  exit 0 yes, 1 no, 2 could not run, 3 login expires, 4 usage limit. Journal rows in
+  `$RUN2/<phase>/journal.jsonl`, scores in `$RUN2/<phase>/score.json`.
+
+**Out of scope:** `plugins/` - the tool is evidence tooling for one test and does not ship; it
+imports the shipped harness from the frozen checkout instead of copying it.
+
+**STOP conditions:** a test fails twice after one fix attempt; a battery arm survives.
+
+- [ ] **Step 1:** `export ANCHOR=<anchor>; RUN2=$HOME/.claude/self-improve-audit/p1b-$(date -u +%Y%m%dT%H%M%SZ); mkdir -p "$RUN2/tool/tests" && git -C "$RUN2" init -q -b main && echo "$RUN2"`
+- [ ] **Step 2:** Write the five files below. They were run before this plan was committed: 31
+  tests green, and the 11-arm battery of Step 4 killed every arm.
+
+`$RUN2/tool/firecore.py`:
+
+```python
+"""Pure core of the P1b firing test: arm files, rule checks, the schedule and the verdict.
+
+The firing test asks one question: do tree-top hooks shortened to 350 characters make a fresh
+session follow their rule as often as today's hooks do? Every arm loads the same chain except
+the tree-top pointer block, which each arm replaces with a file built here. Nothing in this
+module starts a process or touches the store; firing.py drives the sessions.
+
+Decisions:
+    - The pass bound comes from the two today arms, never from a fixed number: a fixed allowance
+      called an arm identical to today failed 38% of the time in simulation (70% firing rate,
+      3 runs per rule), while the bound below has a 5% false-failure rate by construction.
+      Reopen if: the today arms disagree beyond their own bound (VOID_NOISE), which says the
+      instrument, not the hooks, is what varies.
+    - A rule whose today arms fire 8 or more of 12 runs and whose shortened arm fires 0 of 6
+      fails the arm on its own, because a total can hide one rule that stopped firing.
+"""
+
+from __future__ import annotations
+
+import json
+import random
+import re
+from collections.abc import Iterable, Sequence
+from pathlib import Path
+from typing import Any
+
+__all__ = [
+    "CHECK_KINDS",
+    "RuleError",
+    "arm_file_name",
+    "build_arm_text",
+    "fired",
+    "load_rules",
+    "pass_bound",
+    "pointer_hooks",
+    "read_stream",
+    "schedule",
+    "screen",
+    "verdict",
+]
+
+# One pointer line of an engine-managed block; the title may hold brackets, so it is greedy
+# and the "](mem:" anchor decides where it ends.
+POINTER = re.compile(r"^- \[(?P<title>.*)\]\(mem:(?P<slug>[^)\s]+)\) - (?P<hook>.*?)(?P<pin> <!-- bx:pin -->)?$")
+CHECK_KINDS = ("tool_input_regex", "scoped_absent", "final_text_regex")
+SEED = 20261110
+DRAWS = 20000
+QUANTILE = 0.95
+FLAG_TODAY_MIN = 8  # of 12 today runs (two arms x 6) for the one-rule failure check
+
+
+class RuleError(ValueError):
+    """A rules file or an arm build input does not have the shape this test needs."""
+
+
+def pointer_hooks(text: str) -> dict[str, str]:
+    """{slug: hook} for every pointer line of text; a slug seen twice is a RuleError."""
+    out: dict[str, str] = {}
+    for line in text.splitlines():
+        m = POINTER.match(line)
+        if m is None:
+            continue
+        if m["slug"] in out:
+            raise RuleError(f"slug {m['slug']} has two pointer lines")
+        out[m["slug"]] = m["hook"]
+    return out
+
+
+def build_arm_text(text: str, *, replace: dict[str, str] | None = None, drop: Iterable[str] = (),
+                   add_line: str | None = None) -> str:
+    """text with the named pointers' hooks replaced, the named pointers removed, one line appended.
+
+    Each slug in replace and drop must have exactly one pointer line; the pin marker and the
+    title stay as they are. add_line goes right after the last pointer line.
+
+    Raises:
+        RuleError: a slug to replace or drop is absent, or there is no pointer line at all.
+    """
+    replace = dict(replace or {})
+    dropped = set(drop)
+    present = pointer_hooks(text)
+    missing = sorted((set(replace) | dropped) - set(present))
+    if missing:
+        raise RuleError(f"no pointer line for: {', '.join(missing)}")
+    lines = text.splitlines(keepends=True)
+    out: list[str] = []
+    last = -1
+    for line in lines:
+        m = POINTER.match(line.rstrip("\n"))
+        if m is None:
+            out.append(line)
+            continue
+        if m["slug"] in dropped:
+            continue
+        if m["slug"] in replace:
+            line = f"- [{m['title']}](mem:{m['slug']}) - {replace[m['slug']]}{m['pin'] or ''}\n"
+        out.append(line)
+        last = len(out) - 1
+    if last < 0:
+        raise RuleError("the text has no pointer line")
+    if add_line is not None:
+        out.insert(last + 1, add_line.rstrip("\n") + "\n")
+    return "".join(out)
+
+
+def arm_file_name(arm: str, rule_id: str) -> str:
+    """The arm file a run of rule_id under arm loads: N is per rule, every other arm is shared."""
+    return f"N-{rule_id}.md" if arm == "N" else f"{arm}.md"
+
+
+def load_rules(path: Path) -> list[dict[str, Any]]:
+    """The rules file as a list of rule dicts, each checked for the fields the driver reads.
+
+    A rule is {id, slug, prompt, fixture: {relpath: text}, check: {kind, pattern[, scope]}}.
+
+    Raises:
+        RuleError: any rule lacks a field, has an unknown check kind, an unsafe fixture path,
+            a duplicated id, or a pattern that does not compile.
+    """
+    try:
+        rules = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise RuleError(f"cannot read {path}: {exc}") from exc
+    if not isinstance(rules, list) or not rules:
+        raise RuleError("the rules file must be a non-empty JSON list")
+    seen: set[str] = set()
+    for rule in rules:
+        _check_rule(rule, seen)
+    return rules
+
+
+def _check_rule(rule: Any, seen: set[str]) -> None:
+    if not isinstance(rule, dict):
+        raise RuleError("every rule must be an object")
+    for key, kind in (("id", str), ("slug", str), ("prompt", str), ("fixture", dict), ("check", dict)):
+        if not isinstance(rule.get(key), kind) or (kind is str and not rule[key].strip()):
+            raise RuleError(f"rule {rule.get('id')!r}: field {key} missing or not a {kind.__name__}")
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,39}", rule["id"]) or rule["id"] in seen:
+        raise RuleError(f"rule id {rule['id']!r} is malformed or duplicated")
+    seen.add(rule["id"])
+    for rel in rule["fixture"]:
+        p = Path(rel)
+        if p.is_absolute() or ".." in p.parts or not isinstance(rule["fixture"][rel], str):
+            raise RuleError(f"rule {rule['id']}: unsafe fixture path or non-text content: {rel!r}")
+    check = rule["check"]
+    if check.get("kind") not in CHECK_KINDS:
+        raise RuleError(f"rule {rule['id']}: check kind must be one of {CHECK_KINDS}")
+    needed = ("pattern", "scope") if check["kind"] == "scoped_absent" else ("pattern",)
+    for key in needed:
+        try:
+            re.compile(check[key])
+        except (KeyError, TypeError, re.error) as exc:
+            raise RuleError(f"rule {rule['id']}: check.{key} missing or invalid: {exc}") from exc
+
+
+def read_stream(path: Path) -> tuple[list[str], str]:
+    """(every tool_use input as sorted JSON, the session's last text) from a stream-json file."""
+    inputs: list[str] = []
+    last = ""
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(rec, dict):
+            continue
+        if rec.get("type") == "result" and isinstance(rec.get("result"), str) and rec["result"].strip():
+            last = rec["result"]
+        msg = rec.get("message") if rec.get("type") == "assistant" else None
+        content = msg.get("content") if isinstance(msg, dict) else None
+        for block in content if isinstance(content, list) else []:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "tool_use":
+                inputs.append(json.dumps(block.get("input"), sort_keys=True))
+            elif block.get("type") == "text" and isinstance(block.get("text"), str) and block["text"].strip():
+                last = block["text"]
+    return inputs, last
+
+
+def fired(check: dict[str, Any], inputs: Sequence[str], last_text: str) -> bool:
+    """Whether a run followed the rule, by the rule's mechanical check.
+
+    tool_input_regex: some tool call's input matches pattern. scoped_absent: some input matches
+    scope, and no input matching scope matches pattern (no in-scope call means it did not fire).
+    final_text_regex: the session's last text matches pattern.
+    """
+    kind = check["kind"]
+    pattern = re.compile(check["pattern"], re.S)
+    if kind == "tool_input_regex":
+        return any(pattern.search(i) for i in inputs)
+    if kind == "final_text_regex":
+        return bool(pattern.search(last_text))
+    scope = re.compile(check["scope"], re.S)
+    in_scope = [i for i in inputs if scope.search(i)]
+    return bool(in_scope) and not any(pattern.search(i) for i in in_scope)
+
+
+def schedule(rule_ids: Sequence[str], arms: Sequence[str], rounds: int) -> list[tuple[int, str, str]]:
+    """(round, rule, arm) in run order: every rule once per round, arms rotated by round and rule.
+
+    Rotating both keeps an arm from always running first after a rule change or a round start,
+    so a drift in the account or the cache over the run spreads across the arms.
+    """
+    order: list[tuple[int, str, str]] = []
+    n, k = len(rule_ids), len(arms)
+    for r in range(rounds):
+        rot = list(rule_ids[r % n:]) + list(rule_ids[:r % n])
+        for i, rule in enumerate(rot):
+            shift = (r + i) % k
+            order += [(r, rule, arm) for arm in list(arms[shift:]) + list(arms[:shift])]
+    return order
+
+
+def pass_bound(t1: int, t2: int, trials: int, *, seed: int = SEED, draws: int = DRAWS, q: float = QUANTILE) -> int:
+    """The largest drop two arms identical to today show in 95% of draws, at today's pooled rate."""
+    if trials <= 0 or not 0 <= t1 <= trials or not 0 <= t2 <= trials:
+        raise ValueError("t1 and t2 must lie in 0..trials and trials must be positive")
+    p = (t1 + t2) / (2 * trials)
+    rng = random.Random(seed)
+    diffs = sorted(rng.binomialvariate(trials, p) - rng.binomialvariate(trials, p) for _ in range(draws))
+    return diffs[min(int(q * draws), draws - 1)]
+
+
+def verdict(counts: dict[str, dict[str, tuple[int, int]]], *, runs: int) -> dict[str, Any]:
+    """PASS, FAIL, VOID_NOISE or INCOMPLETE for the arms T1, T2 and S.
+
+    counts[arm][rule] = (fired, valid runs). INCOMPLETE when any cell has fewer than `runs`
+    valid runs. VOID_NOISE when the two today arms differ by more than their own bound. FAIL
+    when S's drop below the today mean exceeds the bound, or a rule fires today and never in S.
+    """
+    rules = sorted(counts["T1"])
+    short = [f"{a}/{r}" for a in ("T1", "T2", "S") for r in rules if counts[a].get(r, (0, 0))[1] < runs]
+    totals = {a: sum(counts[a][r][0] for r in rules if r in counts[a]) for a in ("T1", "T2", "S")}
+    out: dict[str, Any] = {"rules": len(rules), "runs": runs, "totals": totals, "incomplete": short}
+    if short:
+        return dict(out, verdict="INCOMPLETE")
+    trials = runs * len(rules)
+    bound = pass_bound(totals["T1"], totals["T2"], trials)
+    drop = (totals["T1"] + totals["T2"]) / 2 - totals["S"]
+    flagged = [r for r in rules if counts["T1"][r][0] + counts["T2"][r][0] >= FLAG_TODAY_MIN and counts["S"][r][0] == 0]
+    out.update(trials=trials, bound=bound, drop=drop, flagged=flagged)
+    if abs(totals["T1"] - totals["T2"]) > bound:
+        return dict(out, verdict="VOID_NOISE")
+    return dict(out, verdict="FAIL" if drop > bound or flagged else "PASS")
+
+
+def screen(counts: dict[str, dict[str, tuple[int, int]]], *, runs: int, keep: int) -> dict[str, Any]:
+    """The candidates that discriminate: T1 fires at least runs-1 and N at most T1-2.
+
+    Kept candidates are ranked by today minus no-index, then by id; at most `keep` are kept.
+    """
+    rows = []
+    for rule in sorted(counts["T1"]):
+        t, tv = counts["T1"][rule]
+        n, nv = counts["N"].get(rule, (0, 0))
+        rows.append({"rule": rule, "T": t, "N": n, "valid": min(tv, nv),
+                     "discriminates": tv >= runs and nv >= runs and t >= runs - 1 and n <= t - 2})
+    good = sorted((r for r in rows if r["discriminates"]), key=lambda r: (-(r["T"] - r["N"]), r["rule"]))
+    return {"rows": rows, "kept": [r["rule"] for r in good[:keep]], "enough": len(good) >= keep}
+```
+
+`$RUN2/tool/firing.py`:
+
+```python
+#!/usr/bin/env python3
+"""Drive the P1b firing test: build the arm files, run the sessions, score the phases.
+
+Every session runs the shipped `claude -p --model opus` the way the A/B harness runs an arm: a
+fresh nested worktree of the workpiece, its own config dir with the frozen plugin installed, a
+HOME of its own, bubblewrap around it, memory writes off. The one difference per arm is the
+tree-top pointer file, which a read-only bind lays over the real one inside the sandbox; the
+rest of the chain is the real one. The harness modules are imported from the FROZEN plugin
+checkout named in config.json, so the code driving every run is fixed for the whole test.
+
+Usage: firing.py {build-arms,run,score} --run-dir DIR [...]. Exit 0 yes, 1 no, 2 could not run,
+3 the login expires before the next run could finish, 4 the account hit a usage limit.
+
+Decisions:
+    - The paid phases are started by the user in their own terminal; `run --dry-run` is the
+      only form a tool call starts, and it runs `sha256sum` on the bound file instead of a
+      session, proving each arm sees its own file. Reopen if: the classifier stops refusing a
+      paid launch from a tool call and the user asks for it.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+from types import ModuleType
+from typing import Any
+
+import firecore as fc
+
+__all__ = ["EXIT_LIMIT", "EXIT_LOGIN", "PHASES", "main", "with_top_bind", "write_fixture"]
+
+PHASES: dict[str, dict[str, Any]] = {
+    "canary": {"rules": "canary.json", "arms": ["CAN", "T1"], "rounds": 1},
+    "screen": {"rules": "candidates.json", "arms": ["T1", "N"], "rounds": 3},
+    "grid": {"rules": "rules.json", "arms": ["T1", "T2", "S"], "rounds": 6},
+}
+VERIFY_SKILL = "meta-self-improve"  # any shipped skill: install_plugin checks one skill dir byte for byte
+ENV_KEEP = ("PATH", "LANG", "LC_ALL", "TERM", "TZ")
+HOME_LINKS = (".local", ".cache", ".gitconfig")
+MAX_TURNS = 15
+MAX_TOKENS = 400_000
+DEADLINE_S = 600.0
+LOGIN_MARGIN_S = 120.0
+EXIT_LOGIN, EXIT_LIMIT = 3, 4
+
+
+def with_top_bind(prefix: list[str], arm_file: Path, top_target: Path) -> list[str]:
+    """The sandbox prefix with arm_file bound read-only over top_target, just before --chdir.
+
+    Placed last among the mounts so no later bind covers it again.
+
+    Raises:
+        ValueError: the prefix carries no --chdir (it is not a sandbox_argv prefix).
+    """
+    if "--chdir" not in prefix:
+        raise ValueError("the prefix has no --chdir; build it with abarm.sandbox_argv")
+    at = prefix.index("--chdir")
+    return [*prefix[:at], "--ro-bind", str(arm_file), str(top_target), *prefix[at:]]
+
+
+def write_fixture(ws: Path, fixture: dict[str, str]) -> list[str]:
+    """Write each fixture file under ws; the relative paths written, in order."""
+    written = []
+    for rel, text in fixture.items():
+        target = ws / rel
+        if ws.resolve() not in target.resolve().parents:
+            raise fc.RuleError(f"fixture path escapes the worktree: {rel!r}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8", newline="\n")
+        written.append(rel)
+    return written
+
+
+def _harness(config: dict[str, Any]) -> tuple[ModuleType, ModuleType, ModuleType, ModuleType]:
+    """abarm, abguard, _ablib and abtest from the frozen checkout's ab-test scripts dir."""
+    sys.path.insert(0, str(config["harness"]))
+    import _ablib  # noqa: PLC0415 - path-loaded from the frozen checkout named in config.json
+    import abarm  # noqa: PLC0415 - same reason
+    import abguard  # noqa: PLC0415 - same reason
+    import abtest  # noqa: PLC0415 - same reason; its _pause_trigger classifies a refused session
+    return abarm, abguard, _ablib, abtest
+
+
+def _sha(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def cmd_build_arms(run_dir: Path, config: dict[str, Any]) -> int:
+    """Write arms/{T1,T2,S,CAN}.md and arms/N-<id>.md for every candidate, and arms/arms.json."""
+    top = (run_dir / "inputs" / "top.md").read_text(encoding="utf-8")
+    short = {p.stem: p.read_text(encoding="utf-8").strip() for p in sorted((run_dir / "short").glob("*.hook"))}
+    too_long = sorted(s for s, h in short.items() if len(h) > 350 or "\n" in h)
+    if too_long:
+        print(f"refused: hooks over 350 or multi-line: {', '.join(too_long)}", file=sys.stderr)
+        return 1
+    arms = run_dir / "arms"
+    arms.mkdir(exist_ok=True)
+    texts = {"T1": top, "T2": top, "S": fc.build_arm_text(top, replace=short),
+             "CAN": fc.build_arm_text(top, add_line=config["canary_line"])}
+    for rule in fc.load_rules(run_dir / "candidates.json"):
+        texts[f"N-{rule['id']}"] = fc.build_arm_text(top, drop=[rule["slug"]])
+    for name, text in texts.items():
+        (arms / f"{name}.md").write_text(text, encoding="utf-8", newline="\n")
+    shas = {name: _sha(arms / f"{name}.md") for name in texts}
+    (arms / "arms.json").write_text(json.dumps({"short_hooks": len(short), "sha256": shas}, indent=2), encoding="utf-8")
+    print(json.dumps({"arms": len(texts), "short_hooks": len(short)}))
+    return 0
+
+
+def _journal(phase_dir: Path) -> dict[str, list[dict[str, Any]]]:
+    rows: dict[str, list[dict[str, Any]]] = {}
+    path = phase_dir / "journal.jsonl"
+    for line in path.read_text(encoding="utf-8").splitlines() if path.is_file() else []:
+        row = json.loads(line)
+        rows.setdefault(row["id"], []).append(row)
+    return rows
+
+
+def _git(repo: Path, *args: str) -> None:
+    proc = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True,  # nosec B603 B607
+                          encoding="utf-8", errors="replace", check=False)
+    if proc.returncode != 0:
+        raise RuntimeError(f"git {' '.join(args[:2])} failed rc={proc.returncode}: {proc.stderr.strip()[-300:]}")
+
+
+class Runner:
+    """One phase's runs, serial, resumable from the phase journal."""
+
+    def __init__(self, run_dir: Path, config: dict[str, Any], phase: str, *, dry_run: bool) -> None:
+        self.run_dir, self.config, self.phase, self.dry_run = run_dir, config, phase, dry_run
+        self.abarm, self.abguard, self.ablib, self.abtest = _harness(config)
+        # A dry run never writes the phase journal or its run dirs.
+        self.phase_dir = run_dir / (f"dry-{phase}" if dry_run else phase)
+        self.repo, self.top_target = Path(config["repo"]), Path(config["top_target"])
+        self.credentials = Path(config["credentials"])
+        checkout = Path(config["frozen"])
+        skill = self.abarm.plugin_root(checkout) / "skills" / VERIFY_SKILL
+        self.frozen = self.abarm.Frozen(path=checkout, skills_ref=config["frozen_sha"], skill_dir=skill,
+                                        overlay_written=(), hashes=self.ablib.tree_hashes(skill))
+
+    def run(self) -> int:
+        spec = PHASES[self.phase]
+        rules = {r["id"]: r for r in fc.load_rules(self.run_dir / spec["rules"])}
+        done = _journal(self.phase_dir) if not self.dry_run else {}
+        order = fc.schedule(sorted(rules), spec["arms"], 1 if self.dry_run else spec["rounds"])
+        problem = self.abarm.bwrap_problem(os.environ.get("PATH"), self.config["sandbox"])
+        if problem:
+            print(f"could not run: {problem}", file=sys.stderr)
+            return 2
+        for rnd, rule_id, arm in order:
+            run_id = f"r{rnd}-{rule_id}-{arm}"
+            tries = [t for t in done.get(run_id, []) if not t.get("paused")]
+            if any(t["valid"] for t in tries) or len(tries) >= 2:
+                continue
+            rc = self._gate_login()
+            if rc:
+                return rc
+            row = self.one(run_id, rnd, rules[rule_id], arm, attempt=len(tries) + 1)
+            if not self.dry_run:
+                self.ablib.append_jsonl(self.phase_dir / "journal.jsonl", row)
+            print(json.dumps({k: row.get(k) for k in ("id", "valid", "fired", "stop_reason", "main_new_tokens", "probe_ok")}))
+            if self.dry_run and not row.get("probe_ok"):
+                return 1
+            if row.get("paused"):
+                print(f"paused on {row['paused']}: run the same command again to resume", file=sys.stderr)
+                return EXIT_LIMIT if row["paused"] == self.abtest.PAUSE_LIMIT else EXIT_LOGIN
+        return 0
+
+    def _gate_login(self) -> int:
+        expiry = self.abguard.credentials_expiry_s(self.credentials)
+        if expiry is not None and expiry - time.time() < DEADLINE_S + LOGIN_MARGIN_S:
+            print("the login expires before the next run could finish: /login, then run again", file=sys.stderr)
+            return EXIT_LOGIN
+        return 0
+
+    def one(self, run_id: str, rnd: int, rule: dict[str, Any], arm: str, *, attempt: int) -> dict[str, Any]:
+        arm_file = self.run_dir / "arms" / fc.arm_file_name(arm, rule["id"])
+        arm_dir = self.phase_dir / "runs" / (run_id if attempt == 1 else f"{run_id}.attempt-{attempt}")
+        if arm_dir.exists():
+            shutil.rmtree(arm_dir)
+        arm_dir.mkdir(parents=True)
+        ws = Path(self.config["ws_root"]) / f"{self.phase}-{run_id}-{attempt}"
+        cfg = arm_dir / "cfg"
+        row: dict[str, Any] = {"id": run_id, "round": rnd, "rule": rule["id"], "arm": arm, "attempt": attempt,
+                               "arm_sha256": _sha(arm_file), "started": self.ablib.utc_now(), "valid": False}
+        try:
+            home = self.abarm.arm_home(arm_dir, HOME_LINKS)
+            env = self.abarm.arm_env(cfg, home, ENV_KEEP)
+            self.abarm.delete_cfg(cfg)
+            self.abarm.install_plugin(cfg, self.frozen, self.credentials, env)
+            _git(self.repo, "worktree", "add", "--detach", str(ws), self.config["base"])
+            row["fixture"] = write_fixture(ws, rule["fixture"])
+            self.abguard.snapshot(ws, arm_dir / "guard")
+            mounts = self.abarm.SandboxMounts(
+                ws=ws, home=home, cfg=cfg, git_common_dir=self.abarm.git_common_dir(ws), real_home=Path.home(),
+                read_only=(*self.abarm.home_link_targets(home, HOME_LINKS), self.repo, self.frozen.path))
+            prefix = with_top_bind(self.abarm.sandbox_argv(mounts, sandbox=self.config["sandbox"]), arm_file, self.top_target)
+            if self.dry_run:
+                row.update(self._probe(prefix, env, ws, row["arm_sha256"]))
+            else:
+                row.update(self._session(prefix, env, ws, arm_dir, rule))
+            row["guard_changes"] = self.abguard.verify(arm_dir / "guard")
+        except Exception as exc:  # noqa: BLE001 - one run's failure is recorded and the phase goes on
+            row["error"] = f"{type(exc).__name__}: {exc}"[:500]
+        finally:
+            self.abarm.delete_cfg(cfg)
+            shutil.rmtree(arm_dir / "home", ignore_errors=True)
+            if ws.exists():
+                try:
+                    _git(self.repo, "worktree", "remove", "--force", str(ws))
+                except RuntimeError as exc:
+                    row["cleanup_error"] = str(exc)[:300]
+        return row
+
+    def _probe(self, prefix: list[str], env: dict[str, str], ws: Path, want: str) -> dict[str, Any]:
+        proc = subprocess.run([*prefix, "sha256sum", str(self.top_target)], cwd=ws, env=env, capture_output=True,  # nosec B603
+                              text=True, encoding="utf-8", errors="replace", timeout=60, check=False)
+        seen = proc.stdout.split()[0] if proc.stdout.split() else ""
+        return {"probe_rc": proc.returncode, "probe_sha256": seen, "probe_ok": proc.returncode == 0 and seen == want,
+                "probe_stderr": proc.stderr.strip()[-300:]}
+
+    def _session(self, prefix: list[str], env: dict[str, str], ws: Path, arm_dir: Path, rule: dict[str, Any]) -> dict[str, Any]:
+        summary = self.abarm.dispatch(arm_dir, ws, env, [*prefix, *self.abarm.claude_argv(rule["prompt"], MAX_TURNS)],
+                                      max_tokens=MAX_TOKENS, deadline_s=DEADLINE_S)
+        inputs, last = fc.read_stream(arm_dir / "stream.jsonl")
+        model = str(summary.get("model") or "")
+        keep = ("model", "claude_version", "stop_reason", "void_reasons", "main_new_tokens", "main_cache_read",
+                "main_output_tokens", "total_cost_usd", "num_turns", "wall_s")
+        out = {k: summary.get(k) for k in keep}
+        paused = self.abtest._pause_trigger(summary, arm_dir / "stream.jsonl")  # noqa: SLF001 - the harness's own classifier
+        out.update(fired=fc.fired(rule["check"], inputs, last), tool_calls=len(inputs), paused=paused,
+                   valid=paused is None and summary.get("stop_reason") == "finished" and model.startswith("claude-opus"))
+        return out
+
+
+def _cells(rows: dict[str, list[dict[str, Any]]]) -> dict[str, dict[str, tuple[int, int]]]:
+    """counts[arm][rule] = (fired, valid) over each run id's valid row (its last valid attempt)."""
+    out: dict[str, dict[str, list[int]]] = {}
+    for tries in rows.values():
+        valid = [t for t in tries if t["valid"]]
+        first = tries[0]
+        cell = out.setdefault(first["arm"], {}).setdefault(first["rule"], [0, 0])
+        if valid:
+            cell[0] += int(bool(valid[-1]["fired"]))
+            cell[1] += 1
+    return {arm: {rule: (c[0], c[1]) for rule, c in rules.items()} for arm, rules in out.items()}
+
+
+def cmd_score(run_dir: Path, phase: str) -> int:
+    """Write <phase>/score.json; exit 0 when the phase's question came out yes, else 1."""
+    rows = _journal(run_dir / phase)
+    cells = _cells(rows)
+    runs = PHASES[phase]["rounds"]
+    if phase == "canary":
+        can, plain = cells.get("CAN", {}), cells.get("T1", {})
+        ok = any(v == (1, 1) for v in can.values()) and all(v == (0, 1) for v in plain.values()) and bool(plain)
+        result: dict[str, Any] = {"cells": cells, "loads": ok}
+    elif phase == "screen":
+        result = fc.screen(cells, runs=runs, keep=12)
+        ok = result["enough"]
+    else:
+        result = fc.verdict(cells, runs=runs)
+        ok = result["verdict"] == "PASS"
+    spent = [r for tries in rows.values() for r in tries]
+    result["spend"] = {"runs": len(spent), "new_tokens": sum(int(r.get("main_new_tokens") or 0) for r in spent),
+                       "cache_read": sum(int(r.get("main_cache_read") or 0) for r in spent),
+                       "usd": round(sum(float(r.get("total_cost_usd") or 0) for r in spent), 2),
+                       "guard_changes": sum(1 for r in spent if r.get("guard_changes")),
+                       "errors": sum(1 for r in spent if r.get("error"))}
+    (run_dir / phase / "score.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+    print(json.dumps(result, indent=2))
+    return 0 if ok else 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("command", choices=("build-arms", "run", "score"))
+    parser.add_argument("--run-dir", type=Path, required=True)
+    parser.add_argument("--phase", choices=tuple(PHASES))
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args(argv)
+    run_dir = args.run_dir.resolve()
+    try:
+        config = json.loads((run_dir / "config.json").read_text(encoding="utf-8"))
+        if args.command == "build-arms":
+            return cmd_build_arms(run_dir, config)
+        if args.phase is None:
+            parser.error("--phase is required for run and score")
+        if args.command == "score":
+            return cmd_score(run_dir, args.phase)
+        return Runner(run_dir, config, args.phase, dry_run=args.dry_run).run()
+    except (OSError, ValueError, KeyError, fc.RuleError) as exc:
+        print(f"could not run: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+```
+
+`$RUN2/tool/tests/conftest.py`:
+
+```python
+"""Put the tool dir on sys.path so the tests import firecore and firing by name."""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+```
+
+`$RUN2/tool/tests/test_firecore.py`:
+
+```python
+"""Tests for the P1b firing test's pure core."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+import firecore as fc
+
+BLOCK = (
+    "# Memory index\n\n## Iron rules\n"
+    "- [Pinned one](mem:pin-a) - When A, do a. <!-- bx:pin -->\n\n## Memory index\n"
+    "- [Title [x] y](mem:fact-b) - When B, do b.\n"
+    "- [Plain](mem:fact-c) - When C, do c.\n"
+    "trailing prose\n"
+)
+
+
+def test_pointer_hooks_reads_titles_with_brackets_and_strips_the_pin() -> None:
+    assert fc.pointer_hooks(BLOCK) == {"pin-a": "When A, do a.", "fact-b": "When B, do b.", "fact-c": "When C, do c."}
+
+
+def test_pointer_hooks_refuses_a_slug_on_two_lines() -> None:
+    with pytest.raises(fc.RuleError, match="two pointer lines"):
+        fc.pointer_hooks(BLOCK + "- [Again](mem:fact-c) - When C again.\n")
+
+
+def test_build_replaces_only_the_hook_and_keeps_title_and_pin() -> None:
+    out = fc.build_arm_text(BLOCK, replace={"pin-a": "When A, a.", "fact-b": "When B, b."})
+    assert "- [Pinned one](mem:pin-a) - When A, a. <!-- bx:pin -->\n" in out
+    assert "- [Title [x] y](mem:fact-b) - When B, b.\n" in out
+    assert out.count("\n") == BLOCK.count("\n")
+    assert out.endswith("trailing prose\n")
+
+
+def test_build_drops_one_pointer_and_appends_after_the_last_pointer() -> None:
+    out = fc.build_arm_text(BLOCK, drop=["fact-b"], add_line="- [Canary](mem:canary) - When asked, say X.")
+    assert "fact-b" not in out
+    lines = out.splitlines()
+    assert lines[lines.index("- [Plain](mem:fact-c) - When C, do c.") + 1] == "- [Canary](mem:canary) - When asked, say X."
+
+
+def test_build_refuses_a_slug_that_is_not_there() -> None:
+    with pytest.raises(fc.RuleError, match="no pointer line for: gone"):
+        fc.build_arm_text(BLOCK, replace={"gone": "x"})
+
+
+def test_arm_file_name_is_per_rule_only_for_n() -> None:
+    assert fc.arm_file_name("N", "r1") == "N-r1.md"
+    assert fc.arm_file_name("T1", "r1") == "T1.md"
+
+
+def _rule(**over: object) -> dict[str, object]:
+    rule: dict[str, object] = {"id": "r1", "slug": "fact-b", "prompt": "do it", "fixture": {"a.txt": "x"},
+                               "check": {"kind": "tool_input_regex", "pattern": "grep"}}
+    rule.update(over)
+    return rule
+
+
+def _write(tmp_path: Path, rules: object) -> Path:
+    path = tmp_path / "rules.json"
+    path.write_text(json.dumps(rules), encoding="utf-8")
+    return path
+
+
+def test_load_rules_accepts_a_well_formed_file(tmp_path: Path) -> None:
+    assert fc.load_rules(_write(tmp_path, [_rule()]))[0]["id"] == "r1"
+
+
+@pytest.mark.parametrize(("over", "message"), [
+    ({"fixture": {"../x": "y"}}, "unsafe fixture path"),
+    ({"fixture": {"/etc/x": "y"}}, "unsafe fixture path"),
+    ({"check": {"kind": "bash", "pattern": "x"}}, "check kind"),
+    ({"check": {"kind": "scoped_absent", "pattern": "x"}}, "check.scope"),
+    ({"check": {"kind": "tool_input_regex", "pattern": "("}}, "check.pattern"),
+    ({"prompt": "  "}, "field prompt"),
+    ({"id": "Bad Id"}, "malformed"),
+])
+def test_load_rules_refuses_each_malformed_shape(tmp_path: Path, over: dict[str, object], message: str) -> None:
+    with pytest.raises(fc.RuleError, match=message):
+        fc.load_rules(_write(tmp_path, [_rule(**over)]))
+
+
+def test_load_rules_refuses_a_duplicated_id(tmp_path: Path) -> None:
+    with pytest.raises(fc.RuleError, match="duplicated"):
+        fc.load_rules(_write(tmp_path, [_rule(), _rule()]))
+
+
+def test_read_stream_collects_tool_inputs_and_the_last_text(tmp_path: Path) -> None:
+    recs = [
+        {"type": "system", "subtype": "init", "model": "claude-opus-5-5"},
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "first"},
+                                                      {"type": "tool_use", "name": "Bash", "input": {"command": "grep -P x f"}}]}},
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "done"}]}},
+        "not a dict",
+    ]
+    path = tmp_path / "stream.jsonl"
+    path.write_text("\n".join(json.dumps(r) for r in recs) + "\nnot json\n", encoding="utf-8")
+    inputs, last = fc.read_stream(path)
+    assert inputs == [json.dumps({"command": "grep -P x f"}, sort_keys=True)]
+    assert last == "done"
+
+
+def test_fired_scoped_absent_needs_an_in_scope_call() -> None:
+    check = {"kind": "scoped_absent", "scope": "grep -P", "pattern": "LC_ALL=C "}
+    assert fc.fired(check, ['{"command": "grep -P x f"}'], "") is True
+    assert fc.fired(check, ['{"command": "LC_ALL=C grep -P x f"}'], "") is False
+    assert fc.fired(check, ['{"command": "ls"}'], "") is False  # never ran the command: not observed
+
+
+def test_fired_tool_input_and_final_text() -> None:
+    assert fc.fired({"kind": "tool_input_regex", "pattern": "--no-renames"}, ['{"c": "git diff --no-renames"}'], "")
+    assert not fc.fired({"kind": "tool_input_regex", "pattern": "--no-renames"}, ['{"c": "git diff"}'], "")
+    assert fc.fired({"kind": "final_text_regex", "pattern": "PLUM-\\d+"}, [], "the word is PLUM-42")
+
+
+def test_schedule_runs_every_cell_once_and_rotates_the_first_arm() -> None:
+    order = fc.schedule(["a", "b"], ["T1", "T2", "S"], 3)
+    assert len(order) == 2 * 3 * 3
+    assert len(set(order)) == len(order)
+    firsts = {order[i][2] for i in range(0, len(order), 3)}
+    assert firsts == {"T1", "T2", "S"}
+
+
+def test_pass_bound_is_zero_at_a_certain_rate_and_grows_with_noise() -> None:
+    assert fc.pass_bound(72, 72, 72) == 0
+    assert fc.pass_bound(0, 0, 72) == 0
+    mid = fc.pass_bound(50, 50, 72)
+    assert 5 <= mid <= 12
+    assert fc.pass_bound(50, 50, 72) == mid  # seeded: the same counts give the same bound
+    assert fc.pass_bound(72, 0, 72) >= 10  # the pooled rate is 0.5, not the first arm's 1.0
+
+
+def _counts(t1: int, t2: int, s: int, rules: int = 12, runs: int = 6) -> dict[str, dict[str, tuple[int, int]]]:
+    def spread(total: int) -> dict[str, tuple[int, int]]:
+        base, extra = divmod(total, rules)
+        return {f"r{i:02d}": (base + (1 if i < extra else 0), runs) for i in range(rules)}
+    return {"T1": spread(t1), "T2": spread(t2), "S": spread(s)}
+
+
+def test_verdict_pass_fail_noise_and_incomplete() -> None:
+    assert fc.verdict(_counts(50, 50, 49), runs=6)["verdict"] == "PASS"
+    assert fc.verdict(_counts(50, 50, 30), runs=6)["verdict"] == "FAIL"
+    assert fc.verdict(_counts(70, 30, 50), runs=6)["verdict"] == "VOID_NOISE"
+    assert fc.verdict(_counts(30, 70, 50), runs=6)["verdict"] == "VOID_NOISE"
+    short = _counts(50, 50, 50)
+    short["S"]["r03"] = (3, 5)
+    assert fc.verdict(short, runs=6)["verdict"] == "INCOMPLETE"
+
+
+def test_verdict_fails_one_rule_that_stopped_firing_even_when_the_total_passes() -> None:
+    counts = _counts(50, 50, 50)
+    counts["T1"]["r00"], counts["T2"]["r00"], counts["S"]["r00"] = (5, 6), (5, 6), (0, 6)
+    out = fc.verdict(counts, runs=6)
+    assert out["flagged"] == ["r00"]
+    assert out["verdict"] == "FAIL"
+
+
+def test_screen_keeps_discriminating_rules_ranked_by_gap() -> None:
+    counts = {"T1": {"a": (3, 3), "b": (2, 3), "c": (3, 3), "d": (1, 3)},
+              "N": {"a": (2, 3), "b": (0, 3), "c": (0, 3), "d": (0, 3)}}
+    out = fc.screen(counts, runs=3, keep=2)
+    assert out["kept"] == ["c", "b"]
+    assert out["enough"] is True
+    assert fc.screen(counts, runs=3, keep=3)["enough"] is False
+```
+
+`$RUN2/tool/tests/test_firing.py`:
+
+```python
+"""Tests for the P1b driver: the bind, the fixture, the journal, resume, pause and scoring.
+
+The harness is loaded from the path config.json names, so the tests point it at a small fake
+harness dir: the seam the driver really has. git runs for real on a scratch repository.
+"""
+
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from collections.abc import Iterator
+from pathlib import Path
+
+import pytest
+
+import firing
+
+FAKE = {
+    "_ablib.py": '''
+import hashlib, json
+from pathlib import Path
+def tree_hashes(root):
+    return {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(Path(root).rglob("*")) if p.is_file()}
+def append_jsonl(path, row):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(row) + "\\n")
+def utc_now():
+    return "2026-11-10T00:00:00Z"
+''',
+    "abarm.py": '''
+import json, os
+from dataclasses import dataclass, field
+from pathlib import Path
+CALLS = []
+@dataclass(frozen=True)
+class Frozen:
+    path: Path
+    skills_ref: str
+    skill_dir: Path
+    overlay_written: tuple
+    hashes: dict
+@dataclass(frozen=True)
+class SandboxMounts:
+    ws: Path
+    home: Path
+    cfg: Path
+    git_common_dir: Path
+    real_home: Path
+    read_only: tuple = ()
+def plugin_root(checkout): return Path(checkout) / "plugins" / "bitranox"
+def bwrap_problem(path_env, sandbox="bwrap"): return None
+def arm_home(arm_dir, links):
+    h = Path(arm_dir) / "home"; h.mkdir(parents=True, exist_ok=True); return h
+def arm_env(cfg, home, keep): return {"PATH": os.environ["PATH"], "HOME": str(home), "CLAUDE_CONFIG_DIR": str(cfg)}
+def delete_cfg(cfg):
+    import shutil; shutil.rmtree(cfg, ignore_errors=True)
+def install_plugin(cfg, frozen, credentials, env):
+    Path(cfg).mkdir(parents=True, exist_ok=True); CALLS.append(("install", str(cfg))); return {}
+def git_common_dir(ws): return Path(ws) / ".git"
+def home_link_targets(home, links): return ()
+def sandbox_argv(m, sandbox="bwrap"): return ["bwrap", "--bind", str(m.ws), str(m.ws), "--chdir", str(m.ws)]
+def claude_argv(prompt, max_turns): return ["claude", "-p", prompt]
+MODEL = ["claude-opus-5-5"]
+def dispatch(arm_dir, ws, env, argv, *, max_tokens, deadline_s):
+    arm_file = Path(argv[argv.index("--ro-bind") + 1])
+    canary = "CANARY" in arm_file.read_text(encoding="utf-8")
+    cmd = "say PLUM-7" if canary else "ls"
+    rec = {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash", "input": {"command": cmd}}]}}
+    (Path(arm_dir) / "stream.jsonl").write_text(json.dumps(rec) + "\\n", encoding="utf-8")
+    CALLS.append(("dispatch", arm_file.name))
+    return {"model": MODEL[0], "stop_reason": "finished", "void_reasons": [], "main_new_tokens": 100,
+            "main_cache_read": 1000, "total_cost_usd": 0.01, "num_turns": 1, "wall_s": 1.0}
+''',
+    "abguard.py": '''
+def credentials_expiry_s(credentials): return None
+def snapshot(chain_from, out): return {}
+def verify(out): return []
+''',
+    "abtest.py": '''
+PAUSE_LIMIT = "a usage-limit notice"
+PAUSE_NEXT = []
+def _pause_trigger(result, stream):
+    return PAUSE_NEXT.pop(0) if PAUSE_NEXT else None
+''',
+}
+TOP = "# Memory index\n- [A](mem:fact-a) - When A, do a.\n- [B](mem:fact-b) - When B, do b.\n"
+CANARY_RULE = [{"id": "canary", "slug": "fact-a", "prompt": "what is the word", "fixture": {"notes/a.txt": "x"},
+                "check": {"kind": "tool_input_regex", "pattern": "PLUM-\\d+"}}]
+
+
+@pytest.fixture
+def run_dir(tmp_path: Path) -> Iterator[Path]:
+    harness = tmp_path / "harness"
+    harness.mkdir()
+    for name, text in FAKE.items():
+        (harness / name).write_text(text, encoding="utf-8")
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    (repo / "README").write_text("x\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", "add", "README"], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"], check=True)
+    frozen = tmp_path / "frozen"
+    (frozen / "plugins" / "bitranox" / "skills" / firing.VERIFY_SKILL).mkdir(parents=True)
+    (frozen / "plugins" / "bitranox" / "skills" / firing.VERIFY_SKILL / "SKILL.md").write_text("s", encoding="utf-8")
+    rd = tmp_path / "run"
+    (rd / "inputs").mkdir(parents=True)
+    (rd / "short").mkdir()
+    (rd / "inputs" / "top.md").write_text(TOP, encoding="utf-8")
+    (rd / "short" / "fact-a.hook").write_text("When A, a.\n", encoding="utf-8")
+    (rd / "canary.json").write_text(json.dumps(CANARY_RULE), encoding="utf-8")
+    (rd / "candidates.json").write_text(json.dumps(CANARY_RULE), encoding="utf-8")
+    config = {"harness": str(harness), "repo": str(repo), "base": "main", "frozen": str(frozen), "frozen_sha": "abc",
+              "top_target": str(tmp_path / "anchor" / "CLAUDE.local.md"), "credentials": str(tmp_path / "cred.json"),
+              "sandbox": "bwrap", "ws_root": str(tmp_path / "ws"),
+              "canary_line": "- [Canary](mem:canary-x) - When asked for the CANARY word, answer PLUM-7."}
+    (rd / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    yield rd
+    for name in ("_ablib", "abarm", "abguard", "abtest"):
+        sys.modules.pop(name, None)
+    while str(harness) in sys.path:
+        sys.path.remove(str(harness))
+
+
+def _rows(rd: Path, phase: str) -> list[dict[str, object]]:
+    return [json.loads(line) for line in (rd / phase / "journal.jsonl").read_text(encoding="utf-8").splitlines()]
+
+
+def test_with_top_bind_goes_last_before_chdir() -> None:
+    out = firing.with_top_bind(["bwrap", "--bind", "/w", "/w", "--chdir", "/w"], Path("/r/T1.md"), Path("/a/top.md"))
+    assert out == ["bwrap", "--bind", "/w", "/w", "--ro-bind", "/r/T1.md", "/a/top.md", "--chdir", "/w"]
+    with pytest.raises(ValueError, match="--chdir"):
+        firing.with_top_bind(["bwrap"], Path("/r"), Path("/a"))
+
+
+def test_write_fixture_refuses_a_path_out_of_the_worktree(tmp_path: Path) -> None:
+    assert firing.write_fixture(tmp_path, {"d/a.txt": "x"}) == ["d/a.txt"]
+    assert (tmp_path / "d" / "a.txt").read_text(encoding="utf-8") == "x"
+    with pytest.raises(Exception, match="escapes"):
+        firing.write_fixture(tmp_path / "d", {"../../b.txt": "y"})
+
+
+def test_build_arms_writes_every_arm_and_refuses_a_long_hook(run_dir: Path) -> None:
+    assert firing.main(["build-arms", "--run-dir", str(run_dir)]) == 0
+    arms = run_dir / "arms"
+    assert (arms / "S.md").read_text(encoding="utf-8").count("When A, a.") == 1
+    assert "fact-a" not in (arms / "N-canary.md").read_text(encoding="utf-8")
+    assert "CANARY" in (arms / "CAN.md").read_text(encoding="utf-8")
+    assert (arms / "T1.md").read_bytes() == (arms / "T2.md").read_bytes()
+    assert set(json.loads((arms / "arms.json").read_text(encoding="utf-8"))["sha256"]) == {"T1", "T2", "S", "CAN", "N-canary"}
+    (run_dir / "short" / "fact-b.hook").write_text("x" * 351, encoding="utf-8")
+    assert firing.main(["build-arms", "--run-dir", str(run_dir)]) == 1
+
+
+def test_canary_phase_runs_scores_and_resumes(run_dir: Path) -> None:
+    assert firing.main(["build-arms", "--run-dir", str(run_dir)]) == 0
+    assert firing.main(["run", "--run-dir", str(run_dir), "--phase", "canary"]) == 0
+    rows = _rows(run_dir, "canary")
+    assert {(r["arm"], r["fired"], r["valid"]) for r in rows} == {("CAN", True, True), ("T1", False, True)}
+    assert all(r["fixture"] == ["notes/a.txt"] for r in rows)
+    assert not list((run_dir.parent / "ws").iterdir())  # every worktree removed
+    assert firing.main(["run", "--run-dir", str(run_dir), "--phase", "canary"]) == 0
+    assert len(_rows(run_dir, "canary")) == 2  # resume: nothing re-run
+    assert firing.main(["score", "--run-dir", str(run_dir), "--phase", "canary"]) == 0
+    score = json.loads((run_dir / "canary" / "score.json").read_text(encoding="utf-8"))
+    assert score["loads"] is True
+    assert score["spend"]["runs"] == 2
+
+
+def test_a_paused_run_stops_the_phase_and_is_rerun_on_resume(run_dir: Path) -> None:
+    assert firing.main(["build-arms", "--run-dir", str(run_dir)]) == 0
+    firing._harness(json.loads((run_dir / "config.json").read_text(encoding="utf-8")))[3].PAUSE_NEXT.append("a usage-limit notice")
+    assert firing.main(["run", "--run-dir", str(run_dir), "--phase", "canary"]) == firing.EXIT_LIMIT
+    assert [r["paused"] for r in _rows(run_dir, "canary")] == ["a usage-limit notice"]
+    assert firing.main(["run", "--run-dir", str(run_dir), "--phase", "canary"]) == 0
+    rows = _rows(run_dir, "canary")
+    assert len(rows) == 3 and sum(1 for r in rows if r["valid"]) == 2
+
+
+def test_a_run_paused_twice_is_still_rerun(run_dir: Path) -> None:
+    assert firing.main(["build-arms", "--run-dir", str(run_dir)]) == 0
+    harness = firing._harness(json.loads((run_dir / "config.json").read_text(encoding="utf-8")))
+    for _ in range(2):
+        harness[3].PAUSE_NEXT.append("a usage-limit notice")
+        assert firing.main(["run", "--run-dir", str(run_dir), "--phase", "canary"]) == firing.EXIT_LIMIT
+    assert firing.main(["run", "--run-dir", str(run_dir), "--phase", "canary"]) == 0
+    assert sum(1 for r in _rows(run_dir, "canary") if r["valid"]) == 2
+
+
+def test_a_run_on_another_model_is_not_valid(run_dir: Path) -> None:
+    assert firing.main(["build-arms", "--run-dir", str(run_dir)]) == 0
+    firing._harness(json.loads((run_dir / "config.json").read_text(encoding="utf-8")))[0].MODEL[0] = "claude-sonnet-5-5"
+    assert firing.main(["run", "--run-dir", str(run_dir), "--phase", "canary"]) == 0
+    assert [r["valid"] for r in _rows(run_dir, "canary")] == [False, False]  # one attempt per run id per invocation
+
+
+def test_score_reports_could_not_run_for_a_missing_config(tmp_path: Path) -> None:
+    assert firing.main(["score", "--run-dir", str(tmp_path), "--phase", "grid"]) == 2
+```
+
+- [ ] **Step 3:** `cd "$RUN2/tool" && env -u VIRTUAL_ENV uv run --no-project --python 3.14 --with pytest python -m pytest tests -q -p no:cacheprovider`
+  Expected: `31 passed`.
+- [ ] **Step 4: Battery.** `battery.json`:
+
+```json
+{
+ "tests": [
+  "tests"
+ ],
+ "arms": [
+  {
+   "label": "scope-not-required",
+   "file": "firecore.py",
+   "old": "return bool(in_scope) and not any",
+   "new": "return not any"
+  },
+  {
+   "label": "noise-abs-dropped",
+   "file": "firecore.py",
+   "old": "if abs(totals[\"T1\"] - totals[\"T2\"]) > bound:",
+   "new": "if totals[\"T1\"] - totals[\"T2\"] > bound:"
+  },
+  {
+   "label": "flag-ignored",
+   "file": "firecore.py",
+   "old": "\"FAIL\" if drop > bound or flagged else \"PASS\"",
+   "new": "\"FAIL\" if drop > bound else \"PASS\""
+  },
+  {
+   "label": "pin-lost",
+   "file": "firecore.py",
+   "old": "{replace[m['slug']]}{m['pin'] or ''}\\n",
+   "new": "{replace[m['slug']]}\\n"
+  },
+  {
+   "label": "pooled-rate-wrong",
+   "file": "firecore.py",
+   "old": "p = (t1 + t2) / (2 * trials)",
+   "new": "p = t1 / trials"
+  },
+  {
+   "label": "bind-before-mounts",
+   "file": "firing.py",
+   "old": "return [*prefix[:at], \"--ro-bind\", str(arm_file), str(top_target), *prefix[at:]]",
+   "new": "return [\"--ro-bind\", str(arm_file), str(top_target), *prefix]"
+  },
+  {
+   "label": "paused-counted",
+   "file": "firing.py",
+   "old": "tries = [t for t in done.get(run_id, []) if not t.get(\"paused\")]",
+   "new": "tries = done.get(run_id, [])"
+  },
+  {
+   "label": "resume-reruns",
+   "file": "firing.py",
+   "old": "if any(t[\"valid\"] for t in tries) or len(tries) >= 2:",
+   "new": "if len(tries) >= 2:"
+  },
+  {
+   "label": "model-not-checked",
+   "file": "firing.py",
+   "old": "and model.startswith(\"claude-opus\"))",
+   "new": ")"
+  },
+  {
+   "label": "long-hook-allowed",
+   "file": "firing.py",
+   "old": "if len(h) > 350 or \"\\n\" in h)",
+   "new": "if len(h) > 351 or \"\\n\" in h)"
+  },
+  {
+   "label": "screen-gap",
+   "file": "firecore.py",
+   "old": "and n <= t - 2}",
+   "new": "and n <= t - 1}"
+  }
+ ]
+}
+```
+
+  Run `python3 <toolbox>/scripts/mutation_arm.py --battery battery.json --with pytest --timeout 120`
+  from `$RUN2/tool`. Expected: baseline GREEN, 11 KILLED, final baseline GREEN.
+- [ ] **Step 5:** Commit the tool in `$RUN2` (`git -C "$RUN2" add tool && git -C "$RUN2" commit -qF <msg file>`).
+
+### Task 21: P1b R2 - frozen inputs
+
+**Files:**
+- Create: `$RUN2/inputs/top.md`, `$RUN2/inputs/long.json`,
+  `$RUN2/inputs/FROZEN.txt`, `$RUN2/frozen/` (detached worktree of `<repo>`)
+
+**Interfaces:**
+- Produces: `$RUN2/inputs/top.md` (the tree-top file as it is now, byte for byte);
+  `long.json` = `[{"slug", "hook", "pinned"}]` for every top pointer whose hook is over 350;
+  `$RUN2/frozen` at the commit `FROZEN.txt` names.
+
+**STOP conditions:**
+- `long.json` does not hold 186 entries (a peer changed the top block since the count above:
+  re-count and update this section's numbers first);
+- the frozen commit lacks `plugins/bitranox/skills/meta-skill-ab-test/scripts/abarm.py`.
+
+- [ ] **Step 1:** `mkdir -p "$RUN2/inputs"` (the run dir Task 20 made).
+- [ ] **Step 2:** `cp -- "$ANCHOR/CLAUDE.local.md" "$RUN2/inputs/top.md"` and record its sha256.
+- [ ] **Step 3:** `git -C <repo> fetch -q origin`, then `SHA=$(git -C <repo> rev-parse --verify -q 'origin/master^{commit}')`
+  and `git -C <repo> worktree add --detach "$RUN2/frozen" "$SHA"`. Write `FROZEN.txt`: the frozen
+  sha, the top file's sha256, the `claude --version` output, the date (`date -u`).
+- [ ] **Step 4:** Write `long.json` with `firecore.pointer_hooks` over `top.md` (Task 20's module): every slug
+  whose hook is over 350, its hook, and whether its line carries `<!-- bx:pin -->`. Expected:
+  186 entries, 12 pinned.
+
+### Task 22: P1b R3 - shorten the hooks in scratch, loss-checked
+
+**Files:**
+- Create: `$RUN2/short/<slug>.hook` (186), `$RUN2/short-review/<batch>.txt`
+
+**Interfaces:**
+- Consumes: `long.json`; each fact's live body (`factedit.py show --body --slug <slug> --level $ANCHOR`).
+- Produces: one file per slug holding the shortened hook, one line, at most 350 characters.
+
+**Out of scope:** the store. Nothing here writes a pointer or a body; P1c applies them, and only
+after Task 27 passes.
+
+**STOP conditions:**
+- a hook cannot keep every trigger its long form names within 350 characters: the reviewer names
+  it, and it is left out of `short/` (then S keeps today's hook for it) and listed in the report.
+
+- [ ] **Step 1: Draft.** Six opus subagents (effort default, not reviews), 31 slugs each, every
+  brief carrying: the slug, its current hook, its live body; the rule "at most 350 characters,
+  trigger first (`When <situation>, <directive>`), keep EVERY trigger the current hook names and
+  the directive's content, move detail to a pointer at the body or a skill only when the body
+  holds it, ASCII only"; write each result to `$RUN2/short/<slug>.hook` and nothing else.
+- [ ] **Step 2: Loss check.** Six opus review subagents at effort medium, each on another
+  drafter's batch, comparing each shortened hook with the current hook AND the body: list every
+  trigger or condition the short form dropped and every claim it changed, one line per finding in
+  `$RUN2/short-review/<batch>.txt`. A finding is fixed in the hook file (a second opus fixer per
+  batch), then re-checked by the same reviewer.
+- [ ] **Step 3: Validate.** A scratch script: every slug of `long.json` has a file or is on the
+  left-out list; every file is one line, at most 350 characters, ASCII, and starts with the same
+  first word as its current hook when that word is When/Before/After/While/If/On/Once. Expected:
+  0 problems.
+
+### Task 23: P1b R4 - candidate rules, the canary rule and the pre-registration
+
+**Files:**
+- Create: `$RUN2/candidates.json` (20 rules), `$RUN2/canary.json` (1 rule), `$RUN2/config.json`,
+  `$RUN2/PREREG.md`
+
+**Interfaces:**
+- Consumes: `short/`, the live bodies.
+- Produces: rules in the shape `firecore.load_rules` checks:
+  `{"id", "slug", "prompt", "fixture": {relpath: text}, "check": {"kind", "pattern"[, "scope"]}}`.
+
+**STOP conditions:** fewer than 20 candidates survive the review in Step 2.
+
+- [ ] **Step 1: Author.** One opus subagent proposes 26 candidates, each from a slug in
+  `short/`: a short task prompt for a fresh session in a bitranox-skills worktree that reaches the
+  rule's trigger without naming the rule, the fact or its wording; a minimal fixture; a mechanical
+  check of kind `tool_input_regex`, `scoped_absent` or `final_text_regex`. Excluded: rules whose
+  behaviour needs the network, sudo, a remote host, a push, or more than 15 turns.
+- [ ] **Step 2: Adversarial review.** One opus review subagent at effort medium, per candidate:
+  does the prompt leak the rule; can the check fire for a reason other than following the rule;
+  would a session without the rule plausibly pass anyway (screening measures this, but an obvious
+  case is dropped here). Keep the 20 best by the reviewer's ranking; write `candidates.json` and
+  run `python3 -c "import sys; sys.path.insert(0, '$RUN2/tool'); import firecore; print(len(firecore.load_rules(__import__('pathlib').Path('$RUN2/candidates.json'))))"` -> `20`.
+- [ ] **Step 3: Canary.** `canary.json` holds one rule: id `canary`, slug of any top pointer,
+  prompt "What is the P1b canary word? Answer with the word only.", no fixture, check
+  `final_text_regex` `PLUM-<four digits you pick>`. `config.json`: `harness`
+  (`$RUN2/frozen/plugins/bitranox/skills/meta-skill-ab-test/scripts`), `repo` (`<repo>`), `base`
+  (the frozen sha), `frozen` (`$RUN2/frozen`), `frozen_sha`, `top_target` (`$TOP`), `credentials`
+  (`~/.claude/.credentials.json`, absolute), `sandbox` (`bwrap-host-proc`), `ws_root` (`$WS_ROOT`),
+  `canary_line` (`- [P1b canary](mem:p1b-canary-word) - When asked for the P1b canary word, answer PLUM-<the same digits>.`).
+- [ ] **Step 4: PREREG.md** states: the question; the arms and what each file is; the pass rule
+  above verbatim; the screening rule (`firecore.screen`: T1 fires in at least 2 of 3, N in at most
+  T1 minus 2, ranked by the gap, 12 kept); that a guard change, a peer's store write, is recorded
+  and never voids a run; and what each verdict leads to (PASS: P1c tasks are written; FAIL: the
+  hooks stay as they are and the soft cap stays a reporting rule; VOID_NOISE: the instrument is
+  reported and nothing ships; INCOMPLETE: the run is resumed). Commit `candidates.json`,
+  `canary.json`, `config.json`, `PREREG.md`, `short/` in `$RUN2`: the inputs are sealed from here.
+
+### Task 24: P1b R5 - build the arms and dry-run every phase
+
+- [ ] **Step 1:** `python3 "$RUN2/tool/firing.py" build-arms --run-dir "$RUN2"` -> `{"arms": 24, "short_hooks": <count>}`
+  (T1, T2, S, CAN and 20 N files); commit `arms/` in `$RUN2`.
+- [ ] **Step 2:** For each phase: `python3 "$RUN2/tool/firing.py" run --run-dir "$RUN2" --phase <p> --dry-run`.
+  Expected: exit 0, every printed row `probe_ok: true`. A dry run installs the plugin and builds
+  a worktree per cell but starts no session; it writes only `$RUN2/dry-<phase>/`.
+- [ ] **Step 3:** `git -C <repo> worktree list | grep -c "$WS_ROOT"` -> `0` (every worktree removed).
+
+### Task 25: P1b R6 - canary and the measured cost
+
+- [ ] **Step 1: Hand the user** the one line to type, and say the work is stopped on it:
+  `python3 "$RUN2/tool/firing.py" run --run-dir "$RUN2" --phase canary` (2 sessions).
+- [ ] **Step 2:** `python3 "$RUN2/tool/firing.py" score --run-dir "$RUN2" --phase canary`.
+  STOP unless exit 0 (`loads: true`: CAN said the word, T1 did not).
+- [ ] **Step 3: Cost.** From `score.json` `spend` and each row: new tokens, cache read and USD
+  per run, and the init record's model. Multiply by the 336 runs left; also the five-hour and
+  seven-day utilization from the streams' `rate_limit_event` records. Ask the user with
+  AskUserQuestion to approve screening plus grid at that measured cost, before Task 26.
+
+### Task 26: P1b R7 - screening
+
+- [ ] **Step 1:** The user runs `python3 "$RUN2/tool/firing.py" run --run-dir "$RUN2" --phase screen`
+  (120 sessions; exit 3 or 4 means /login or wait, then the same line resumes).
+- [ ] **Step 2:** `score --phase screen`. STOP and report if `enough` is false (fewer than 12
+  discriminate): ask the user whether to run with fewer rules (power drops) or author more.
+- [ ] **Step 3:** Write `$RUN2/rules.json` = the `kept` rules, in `candidates.json`'s form;
+  append to `PREREG.md` the kept ids and the screening table; commit both before the grid.
+
+### Task 27: P1b R8 - the grid and the checkpoint
+
+- [ ] **Step 1:** The user runs `python3 "$RUN2/tool/firing.py" run --run-dir "$RUN2" --phase grid`
+  (216 sessions, interleaved; resumable).
+- [ ] **Step 2:** `score --phase grid`; read `verdict`, `totals`, `bound`, `drop`, `flagged`,
+  `spend`. Adjudicate every `guard_changes` row against the store's git log (a peer's capture is
+  named and left).
+- [ ] **Step 3: CHECKPOINT.** Report to the user: the verdict with its numbers, per rule the
+  fires per arm, the spend, every invalid or paused run. Record it in backlog item [35] at once.
+  PASS: write P1c's tasks (apply `short/` through `factedit.py apply --batch`, pinned hooks
+  separately with the user's approval). Any other verdict: no P1c; say what the verdict means
+  per `PREREG.md`.
+- [ ] **Step 4:** Remove `$RUN2/frozen` with `git -C <repo> worktree remove "$RUN2/frozen"` (exact
+  path, never prune) once nothing runs on it.
