@@ -275,7 +275,11 @@ the success line, abort-and-show on a miss).
    - a hook written generally, at a level whose PLACE-HERE EXCLUDES it, is a MISPLACEMENT:
      re-home it to the level the routing prompt picks, whatever `should-promote` says (a `hold`
      answers the promotion question, not this one), and still record the sighting with
-     `saw-promotable`;
+     `saw-promotable`. When that level is the tree top, the mode decides (references/dream-core.md,
+     Mode and the misplacement row): propose mode lists the move in the report with its cost (the
+     bytes it adds to the top block) for the user's approval and does not apply it; auto mode
+     applies it and prints its cost in the report; a manual run under `off` proposes it. A re-home
+     to any level below the top is applied in every mode;
    - anything else - the hook names its project, or its level's PLACE-HERE covers it, or you
      cannot tell - is a PROMOTION, and passes the corroboration gate (user-stated: eager;
      model-inferred: >= 2 DISTINCT PROJECTS). Record the sighting with
@@ -285,8 +289,10 @@ the success line, abort-and-show on a miss).
      `hold` exits 1 - an answer, not a failure), with one exception: a `promote` resting on a
      project key you cannot resolve to a real directory is a `hold` (how to resolve the keys:
      references/dream-core.md, "A `promote` is only as good as the keys behind it"). `promote`:
-     move it to the tree top, then run `dream_state.py promoted <slug>` to clear every project's
-     sighting.
+     move it to the tree top as the mode says (references/dream-core.md, Mode: auto mode applies
+     the move and prints its cost; propose mode and a manual run under `off` list it with its
+     cost for the user's approval and leave the fact where it is), and once it has moved, run
+     `dream_state.py promoted <slug>` to clear every project's sighting.
      `hold`: it STAYS at its project level - no move to the tree top and no move part-way up as
      a compromise, however general its body reads; report it as held. A fact that looks
      universal on ONE project's evidence is exactly what the gate exists to stop, so "it plainly
@@ -341,12 +347,16 @@ the success line, abort-and-show on a miss).
    legacy store, and each needs a rewrite - trigger-less hooks, and bodies missing the
    `**Why:**`/`**How to apply:**` frame - a tracked backlog number, advisory). Then apply judgment on
    top: a hook whose trigger does not actually name the situations its body applies to (the FIRING
-   check - would this line catch your attention at the right moment?). Do
-   NOT rewrite a hook merely for exceeding the 350 SOFT cap - a complete trigger-first hook may run up
-   to the hard cap, which the engine enforces by refusal. Queue offenders to an opus
-   rewrite (trigger-first, facts preserved, slug-stable via `add --slug <the stored slug>` aimed at
-   the level that OWNS the pointer - a title-derived slug mints a duplicate when the fact was
-   retitled, and any other level is refused as a collision), propose-diff, apply.
+   check - would this line catch your attention at the right moment?). Length alone is not a
+   FIRING defect: a complete trigger-first hook may run up to the 500 hard cap, which the engine
+   enforces by refusal, so the firing check never rewrites a hook for exceeding the 350 SOFT cap.
+   Length is a COST question, met by representation (references/dream-passes.md, removal policy): a
+   hook over the soft cap at a broad level goes into the report with its length and its level's
+   block bytes as a shortening proposal, never shortened unasked. Queue the FIRING offenders (a
+   trigger that misses its situations) to an opus rewrite (trigger-first, facts preserved,
+   slug-stable via `add --slug <the stored slug>` aimed at the level that OWNS the pointer - a
+   title-derived slug mints a duplicate when the fact was retitled, and any other level is refused
+   as a collision), propose-diff, apply.
    Bodies missing the frame or the **Why:**/**How to apply:** sections get the same treatment.
    - **Jev shadow on the firing check** (only when step 0c found `jev_shadow.py status` on; home, launch and
      procedure as in step 5's shadow bullet; a fresh `D=$(mktemp -d)` of its own outside any repo):
@@ -422,6 +432,12 @@ the success line, abort-and-show on a miss).
    to explain before finishing. A backup taken by an older release has no digests: verify then
    prints `hooks and bodies not compared` (`content_compared: false` under `--json`) and checks
    level, slug, title and pin only.
+   Under the diff, verify prints the `pointer blocks` lines (one per level whose block changed,
+   top first: bytes and pointers before and after, and how many slugs arrived and left); the
+   slugs themselves are in `data.levels[]` (`arrived`, `left`) under `--json`. They go into the
+   report as printed, with the slugs that arrived at the tree top named (references/dream-core.md,
+   report contract). A level the backup holds no copy of prints `block bytes before not known`
+   and `?` for its bytes before (`null` under `--json`), never 0.
    A clean verify says nothing about a fact's KIND: a body digest says THAT a body changed, never
    whether its `type:` did, and no other
    shipped check compares a body's `metadata: type:` before and after a write (the engine prints
@@ -551,17 +567,17 @@ An ended run missing any box is not done - finish it or say plainly what was ski
 
 ## Rationalizations (pressure-tested; these do not fly)
 
-| Excuse                                                         | Reality                                                                                                                                                                                           |
-|----------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| "not-due / no store exists -> nothing to consolidate"          | not-due never suppresses capture; an absent store is the TRIGGER to create one. Two learnings uncaptured = work exists.                                                                           |
-| "Only N entries changed -> grep their keywords over CLAUDE.md" | The named prohibited shortcut. Reconciliation is rule-by-rule, BOTH directions, every dream - pre-existing overlap is the point.                                                                  |
-| "auto mode + 'stop asking' covers the pinned entry"            | Auto mode changes nothing here: the engine REFUSES an ordinary `add` on a pinned slug regardless of mode, and the dream never calls `amend-pinned` (human-only) to push a change through anyway.  |
-| "I'm 90% sure, despite CONFIDENCE low"                         | The router's confidence gates the move, not your certainty. Evidence beats wording; UNSURE stays put.                                                                                             |
-| "`hold`, but the body says it applies to every project"        | A fact that reads universal on ONE project's evidence is exactly what the gate stops. For a PROMOTION, `hold` binds: no tree-top move, and no part-way move up to a middle level as a compromise. |
-| "`should-promote` printed `hold`, so this misfiled fact stays" | A `hold` answers the promotion question only. Classify first: a general hook at a level whose PLACE-HERE excludes it is a MISPLACEMENT and is re-homed whatever the verdict says.                 |
-| "Writing it into CLAUDE.md is faster than the engine"          | Routing into CLAUDE.md is not capture; the store is the system of record.                                                                                                                         |
-| "The store is empty/unchanged, so the passes no-op"            | Only counter-gated passes no-op on emptiness; chain-gated passes (reconciliation, dedup, placement) run EVERY dream.                                                                              |
-| "No time for the full pass - I'll note it for next dream"      | Say it out loud in the report as INCOMPLETE and flagged; never silently downgrade a pass and call the dream done.                                                                                 |
+| Excuse                                                         | Reality                                                                                                                                                                                                                                                                                                                                                                                             |
+|----------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| "not-due / no store exists -> nothing to consolidate"          | not-due never suppresses capture; an absent store is the TRIGGER to create one. Two learnings uncaptured = work exists.                                                                                                                                                                                                                                                                             |
+| "Only N entries changed -> grep their keywords over CLAUDE.md" | The named prohibited shortcut. Reconciliation is rule-by-rule, BOTH directions, every dream - pre-existing overlap is the point.                                                                                                                                                                                                                                                                    |
+| "auto mode + 'stop asking' covers the pinned entry"            | Auto mode changes nothing here: the engine REFUSES an ordinary `add` on a pinned slug regardless of mode, and the dream never calls `amend-pinned` (human-only) to push a change through anyway.                                                                                                                                                                                                    |
+| "I'm 90% sure, despite CONFIDENCE low"                         | The router's confidence gates the move, not your certainty. Evidence beats wording; UNSURE stays put.                                                                                                                                                                                                                                                                                               |
+| "`hold`, but the body says it applies to every project"        | A fact that reads universal on ONE project's evidence is exactly what the gate stops. For a PROMOTION, `hold` binds: no tree-top move, and no part-way move up to a middle level as a compromise.                                                                                                                                                                                                   |
+| "`should-promote` printed `hold`, so this misfiled fact stays" | A `hold` answers the promotion question only. Classify first: a general hook at a level whose PLACE-HERE excludes it is a MISPLACEMENT and is re-homed whatever the verdict says. To the tree top the mode decides: propose mode lists the re-home with its cost for the user's approval and does not apply it, auto mode applies it and prints its cost, and a manual run under `off` proposes it. |
+| "Writing it into CLAUDE.md is faster than the engine"          | Routing into CLAUDE.md is not capture; the store is the system of record.                                                                                                                                                                                                                                                                                                                           |
+| "The store is empty/unchanged, so the passes no-op"            | Only counter-gated passes no-op on emptiness; chain-gated passes (reconciliation, dedup, placement) run EVERY dream.                                                                                                                                                                                                                                                                                |
+| "No time for the full pass - I'll note it for next dream"      | Say it out loud in the report as INCOMPLETE and flagged; never silently downgrade a pass and call the dream done.                                                                                                                                                                                                                                                                                   |
 
 ## Common mistakes
 

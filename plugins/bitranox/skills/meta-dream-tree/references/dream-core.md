@@ -76,15 +76,23 @@ holds only the stale version you were replacing, so it is your only restore sour
 
 Read the mode first (`dream_state.py mode`; knobs in `~/.claude/.bitranox-memory.json` via
 `self_improve_signals.load_config()`):
-- **`propose`** (default): apply safe private-memory consolidation; apply CLAUDE.md consolidation
-  under the reachability invariant (see Boundaries) and REPORT every file touched; route skill
-  changes to a self-PR. Mention the `dream_mode` knob (`bitranox:meta-memory-settings`) at the end.
-- **`auto`**: no per-change prompts - CLAUDE.md edits as above, plus ship skill changes directly.
-- **`off`**: no nudges; a manual run consolidates PRIVATE memory only.
+- **`propose`** (default): apply safe private-memory consolidation, EXCEPT a move of a fact to
+  the tree top (the anchor), which it PROPOSES: the report lists the fact and its cost (the bytes
+  it adds to the top block: the UTF-8 length of its pointer line plus the newline) for the user's
+  approval, and the fact stays where it is. Moves to every level below the top are applied. Apply
+  CLAUDE.md consolidation under the reachability invariant (see Boundaries) and REPORT every file
+  touched; route skill changes to a self-PR. Mention the `dream_mode` knob
+  (`bitranox:meta-memory-settings`) at the end.
+- **`auto`**: no per-change prompts - CLAUDE.md edits as above, plus ship skill changes directly;
+  a move of a fact to the tree top is applied and its cost printed in the report.
+- **`off`**: no nudges; a manual run consolidates PRIVATE memory only, and PROPOSES a move of a
+  fact to the tree top as propose mode does.
 
 ## Boundaries (the whole family; skills point here, they do not restate it)
 
-- **Private memory + the curated stores:** back up, then apply (reversible via the backup).
+- **Private memory + the curated stores:** back up, then apply (reversible via the backup); a
+  move of a fact to the tree top follows Mode (proposed in propose mode and under `off`, applied
+  with its cost in auto).
 - **`CLAUDE.md`:** back up, then apply, then REPORT per file. A rule may be REMOVED only when the
   reachability invariant holds (`dream-passes.md` -> "CLAUDE.md reconciliation"): a covering rule at
   an ANCESTOR directory, delivered as always-loaded text. Otherwise rewrite in place and keep it.
@@ -309,13 +317,20 @@ defect it was asked to fix.
 
 Decide which question you are asking from the fact's HOOK and the level's PLACE-HERE:
 
-| hook names the project | PLACE-HERE covers it | what it is     | what to do                                 |
-|------------------------|----------------------|----------------|--------------------------------------------|
-| yes                    | yes                  | a promotion    | honour the hold                            |
-| no                     | no                   | a misplacement | re-home it, and record the sighting anyway |
+| hook names the project | PLACE-HERE covers it | what it is     | what to do                                                                   |
+|------------------------|----------------------|----------------|------------------------------------------------------------------------------|
+| yes                    | yes                  | a promotion    | honour the hold                                                              |
+| no                     | no                   | a misplacement | re-home it, and record the sighting anyway; to the tree top as the mode says |
 
 Record the sighting in the re-home case too - it costs nothing, and the fact may still be a
 genuine promotion candidate later.
+
+A re-home to the tree top is the one re-home the mode decides (see Mode). The top's block loads
+in every session of the tree, and the misplacement test passes for nearly any lesson written
+generally, so in propose mode the move is PROPOSED in the report with its cost (the fact and the
+bytes it adds to the top block) for the user's approval and the fact stays where it is; in auto
+mode the move is applied and its cost is printed in the report; a manual run under `off`
+proposes it, as propose mode does. A re-home to any level below the top is applied in every mode.
 
 **Reading a high tree-top share.** When a placement pass sends most upward moves to the tree top
 and names the intermediate rungs almost never, do not read it as the router skipping rungs. Name
@@ -366,13 +381,18 @@ re-run `--check-tree` and also assert the invariant directly:
 one path, the anchor's own store (the `-not -path` drops stores nested in a backup copy, which
 `--check-tree` skips too). The dream is not finished while a second path prints.
 
-Report counts (merges, placements with direction, prunes,
-pinned untouched) and, when the run covered what the nudge asked for, run `dream_state.py done
---kind nap` (a nap) or `dream_state.py done --kind tree --dream <dream id>` (meta-dream-tree, whose
-`done` refuses until each of its Jev shadow sites logged rows for that id or was skipped with a
-reason); a bare `done` is refused. A run that has Jev shadow sites (meta-dream-tree and the crosstree variants; a nap
-has none) also reports one `jev shadow:` line, one entry per site in one of the four forms defined
-once in `bitranox:meta-self-improve` -> references/jev-shadow.md, "The report line".
+Report counts (merges, placements with direction, prunes, pinned untouched), then the
+`pointer blocks` lines `store_manifest.py verify` prints, as printed: one per level whose block
+changed, top first, with bytes and pointers before and after and how many slugs arrived and left.
+Name every slug that arrived at the tree top (verify's `--json` lists them in `data.levels[]`).
+Every move to the tree top is listed beside them with its cost: as a proposal awaiting the user's
+approval in propose mode and under `off`, as applied in auto mode. When the run covered what the
+nudge asked for, run `dream_state.py done --kind nap` (a nap) or
+`dream_state.py done --kind tree --dream <dream id>` (meta-dream-tree, whose `done` refuses until
+each of its Jev shadow sites logged rows for that id or was skipped with a reason); a bare `done` is
+refused. A run that has Jev shadow sites (meta-dream-tree and the crosstree variants; a nap has
+none) also reports one `jev shadow:` line, one entry per site in one of the four forms defined once
+in `bitranox:meta-self-improve` -> references/jev-shadow.md, "The report line".
 
 ## Tier note (inline deep judgments)
 

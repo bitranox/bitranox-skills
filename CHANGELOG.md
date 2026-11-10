@@ -52,6 +52,12 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 - `reconcile_memory_index.py --check`: the large-index warning says to shrink the block in
   place (fold near-duplicates, trim long hooks) and no longer recommends lifting facts to a
   broader level, which loads them in more sessions.
+- meta-dream-tree: a move of a fact to the tree top follows the dream mode: propose mode, and a
+  manual run under `off`, lists the move with its cost (the bytes it adds to the top block) for
+  approval and does not apply it, auto mode applies it and prints its cost; a re-home below the
+  top is applied in every mode. The firing check no longer rewrites a hook for its length, and a
+  long hook at a broad level is reported as a shortening proposal; step 8 copies verify's
+  pointer-block lines into the report, naming the slugs that arrived at the tree top.
 
 ## [11.0.0]
 
