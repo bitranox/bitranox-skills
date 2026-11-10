@@ -41,10 +41,13 @@ Phase 1 is split in three, each shipped on its own.
   hand-roll their backups, switch to `store_manifest` backup and verify like the tree dream and
   the nap.
 - *Rule-text fixes.* The cost side reaches the rules that push facts up: a misplacement is no
-  longer re-homed to the top whatever the verdict says; a move of a fact to the tree top, by a
-  dream or a nap, follows the dream mode: propose mode lists it with its cost (the bytes it adds
-  to the top block) for the user's approval, auto mode applies it and prints the cost, a manual
-  run in off mode proposes it like propose mode, and a re-home below the top is applied as before; the soft-cap sentence of the tree dream stops contradicting the passes
+  longer re-homed to the top whatever the verdict says; a misplacement re-home to the tree top,
+  by a dream or a nap, follows the dream mode: propose mode lists it with its cost (the bytes it
+  adds to the top block) for the user's approval, auto mode applies it and prints the cost, a
+  manual run in off mode proposes it like propose mode, and a re-home below the top is applied as
+  before; a corroborated promotion, which already passed the promotion gate, is applied in every
+  mode with its cost printed (user decision 2026-11-10, "Misplacements only"); the soft-cap
+  sentence of the tree dream stops contradicting the passes
   note that size is met by representation; `reconcile_memory_index.py`'s large-index warning stops
   recommending "lift".
 - *Titles kept as data.* Each title is copied into its body's frontmatter; pointer lines are

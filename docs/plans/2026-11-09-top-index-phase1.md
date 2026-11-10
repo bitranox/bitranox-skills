@@ -53,12 +53,16 @@ amended after review). Frozen inputs: the main checkout's gitignored
 - User decisions this plan implements (verbatim option labels, 2026-11-09): "Keep as data, decide
   in phase 2 (Recommended)" (titles); "Today twice + shortened, 6 runs (Recommended)" (firing
   test); "Over 350, to 350 (Recommended)" (hook scope); and, 2026-11-10, "Propose in propose
-  mode, apply in auto" (a move of a fact to the tree top follows the dream mode: in propose mode
-  it is listed in the report with its cost, the bytes it adds to the top block, for the user's
-  approval and not applied; in auto mode it is applied and its cost printed in the report; a
-  manual run under `off` proposes it, as propose mode does (user, 2026-11-10: "Propose, like
-  propose"); re-homes below the top are unchanged in every mode; the nap
-  follows the same rule).
+  mode, apply in auto" (a MISPLACEMENT re-home to the tree top follows the dream mode: in propose
+  mode it is listed in the report with its cost, the bytes it adds to the top block, for the
+  user's approval and not applied; in auto mode it is applied and its cost printed in the report;
+  a manual run under `off` proposes it, as propose mode does (user, 2026-11-10: "Propose, like
+  propose"); re-homes below the top are unchanged in every mode; the nap, which runs no
+  promotion gate, treats every move it routes to the anchor as such a re-home). User decision
+  2026-11-10, verbatim label "Misplacements only": a corroborated promotion (`should-promote`
+  prints `promote`) is applied in every mode as before, its cost printed for information; only a
+  misplacement to the top follows the mode. Where Tasks 8-10 below still say "a move of a fact
+  to the tree top", read "a misplacement re-home to the tree top" (commit a09c16ce).
 
 ---
 
@@ -1877,7 +1881,8 @@ every mode, unchanged); the mode knob's values (the `off` line gains its carve-o
   stays put. A pinned fact re-levels` with:
 
 ```text
-   (up or down). A move TO the tree top (the anchor) follows the core's Mode, because the top's
+   (up or down). A move TO the tree top (the anchor) is a misplacement re-home in the core's
+   sense, since a nap runs no promotion gate, and follows the core's Mode, because the top's
    block loads in every session of the tree: in propose mode the nap lists the fact and its cost
    (the bytes it adds to the top block) in the report for the user's approval and does not apply
    it; in auto mode it applies the move and prints its cost in the report; under `off` it
@@ -1907,7 +1912,7 @@ every mode, unchanged); the mode knob's values (the `off` line gains its carve-o
 
 ```json
 [{"skill": "meta-dream-nap", "kind": "rule", "topic": "move-to-top-by-mode",
-  "decision": "A nap follows the dream mode for a move to the tree top (the anchor): propose mode lists it in the report with its cost (the bytes it adds to the top block) for the user's approval and does not apply it; auto mode applies it and prints its cost in the report; A manual run under `off` proposes it, as propose mode does. Moves down from the anchor and between other chain levels are applied in every mode.",
+  "decision": "A nap follows the dream mode for a move to the tree top (the anchor), which is a misplacement re-home because a nap runs no promotion gate: propose mode lists it in the report with its cost (the bytes it adds to the top block) for the user's approval and does not apply it; auto mode applies it and prints its cost in the report; A manual run under `off` proposes it, as propose mode does. Moves down from the anchor and between other chain levels are applied in every mode.",
   "why": "The anchor's block loads in every session of the tree, and naps, run many times a day, moved the second most pointers to the top. The user chose to keep auto mode hands-off and make every move to the top carry its cost.",
   "evidence": {"tier": "user", "text": "User decision 2026-11-10: Propose in propose mode, apply in auto. Measured: store backups 2026-11-09, nap intervals added 140 top pointers against 71 removed over 85 intervals."},
   "reopen_if": "Pointer placement is generated from topics (phase 2), naps stop running on the anchor's chain, or the top block's growth under auto mode makes the user revisit the choice.",
