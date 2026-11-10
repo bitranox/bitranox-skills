@@ -1735,9 +1735,15 @@ def retitle_entry(level, slug, to_title):
     us.add_pointer(str(lvl), slug=slug, title=title, hook=entry.hook,
                    pin=entry.pin)
     rep["levels"].append(str(lvl))
-    retitled_body = _with_title(entry.body, title)
-    if retitled_body != entry.body:          # a missing body reads as "": writing it back would
-        us.put_body(str(anchor), slug, retitled_body)   # create a body for a dangling pointer
+    # The body is re-read under the level lock rather than taken from `entry`: that copy was read
+    # unlocked, and an `add` on the same slug in another session (which rewrites the body under
+    # this lock) can land between that read and this write - writing the stale copy back loses its
+    # prose. The lock is non-reentrant, so it is taken only after `add_pointer` released its own.
+    with sig.memory_lock(sig.claude_local_md_path(str(lvl))):
+        current = read_store_text(us.body_path(anchor, slug)).rstrip("\n")
+        retitled_body = _with_title(current, title)
+        if current and retitled_body != current:     # "" is an absent body: writing it back
+            us.put_body(str(anchor), slug, retitled_body)   # would create one for a dangler
 
     # A slug carried by more than one level is a pre-existing violation, but leaving the OTHER
     # pointers on the old title is not neutral: `move_entry` and `relocate_entry` both refuse when

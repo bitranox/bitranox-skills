@@ -670,6 +670,64 @@ def test_a_backup_without_level_copies_reports_skipped_never_zero_bytes(tmp_path
     assert "block bytes before not known" in text
 
 
+def _as_an_old_manifest(out: Path) -> None:
+    """Reduce a fresh backup to what a manifest from before level copies holds: no `levels/`
+    copies and no recorded `levels` list."""
+    shutil.rmtree(out / "levels")
+    manifest = out / "manifest.json"
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    del data["levels"]
+    manifest.write_text(json.dumps(data), encoding="utf-8")
+
+
+def test_an_identical_verify_on_an_old_manifest_lists_no_level_as_changed(tmp_path):
+    """Unknown bytes before are not a change: with no copy to compare against, every level read as
+    changed, and a dream reading the list explained moves that never happened. The skipped line
+    still names the levels whose bytes before are unknown."""
+    sib_a, sib_b = make_siblings(tmp_path)
+    out = outside(tmp_path)
+    assert run_cli(["backup", "--from", str(tmp_path), "--out", str(out)], tmp_path).returncode == 0
+    _as_an_old_manifest(out)
+    r = run_cli(["verify", "--out", str(out)], tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert r.stdout.startswith("IDENTICAL"), r.stdout
+    assert "pointer blocks: no level changed" in r.stdout, r.stdout
+    assert not [ln for ln in r.stdout.splitlines() if "  bytes " in ln], r.stdout
+    env = json.loads(run_cli(["verify", "--out", str(out), "--json"], tmp_path).stdout)
+    unknown = [s for s in env["skipped"] if "block bytes before not known" in s]
+    assert len(unknown) == 1
+    for level in (tmp_path, sib_a, sib_b):
+        assert str(level) in unknown[0]
+
+
+def test_an_old_manifest_still_lists_a_level_whose_pointers_changed(tmp_path):
+    """Ignoring unknown bytes must not hide a level whose pointers moved: the pointer counts and
+    slugs come from the manifest entries, which every manifest has."""
+    _sib_a, sib_b = make_siblings(tmp_path)
+    out = outside(tmp_path)
+    assert run_cli(["backup", "--from", str(tmp_path), "--out", str(out)], tmp_path).returncode == 0
+    _as_an_old_manifest(out)
+    sib_b.joinpath("CLAUDE.local.md").write_text("# Memory index\n", encoding="utf-8")
+    text = run_cli(["verify", "--out", str(out)], tmp_path).stdout
+    cost_lines = [ln for ln in text.splitlines() if "  bytes " in ln]
+    assert len(cost_lines) == 1 and cost_lines[0].lstrip().startswith(str(sib_b)), text
+    assert "bytes ? -> " in cost_lines[0]
+
+
+def test_the_unknown_bytes_message_names_both_causes(tmp_path):
+    """Two different backups give no bytes before: one whose level copy is missing or unreadable,
+    and one written before level copies existed. The message names both, so a reader does not go
+    looking for a lost copy that never was."""
+    make_siblings(tmp_path)
+    out = outside(tmp_path)
+    assert run_cli(["backup", "--from", str(tmp_path), "--out", str(out)], tmp_path).returncode == 0
+    _as_an_old_manifest(out)
+    env = json.loads(run_cli(["verify", "--out", str(out), "--json"], tmp_path).stdout)
+    line = next(s for s in env["skipped"] if "block bytes before not known" in s)
+    assert "holds no readable copy of them" in line
+    assert "the manifest predates level copies" in line
+
+
 def test_a_manifest_without_a_levels_list_cannot_prove_a_new_level_was_absent(tmp_path):
     """A manifest written before the `levels` list existed knows only the levels it saw pointers
     at; a level that has pointers now may have existed then with an empty block."""

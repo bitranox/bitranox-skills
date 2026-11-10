@@ -525,7 +525,10 @@ class LevelCost:
 
     @property
     def changed(self) -> bool:
-        return (self.bytes_before != self.bytes_after
+        """Unknown bytes before are not a change: with no copy to compare, every level of an old
+        manifest read as changed, and a reader explained moves that never happened. Such a level
+        is still named in the skipped line, and its pointers still decide."""
+        return ((self.bytes_before is not None and self.bytes_before != self.bytes_after)
                 or self.pointers_before != self.pointers_after or bool(self.arrived or self.left))
 
     def as_dict(self) -> dict:
@@ -610,7 +613,8 @@ def cost_report(out: Path) -> tuple[list[LevelCost], list[str]]:
                                left=tuple(sorted(before - after))))
     skipped = [] if not unknown else [
         f"block bytes before not known for {len(unknown)} level(s): the backup holds no readable "
-        "copy of them, so their bytes_before is null rather than 0: " + "; ".join(unknown)]
+        "copy of them, or the manifest predates level copies, so their bytes_before is null "
+        "rather than 0: " + "; ".join(unknown)]
     return costs, skipped
 
 

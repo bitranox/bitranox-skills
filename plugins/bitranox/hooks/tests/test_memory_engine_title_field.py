@@ -8,6 +8,7 @@ all of this. All content ASCII.
 """
 
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -108,6 +109,73 @@ def test_a_retitle_of_a_fact_whose_body_is_missing_creates_no_body_file(tmp_path
     us.body_path(anchor, slug).unlink()
     assert E.retitle_entry(proj, slug, "New title")["retitled"] is True
     assert not us.body_path(anchor, slug).exists()
+
+
+def _on_first_call(name, module_file, action):
+    """A profile function that runs `action(frame)` once, when the function `name` defined in
+    `module_file` is first entered. It replaces nothing: it only observes the call and lets the test
+    act at that exact point, which is how a second session's write is placed between the retitle's
+    first read of the store and its own writes."""
+    fired = []
+
+    def profile(frame, event, _arg):
+        if fired or event != "call":
+            return
+        code = frame.f_code
+        if code.co_name == name and Path(code.co_filename).name == module_file:
+            fired.append(True)
+            action(frame)
+
+    return profile, fired
+
+
+def _run_profiled(profile, fn):
+    previous = sys.getprofile()
+    sys.setprofile(profile)
+    try:
+        return fn()
+    finally:
+        sys.setprofile(previous)
+
+
+def test_a_retitle_keeps_prose_another_session_wrote_while_it_ran(tmp_path):
+    """Session A retitles while session B updates the same fact's prose. B's write lands after A
+    read the store and before A writes: A must write the title into B's prose, not into the stale
+    prose it read first. Before the fix A wrote `_with_title(P1)` back and B's prose was lost, with
+    exit 0 on both sides."""
+    anchor, proj = _tree(tmp_path)
+    slug = E.add_or_update_entry(proj, "Old title", "When x, do y.", body="Prose one.")
+
+    def session_b_writes(_frame):
+        E.add_or_update_entry(proj, "Old title", "When x, do y.", body="Prose two.", slug=slug)
+
+    profile, fired = _on_first_call("add_pointer", "uuid_store.py", session_b_writes)
+    rep = _run_profiled(profile, lambda: E.retitle_entry(proj, slug, "New title"))
+    assert fired, "the observer never saw add_pointer: the interleaving was not exercised"
+    assert rep["retitled"] is True
+    body = _body(anchor, slug)
+    assert "Prose two." in body, body
+    assert "Prose one." not in body, body
+    assert E._body_title(body) == "New title"
+    assert _pointer_title(proj, slug) == "New title"
+
+
+def test_a_retitle_writes_the_body_while_holding_the_level_lock(tmp_path):
+    """The body write is a read-modify-write of a file `add` rewrites under the level lock, so it
+    must run under that same lock, or the re-read can still be overtaken."""
+    anchor, proj = _tree(tmp_path)
+    slug = E.add_or_update_entry(proj, "Old title", "When x, do y.", body="Prose.")
+    lock = Path(str(sig.claude_local_md_path(proj)) + ".lock")
+    held = []
+
+    def record_lock(frame):
+        if frame.f_locals.get("slug") == slug:
+            held.append(lock.exists())
+
+    profile, fired = _on_first_call("put_body", "uuid_store.py", record_lock)
+    assert _run_profiled(profile, lambda: E.retitle_entry(proj, slug, "New title"))["retitled"]
+    assert fired and held == [True], held
+    assert not lock.exists()
 
 
 def test_a_move_leaves_the_body_and_its_title_byte_identical(tmp_path):

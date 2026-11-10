@@ -39,11 +39,15 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 - `store_manifest.py verify` reports the cost of every level's always-loaded pointer block:
   bytes and pointer count before and after, and how many slugs arrived and left (the slugs
   themselves in `data.levels[]` under `--json`), one line per changed level, top first. A level the
-  backup holds no copy of reports its bytes before as unknown, never as 0. The exit codes are
-  unchanged.
+  backup holds no copy of reports its bytes before as unknown, never as 0, and counts as changed
+  only when its pointers changed, so an identical verify against a manifest from before level
+  copies lists no level. The exit codes are unchanged.
 - A fact's body frontmatter carries its title (`title:`, after `description:`), written by
   `add` and kept equal to the pointer's title by every engine write: `amend-pinned`, `retitle`
-  and `factedit.py apply` included. Pointer lines are unchanged.
+  and `factedit.py apply` included. Pointer lines are unchanged. `retitle` writes the body under
+  the level lock, so an `add` of the same fact in another session keeps its prose, and a
+  `migrate_memory.py` run resumed across this upgrade reuses a placement written without a title
+  instead of placing a `-2` copy.
 - `memory_engine.py heal --backfill-titles` copies each pointer's title into its body's
   frontmatter where the body has none, across the whole tree; a body that has one is never
   rewritten. Plain `heal` still never opens a body.

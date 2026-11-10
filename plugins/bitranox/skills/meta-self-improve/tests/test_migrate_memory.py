@@ -431,6 +431,30 @@ def test_a_resumed_run_reuses_its_own_placement_and_places_no_duplicate(env):
     assert _placed_bodies(proj) == first
 
 
+def test_a_run_resumed_after_an_upgrade_reuses_a_placement_written_without_a_title(env):
+    """A run that crashed under an engine from before the `title:` field left its placements
+    untitled. Resumed under the current engine, it must still recognise them as its own: compared
+    with the titled form only, each one read as a different fact and a `-2` copy was placed."""
+    proj, slug, home = _project(env, "repoUpgrade")
+    ME.add_or_update_entry(str(proj), "Notes", "an earlier fact", body="Earlier body.",
+                           slug="notes")
+    _raw_store(home, slug, {"notes.md": "---\nname: notes\ndescription: d\n---\nNew body.\n",
+                            "other.md": "---\nname: other\ndescription: o\n---\nOther.\n"})
+    M.migrate_store(slug, dry_run=False)
+    anchor = ME._anchor(str(proj))
+    placed = [s for s in _placed_bodies(proj) if s != "notes"]
+    for s in placed:                                  # as the pre-title engine left them
+        path = ME.us.body_path(anchor, s)
+        text = path.read_text(encoding="utf-8")
+        path.write_text("".join(line for line in text.splitlines(keepends=True)
+                                if not line.startswith("title:")), encoding="utf-8")
+        assert ME._body_title(path.read_text(encoding="utf-8")) == ""
+    M._receipt_path(str(proj)).unlink()               # the crash lost the receipt
+    rep = M.migrate_store(slug, dry_run=False)
+    assert rep["placed"] == 2 and not rep["failed"]
+    assert sorted(_placed_bodies(proj)) == sorted(["notes", *placed])
+
+
 def test_a_nested_metadata_type_is_read():
     raw = "---\nname: gitea_access\ndescription: d\nmetadata:\n  type: reference\n---\nBody.\n"
     assert M._native_type(*M.R.parse_frontmatter(raw)[:1], raw, "gitea_access") == "reference"

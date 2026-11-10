@@ -267,12 +267,15 @@ def _placement_slug(anchor, entry):
 
 
 def _is_own_placement(stored, slug, entry):
-    """True when the body `stored` at `slug` is byte for byte what migrating `entry` writes there."""
+    """True when the body `stored` at `slug` is byte for byte what migrating `entry` writes there,
+    under this engine (with the `title:` field) or under one from before it (without): a run that
+    crashed before an upgrade and resumes after it would otherwise place a `-2` copy of each fact."""
     hook = (entry["hook"] or "").strip()
     # The engine's frame plus the `title:` its write path adds: what upsert really stores.
     framed = ME._framed_body(slug, hook, entry["type"], entry["body"])  # noqa: SLF001 - the engine's frame
     written = ME._with_title(framed, entry["title"])  # noqa: SLF001 - the engine's title field
-    return bool(entry["body"]) and stored.rstrip("\n") == written.rstrip("\n")
+    return bool(entry["body"]) and stored.rstrip("\n") in (written.rstrip("\n"),
+                                                           framed.rstrip("\n"))
 
 
 # ---- receipts (idempotency + resume) -----------------------------------------------------------
