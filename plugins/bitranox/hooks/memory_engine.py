@@ -39,6 +39,7 @@ from pathlib import Path
 import capture_constraints
 import self_improve_signals as sig
 import tell_chars
+import topic_placement as tp
 import uuid_store as us
 
 WRITE_VERBS = frozenset({"add", "amend-pinned", "move", "relocate", "rename", "retitle", "set-scope",
@@ -437,7 +438,10 @@ def upsert_entry(proj, title, hook, body="", type_=None, pin=False,
                 # that always lands on "project".
                 kept_skill = skill or _body_skill(body) or _body_skill(e.body)
                 framed = _framed_body(slug, e.hook, type_ or _body_type(e.body), body)
-                e.body = _with_skill(_synced_frame(slug, e.hook, type_, framed), kept_skill)
+                # The stored topics win over whatever the new body's frame says or lacks: topics
+                # change only through set-topics.
+                e.body = _with_topics(_with_skill(_synced_frame(slug, e.hook, type_, framed),
+                                                  kept_skill), _body_topics(e.body))
             else:
                 if e.hook != old_hook:
                     e.body = _reframe_description(e.body, e.hook)   # keep body description in sync
@@ -698,6 +702,47 @@ def _with_title(text, title):
             break
         new_inner, n = re.subn(r"(?m)^(%s:[^\r\n]*)(?=\r?$)" % key,
                                lambda t: "%s%stitle: %s" % (t.group(1), nl, title), inner, count=1)
+    return _with_frame(head, m, new_inner) if n else text
+
+
+def _body_topics(text):
+    """The topics a framed body's frontmatter carries on its `topics:` line: None when the line is
+    absent (the fact was never tagged), an empty tuple for `topics: []` (tagged, and bound to no
+    topic), else the sorted tags. Scoped to the leading frontmatter block (see `_frontmatter`),
+    like `_body_title`. A line that does not parse as a topic list reads as None: the fact is
+    then placed by nothing, and stays where its pointer is."""
+    _head, m = _frontmatter(text)
+    if m is None:
+        return None
+    t = re.search(r"(?m)^topics:[ \t]*([^\r\n]*)", m.group(1))
+    if t is None:
+        return None
+    try:
+        return tp.parse_topics(t.group(1))
+    except tp.InvalidTopic:
+        return None
+
+
+def _with_topics(text, topics):
+    """Return framed `text` with its frontmatter `topics:` line set to `topics`, prose untouched;
+    `topics=None` removes the line. A frame without the key gains it after `title:` (else after
+    `description:`, else after `name:`). An unframed `text` is returned unchanged: every write
+    path frames first."""
+    head, m = _frontmatter(text)
+    if m is None:
+        return text
+    inner = m.group(1)
+    nl = "\r\n" if inner.endswith("\r\n") else "\n"
+    if topics is None:
+        new_inner = re.sub(r"(?m)^topics:[^\r\n]*\r?\n", "", inner, count=1)
+        return _with_frame(head, m, new_inner)
+    line = "topics: %s" % tp.format_topics(topics)
+    new_inner, n = re.subn(r"(?m)^topics:[^\r\n]*", lambda _t: line, inner, count=1)
+    for key in ("title", "description", "name"):
+        if n:
+            break
+        new_inner, n = re.subn(r"(?m)^(%s:[^\r\n]*)(?=\r?$)" % key,
+                               lambda t: "%s%s%s" % (t.group(1), nl, line), inner, count=1)
     return _with_frame(head, m, new_inner) if n else text
 
 
