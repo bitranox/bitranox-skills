@@ -96,3 +96,31 @@ def test_an_update_of_a_fact_never_tagged_does_not_gain_a_topics_line(tmp_path):
     slug = E.add_or_update_entry(proj, title="T", hook=HOOK, body="first", type_="feedback")
     E.add_or_update_entry(proj, title="T", hook=HOOK, body="second", slug=slug)
     assert "topics:" not in _stored(anchor, slug)
+
+
+@pytest.mark.parametrize("raw", ["topics: [Python]", "topics: [a b]", "topics: python, Rust"])
+def test_a_prose_update_keeps_a_stored_topics_line_that_does_not_parse_verbatim(tmp_path, raw):
+    # A line no parser accepts is still the author's data: an ordinary write must neither refuse
+    # (one bad body would wedge every write to the fact) nor drop it (silent data loss).
+    anchor, proj = _tree(tmp_path)
+    slug = E.add_or_update_entry(proj, title="T", hook=HOOK, body="first", type_="feedback")
+    stored = _stored(anchor, slug)
+    assert stored.count("\ntitle: T\n") == 1
+    us.put_body(anchor, slug, stored.replace("\ntitle: T\n", "\ntitle: T\n%s\n" % raw))
+    assert E._body_topics(_stored(anchor, slug)) is None
+    E.add_or_update_entry(proj, title="T", hook=HOOK, body="second prose", slug=slug)
+    lines = _stored(anchor, slug).split("\n")
+    assert "second prose" in lines
+    assert [row for row in lines if row.startswith("topics:")] == [raw]
+    assert lines[lines.index(raw) - 1] == "title: T"
+
+
+def test_a_framed_update_does_not_replace_a_stored_line_that_does_not_parse(tmp_path):
+    anchor, proj = _tree(tmp_path)
+    slug = E.add_or_update_entry(proj, title="T", hook=HOOK, body="first", type_="feedback")
+    tagged = _stored(anchor, slug).replace("\ntitle: T\n", "\ntitle: T\ntopics: [Python]\n")
+    us.put_body(anchor, slug, tagged)
+    edited = E._with_topics(_stored(anchor, slug), ("rust",)).replace("first", "edited")
+    E.add_or_update_entry(proj, title="T", hook=HOOK, body=edited, slug=slug)
+    stored = _stored(anchor, slug)
+    assert "edited" in stored and stored.count("topics:") == 1 and "topics: [Python]\n" in stored

@@ -438,10 +438,10 @@ def upsert_entry(proj, title, hook, body="", type_=None, pin=False,
                 # that always lands on "project".
                 kept_skill = skill or _body_skill(body) or _body_skill(e.body)
                 framed = _framed_body(slug, e.hook, type_ or _body_type(e.body), body)
-                # The stored topics win over whatever the new body's frame says or lacks: topics
-                # change only through set-topics.
-                e.body = _with_topics(_with_skill(_synced_frame(slug, e.hook, type_, framed),
-                                                  kept_skill), _body_topics(e.body))
+                # The stored topics line wins over whatever the new body's frame says or lacks:
+                # topics change only through set-topics (`e.body` is still the stored body here).
+                e.body = _with_stored_topics(_with_skill(_synced_frame(slug, e.hook, type_, framed),
+                                                         kept_skill), e.body)
             else:
                 if e.hook != old_hook:
                     e.body = _reframe_description(e.body, e.hook)   # keep body description in sync
@@ -723,20 +723,48 @@ def _body_topics(text):
         return None
 
 
+def _body_topics_line(text):
+    """The raw `topics:` line of a framed body's frontmatter, exactly as stored (no line break), or
+    None when there is none. Unlike `_body_topics` it does not parse: a line that is no valid topic
+    list is still returned, so a writer can carry it over instead of erasing it."""
+    _head, m = _frontmatter(text)
+    if m is None:
+        return None
+    t = re.search(r"(?m)^topics:[^\r\n]*", m.group(1))
+    return t.group(0) if t else None
+
+
 def _with_topics(text, topics):
     """Return framed `text` with its frontmatter `topics:` line set to `topics`, prose untouched;
     `topics=None` removes the line. A frame without the key gains it after `title:` (else after
     `description:`, else after `name:`). An unframed `text` is returned unchanged: every write
     path frames first."""
+    line = None if topics is None else "topics: %s" % tp.format_topics(topics)
+    return _with_topics_line(text, line)
+
+
+def _with_stored_topics(text, stored):
+    """Return framed `text` carrying the `topics:` line of the `stored` body: the parsed tags in
+    their stored form, the raw line verbatim when it does not parse, and no line when `stored` has
+    none. Whatever `text`'s own frame says is replaced - topics change only through set-topics.
+    A line that does not parse is kept rather than dropped or refused: it is the author's data, and
+    refusing would wedge every ordinary write to the fact over one bad line."""
+    topics = _body_topics(stored)
+    if topics is not None:
+        return _with_topics(text, topics)
+    return _with_topics_line(text, _body_topics_line(stored))
+
+
+def _with_topics_line(text, line):
+    """`_with_topics` for a whole `topics:` line given as it should be written (None removes it)."""
     head, m = _frontmatter(text)
     if m is None:
         return text
     inner = m.group(1)
     nl = "\r\n" if inner.endswith("\r\n") else "\n"
-    if topics is None:
+    if line is None:
         new_inner = re.sub(r"(?m)^topics:[^\r\n]*\r?\n", "", inner, count=1)
         return _with_frame(head, m, new_inner)
-    line = "topics: %s" % tp.format_topics(topics)
     new_inner, n = re.subn(r"(?m)^topics:[^\r\n]*", lambda _t: line, inner, count=1)
     for key in ("title", "description", "name"):
         if n:
