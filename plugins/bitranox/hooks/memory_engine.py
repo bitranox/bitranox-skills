@@ -2053,7 +2053,8 @@ def set_topic_list(proj, topics, tagger):
     """Replace the tree's closed topic list. Raises TopicRefusal, before writing, for an empty
     list (every set-topics would then be refused) and when a topic the new list drops is still
     carried by a fact or declared by a level, naming the first users. A level whose `TOPICS:` line
-    does not parse declares nothing it could lose, and does not block the list."""
+    or a fact whose `topics:` line does not parse declares nothing it could lose, and does not
+    block the list."""
     sig.refuse_if_memory_writes_off()
     if not topics:
         raise TopicRefusal(["an empty topic list: a tree's list names at least one topic"])
@@ -2117,8 +2118,8 @@ def set_fact_topics(proj, rows, dry_run=False):
     """Set the `topics:` line of each fact in `rows`, a {slug: topics} mapping where topics is a
     tuple of tags, an empty tuple (bound to no topic) or None (remove the line).
 
-    Every row is checked before any is written: a slug no level points at, a pinned fact, a tag
-    outside the tree's list or a body without frontmatter refuses the WHOLE call with TopicRefusal
+    Every row is checked before any is written: an invalid slug, a slug no level points at, a
+    pinned fact, a tag outside the tree's list or a body without frontmatter refuses the WHOLE call with TopicRefusal
     (the first refusals and their total). Each body is then read and written under the lock of
     the first level that points at it, the lock an ordinary write to that fact holds. Pointer
     lines are not touched: `render-topics` places them. Returns {'set': [slugs], 'unchanged': n}.

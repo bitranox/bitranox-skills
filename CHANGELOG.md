@@ -45,6 +45,11 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 - `set-scope` keeps a level's `TOPICS:` line when the new descriptor text has none, and refuses
   a text that changes it: topics change only through `set-level-topics` and `set-top-topics`.
+  That refusal is decided before the level is scaffolded, so on a directory that is not a level
+  yet it writes nothing.
+- `memory_engine.py add` refuses to create a fact whose body's frontmatter carries a `topics:`
+  line (exit 2, nothing written): a new fact is tagged with `set-topics`, which checks the names
+  against the tree's list. An `add` that updates a fact still keeps the stored line.
 - `meta-self-improve`'s storage spec and `docs/reference.md` document topics as data and the six
   topic verbs, with their refusals and exit codes; `meta-dream-tree` says what `set-scope` keeps
   of a descriptor it replaces.

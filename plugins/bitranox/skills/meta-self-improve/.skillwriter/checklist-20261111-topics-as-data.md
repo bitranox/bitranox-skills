@@ -151,3 +151,26 @@ text. Every gap either tier listed is one of the declined ones above; no new und
 - [x] Both tables are canonical: `reformat_tables.py --check` reports both files unchanged.
 - [x] History finder over the added lines: no version-history wording.
 - [x] ASCII only; no host, private path or project name; the example values are `python`, `uv`.
+
+## Follow-up 2026-11-12: two engine fixes and four corrections
+
+Scope: `references/memory-backend.md` (the body-frame bullet, the exit-code paragraph, the
+sentence after it on `set-scope`, the `set-topics` and `topics-set-list` rows) and the
+`memory_add` refusal cell in the repository's `docs/reference.md`. `SKILL.md` is not changed.
+
+- [x] `add` that creates a fact now refuses a body whose frontmatter carries a `topics:` line
+      (`TopicsOnCreate`, exit 2, no body file, no pointer, no level scaffolded). Pinned by
+      `test_add_refuses_a_new_fact_whose_frame_carries_a_topics_line` (RED on the old engine:
+      `assert 0 == 2`) and `test_the_library_create_raises_and_a_topics_line_in_the_prose_is_no_frame`.
+      The bullet says so and names `set-topics` as the way to tag the new fact.
+- [x] A refused `set-scope` on a directory that is not a level yet leaves no `CLAUDE.local.md`:
+      the `TOPICS:` check now runs before the level is scaffolded. Pinned by
+      `test_a_refused_set_scope_leaves_no_level_scaffolded_behind_it` (RED on the old engine:
+      `assert not local.exists()` failed). The sentence after the exit-code paragraph now states
+      it for both a missing flag and a `TOPICS:` refusal.
+- [x] `set-topics` row: an invalid slug is the first refusal `_topic_row_problem` checks; added.
+- [x] `topics-set-list` row: a fact whose `topics:` line does not parse is skipped like a level's
+      (`iter_fact_topics` yields only bodies `_body_topics` parses); added.
+- [x] Width check over the changed prose lines (none over 100 columns), both tables canonical
+      (`reformat_tables.py` reports both files unchanged), ASCII only, no history wording.
+- Decisions: none - documents two engine refusals and corrects two refusal lists, changes no rule
