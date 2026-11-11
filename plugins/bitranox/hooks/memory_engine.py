@@ -2031,12 +2031,19 @@ def _outside_list(topics, allowed):
 
 
 def set_topic_list(proj, topics, tagger):
-    """Replace the tree's closed topic list. Raises TopicRefusal, before writing, when a topic the
-    new list drops is still carried by a fact or declared by a level, naming the first users."""
+    """Replace the tree's closed topic list. Raises TopicRefusal, before writing, for an empty
+    list (every set-topics would then be refused) and when a topic the new list drops is still
+    carried by a fact or declared by a level, naming the first users. A level whose `TOPICS:` line
+    does not parse declares nothing it could lose, and does not block the list."""
     sig.refuse_if_memory_writes_off()
+    if not topics:
+        raise TopicRefusal(["an empty topic list: a tree's list names at least one topic"])
     anchor = _anchor(proj)
     old = topic_store.load(anchor)
-    dropped = set(old["topics"]) - set(topics) if old else set()
+    # By the name the list will store (trimmed), one name at a time: the list is capped by
+    # topic_store.MAX_LIST, not by the per-fact tp.MAX_TOPICS a whole-list normalise applies.
+    names = {tp.normalise_topics([name])[0] for name in topics}
+    dropped = set(old["topics"]) - names if old else set()
     users, total = [], 0
     if dropped:
         for slug, carried in iter_fact_topics(anchor):
@@ -2046,7 +2053,10 @@ def set_topic_list(proj, topics, tagger):
                     users.append("fact %s carries %s" % (slug, ", ".join(sorted(dropped & set(carried)))))
         for level in curated_levels_under(anchor):
             scope = us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level)))[0]
-            declared = set(tp.descriptor_topics(scope) or ())
+            try:
+                declared = set(tp.descriptor_topics(scope) or ())
+            except tp.InvalidTopic:
+                continue
             if dropped & declared:
                 total += 1
                 if len(users) < _REFUSALS_SHOWN:
@@ -2169,7 +2179,11 @@ def level_topics_stale(level):
     scope = us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level)))[0]
     if not scope.strip():
         return True, "no descriptor"
-    if tp.descriptor_topics(scope) is None:
+    try:
+        declared = tp.descriptor_topics(scope)
+    except tp.InvalidTopic:
+        return True, "its TOPICS line does not parse (set-level-topics replaces it)"
+    if declared is None:
         return True, "never tagged"
     if data["levels"].get(topic_store.level_key(anchor, level)) != tp.descriptor_digest(scope):
         return True, "descriptor changed since its topics were chosen"
@@ -2180,9 +2194,17 @@ def scope_keeping_topics(old_scope, new_scope):
     """`new_scope` for a `set-scope` write, with the stored `TOPICS:` line carried over when the
     new text has none. Raises TopicRefusal when the new text carries a DIFFERENT `TOPICS:` line:
     topics change only through set-level-topics / set-top-topics, so a rewritten descriptor can
-    neither drop nor change them by accident."""
-    old, new = tp.descriptor_topics(old_scope), tp.descriptor_topics(new_scope)
-    if new is not None and new != (old or ()):
+    neither drop nor change them by accident; a never-tagged level gains no line this way either,
+    not even an empty one. Raises TopicRefusal too when the stored line does not parse (carried
+    over or dropped, the result would be a guess; set-level-topics replaces it), and InvalidTopic
+    when the new text's line does not parse."""
+    try:
+        old = tp.descriptor_topics(old_scope)
+    except tp.InvalidTopic as exc:
+        raise TopicRefusal(["the stored TOPICS line does not parse (%s); replace it with "
+                            "set-level-topics (set-top-topics at the tree top) first" % exc]) from exc
+    new = tp.descriptor_topics(new_scope)
+    if new is not None and new != old:
         raise TopicRefusal(["a descriptor's TOPICS line changes only through set-level-topics "
                             "(set-top-topics at the tree top); leave the line out of the new text"])
     if old is None or new is not None:
@@ -2314,6 +2336,26 @@ _USER_ESCALATION_RX = re.compile(r"(?im)^[^\n]*\bescalation\s+decided\b[^\n]*\(u
 def _user_decided_escalation(body):
     """True when `body` records the USER's decision on the guard/jig ladder (see the regex)."""
     return bool(_USER_ESCALATION_RX.search(body or ""))
+
+
+def _topic_read(args):
+    """The two topic check verbs: `topics-show` (exit 1: no list) and `topics-stale` (exit 1: the
+    level is stale). A topic file that cannot be used is raised to the caller as TopicStoreError."""
+    if args.cmd == "topics-stale":
+        stale, why = level_topics_stale(args.proj)
+        print("stale: %s" % why if stale else "fresh")
+        return 1 if stale else 0
+    data = topic_store.load(_anchor(args.proj))
+    if data is None:
+        print("no topic list in this tree")
+        return 1
+    if args.as_json:
+        print(json.dumps({"tagger": data["tagger"], "topics": data["topics"]}, sort_keys=True))
+        return 0
+    print("tagger: %s" % data["tagger"])
+    for name in sorted(data["topics"]):
+        print("%s - %s" % (name, data["topics"][name]))
+    return 0
 
 
 def _topic_write(args):
@@ -2547,29 +2589,19 @@ def _main(argv=None):
             print("store: %s%s" % (info["store"], "  (bootstrap: not created yet)" if info["bootstrap"] else ""))
         return 0
 
-    if args.cmd == "topics-show":
-        data = topic_store.load(_anchor(args.proj))
-        if data is None:
-            print("no topic list in this tree")
-            return 1
-        if args.as_json:
-            print(json.dumps({"tagger": data["tagger"], "topics": data["topics"]}, sort_keys=True))
-            return 0
-        print("tagger: %s" % data["tagger"])
-        for name in sorted(data["topics"]):
-            print("%s - %s" % (name, data["topics"][name]))
-        return 0
+    if args.cmd in ("topics-show", "topics-stale"):
+        try:
+            return _topic_read(args)
+        except topic_store.TopicStoreError as exc:
+            # a damaged topic file: the check could not run, which is not its "no"
+            print("! error: %s" % exc, file=sys.stderr)
+            return 2
 
     if args.cmd in ("topics-set-list", "set-topics", "set-level-topics", "set-top-topics"):
         try:
             return _topic_write(args)
         except (TopicRefusal, tp.InvalidTopic, topic_store.TopicStoreError) as exc:
             return _refused(exc)
-
-    if args.cmd == "topics-stale":
-        stale, why = level_topics_stale(args.proj)
-        print("stale: %s" % why if stale else "fresh")
-        return 1 if stale else 0
 
     if args.cmd == "ensure-all-trees":
         rep = ensure_all_trees(roots=args.roots or None, apply=args.apply)
@@ -2666,7 +2698,7 @@ def _main(argv=None):
         old_scope, pointers = us.parse_pointer_index(text)
         try:
             scope = scope_keeping_topics(old_scope, scope.strip())
-        except TopicRefusal as exc:
+        except (TopicRefusal, tp.InvalidTopic) as exc:
             return _refused(exc)
         changed = us.write_if_changed(local, us.upsert_pointer_block(text, scope, pointers))
         print("scope %s: %s" % ("updated" if changed else "unchanged", local))

@@ -312,3 +312,80 @@ def test_the_scan_skips_names_that_are_no_fact_and_a_missing_store_yields_nothin
     (facts / "notes.txt").write_text("topics: [python]\n", encoding="utf-8")
     (facts / "Bad Name.md").write_text("---\nname: x\ntopics: [python]\n---\n", encoding="utf-8")
     assert list(E.iter_fact_topics(anchor)) == [("feedback-n00000", ("python",))]
+
+
+# ---- what the verbs do with a list or a TOPICS line they cannot use ----------------------------
+
+def _plant_scope(level, scope):
+    """Write `scope` as `level`'s descriptor as it is, bypassing set-scope's checks: a stored line
+    that does not parse can come from a hand edit or an older writer."""
+    local = sig.claude_local_md_path(level)
+    text = local.read_text(encoding="utf-8")
+    pointers = us.parse_pointer_index(text)[1]
+    local.write_text(us.upsert_pointer_block(text, scope, pointers), encoding="utf-8")
+
+
+def test_an_empty_topic_list_is_refused(tmp_path, capsys):
+    anchor, proj = _tree(tmp_path)
+    rc = E.main(["topics-set-list", "--proj", proj, "--from-file", _list_file(tmp_path, {})])
+    assert rc == 2 and "empty" in capsys.readouterr().out
+    assert topic_store.load(anchor)["topics"] == LIST
+
+
+def test_a_dropped_topic_is_judged_by_the_trimmed_name(tmp_path, capsys):
+    anchor, proj = _tree(tmp_path)
+    _fact(proj, "feedback-uses-rust")
+    E.set_fact_topics(proj, {"feedback-uses-rust": ("rust",)})
+    capsys.readouterr()
+    rc = E.main(["topics-set-list", "--proj", proj, "--from-file",
+                 _list_file(tmp_path, {" rust ": "Rust code", "git": "git"})])
+    assert rc == 0, capsys.readouterr().out
+    assert set(topic_store.load(anchor)["topics"]) == {"rust", "git"}
+
+
+def test_a_stored_topics_line_that_does_not_parse(tmp_path, capsys):
+    anchor, proj = _tree(tmp_path)
+    E.main(["set-scope", "--proj", proj, "--scope", SCOPE])
+    _plant_scope(proj, SCOPE + "\nTOPICS: Not A Tag!")
+    before = _scope(proj)
+    capsys.readouterr()
+    assert E.main(["set-scope", "--proj", proj, "--scope", SCOPE]) == 2
+    assert "set-level-topics" in capsys.readouterr().out
+    assert _scope(proj) == before
+    assert E.main(["topics-stale", "--proj", proj]) == 1
+    assert "does not parse" in capsys.readouterr().out
+    # a list that drops a topic is not refused over a line that declares nothing readable
+    assert E.main(["topics-set-list", "--proj", proj, "--from-file",
+                   _list_file(tmp_path, {"python": "Python code"})]) == 0
+    # the verb meant to change the line replaces it
+    assert E.main(["set-level-topics", "--proj", proj, "--topics", "python"]) == 0
+    assert tp.descriptor_topics(_scope(proj)) == ("python",)
+
+
+def test_set_scope_refuses_a_new_topics_line_that_does_not_parse(tmp_path, capsys):
+    anchor, proj = _tree(tmp_path)
+    E.main(["set-scope", "--proj", proj, "--scope", SCOPE])
+    before = _scope(proj)
+    capsys.readouterr()
+    assert E.main(["set-scope", "--proj", proj, "--scope", SCOPE + "\nTOPICS: Not A Tag!"]) == 2
+    assert "refused" in capsys.readouterr().out
+    assert _scope(proj) == before
+
+
+def test_a_damaged_topic_file_is_an_error_for_the_read_verbs(tmp_path, capsys):
+    anchor, proj = _tree(tmp_path)
+    E.main(["set-scope", "--proj", proj, "--scope", SCOPE])
+    topic_store.store_path(anchor).write_text("{not json", encoding="utf-8")
+    capsys.readouterr()
+    for verb in ("topics-show", "topics-stale"):
+        assert E.main([verb, "--proj", proj]) == 2
+        assert "! error" in capsys.readouterr().err
+
+
+def test_set_scope_cannot_tag_a_never_tagged_level_even_as_universal(tmp_path, capsys):
+    anchor, proj = _tree(tmp_path)
+    E.main(["set-scope", "--proj", proj, "--scope", SCOPE])
+    capsys.readouterr()
+    assert E.main(["set-scope", "--proj", proj, "--scope", SCOPE + "\nTOPICS:"]) == 2
+    assert "changes only through set-level-topics" in capsys.readouterr().out
+    assert tp.descriptor_topics(_scope(proj)) is None
