@@ -128,3 +128,42 @@ def test_descriptor_digest_ignores_the_topics_line_and_sees_every_other_change()
     assert tp.descriptor_digest(scope) == tp.descriptor_digest(tp.with_descriptor_topics(scope, ["a"]))
     assert tp.descriptor_digest(scope) == tp.descriptor_digest("WHAT: x\r\n\nSTACK: y\n")
     assert tp.descriptor_digest(scope) != tp.descriptor_digest("WHAT: x\nSTACK: z")
+
+
+def _small_tree():
+    return tp.LevelMap({tp.TOP: [], ("a",): ["python"], ("b",): ["rust"]})
+
+
+def test_normalise_refuses_a_bare_string_for_a_topic_list():
+    with pytest.raises(tp.InvalidTopic):
+        tp.normalise_topics("python")
+
+
+def test_format_refuses_a_bare_string_for_a_topic_list():
+    with pytest.raises(tp.InvalidTopic):
+        tp.format_topics("uv")
+
+
+def test_a_level_map_refuses_a_string_level_key():
+    with pytest.raises(TypeError):
+        tp.LevelMap({tp.TOP: [], "ab": ["x"]})
+
+
+def test_placements_refuses_a_bare_string_and_an_invalid_tag():
+    with pytest.raises(tp.InvalidTopic):
+        _small_tree().placements("python")
+    with pytest.raises(tp.InvalidTopic):
+        _small_tree().placements(["Python"])
+
+
+def test_placements_treats_an_unnormalised_tag_as_its_normalised_form():
+    assert _small_tree().placements([" python", "python "]) == (("a",),)
+
+
+def test_placed_at_normalises_its_topics_and_refuses_a_string_level():
+    tree = _small_tree()
+    assert tree.placed_at(("a",), [" python"]) is True
+    with pytest.raises(tp.InvalidTopic):
+        tree.placed_at(("a",), "python")
+    with pytest.raises(TypeError):
+        tree.placed_at("a", ["python"])

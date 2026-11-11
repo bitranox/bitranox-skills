@@ -24,6 +24,14 @@ Decisions:
     - A fact whose topics no level has is placed at the top. Why: a rule nobody reads is lost,
       and a rule read too widely only costs bytes. Reopen if: never - it is the safeguard.
       Pinned by: tests/test_topic_placement.py::test_a_fact_whose_topic_no_level_has_falls_back_to_the_top
+    - A bare string is refused where a topic list or a level is expected (InvalidTopic for a
+      topic list, TypeError for a level). Why: a str is itself an iterable of str, so "python"
+      would silently become the topics p, y, t, h, o, n and the level "ab" the path a/b; the
+      caller's mistake would surface as a wrong placement far from its cause. A topic list is
+      refused with InvalidTopic so a caller handles every bad topic input through one exception;
+      a level is no topic, so it gets TypeError. Reopen if: never - the silent split is the bug.
+      Pinned by: tests/test_topic_placement.py::test_normalise_refuses_a_bare_string_for_a_topic_list
+      and tests/test_topic_placement.py::test_a_level_map_refuses_a_string_level_key
 """
 
 from __future__ import annotations
@@ -65,7 +73,9 @@ class InvalidTopic(ValueError):
 def normalise_topics(raw: Iterable[str]) -> tuple[str, ...]:
     """`raw` as a sorted tuple without repeats. Raises InvalidTopic for a tag that is not lower
     case letters, digits and dashes (at most 32 characters, starting with a letter or digit), and
-    for more than MAX_TOPICS tags."""
+    for more than MAX_TOPICS tags, and for a bare string given where the list belongs."""
+    if isinstance(raw, str):
+        raise InvalidTopic("a topic list must be a list of tags, not the string %r" % (raw,))
     seen: set[str] = set()
     for item in raw:
         tag = item.strip() if isinstance(item, str) else item
@@ -123,11 +133,19 @@ def descriptor_digest(scope: str) -> str:
     return hashlib.sha256("\n".join(row for row in rows if row).encode("utf-8")).hexdigest()
 
 
+def _as_level(level: Level) -> Level:
+    """`level` as a tuple of path parts. Raises TypeError for a bare string, which tuple() would
+    split into one part per character."""
+    if isinstance(level, str):
+        raise TypeError("a level must be a tuple of path parts, not the string %r" % (level,))
+    return tuple(level)
+
+
 class LevelMap:
     """The levels of one tree and the topics each one has. Holds one small record per level."""
 
     def __init__(self, declared: Mapping[Level, Iterable[str]]) -> None:
-        self._declared = {tuple(level): frozenset(normalise_topics(topics))
+        self._declared = {_as_level(level): frozenset(normalise_topics(topics))
                           for level, topics in declared.items()}
         self._declared.setdefault(TOP, frozenset())
         self._children: dict[Level, list[Level]] = {level: [] for level in self._declared}
@@ -159,19 +177,20 @@ class LevelMap:
     def topics(self, level: Level) -> frozenset[str]:
         """The topics `level` has: declared there, or had by every one of its two or more
         child levels."""
-        return self._effective[tuple(level)]
+        return self._effective[_as_level(level)]
 
     def placements(self, topics: Iterable[str]) -> tuple[Level, ...]:
         """The levels a fact with `topics` gets a pointer line at: each level that has one of the
-        topics while no level above it does. `(TOP,)` when no level has any of them."""
-        wanted = frozenset(topics)
+        topics while no level above it does. `(TOP,)` when no level has any of them. The topics
+        are normalised first, so an invalid tag raises InvalidTopic."""
+        wanted = frozenset(normalise_topics(topics))
         hit = {level for level in self._declared if self._effective[level] & wanted}
         out = [level for level in hit if not self._has_ancestor_in(level, hit)]
         return tuple(sorted(out, key=lambda level: (len(level), level))) or (TOP,)
 
     def placed_at(self, level: Level, topics: Iterable[str]) -> bool:
         """True when a fact with `topics` gets a pointer line at `level`."""
-        return tuple(level) in self.placements(topics)
+        return _as_level(level) in self.placements(topics)
 
     def _has_ancestor_in(self, level: Level, hit: set[Level]) -> bool:
         parent = self.parent(level)
