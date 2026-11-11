@@ -82,22 +82,29 @@ reach the hooks, while a `/reload-plugins` keeps the launch environment).
 **The memory engine** - `python3 <plugin>/hooks/memory_engine.py <subcommand>` - is the single
 write path to the store. Fail-loud: success prints an explicit line; a refusal prints
 `! refused: ...` and an input or usage error prints `! error: ...` on stderr, both exit 2. Only
-`lint --tree` exits 1, when it reports anything.
+the three check verbs exit 1, when their answer is no: `lint --tree` when it reports anything,
+`topics-show` when the tree has no topic list, `topics-stale` when the level is stale.
 
-| Subcommand                                                                                                                               | Success line                                 |
-|------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------|
-| `add --proj <cwd> --title T --hook H [--type feedback\|project\|reference\|user] [--body\|--body-file] [--source ..] [--pin] [--slug s]` | the fact's slug                              |
-| `amend-pinned --proj <cwd> --slug s [--title T] [--hook H] [--body-file f] [--source ..]`                                                | the fact's slug                              |
-| `move --slug s --from-level <dir> --to-level <dir> [--force]`                                                                            | `moved <slug>: <from> -> <to> (<direction>)` |
-| `relocate --slug s --from-level <dir> --to-level <dir> [--force]`                                                                        | `relocated <slug>: <from> -> <to> (...)`     |
-| `rename --level <dir> --slug s --to-slug s2`                                                                                             | `renamed <slug> -> <slug2> at <dir>`         |
-| `retitle --level <dir> --slug s --to-title T`                                                                                            | `retitled <slug> -> '<title>' at <dir>`      |
-| `heal --proj <cwd>`                                                                                                                      | `healed N file(s) across M level(s)`         |
-| `set-scope --proj <level> --scope "..."`                                                                                                 | `scope updated: <file>`                      |
-| `ensure-memory-structure --proj <cwd>`                                                                                                   | `created N file(s) up the chain`             |
-| `lint --tree <dir>`                                                                                                                      | `TOTAL over-cap hooks: N \| ...`             |
-| `tree-top --proj <dir> [--json]`                                                                                                         | `top: ...` / `store: ...`                    |
-| `ensure-all-trees [--apply]`                                                                                                             | per-tree report (dry-run without `--apply`)  |
+| Subcommand                                                                                                                               | Success line                                                                 |
+|------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------|
+| `add --proj <cwd> --title T --hook H [--type feedback\|project\|reference\|user] [--body\|--body-file] [--source ..] [--pin] [--slug s]` | the fact's slug                                                              |
+| `amend-pinned --proj <cwd> --slug s [--title T] [--hook H] [--body-file f] [--source ..]`                                                | the fact's slug                                                              |
+| `move --slug s --from-level <dir> --to-level <dir> [--force]`                                                                            | `moved <slug>: <from> -> <to> (<direction>)`                                 |
+| `relocate --slug s --from-level <dir> --to-level <dir> [--force]`                                                                        | `relocated <slug>: <from> -> <to> (...)`                                     |
+| `rename --level <dir> --slug s --to-slug s2`                                                                                             | `renamed <slug> -> <slug2> at <dir>`                                         |
+| `retitle --level <dir> --slug s --to-title T`                                                                                            | `retitled <slug> -> '<title>' at <dir>`                                      |
+| `heal --proj <cwd>`                                                                                                                      | `healed N file(s) across M level(s)`                                         |
+| `set-scope --proj <level> --scope "..."`                                                                                                 | `scope updated: <file>`                                                      |
+| `topics-show --proj <dir> [--json]`                                                                                                      | `tagger: ...` and one `<topic> - <meaning>` line each; exit 1 without a list |
+| `topics-set-list --proj <dir> --from-file <json>`                                                                                        | `topic list updated: N topic(s), tagger T`                                   |
+| `set-topics --proj <dir> --slug s --topics a,b\|--universal\|--clear` or `--batch <jsonl>` `[--dry-run]`                                 | `set topics on N fact(s); M unchanged`                                       |
+| `set-level-topics --proj <level> --topics a,b`                                                                                           | `topics updated: <level>`                                                    |
+| `set-top-topics --proj <tree top> --topics a,b` (the user's decision only)                                                               | `topics updated: <tree top>`                                                 |
+| `topics-stale --proj <level>`                                                                                                            | `fresh` (exit 0) or `stale: <why>` (exit 1)                                  |
+| `ensure-memory-structure --proj <cwd>`                                                                                                   | `created N file(s) up the chain`                                             |
+| `lint --tree <dir>`                                                                                                                      | `TOTAL over-cap hooks: N \| ...`                                             |
+| `tree-top --proj <dir> [--json]`                                                                                                         | `top: ...` / `store: ...`                                                    |
+| `ensure-all-trees [--apply]`                                                                                                             | per-tree report (dry-run without `--apply`)                                  |
 
 `add` upserts: the same `--slug` updates the fact in place (provenance merged, pin kept). It also
 lints the hook - a warning appears when the hook exceeds the soft length cap or has no trigger

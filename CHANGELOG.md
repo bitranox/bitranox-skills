@@ -45,6 +45,9 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 - `set-scope` keeps a level's `TOPICS:` line when the new descriptor text has none, and refuses
   a text that changes it: topics change only through `set-level-topics` and `set-top-topics`.
+- `meta-self-improve`'s storage spec and `docs/reference.md` document topics as data and the six
+  topic verbs, with their refusals and exit codes; `meta-dream-tree` says what `set-scope` keeps
+  of a descriptor it replaces.
 
 ## [11.1.0]
 

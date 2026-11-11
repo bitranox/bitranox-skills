@@ -148,8 +148,9 @@ the success line, abort-and-show on a miss).
         PLACE-ELSEWHERE: <push child-specific down; push broader-than-subtree up>
 
     After the fan-out, VERIFY from ground truth (see "Verify every parallel WRITE fan-out" in
-    references/dream-core.md): `set-scope` overwrites unconditionally, so a subagent that writes the
-    wrong `--proj` silently clobbers a sibling while reporting success on the right path. Re-run the
+    references/dream-core.md): `set-scope` replaces a level's descriptor text without asking (it
+    keeps only a stored `TOPICS:` line), so a subagent that writes the wrong `--proj` silently
+    clobbers a sibling while reporting success on the right path. Re-run the
     freshness check over ALL levels and diff each level's on-disk descriptor against what its own
     agent RETURNED; keep each agent's returned text (the only restore source - the backup holds just
     the stale version).

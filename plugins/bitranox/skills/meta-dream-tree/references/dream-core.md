@@ -64,9 +64,10 @@ and was acted on). Confirm a level list, a slug set, or a duplicate scan with an
 (e.g. `find | wc -l` vs the tool's own number) before you trust it.
 
 **Verify every parallel WRITE fan-out from ground truth, not the agents' reports.** When you dispatch
-one subagent per level to write descriptors (`set-scope`) or to apply moves, `set-scope` overwrites
-UNCONDITIONALLY, so a subagent that writes the wrong `--proj` silently clobbers a sibling level and
-still reports success on the correct path (observed: one agent wrote `apps/`'s descriptor into
+one subagent per level to write descriptors (`set-scope`) or to apply moves, `set-scope` replaces a
+level's descriptor text WITHOUT ASKING (it keeps only a stored `TOPICS:` line), so a subagent that
+writes the wrong `--proj` silently clobbers a sibling level and still reports success on the
+correct path (observed: one agent wrote `apps/`'s descriptor into
 `bitranox-systems/`, discarding what another agent had just written there). After ANY such fan-out,
 re-run the freshness/enumeration check over ALL levels and diff each level's on-disk descriptor
 against what its own agent RETURNED - keep each agent's returned text, because the pre-dream backup
