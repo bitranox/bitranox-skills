@@ -30,6 +30,22 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.2.0]
+
+### Added
+
+- Facts and directories can carry topics. A fact body's frontmatter takes a `topics:` list, a
+  level's descriptor a `TOPICS:` line, and each knowledge tree one closed topic list
+  (`.claude-memory/topics.json`). New `memory_engine.py` verbs: `topics-show`,
+  `topics-set-list`, `set-topics`, `set-level-topics`, `set-top-topics`, `topics-stale`.
+  Nothing is placed by topic yet, and a tree without a topic list behaves as before.
+- `hooks/topic_placement.py`: the rules that decide where a topic-bound fact's pointer lines go.
+
+### Changed
+
+- `set-scope` keeps a level's `TOPICS:` line when the new descriptor text has none, and refuses
+  a text that changes it: topics change only through `set-level-topics` and `set-top-topics`.
+
 ## [11.1.0]
 
 ### Added
