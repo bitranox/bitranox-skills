@@ -63,3 +63,12 @@ answer NONE." Text-only probes (no file or shell tools), the paragraph pasted in
 - [x] The sentence after each insertion point still refers to the same thing (the wrong `--proj`
       clobber).
 - [x] ASCII only; no host, path or project name added.
+
+## Follow-up 2026-11-12: neutral names in the fan-out example
+
+- [x] `references/dream-core.md`, "Verify every parallel WRITE fan-out": the observed clobber
+      named two directories of a private tree; it now names `projects/` and `infra/`. The meaning
+      is unchanged (one agent wrote a level's descriptor into a sibling level).
+- [x] Width check over the reflowed lines (none over 100 columns); ASCII only; the sentence after
+      it still continues "After ANY such fan-out".
+- Decisions: none - replaces two example names, changes no rule
