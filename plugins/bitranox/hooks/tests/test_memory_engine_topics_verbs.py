@@ -389,3 +389,15 @@ def test_set_scope_cannot_tag_a_never_tagged_level_even_as_universal(tmp_path, c
     assert E.main(["set-scope", "--proj", proj, "--scope", SCOPE + "\nTOPICS:"]) == 2
     assert "changes only through set-level-topics" in capsys.readouterr().out
     assert tp.descriptor_topics(_scope(proj)) is None
+
+
+@pytest.mark.parametrize("line", ["TOPICS: python", "TOPICS:", "TOPICS: Not A Tag!"])
+def test_a_refused_set_scope_leaves_no_level_scaffolded_behind_it(tmp_path, capsys, line):
+    # The topics check reads the level's current text (none yet) BEFORE ensure_level runs, so a
+    # refusal on a directory that was never a level writes nothing at all.
+    _anchor, proj = _tree(tmp_path)
+    local = sig.claude_local_md_path(proj)
+    assert not local.exists()
+    assert E.main(["set-scope", "--proj", proj, "--scope", SCOPE + "\n" + line]) == 2
+    assert "! refused" in capsys.readouterr().out
+    assert not local.exists()

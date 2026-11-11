@@ -34,7 +34,7 @@ class BadRequest(ValueError):
 
 
 REFUSALS = (ow.BacklogError, BadInput, ME.SlugCollision, ME.HookTooLong, ME.EmptyBody,
-            ME.PinnedEntry, ME.InvalidSlug, ME.InvalidSkill, ME.ExcludedLevel,
+            ME.TopicsOnCreate, ME.PinnedEntry, ME.InvalidSlug, ME.InvalidSkill, ME.ExcludedLevel,
             sig.MemoryWritesOff)
 
 

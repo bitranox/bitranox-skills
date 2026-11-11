@@ -144,6 +144,20 @@ class EmptyBody(ValueError):
                          "**Why:** and **How to apply:** lines" % slug)
 
 
+class TopicsOnCreate(ValueError):
+    """Raised when a NEW fact's body brings a frontmatter `topics:` line. Only `set-topics` changes
+    a fact's topics: it checks each name against the tree's closed list and records the tagging,
+    while a create would store the line unchecked - a name off the list, a line that does not
+    parse, a tagging from another tree's list. An UPDATE is unaffected: there the stored line wins
+    over whatever the new frame says."""
+
+    def __init__(self, slug):
+        self.slug = slug
+        super().__init__("%r is new and its body's frontmatter carries a topics: line; topics change "
+                         "only through set-topics. Add the fact without the line, then run "
+                         "set-topics on it" % slug)
+
+
 class HookTooLong(ValueError):
     """Raised when an authored hook exceeds the always-loaded pointer line's hard cap. Refused rather
     than truncated, so no fact ever ships a line that reads complete while its tail is missing - the
@@ -406,6 +420,11 @@ def upsert_entry(proj, title, hook, body="", type_=None, pin=False,
     # (rehome/migrate, which pass no body) is unaffected.
     if not _has_prose(body) and not us.body_path(anchor, slug).is_file():
         raise EmptyBody(slug)
+    # Same key, same moment: a create (no body file yet) whose framed body brings a `topics:` line
+    # would store a tagging set-topics never checked. Refused before the level is scaffolded, so
+    # the refusal writes nothing at all.
+    if _body_topics_line(body) is not None and not us.body_path(anchor, slug).is_file():
+        raise TopicsOnCreate(slug)
     store_dir = us.central_facts_dir(anchor).parent   # the `.claude-memory` store dir for this tree
     store_existed = store_dir.exists()
     lock_target = sig.claude_local_md_path(proj)
@@ -2692,8 +2711,16 @@ def _main(argv=None):
         scope, err = _text_from_flag_or_file(args.scope, args.scope_file, "--scope", "--scope-file")
         if err:
             return _input_error(err)
-        ensure_level(args.proj)                       # make sure the pointer block exists first
         local = sig.claude_local_md_path(args.proj)
+        # The topics check runs on the level's CURRENT text (empty when it was never scaffolded)
+        # before ensure_level writes anything, so a refused call leaves no level behind. It runs
+        # again below on what ensure_level produced: a scope it harvests from a legacy CLAUDE.md
+        # block is a stored text the first check could not see.
+        try:
+            scope_keeping_topics(us.parse_pointer_index(read_store_text(local))[0], scope.strip())
+        except (TopicRefusal, tp.InvalidTopic) as exc:
+            return _refused(exc)
+        ensure_level(args.proj)                       # make sure the pointer block exists first
         text = read_store_text(local)
         old_scope, pointers = us.parse_pointer_index(text)
         try:
@@ -2758,7 +2785,8 @@ def _main(argv=None):
             slug, _created, advice = add_with_advice(
                 args.proj, title=args.title, hook=hook, body=body, type_=args.type_,
                 pin=args.pin, scope_default=scope_default, slug=args.slug, skill=args.skill)
-        except (SlugCollision, HookTooLong, EmptyBody, PinnedEntry, InvalidSlug, InvalidSkill) as c:
+        except (SlugCollision, HookTooLong, EmptyBody, TopicsOnCreate, PinnedEntry, InvalidSlug,
+                InvalidSkill) as c:
             return _refused(c)
         print(slug)
         for line in advice:

@@ -5,6 +5,8 @@ and changes only through `set-topics`. `topics: []` means tagged and bound to no
 means never tagged. An ordinary write to the fact keeps the stored line. All content ASCII.
 """
 
+from pathlib import Path
+
 import pytest
 
 import memory_engine as E
@@ -124,3 +126,30 @@ def test_a_framed_update_does_not_replace_a_stored_line_that_does_not_parse(tmp_
     E.add_or_update_entry(proj, title="T", hook=HOOK, body=edited, slug=slug)
     stored = _stored(anchor, slug)
     assert "edited" in stored and stored.count("topics:") == 1 and "topics: [Python]\n" in stored
+
+
+@pytest.mark.parametrize("line", ["topics: [python]", "topics: []", "topics: [Not A Tag]"])
+def test_add_refuses_a_new_fact_whose_frame_carries_a_topics_line(tmp_path, capsys, line):
+    # Only set-topics changes a fact's topics: a create handed a frame with the line would store a
+    # tagging nobody checked against the tree's list. Refused before anything is written.
+    anchor, proj = _tree(tmp_path)
+    body_file = tmp_path / "body.md"
+    body_file.write_text(FRAME.replace("title: T\n", "title: T\n%s\n" % line), encoding="utf-8")
+    rc = E.main(["add", "--proj", proj, "--title", "T", "--hook", HOOK, "--slug", "s",
+                 "--body-file", str(body_file)])
+    assert rc == 2
+    out = capsys.readouterr().out
+    assert "! refused" in out and "set-topics" in out
+    assert not us.body_path(anchor, "s").exists()
+    assert not (Path(proj) / "CLAUDE.local.md").exists()
+
+
+def test_the_library_create_raises_and_a_topics_line_in_the_prose_is_no_frame(tmp_path):
+    anchor, proj = _tree(tmp_path)
+    with pytest.raises(E.TopicsOnCreate):
+        E.add_or_update_entry(proj, title="T", hook=HOOK, slug="s",
+                              body=FRAME.replace("title: T\n", "title: T\ntopics: [python]\n"))
+    assert not us.body_path(anchor, "s").exists()
+    slug = E.add_or_update_entry(proj, title="T", hook=HOOK, slug="s",
+                                 body=FRAME + "topics: [python]\n")
+    assert E._body_topics(_stored(anchor, slug)) is None
