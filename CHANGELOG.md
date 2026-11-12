@@ -39,7 +39,19 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   (`.claude-memory/topics.json`). New `memory_engine.py` verbs: `topics-show`,
   `topics-set-list`, `set-topics`, `set-level-topics`, `set-top-topics`, `topics-stale`.
   Nothing is placed by topic yet, and a tree without a topic list has no topics.
+- `set-level-topics` and `set-top-topics` name a level by its path below the tree top, symlinks not
+  followed, so a symlinked level can be tagged; they check the topic file before they write the
+  descriptor, so a refusal there writes neither file.
+- `set-topics --batch` reads its file line by line and refuses, as an input error before any
+  change, a line over 4096 bytes, more than 5000 rows, a slug named twice, a line that is not
+  UTF-8 and a line that is not a row object. A leading BOM is accepted.
+- `set-topics --dry-run` runs under `BITRANOX_MEMORY_WRITES=off`, and `set-topics --clear` (or a
+  batch row `null`) works on a pinned fact; tagging a pinned fact is refused.
+- A `--topics` value that is no topic list is a usage error (`! error: --topics ...`, exit 2).
 - `hooks/topic_placement.py`: the rules that decide where a topic-bound fact's pointer lines go.
+- `meta-self-improve`'s storage spec and `docs/reference.md` document topics as data and the six
+  topic verbs, with their refusals and exit codes; `meta-dream-tree` says what `set-scope` keeps
+  of a descriptor it replaces.
 
 ### Changed
 
@@ -51,26 +63,19 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   descriptor; one whose `TOPICS:` line does not parse refuses `set-scope`, `add` and the level
   setup until it is fixed by hand; `ensure-memory-structure`, `heal` and
   `ensure-all-trees --apply` leave that level as it is and name it on a
-  `! refused level, left untouched: ...` line, their exit code unchanged.
+  `! refused level, left untouched: ...` line, which does not change their exit code.
   `set-scope` decides its refusal before the level is scaffolded and holds the level lock for its
   whole read, check and write.
+- Upgrade note: a store that never used topics is affected only when a legacy `CLAUDE.md` scope
+  block holds a line starting `TOPICS:`; that level is then refused as above until the line is
+  fixed or removed by hand. The session-start heal skips it without a message, so run
+  `memory_engine.py heal` once to see such levels named.
 - `memory_engine.py add` refuses to create a fact whose body's frontmatter carries a `topics:`
   line (exit 2, nothing written): a new fact is tagged with `set-topics`, which checks the names
-  against the tree's list. An `add` that updates a fact keeps the stored line.
+  against the tree's list. An `add` that updates a fact, `amend-pinned` and factedit's `apply`
+  keep the stored line.
 - A cross-tree `relocate` drops the frontmatter `topics:` line from the copied body and prints a
   `~ note:` saying so; a same-tree move leaves the body untouched.
-- `set-level-topics` and `set-top-topics` name a level by its path below the tree top, symlinks not
-  followed, so a symlinked level can be tagged; they check the topic file before they write the
-  descriptor, so a refusal there writes neither file.
-- `set-topics --batch` reads its file line by line and refuses, as an input error before any
-  change, a line over 4096 bytes, more than 5000 rows, a slug named twice, a line that is not
-  UTF-8 and a line that is not a row object. A leading BOM is accepted.
-- `set-topics --dry-run` runs under `BITRANOX_MEMORY_WRITES=off`, and `set-topics --clear` (or a
-  batch row `null`) works on a pinned fact; tagging a pinned fact stays refused.
-- A `--topics` value that is no topic list is a usage error (`! error: --topics ...`, exit 2).
-- `meta-self-improve`'s storage spec and `docs/reference.md` document topics as data and the six
-  topic verbs, with their refusals and exit codes; `meta-dream-tree` says what `set-scope` keeps
-  of a descriptor it replaces.
 
 ## [11.1.0]
 
