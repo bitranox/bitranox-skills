@@ -1189,7 +1189,9 @@ def move_entry(from_level, to_level, slug, force=False):
     how many pointers already moved, with that same re-run instruction.
 
     It also refuses, before any write, a set holding a fact placed by topic (its place follows its
-    topics; un-bind it first).
+    topics; un-bind it first), and a set whose lines would leave the target's block past
+    MAX_RENDER_BLOCK_BYTES, the cap render-topics holds every level to, unless the move does not
+    grow that block (see `_move_cap_refusal`).
 
     Returns {"slug","slugs","from","to","direction","moved","moved_slugs","refused","warnings"};
     `slug` is the comma-joined set, identical to the input for a single slug."""
@@ -1291,6 +1293,13 @@ def move_entry(from_level, to_level, slug, force=False):
             fields = (entry.title, entry.hook, entry.pin)
         plan.append((entry.slug, fields))
 
+    # The target's block is held to the cap render-topics holds every level to; the refusals of
+    # render-topics and set-topics that name a move promise it.
+    full = _move_cap_refusal(src, dst, plan)
+    if full:
+        rep["refused"] = full
+        return rep
+
     for s, (title, hook, pin) in plan:
         try:
             us.add_pointer(str(dst), slug=s, title=title, hook=hook, pin=pin)
@@ -1305,6 +1314,48 @@ def move_entry(from_level, to_level, slug, force=False):
     rep["warnings"].extend(dedup_warnings)
     rep["moved"] = True
     return rep
+
+
+def _move_cap_refusal(src, dst, plan):
+    """The refusal text when the lines `plan` ([(slug, (title, hook, pin))]) moves to `dst` would
+    leave its block past MAX_RENDER_BLOCK_BYTES and larger than it is now, else None. A line the
+    target already holds for a moving slug is replaced by the planned one (`plan` already carries
+    the merged pin and the kept hook of a forced dedup, and an identical line is its own
+    replacement); every other line stays. A move that does not grow the block (completing an
+    interrupted one) is never refused: it makes no level fuller than it was. Holds the target's
+    block and one size per moving line."""
+    pointers = us.parse_pointer_index(read_store_text(sig.claude_local_md_path(str(dst))))[1]
+    moving = {s for s, _fields in plan}
+    before = sum(_line_size(p) for p in pointers)
+    kept = sum(_line_size(p) for p in pointers if p.slug not in moving)
+    sizes = [_line_size(us.Pointer(slug=s, title=title, hook=hook, pin=pin))
+             for s, (title, hook, pin) in plan]
+    after = kept + sum(sizes)
+    if after <= MAX_RENDER_BLOCK_BYTES or after <= before:
+        return None
+    room = MAX_RENDER_BLOCK_BYTES - kept
+    fit, total = 0, 0
+    for size in sorted(sizes):
+        total += size
+        if total > room:
+            break
+        fit += 1
+    route = _ENGINE_ROUTE + " move --from-level %s --to-level <level> --slug <slug> [<slug> ...]"
+    text = ("moving these lines to %s would leave its block at %d bytes, %d bytes over the %d "
+            "bytes one level's block may hold (render-topics holds every level to it; a line "
+            "counts its line break): the lines it keeps come to %d bytes and the %d line(s) "
+            "moved there to %d bytes, and %d bytes are left there"
+            % (dst, after, after - MAX_RENDER_BLOCK_BYTES, MAX_RENDER_BLOCK_BYTES, kept,
+               len(sizes), sum(sizes), max(room, 0)))
+    if fit:
+        return text + (". %d of the %d line(s) fit there, smallest first: move those there and "
+                       "the rest to another level of the altitude chain that has room, with "
+                       + route + "; every level is held to the same %d bytes") % (
+                           fit, len(sizes), src, MAX_RENDER_BLOCK_BYTES)
+    return text + (". None of the lines fits there: move them to another level of the altitude "
+                   "chain that has room, with " + route + ", or first free room at %s by moving "
+                   "lines out of it with " + route + "; every level is held to the same %d "
+                   "bytes") % (src, dst, dst, MAX_RENDER_BLOCK_BYTES)
 
 
 
