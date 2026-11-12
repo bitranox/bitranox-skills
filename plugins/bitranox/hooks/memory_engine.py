@@ -2182,11 +2182,17 @@ def set_level_topics(level, topics, top=False):
     loads, so they change only through `set-top-topics`, a verb of its own that a nap or dream is
     told never to run; `set-level-topics` refuses the top, and `set-top-topics` refuses any other
     level. Raises TopicRefusal before writing for that, for a tag outside the list, and for a
-    level with no descriptor to tag. Returns True if the descriptor changed."""
+    level with no descriptor to tag. Returns True if the descriptor changed.
+
+    The level is named LEXICALLY, as `resolve_anchor` names its anchor: a level reached through a
+    symlink is the level its path names, keyed and judged top-or-not by that path. The topic file
+    is checked (list present, level keyable) before the descriptor is written, and recorded right
+    after it under both locks, so a refusal there writes neither; TopicStoreError is raised for it."""
     sig.refuse_if_memory_writes_off()
     level = os.path.abspath(str(level))
     anchor = _anchor(level)
-    is_top = Path(level).resolve() == Path(anchor).resolve()
+    is_top = os.path.normcase(level) == os.path.normcase(os.path.abspath(str(anchor)))
+    topic_store.level_key(anchor, level)              # a level it cannot key refuses before any write
     if is_top and not top:
         raise TopicRefusal(["%s is the tree top: its topics are the user's decision "
                             "(set-top-topics, on the user's word)" % level])
@@ -2203,9 +2209,12 @@ def set_level_topics(level, topics, top=False):
         if not scope.strip():
             raise TopicRefusal(["%s has no descriptor yet (set-scope writes one)" % level])
         tagged = tp.with_descriptor_topics(scope, topics)
-        changed = us.write_if_changed(local, us.upsert_pointer_block(text, tagged, pointers))
-    topic_store.record_level(anchor, level, tp.descriptor_digest(tagged))
-    return changed
+        written = []
+        topic_store.record_level(
+            anchor, level, tp.descriptor_digest(tagged),
+            before=lambda: written.append(
+                us.write_if_changed(local, us.upsert_pointer_block(text, tagged, pointers))))
+    return written[0]
 
 
 def level_topics_stale(level):

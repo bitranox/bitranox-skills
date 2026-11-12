@@ -15,7 +15,8 @@ list, and nothing is placed by topic there. Written only through memory_engine.
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+import os
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 import self_improve_signals as sig
@@ -43,9 +44,17 @@ def store_path(anchor) -> Path:
 
 def level_key(anchor, level) -> str:
     """A level as the file records it: its path below the anchor with `/` separators, and the
-    empty string for the anchor itself."""
-    rel = Path(level).resolve().relative_to(Path(anchor).resolve()).as_posix()
-    return "" if rel == "." else rel
+    empty string for the anchor itself. Computed LEXICALLY (absolute paths, symlinks not followed),
+    as `resolve_anchor` finds the anchor: a level reached through a symlink to a directory outside
+    the tree is still the level its path names. Raises TopicStoreError for a level that is not
+    below the anchor (or on another drive)."""
+    try:
+        rel = os.path.relpath(os.path.abspath(os.fspath(level)), os.path.abspath(os.fspath(anchor)))
+    except ValueError as exc:                         # Windows: a different drive
+        raise TopicStoreError("%s is not below the tree top %s (%s)" % (level, anchor, exc)) from exc
+    if rel == os.pardir or rel.startswith(os.pardir + os.sep):
+        raise TopicStoreError("%s is not below the tree top %s" % (level, anchor))
+    return "" if rel == os.curdir else Path(rel).as_posix()
 
 
 def load(anchor) -> dict | None:
@@ -104,13 +113,21 @@ def save_list(anchor, topics: Mapping[str, str], tagger: str) -> bool:
                                "levels": dict(data["levels"])})
 
 
-def record_level(anchor, level, digest: str) -> bool:
-    """Record the descriptor digest `level`'s topics were chosen from. True if written."""
+def record_level(anchor, level, digest: str, before: Callable[[], object] | None = None) -> bool:
+    """Record the descriptor digest `level`'s topics were chosen from. True if written.
+
+    Raises TopicStoreError when the tree has no list, the file cannot be used, or `level` is not
+    below `anchor`. `before`, when given, runs under the file's lock once all of that is checked
+    and ahead of this write: a caller whose own write (the descriptor) must not happen unless this
+    one can puts it there, so a refusal here leaves both files as they were."""
     sig.refuse_if_memory_writes_off()
     with sig.memory_lock(store_path(anchor)):
         data = load(anchor)
         if data is None:
             raise TopicStoreError("this tree has no topic list yet")
+        key = level_key(anchor, level)
+        if before is not None:
+            before()
         levels = dict(data["levels"])
-        levels[level_key(anchor, level)] = digest
+        levels[key] = digest
         return _write(anchor, {**data, "levels": levels})

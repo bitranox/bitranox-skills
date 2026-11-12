@@ -108,3 +108,12 @@ def test_a_padded_name_is_stored_trimmed_and_a_collision_is_refused(tmp_path):
     with pytest.raises(topic_store.TopicStoreError):
         topic_store.save_list(anchor, {"python": "a", " python": "b"}, "jev")
     assert topic_store.load(anchor)["topics"] == {"python": "Python code"}
+
+
+def test_recording_a_level_keeps_the_list_and_the_tagger(tmp_path):
+    anchor = _anchor(tmp_path)
+    topic_store.save_list(anchor, {"python": "Python code", "rust": "Rust code"}, "jev")
+    topic_store.record_level(anchor, anchor, "d0")
+    data = topic_store.load(anchor)
+    assert data["topics"] == {"python": "Python code", "rust": "Rust code"}
+    assert data["tagger"] == "jev" and data["levels"] == {"": "d0"}

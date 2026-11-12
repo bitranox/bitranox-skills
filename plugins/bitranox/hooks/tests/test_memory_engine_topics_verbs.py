@@ -499,3 +499,58 @@ def test_topics_on_create_says_what_is_true_for_a_pointer_without_a_body(tmp_pat
     with pytest.raises(E.TopicsOnCreate) as exc:
         E.add_or_update_entry(proj, title="T feedback-s", hook=HOOK, body=framed, slug="feedback-s")
     assert "has no body file yet" in str(exc.value) and "is new" not in str(exc.value)
+
+
+# ---- a level reached through a symlink ---------------------------------------------------------
+
+def _symlinked_level(tmp_path):
+    """A tree whose level `link` is a symlink to a directory outside the tree, as a checkout
+    mounted into a workspace is. Skipped where this account may not create a symlink."""
+    anchor, _proj = _tree(tmp_path)
+    real = tmp_path / "elsewhere" / "lvl"
+    real.mkdir(parents=True)
+    (real / "CLAUDE.md").write_text("x\n", encoding="utf-8")
+    link = tmp_path / "tree" / "link"
+    try:
+        link.symlink_to(real, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink creation is not permitted for this account (Windows without "
+                    "Developer Mode or SeCreateSymbolicLinkPrivilege)")
+    return anchor, str(link)
+
+
+def test_a_symlinked_level_is_tagged_recorded_and_reads_fresh(tmp_path, capsys):
+    anchor, level = _symlinked_level(tmp_path)
+    assert E.main(["set-scope", "--proj", level, "--scope", SCOPE]) == 0
+    capsys.readouterr()
+    assert E.main(["set-level-topics", "--proj", level, "--topics", "python"]) == 0
+    assert "Traceback" not in capsys.readouterr().err
+    assert topic_store.load(anchor)["levels"] == {"link": tp.descriptor_digest(_scope(level))}
+    assert E.main(["topics-stale", "--proj", level]) == 0
+    assert capsys.readouterr().out.strip() == "fresh"
+
+
+def test_level_key_is_lexical_and_a_level_outside_the_tree_is_a_store_error(tmp_path):
+    anchor, level = _symlinked_level(tmp_path)
+    assert topic_store.level_key(anchor, level) == "link"
+    with pytest.raises(topic_store.TopicStoreError):
+        topic_store.level_key(anchor, tmp_path / "elsewhere" / "lvl")
+
+
+def test_record_level_refuses_a_level_outside_the_tree_and_records_nothing(tmp_path):
+    anchor, _proj = _tree(tmp_path)
+    ran = []
+    with pytest.raises(topic_store.TopicStoreError):
+        topic_store.record_level(anchor, tmp_path / "outside", "d", before=lambda: ran.append(1))
+    assert ran == [] and topic_store.load(anchor)["levels"] == {}
+
+
+def test_record_level_runs_the_callers_write_only_after_the_store_checks_pass(tmp_path):
+    anchor, _proj = _tree(tmp_path, with_list=False)
+    ran = []
+    with pytest.raises(topic_store.TopicStoreError):
+        topic_store.record_level(anchor, anchor, "d", before=lambda: ran.append(1))
+    assert ran == []
+    topic_store.save_list(anchor, LIST, "jev")
+    topic_store.record_level(anchor, anchor, "d", before=lambda: ran.append(1))
+    assert ran == [1] and topic_store.load(anchor)["levels"] == {"": "d"}
