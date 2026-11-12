@@ -39,6 +39,11 @@ finally:
     log.shutdown()  # drains the queue; inside an event loop: await log.shutdown_async()
 ```
 
+In a CLI's `main()`, guard that `shutdown()`: when a sink keeps the queue worker busy past `queue_stop_timeout`
+it raises `RuntimeError: Queue worker failed to stop within the allotted timeout`, and a bare call in `finally`
+replaces the command's exit code with a traceback. Catch `Exception` there, print one warning line to stderr and
+let the command's result stand (runtime-and-integration.md, "A failed shutdown must not replace the exit code").
+
 `attach_std_logging`, `is_initialised` and `inspect_runtime` live in `lib_log_rich.runtime`, not
 on the package root. The enums settings and results use (`ConsoleStream`, `ConsoleTheme`, `FormatPreset`,
 `GraylogProtocol`, `QueuePolicy`, `DumpFormat`, `ExportStyle`, `DropReason`, `LogLevel`) live in `lib_log_rich.domain`;
@@ -58,7 +63,7 @@ fields (`job_id`, `request_id`, `user_id`, `trace_id`, ...) plus `extra={...}` f
 | `api_key`, `api_token` reach the sinks    | Default scrubbing covers only the field names `password`, `secret`, `token` (exact, case-insensitive). Add `scrub_patterns={"api_key": r".+"}`. Messages are never scrubbed.                                                                                      |
 | Forked worker logs nothing                | A forked child inherits a dead queue worker. Use `spawn`, call `init()` in each worker, carry context with `current_runtime().binder.serialize()`.                                                                                                                |
 | Same line twice under systemd             | systemd copies the service's stderr into the journal. With journald on, set `LOG_CONSOLE_STREAM=none`, or accept that records at or above `console_level` appear twice (plain and structured).                                                                    |
-| Graylog enabled, nothing arrives          | An unreachable server drops events (no buffer, one TCP retry). `enable_graylog` without an endpoint is refused by `init()`.                                                                                                                                       |
+| Graylog enabled, nothing arrives          | An unreachable server drops events (no buffer) and Graylog is skipped for 5-300 s after each failed send; a recovered server first gets a WARNING with the skipped count. `enable_graylog` without an endpoint is refused by `init()`.                            |
 
 Thresholds: `console_level` (default INFO), `backend_level` for journald and the Event Log
 (WARNING), `graylog_level` (WARNING). Level names are case-insensitive.
