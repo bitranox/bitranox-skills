@@ -467,7 +467,11 @@ nothing written ("! refused: <path> is no memory level: its path crosses '<name>
 every walk over the tree's levels prunes ..."): the names in `uuid_store.NON_LEVEL_DIRNAMES`
 (`.git`, `node_modules`, `venv`, `site-packages`, `build`, `dist`, `target`, the tool caches and
 the rest of the vendored dirs), a name starting `.venv`, `venv-` or `venv_`, and any directory
-whose name starts with the store dir's name (`.claude-memory`).
+whose name starts with the store dir's name (`.claude-memory`). The refusal names the call to
+run instead: `add` and `set-scope` at the directory holding the pruned one; `move` and `relocate`
+at the nearest level above it that is not the level the line comes from and, within one tree,
+lies on that level's altitude chain. When there is none, the refusal says the line stays where
+it is.
 It is one rule, `uuid_store.is_non_level_dirname`, so a level the
 engine accepts is a level every walk finds; `venvnotes` or `vendor` stay ordinary names.
 `move` relocates only a pointer LINE (the body never moves); if the

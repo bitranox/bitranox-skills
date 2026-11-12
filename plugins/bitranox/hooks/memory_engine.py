@@ -319,12 +319,44 @@ def _pruned_part(anchor, proj):
     return None
 
 
-def _pruned_refusal(anchor, level, route):
+def _pruned_refusal(anchor, level, route, src):
     """The `NonLevelDir` text when `level` crosses a directory the level walk prunes below
-    `anchor`, else None; `route` as `NonLevelDir` takes it. For the verbs that report a refusal
-    rather than raise one."""
+    `anchor`, else None; `route` as `NonLevelDir` takes it, for `move` and `relocate`, which
+    report a refusal rather than raise one. The level the route names is `_move_route_level`:
+    the dir holding the pruned one can be `src` itself, the level the line is taken from, and a
+    move to it is no move at all. When no level qualifies, the text says the line stays at
+    `src` instead of naming a call."""
     pruned = _pruned_part(anchor, level)
-    return None if pruned is None else str(NonLevelDir(str(level), *pruned, route=route))
+    if pruned is None:
+        return None
+    name, outside = pruned
+    target = _move_route_level(anchor, outside, src)
+    if target is not None:
+        return str(NonLevelDir(str(level), name, target, route=route))
+    text = str(NonLevelDir(str(level), name, outside, route="{level}"))
+    head = text[:text.rindex(" Write it at a level outside it")]
+    return head + (" No level outside it on the way from %s up to the tree top can take the line "
+                   "from %s, where it is read now, so it stays there" % (outside, src))
+
+
+def _move_route_level(anchor, outside, src):
+    """The level a pruned-target refusal of `move` or `relocate` names: the nearest curated level
+    at or above `outside` (the dir holding the pruned one) that is not `src`, and, in `src`'s own
+    tree, lies on `src`'s altitude chain (a move goes only up or down it). None when there is
+    none. Lexical, as the pruned check is; one level file read per dir walked."""
+    top = Path(os.path.abspath(str(anchor)))
+    here = Path(os.path.abspath(str(src)))
+    same_tree = here == top or top in here.parents
+    d = Path(os.path.abspath(str(outside)))
+    while d == top or top in d.parents:
+        on_chain = d in here.parents or here in d.parents
+        if d != here and (on_chain or not same_tree) \
+                and _carries_pointer_block(sig.claude_local_md_path(str(d))):
+            return str(d)
+        if d == top:
+            return None
+        d = d.parent
+    return None
 
 
 class UnknownSlug(ValueError):
@@ -1430,7 +1462,7 @@ def move_entry(from_level, to_level, slug, force=False):
         rep["refused"] = "cross-tree move (or no anchor) - a move stays within one tree; use a lift/copy for cross-tree"
         return rep
     pruned = _pruned_refusal(a_to, dst, "%s move --from-level %s --to-level {level} --slug %s"
-                             % (_ENGINE_ROUTE, src, " ".join(slugs)))
+                             % (_ENGINE_ROUTE, src, " ".join(slugs)), src)
     if pruned:
         rep["refused"] = pruned
         return rep
@@ -1929,7 +1961,7 @@ def relocate_entry(from_level, to_level, slug, force=False):
         rep["refused"] = "no anchor for the source or the target level"
         return rep
     pruned = _pruned_refusal(a_to, dst, "%s relocate --from-level %s --to-level {level} --slug %s"
-                             % (_ENGINE_ROUTE, src, slug))
+                             % (_ENGINE_ROUTE, src, slug), src)
     if pruned:
         rep["refused"] = pruned
         return rep

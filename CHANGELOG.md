@@ -69,7 +69,8 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   chain.
 - `add`, `move`, `relocate` and `set-scope` refuse a level inside a directory the level walk
   prunes (a virtualenv, a vendored, build or cache dir, the store), naming the call at a level
-  outside it.
+  outside it (for `move` and `relocate`, one that is not the source level and lies on its
+  altitude chain, or that the line stays where it is when there is none).
 - `render-topics --dry-run`, `set-topics --dry-run` and `--check-tree` take no lock and create
   no file, so a check runs on a read-only tree and never waits behind a peer's lock.
 - A real `render-topics` and `set-topics`, an `add` of a fact bound to a topic, and a `rename`,

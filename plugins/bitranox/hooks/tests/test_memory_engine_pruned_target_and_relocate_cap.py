@@ -96,6 +96,40 @@ def test_moving_a_line_under_a_pruned_dir_is_refused_and_its_route_works(tmp_pat
     assert _slugs(anchor / "a") == ["feedback-mv"] and _slugs(anchor) == []
 
 
+@pytest.mark.parametrize("verb", ["move", "relocate"])
+def test_a_pruned_dir_directly_below_the_source_names_a_real_move(tmp_path, capsys, verb):
+    """The dir holding the pruned one is the source level itself: naming it was a move to where
+    the line already is ("same level - nothing to move"). The route names the nearest other
+    level on the source's chain instead, and runs."""
+    anchor = _tree(tmp_path)
+    assert E.main(["move", "--from-level", str(anchor), "--to-level", str(anchor / "a"),
+                   "--slug", "feedback-mv"]) == 0
+    target = _pruned_target(anchor / "a")
+    before = _snapshot(anchor)
+    out = _refused(capsys, [verb, "--from-level", str(anchor / "a"), "--to-level", str(target),
+                            "--slug", "feedback-mv"])
+    assert _snapshot(anchor) == before
+    route = re.search(r"(hooks/memory_engine\.py %s --from-level \S+ --to-level \S+ --slug "
+                      r"feedback-mv)" % verb, out)
+    assert route is not None, out
+    assert route.group(1).split()[3] == str(anchor / "a"), out
+    assert route.group(1).split()[5] == str(anchor), out
+    rc, said = _run_route(tmp_path, route.group(1))
+    assert rc == 0, said
+    assert _slugs(anchor) == ["feedback-mv"] and _slugs(anchor / "a") == []
+
+
+def test_a_pruned_dir_below_the_top_with_nowhere_else_says_the_line_stays(tmp_path, capsys):
+    anchor = _tree(tmp_path)
+    target = _pruned_target(anchor)
+    before = _snapshot(anchor)
+    out = _refused(capsys, ["move", "--from-level", str(anchor), "--to-level", str(target),
+                            "--slug", "feedback-mv"])
+    assert _snapshot(anchor) == before
+    assert "hooks/memory_engine.py move" not in out, out
+    assert "so it stays there" in out and str(anchor) in out, out
+
+
 def test_relocating_across_trees_under_a_pruned_dir_is_refused(tmp_path, capsys):
     source = _tree(tmp_path, "source")
     dest = _tree(tmp_path, "dest")
