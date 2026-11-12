@@ -1343,21 +1343,31 @@ def _heal_level(proj, report):
             report["healed"].append(str(local))
 
 
+_REFUSED_LEVEL_LINE = "    ! refused level, left untouched: %s [%s]"
+"""How heal, ensure-memory-structure and ensure-all-trees print a level they left because its
+legacy CLAUDE.md scope block has a TOPICS line that does not parse: the refusal text, then the
+level. The text itself names the file and the fix, so the line adds no remedy of its own."""
+
+
 def heal(proj):
     """Self-heal the WHOLE altitude chain for `proj`: (re)create any missing `CLAUDE.md`,
     `CLAUDE.local.md`, or managed pointer block, NORMALIZE a malformed SCOPE/pointer block to canonical.
     A pointer whose central body is missing is REPORTED (never fabricated). Idempotent, mtime-neutral,
     A pointer whose slug is not a plain filename is dropped by that normalisation and REPORTED.
     A level whose files cannot be read or are not UTF-8 is left untouched and REPORTED under
-    'unreadable' - skipping it without a word read exactly like a healthy level.
+    'unreadable' - skipping it without a word read exactly like a healthy level. A level whose
+    legacy CLAUDE.md scope block has a TOPICS line that does not parse is left untouched and
+    REPORTED under 'refused' with the refusal, which names the file to fix by hand.
     FAIL-OPEN (never raises). Returns {'healed': [paths], 'orphans': [(level, slug)],
-    'invalid_pointers': [(level, line)], 'unreadable': [(level, reason)], 'levels': n}.
+    'invalid_pointers': [(level, line)], 'unreadable': [(level, reason)],
+    'refused': [(level, reason)], 'levels': n}.
     Under BITRANOX_MEMORY_WRITES=off it touches nothing and returns every key empty plus
     'skipped': the refusal line (SessionStart calls it on every start, so it must not raise)."""
     if sig.memory_writes_off():
-        return {"healed": [], "orphans": [], "invalid_pointers": [], "unreadable": [], "levels": 0,
-                "skipped": sig.MEMORY_WRITES_OFF_LINE}
-    report = {"healed": [], "orphans": [], "invalid_pointers": [], "unreadable": [], "levels": 0}
+        return {"healed": [], "orphans": [], "invalid_pointers": [], "unreadable": [], "refused": [],
+                "levels": 0, "skipped": sig.MEMORY_WRITES_OFF_LINE}
+    report = {"healed": [], "orphans": [], "invalid_pointers": [], "unreadable": [], "refused": [],
+              "levels": 0}
     try:
         levels = sig.altitude_chain(proj)            # level dirs, narrowest -> the tree's anchor
     except Exception:                                # noqa: BLE001 - self-heal must never raise
@@ -1369,6 +1379,8 @@ def heal(proj):
             _heal_one_level(level, report)
         except TreeWalkError as exc:
             report["unreadable"].append((level, str(exc)))
+        except (TopicRefusal, tp.InvalidTopic) as exc:
+            report["refused"].append((level, str(exc)))
         except Exception:                            # noqa: BLE001 - one bad level never blocks the rest
             continue
     return report
@@ -1439,9 +1451,12 @@ def _heal_one_level(level, report):
             report["orphans"].append((level, ptr.slug))
 
 
-def scaffold(proj):
+def scaffold(proj, refused=None):
     """Create every MISSING CLAUDE.md (marker) + CLAUDE.local.md (pointer block) from `proj` up to the
     anchor, and the anchor's `.claude-memory/` body-store. Idempotent; returns the created paths.
+    A level whose legacy CLAUDE.md scope block has a TOPICS line that does not parse is left as it
+    is and the rest of the chain is still scaffolded; when `refused` is a list, each such level is
+    appended to it as (level, refusal text), the refusal naming the file to fix by hand.
     Refuses first under BITRANOX_MEMORY_WRITES=off: it writes the CLAUDE.md marker
     (`_ensure_claude_md`) before `ensure_level`'s own guard is reached."""
     sig.refuse_if_memory_writes_off()
@@ -1460,10 +1475,13 @@ def scaffold(proj):
             ensure_level(level)
             if not local_before and sig.claude_local_md_path(level).exists():
                 created.append(str(sig.claude_local_md_path(level)))
-        except (OSError, TopicRefusal, tp.InvalidTopic):
+        except (TopicRefusal, tp.InvalidTopic) as exc:
             # a legacy block ensure_level refuses to harvest stays where it is; the next level
-            # is still scaffolded, as after an unwritable one
-            continue
+            # is still scaffolded, and the caller learns which level was left and why
+            if refused is not None:
+                refused.append((level, str(exc)))
+        except OSError:
+            continue                                   # an unwritable level; the next is still scaffolded
     try:
         facts_dir = us.central_facts_dir(_anchor(proj))
         store_existed = facts_dir.parent.exists()     # the `.claude-memory` store dir
@@ -2034,15 +2052,10 @@ at most tp.MAX_TOPICS tags of 32 characters, far under this; the reader holds on
 _REFUSALS_SHOWN = 20
 
 
-class TopicRefusal(ValueError):
-    """Raised when a topic write is declined as a whole; nothing was written. `reasons` holds the
-    first refusals and `total` how many there were."""
-
-    def __init__(self, reasons, total=None):
-        self.reasons = list(reasons)
-        self.total = len(self.reasons) if total is None else total
-        more = "" if self.total <= len(self.reasons) else " (and %d more)" % (self.total - len(self.reasons))
-        super().__init__("; ".join(self.reasons) + more)
+# A topic write declined as a whole (`uuid_store.TopicRefusal`). Defined by the store, whose
+# add_pointer refuses a TOPICS line as well: uuid_store cannot import this module (the import runs
+# the other way), so the shared type lives there, as InvalidSlug's does.
+TopicRefusal = us.TopicRefusal
 
 
 ADD_REFUSALS = (SlugCollision, HookTooLong, EmptyBody, TopicsOnCreate, PinnedEntry, InvalidSlug,
@@ -2394,7 +2407,7 @@ def ensure_all_trees(roots=None, apply=False):
     for top, members in sorted(groups.items(), key=lambda kv: str(kv[0])):
         store = Path(top) / sig.MEMORY_DIRNAME
         entry = {"top": str(top), "store_exists": store.is_dir(),
-                 "members": [str(m) for m in members], "status": "ok", "created": []}
+                 "members": [str(m) for m in members], "status": "ok", "created": [], "refused": []}
         if not store.is_dir():
             beneath = [str(o) for o in tops if o != top and top in o.parents]
             if beneath:
@@ -2403,7 +2416,7 @@ def ensure_all_trees(roots=None, apply=False):
                                 "scaffolding would merge them" % (len(beneath), ", ".join(sorted(beneath))))
         if entry["status"] == "ok" and apply:
             for m in members:
-                entry["created"] += [str(c) for c in scaffold(str(m))]
+                entry["created"] += [str(c) for c in scaffold(str(m), refused=entry["refused"])]
         report["trees"].append(entry)
     return report
 
@@ -2769,6 +2782,8 @@ def _main(argv=None):
                 print("    ! %s" % tr["why"])
             for c in tr["created"]:
                 print("    + %s" % c)
+            for level, why in tr["refused"]:
+                print(_REFUSED_LEVEL_LINE % (why, level))
         return 0
 
     if args.cmd == "lint":
@@ -2838,10 +2853,13 @@ def _main(argv=None):
         return 0
 
     if args.cmd == "ensure-memory-structure":
-        created = scaffold(args.proj)
+        refused = []
+        created = scaffold(args.proj, refused=refused)
         print("ensure-memory-structure: created %d file(s) up the chain" % len(created))
         for p in created:
             print("    +", p)
+        for level, why in refused:
+            print(_REFUSED_LEVEL_LINE % (why, level))
         return 0
 
     if args.cmd == "set-scope":
@@ -2897,6 +2915,8 @@ def _main(argv=None):
         for level, why in rep["unreadable"]:
             print("    ! unreadable level, left untouched (fix its permissions, or re-save it as "
                   "UTF-8): %s [%s]" % (why, level))
+        for level, why in rep["refused"]:
+            print(_REFUSED_LEVEL_LINE % (why, level))
         # heal could not do its job at an unreadable level, so "done" would be a lie there
         return 2 if rep["unreadable"] else 0
 

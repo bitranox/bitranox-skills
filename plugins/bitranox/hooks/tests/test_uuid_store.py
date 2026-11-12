@@ -11,6 +11,7 @@ import uuid as _uuid
 
 import pytest
 
+import memory_engine as E
 import uuid_store as us
 
 
@@ -683,7 +684,10 @@ def test_add_pointer_refuses_a_scope_default_carrying_a_topics_line(tmp_path):
     # A level's TOPICS line changes only through set-level-topics: a descriptor add_pointer writes
     # from scope_default would bring one past every check.
     (tmp_path / "CLAUDE.md").write_text("x\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="TOPICS"):
+    # The refusal is the engine's TopicRefusal, so a caller catching memory_engine.ADD_REFUSALS
+    # (the CLI add, the mod bridge) reports it as a refusal instead of crashing.
+    with pytest.raises(E.TopicRefusal, match="TOPICS") as exc:
         us.add_pointer(str(tmp_path), slug="a-fact", title="Fact", hook="h",
                        scope_default="lvl scope\nTOPICS: python")
+    assert isinstance(exc.value, E.ADD_REFUSALS)
     assert not (tmp_path / "CLAUDE.local.md").exists()

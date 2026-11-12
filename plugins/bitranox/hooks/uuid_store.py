@@ -93,6 +93,19 @@ class InvalidSlug(ValueError):
                          "starting and ending with a letter or digit (no path separators)" % (slug,))
 
 
+class TopicRefusal(ValueError):
+    """Raised when a topic write is declined as a whole; nothing was written. `reasons` holds the
+    first refusals and `total` how many there were. Defined by the store, whose `add_pointer`
+    refuses a TOPICS line too, so that refusal and the engine's TOPICS gate are one exception type
+    that every caller catching the engine's refusals already handles."""
+
+    def __init__(self, reasons, total=None):
+        self.reasons = list(reasons)
+        self.total = len(self.reasons) if total is None else total
+        more = "" if self.total <= len(self.reasons) else " (and %d more)" % (self.total - len(self.reasons))
+        super().__init__("; ".join(self.reasons) + more)
+
+
 def require_valid_slug(slug):
     """Raise `InvalidSlug` unless `slug` is a plain filename the store can own."""
     if not is_valid_slug(slug):
@@ -606,7 +619,7 @@ def add_pointer(altitude_dir, slug, title, hook, pin=False, scope_default=""):
     via `put_body`. Returns the slug. Raises `InvalidSlug` before writing for a slug that is not a
     plain filename. Raises TreeWalkError, before writing, for a level file that exists but cannot
     be read or is not UTF-8: read as empty, the merge would rewrite it as the managed block alone
-    and drop every other line in it. Raises ValueError, before writing, when it would write a
+    and drop every other line in it. Raises TopicRefusal, before writing, when it would write a
     `scope_default` carrying a `TOPICS:` line: a level's topics change only through
     set-level-topics, and this writer checks none."""
     require_valid_slug(slug)
@@ -615,8 +628,8 @@ def add_pointer(altitude_dir, slug, title, hook, pin=False, scope_default=""):
         text = read_store_text(local)
         scope, pointers = parse_pointer_index(text)
         if not scope and re.search(r"(?m)^TOPICS:", scope_default or ""):
-            raise ValueError("a scope_default may not carry a TOPICS line; a level's topics change "
-                             "only through set-level-topics")
+            raise TopicRefusal(["a scope_default may not carry a TOPICS line; a level's topics "
+                                "change only through set-level-topics"])
         by_slug = {p.slug: p for p in pointers}
         if slug in by_slug:
             p = by_slug[slug]
