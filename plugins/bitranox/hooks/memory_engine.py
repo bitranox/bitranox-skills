@@ -2080,33 +2080,41 @@ _RENDER_SHOWN = 20
 
 class RenderBlockTooLarge(TopicRefusal):
     """Raised, before that level is written, when the block one level would hold passes
-    MAX_RENDER_BLOCK_BYTES: `kept` bytes of lines that stay there plus `added` bytes (so far) of
-    lines the render places there. `size` is their sum.
+    MAX_RENDER_BLOCK_BYTES: `kept` bytes of lines that stay there plus `added` bytes of every line
+    the render places there (the whole count, not the count when the cap was first passed). `size`
+    is their sum and `over` how far it passes the cap: the fewest bytes that must leave the block.
 
     The message names the route for the larger part. When the lines placed there are larger, it
     names the set-topics batch that rebinds the facts which need not be read at that level
     (`bound_to` says which topics put them there). When the kept lines are at least as large
     (`kept >= added`), no rebinding can bring the block under the cap, so it names the move that
-    takes kept lines to another level of the altitude chain."""
+    takes at least `over` bytes of kept lines to another level of the altitude chain, whose own
+    block is held to the same cap."""
 
     def __init__(self, level, kept, added, bound_to):
         self.level, self.kept, self.added, self.size = level, kept, added, kept + added
+        self.over = self.size - MAX_RENDER_BLOCK_BYTES
         if kept >= added:
             text = ("%d bytes of pinned, legacy or unplaced lines stay at %s and %d bytes of lines "
-                    "placed there (and counting) are to be added, over the %d bytes one level's "
-                    "block may hold: the lines that stay are the larger part. Move kept lines to a "
-                    "level above or below it with hooks/memory_engine.py move --from-level %s "
-                    "--to-level <level> --slug <slug> [<slug> ...] (a legacy line needs "
-                    "migrate_to_slug_store.py first), then run render-topics again"
-                    % (kept, level, added, MAX_RENDER_BLOCK_BYTES, level))
+                    "placed there are to be added, %d bytes over the %d bytes one level's block "
+                    "may hold: the lines that stay are the larger part. Move kept lines totalling "
+                    "at least %d bytes (a line counts its line break) to a level above or below it "
+                    "with hooks/memory_engine.py "
+                    "move --from-level %s --to-level <level> --slug <slug> [<slug> ...] (a legacy "
+                    "line needs migrate_to_slug_store.py first); the level they go to is held to "
+                    "the same %d bytes, counting the lines it keeps and those placed there. Then "
+                    "run render-topics again"
+                    % (kept, level, added, self.over, MAX_RENDER_BLOCK_BYTES, self.over, level,
+                       MAX_RENDER_BLOCK_BYTES))
         else:
-            text = ("%d bytes of lines placed at %s (and counting) beside %d bytes of lines that "
-                    "stay there come to over %d bytes, the most one level's block may hold: too "
-                    "many facts are bound to %s. Rebind each fact that need not be read there with "
+            text = ("%d bytes of lines placed at %s beside %d bytes of lines that stay there come "
+                    "to %d bytes over %d, the most one level's block may hold: too many facts are "
+                    "bound to %s. Rebind each fact that need not be read there with "
                     "hooks/memory_engine.py set-topics --proj %s --batch <file>, one {\"slug\": "
                     "..., \"topics\": [...]} per line giving its real topics ([] binds it to no "
-                    "topic and leaves its line where it is), then run render-topics again"
-                    % (added, level, kept, MAX_RENDER_BLOCK_BYTES, bound_to, level))
+                    "topic and leaves its line where it is, so a line already at that level stays "
+                    "and still counts), then run render-topics again"
+                    % (added, level, kept, self.over, MAX_RENDER_BLOCK_BYTES, bound_to, level))
         super().__init__([text])
 
 
@@ -2582,10 +2590,11 @@ def _render_census(anchor, pinned, place, dirs, adds):
     bytes each level of `adds` will hold, starting from the lines it keeps (`_held_bytes`). Raises
     RenderBlockTooLarge for the first level a line pushes past MAX_RENDER_BLOCK_BYTES, so that
     refusal comes before ANY level is written, not after the levels ahead of it in the ADD order
-    were. Holds one byte count per level."""
+    were. It raises after the pass, with that level's whole count: a count stopped at the first
+    line past the cap would name too few bytes to move. Holds one byte count per level."""
     managed, incomplete, total = 0, [], 0
     kept = {parts: _held_bytes(anchor, pinned, dirs[parts]) for parts in adds}
-    sizes = dict(kept)
+    sizes, full = dict(kept), None
     for slug, head in _iter_body_heads(anchor):
         topics = _body_topics(head)
         if not topics or slug in pinned:
@@ -2599,9 +2608,11 @@ def _render_census(anchor, pinned, place, dirs, adds):
         managed += 1
         for parts in place(topics):     # a placement is always the top or a level with a topic
             sizes[parts] += len(line.index_line().encode("utf-8")) + 1
-            if sizes[parts] > MAX_RENDER_BLOCK_BYTES:
-                raise RenderBlockTooLarge(dirs[parts], kept[parts], sizes[parts] - kept[parts],
-                                          place.bound_to(parts))
+            if full is None and sizes[parts] > MAX_RENDER_BLOCK_BYTES:
+                full = parts
+    if full is not None:
+        raise RenderBlockTooLarge(dirs[full], kept[full], sizes[full] - kept[full],
+                                  place.bound_to(full))
     return {"managed": managed, "incomplete": sorted(incomplete), "incomplete_total": total}
 
 
@@ -2610,7 +2621,8 @@ def _wanted_lines(anchor, place, pinned, parts, level_dir, held=0):
     over the bodies. This dict is what a render holds; once its lines and the `held` bytes the
     level keeps beside them pass MAX_RENDER_BLOCK_BYTES it raises RenderBlockTooLarge. The census
     refused that case already; this check holds the bound when a body or the level's block grew
-    between the census and this pass (another writer)."""
+    between the census and this pass (another writer). Past the cap it stops holding lines and
+    only counts, so the refusal names the whole overflow."""
     wanted, size = {}, held
     for slug, head in _iter_body_heads(anchor):
         topics = _managed_topics(slug, head, pinned)
@@ -2619,8 +2631,11 @@ def _wanted_lines(anchor, place, pinned, parts, level_dir, held=0):
         line = _line_from_head(slug, head)
         size += len(line.index_line().encode("utf-8")) + 1
         if size > MAX_RENDER_BLOCK_BYTES:
-            raise RenderBlockTooLarge(level_dir, held, size - held, place.bound_to(parts))
-        wanted[slug] = line
+            wanted = None
+        elif wanted is not None:
+            wanted[slug] = line
+    if wanted is None:
+        raise RenderBlockTooLarge(level_dir, held, size - held, place.bound_to(parts))
     return wanted
 
 

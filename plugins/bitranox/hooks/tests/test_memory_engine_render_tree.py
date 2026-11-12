@@ -475,39 +475,80 @@ def _keep_three_kinds(anchor, level, count):
     return [p.slug for p in kept]
 
 
+def _line_bytes(level):
+    """{slug: bytes} of the lines in `level`'s block, each counting its line break."""
+    text = sig.claude_local_md_path(level).read_text(encoding="utf-8")
+    return {p.slug: len(p.index_line().encode("utf-8")) + 1
+            for p in us.parse_pointer_index(text)[1]}
+
+
 def test_kept_lines_that_fill_the_block_are_refused_with_a_route_that_moves_them(tmp_path, capsys):
-    """`b` keeps about 1.1 MB of lines no render places; one rust line is to be added there. No
-    rebinding can help, so the refusal names the kept bytes and a move route: run it as given,
-    from a directory outside the tree, for part of the kept lines, and the next render goes
-    through. Each kind of kept line counts: without any one third the block would fit."""
+    """`b` keeps about 1.1 MB of lines no render places; three rust lines are to be added there.
+    No rebinding can help, so the refusal names the kept bytes, how many bytes must leave the
+    block, and a move route: run it as given, from a directory outside the tree, for kept lines
+    totalling one line short of that figure and the render still refuses; add that one line and
+    it goes through. The figure is the whole overflow, every rust line counted, not the overflow
+    when the first one passed the cap. Each kind of kept line counts: without any one third the
+    block would fit."""
     anchor = _tree(tmp_path)
     level = _level(anchor, "b", ("rust",))
     kept = _keep_three_kinds(anchor, level, 1100)
-    _fact(anchor, "feedback-rs-rule", ("rust",))
+    rust = ["feedback-rs-rule%d" % i for i in range(3)]
+    for slug in rust:
+        _fact(anchor, slug, ("rust",))
+    kept_bytes = _line_bytes(level)
     before = _snapshot(anchor)
     capsys.readouterr()
     assert E.main(["render-topics", "--proj", anchor, "--scope", "tree"]) == 2
     out = capsys.readouterr().out
     assert _snapshot(anchor) == before
     said = re.search(r"(\d+) bytes of pinned, legacy or unplaced lines stay at (\S+) and (\d+) "
-                     r"bytes of lines placed there", out)
+                     r"bytes of lines placed there are to be added, (\d+) bytes over", out)
     assert said is not None and said.group(2) == level, out
-    assert int(said.group(1)) > E.MAX_RENDER_BLOCK_BYTES > int(said.group(3)) > 0
+    assert int(said.group(1)) == sum(kept_bytes.values()) > E.MAX_RENDER_BLOCK_BYTES
+    assert E.MAX_RENDER_BLOCK_BYTES > int(said.group(3)) > 0
+    over = re.search(r"Move kept lines totalling at least (\d+) bytes", out)
+    assert over is not None and int(over.group(1)) == int(said.group(4)), out
     assert "set-topics" not in out
+    assert "the level they go to is held to the same %d bytes" % E.MAX_RENDER_BLOCK_BYTES in out
     route = re.search(r"(hooks/memory_engine\.py) (move --from-level \S+ --to-level) <level> "
                       r"--slug <slug>", out)
     assert route is not None and route.group(2).split()[2] == level, out
+    # the shortest run of kept lines that reaches the figure, then everything but its last line
+    need, moved, total = int(over.group(1)), [], 0
+    for slug in kept:
+        moved.append(slug)
+        total += kept_bytes[slug]
+        if total >= need:
+            break
+    assert total - kept_bytes[moved[-1]] < need <= total and len(moved) < len(kept)
     outside = tmp_path / "outside"
     outside.mkdir()
     engine = Path(E.__file__).resolve().parents[1] / route.group(1)
-    done = subprocess.run([sys.executable, str(engine), *route.group(2).split(), anchor,
-                           "--slug", *kept[:600]],
-                          cwd=str(outside), capture_output=True, text=True, encoding="utf-8",
-                          errors="replace", check=False)
-    assert done.returncode == 0, done.stdout + done.stderr
+
+    def move(slugs):
+        done = subprocess.run([sys.executable, str(engine), *route.group(2).split(), anchor,
+                               "--slug", *slugs],
+                              cwd=str(outside), capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", check=False)
+        assert done.returncode == 0, done.stdout + done.stderr
+
+    move(moved[:-1])
+    capsys.readouterr()
+    assert E.main(["render-topics", "--proj", anchor, "--scope", "tree"]) == 2
+    short = re.search(r"stay at (\S+) and \d+ bytes of lines placed there are to be added, "
+                      r"(\d+) bytes over", capsys.readouterr().out)
+    assert short is not None and short.group(1) == level
+    assert int(short.group(2)) == need - (total - kept_bytes[moved[-1]]) > 0
+    move(moved[-1:])
     assert E.main(["render-topics", "--proj", anchor, "--scope", "tree"]) == 0
-    assert _slugs(level) == sorted(kept[600:] + ["feedback-rs-rule"])
-    assert _slugs(anchor) == kept[:600]
+    placed = _line_bytes(level)
+    # the real overflow, from the block the render left: what stayed plus what it placed
+    real = (sum(kept_bytes.values()) + sum(placed[slug] for slug in rust)
+            - E.MAX_RENDER_BLOCK_BYTES)
+    assert need == real and int(said.group(3)) == sum(placed[slug] for slug in rust)
+    assert _slugs(level) == sorted([s for s in kept if s not in moved] + rust)
+    assert _slugs(anchor) == moved
 
 
 def test_the_tagged_facts_without_a_title_are_all_counted_and_the_first_few_shown(tmp_path):
