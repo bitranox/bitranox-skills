@@ -289,3 +289,45 @@ a fact tagged `topics: [python]`; Q5 a batch whose third line is 5000 bytes.
 - [x] ASCII only; no host, private path or project name.
 - Decisions: none - documents engine behaviour and refusals, adds and removes no rule of the
   skill's text
+
+## Follow-up 2026-11-12: a refused legacy level is named, not skipped
+
+Scope: the gate paragraph of `references/memory-backend.md` (its last two sentences), the topic
+paragraph of the repository's `docs/reference.md`, and the 11.2.0 `CHANGELOG.md` entry on the
+`TOPICS:` gate. `SKILL.md` is not changed.
+
+- [x] Engine: `heal` reports a level whose legacy `CLAUDE.md` block has a `TOPICS:` line that does
+      not parse under `refused`, `scaffold` hands it to an optional `refused` list, and
+      `heal`, `ensure-memory-structure` and `ensure-all-trees --apply` print
+      "    ! refused level, left untouched: <refusal> [<level>]", exit code unchanged. Pinned by
+      `test_ensure_memory_structure_names_the_legacy_level_it_refused`,
+      `test_scaffold_hands_a_refused_level_to_the_callers_list`,
+      `test_ensure_all_trees_reports_a_member_it_refused`,
+      `test_heal_names_the_legacy_level_it_refused_and_heals_the_rest` and
+      `test_heal_under_writes_off_carries_an_empty_refused_list`; RED on the previous engine
+      (the printed line absent, `TypeError: scaffold() got an unexpected keyword argument
+      'refused'`, `KeyError: 'refused'`).
+- [x] The documented line was produced by running both commands on a scratch tree, not written
+      from the code: both printed it and exited 0.
+- [x] RED (text check): the pre-edit paragraph says `ensure-memory-structure` and `heal` "skip such
+      a level without a word", which the engine no longer does.
+- [x] GREEN quote-back on the new paragraph, `opus` (effort medium) and `haiku`, 4 questions each
+      (does heal print, exit code, is CLAUDE.md changed and the parent set up, does `set-scope`
+      behave the same): both tiers answered all four with direct quotes and the right reading.
+- [x] Gap both tiers reported: the paragraph's first sentence gives "every other verb that would
+      set that level up" exit 2 while the next names three commands that do not. CLOSED: the next
+      sentence now opens "The three commands that set up a whole chain are the exception to that
+      exit 2". Re-probe on the final text (`haiku`): answered with that sentence, no new
+      undecided gap.
+- DECLINED, covered elsewhere: what "does not parse" means (the "Store format" bullet: "does not
+  parse when it holds a tag that is no valid topic name or more than 12 tags").
+- DECLINED, judgement: stdout or stderr for the line; no other `! ...` report line of these
+  commands states its stream, and the engine prints all of them on stdout.
+- DECLINED, judgement: a further explicit statement that the refused level is never set up by
+  another route; "leave such a level and its `CLAUDE.md` as they are" says it, and both tiers
+  read it that way.
+- [x] Width and backtick check over the added lines of all three files: nothing reported. Tables
+      canonical (`reformat_tables.py --check` reports all three unchanged). ASCII only; history
+      finder over the added lines: no hits.
+- Decisions: none - documents the engine's report of a refused level, adds and removes no rule of
+  the skill's text

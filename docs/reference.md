@@ -117,10 +117,12 @@ Topics change only through the topic verbs. Every write of a level's descriptor 
 keeps the stored `TOPICS:` line when the new text has none, and refuses a text that brings or
 changes the line, an empty one included, before anything is written. A legacy block whose
 `TOPICS:` line does not parse refuses `set-scope`, `add` and the level setup until that line is
-fixed by hand; `ensure-memory-structure` and `heal` skip such a level. `add` refuses to create a
-fact whose body carries a `topics:` line, and a cross-tree `relocate` drops the line from its copy
-with a `~ note:`. `set-topics --batch` refuses, as an input error, a line over 4096 bytes, more
-than 5000 rows, a slug named twice, a line that is not UTF-8 and a line that is not a row object.
+fixed by hand; `ensure-memory-structure`, `heal` and `ensure-all-trees --apply` leave such a level
+as it is and name it on a `! refused level, left untouched: ...` line (exit code unchanged).
+`add` refuses to create a fact whose body carries a `topics:` line, and a cross-tree `relocate`
+drops the line from its copy with a `~ note:`. `set-topics --batch` refuses, as an input error, a
+line over 4096 bytes, more than 5000 rows, a slug named twice, a line that is not UTF-8 and a line
+that is not a row object.
 `set-topics --clear` works on a pinned fact; tagging one is refused. `set-topics --dry-run` also
 runs under `BITRANOX_MEMORY_WRITES=off`. A `--topics` value that is no topic list is a usage
 error. A level reached through a symlink is named by its own path below the tree top. The full

@@ -49,7 +49,9 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   that brings or changes the line, an empty one included (exit 2, nothing written): topics change
   only through `set-level-topics` and `set-top-topics`. A legacy block counts as the level's
   descriptor; one whose `TOPICS:` line does not parse refuses `set-scope`, `add` and the level
-  setup until it is fixed by hand, and `ensure-memory-structure` and `heal` skip that level.
+  setup until it is fixed by hand; `ensure-memory-structure`, `heal` and
+  `ensure-all-trees --apply` leave that level as it is and name it on a
+  `! refused level, left untouched: ...` line, their exit code unchanged.
   `set-scope` decides its refusal before the level is scaffolded and holds the level lock for its
   whole read, check and write.
 - `memory_engine.py add` refuses to create a fact whose body's frontmatter carries a `topics:`

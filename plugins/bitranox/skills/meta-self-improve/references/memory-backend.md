@@ -168,9 +168,13 @@ line does not parse refuses `set-scope`, `add` and every other verb that would s
 up, exit 2 and nothing written, printing "! refused: the legacy scope block in <path>/CLAUDE.md
 has a TOPICS line that does not parse (<reason>); fix or remove that line there by hand, then run
 this again"; `set-level-topics` reads only the pointer block, so it cannot replace that line
-either. `ensure-memory-structure` and `heal` skip such a level without a word (their exit code
-is unaffected: 0 when nothing else went wrong) and leave its `CLAUDE.md` as it is. `set-scope`
-holds the level's lock for its whole read, check and write.
+either. The three commands that set up a whole chain are the exception to that exit 2:
+`ensure-memory-structure`, `heal` and `ensure-all-trees --apply` leave such a level and its
+`CLAUDE.md` as they are, set up the rest of the chain, and name it with one line per level:
+"    ! refused level, left untouched: the legacy scope block in <path>/CLAUDE.md has a TOPICS line
+that does not parse (<reason>); fix or remove that line there by hand, then run this again
+[<level>]". The line does not change their exit code (0 when nothing else went wrong).
+`set-scope` holds the level's lock for its whole read, check and write.
 
 The tree's closed topic list, with a one-line meaning per topic, is
 `<anchor>/.claude-memory/topics.json`, written by `topics-set-list`: 1 to 64 topics, each name
