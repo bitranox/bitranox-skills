@@ -75,6 +75,11 @@ Create one todo per step.
    trees relevant to that project and bring it in by **lifting broadly-useful hits to a common ancestor**
    or writing a **self-contained local copy** (marked so it is not re-promoted; scrubbed). Single source
    of truth - do not re-implement the funnel here.
+   A fact lifted or copied into another tree arrives UNTAGGED: topics belong to one tree's
+   list (`memory_engine.py topics-show`), so no `topics:` line crosses a tree boundary. Write
+   the copy's body without that line (`add` refuses a new fact whose body carries one), and
+   do not tag it in this run: the target tree's own dream tags it against that tree's list
+   (`bitranox:meta-dream-tree` step 5).
 3. **Cheap convergence pre-check, THEN ask before the deep scan.** The cross-project semantic read (the
    fan-out below) is the expensive part - dozens of subagents. Do NOT run it unconditionally. First the
    cheap, deterministic pass: which stores changed since the last global dream, `reconcile_memory_index.py
@@ -144,6 +149,24 @@ Create one todo per step.
    (dream-core.md, Mode): list it in the report with its cost (the bytes it adds to the top block:
    the UTF-8 length of its pointer line plus the newline), PROPOSED in `propose`, applied in
    `auto`.
+   **A fact placed by topic in its source tree** has a line at each level that has one of its
+   topics, so the audit lists it once per such level and counts each in `TOTAL misplaced`:
+   judge and report it as ONE fact. `relocate` refuses it
+   (`! refused: '<slug>' is placed by topic`), from whichever level you name. When the
+   relocate is to be applied (in `auto`, or once the user approved the proposal), un-bind it
+   in the source tree first:
+   `memory_engine.py set-topics --proj <source anchor> --slug <slug> --clear`, requiring
+   `set topics on 1 fact(s); 0 unchanged` (`<source anchor>` is the source tree's top). A
+   fact that had a line at several levels then has ONE line, at the source tree's top
+   (`set-topics` prints a `~ note:` line naming it); a fact that had one line keeps it where
+   it was. Run the audit again and use the `relocate` command it now prints for that slug,
+   which names the level holding the line, requiring `relocated <slug>:`. In `propose` the
+   un-bind is part of the proposal and is not run: the proposal names both commands, the
+   relocate from the level the line will then stand at. The fact arrives in the target tree
+   UNTAGGED, as a lifted or copied one does (step 2): `relocate` copies the body without a
+   `topics:` line (it prints `~ note: dropped the topics: line of <slug>` for a body that
+   still has one, such as a universal fact's `topics: []`), and the target tree's own dream
+   tags it, not this run.
    - **Jev shadow on that judgement** (only when `jev_shadow.py status` exits 0; home
      `<plugin>/skills/meta-self-improve/`, launch via `hooks/run-python.sh`; procedure in its
      `references/jev-shadow.md`), per tree, each in a fresh `D=$(mktemp -d)` of its own outside any

@@ -58,6 +58,12 @@ duplication to avoid. Everything else, do not duplicate: follow crosstree.
    routine dream until a full sweep finds it. Judge each candidate (a cited neighbour path is not a
    misfile) and `relocate` only the confirmed ones. Report the candidates rejected as well as the
    ones moved - a rejected candidate is a result, not a non-event.
+   A fact placed by topic is listed once per level that holds a line of it and is ONE
+   candidate; `relocate` refuses it (`! refused: '<slug>' is placed by topic`) until it is
+   un-bound in its source tree with `set-topics --proj <source anchor> --slug <slug> --clear`.
+   Follow crosstree step 4b's paragraph on it for the order, the level to relocate from and the
+   mode. A fact that crosses trees, relocated, lifted or copied, arrives UNTAGGED: topics
+   belong to one tree's list, and the target tree's own dream tags it, never this run.
    - **Jev shadow:** crosstree 4b's Jev shadow bullet applies on EVERY tree swept (only when
      `jev_shadow.py status` exits 0), its files per tree in a fresh `D=$(mktemp -d)` of its own
      outside any repo, one `<dream id>` (`crosstree-deep-<YYYYMMDD-HHMM>`) for the whole run:
