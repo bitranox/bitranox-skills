@@ -74,8 +74,14 @@ __all__ = ["Report", "scan", "main"]
 
 
 def is_pruned_dir(name: str) -> bool:
-    """Whether a directory name is one a curated memory tree never keeps levels in."""
-    return name in PRUNE or name.startswith(PRUNE_PREFIXES)
+    """Whether a directory name is one a curated memory tree never keeps levels in.
+
+    On top of this tool's own venv shapes it takes the engine's rule
+    (`uuid_store.is_non_level_dirname`), which covers the store and the migration backup beside
+    it: a copied pointer file there is a snapshot, not a level. Without the engine module main()
+    already refuses, so the check here only guards a direct call."""
+    return (name in PRUNE or name.startswith(PRUNE_PREFIXES)
+            or (uuid_store is not None and uuid_store.is_non_level_dirname(name)))
 
 
 @dataclass

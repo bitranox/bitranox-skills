@@ -44,8 +44,8 @@ BACKUP_PREFIX = ".claude-memory-migration-backup-"
 
 def _is_pruned(name):
     """True for a dir the walk never enters: vendored/build/VCS dirs, a store, or a backup."""
-    return (name in sig.VENDOR_DIRNAMES or name in (sig.MEMORY_DIRNAME, sig.CURATED_DIRNAME)
-            or name.startswith(BACKUP_PREFIX) or ".bak-" in name or name.endswith(".bak"))
+    return (us.is_non_level_dirname(name) or name == sig.CURATED_DIRNAME
+            or ".bak-" in name or name.endswith(".bak"))
 
 
 def find_pointer_files(root, unreadable=None):

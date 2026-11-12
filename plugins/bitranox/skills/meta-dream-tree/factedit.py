@@ -341,7 +341,11 @@ SEARCH_BUDGET_S = 10.0
 
 
 def _skip_dir(name: str) -> bool:
-    return name in _SKIP_DIRS or name.startswith(".venv")
+    """A dir the owner search never enters. A `<store>-*` sibling of the store is the backup a
+    slug-store migration leaves under the anchor, whose pointer files are copies, not owners. The
+    engine's own rule (`uuid_store.is_non_level_dirname`) is not imported for it: this runs against
+    whichever engine --engine names, which may predate that rule."""
+    return name in _SKIP_DIRS or name.startswith((".venv", STORE_DIRNAME))
 
 
 def find_pointer_owners(anchor: Path, slug: str, parse_index: Callable[[str], tuple], *,

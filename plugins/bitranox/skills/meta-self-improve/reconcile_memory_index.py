@@ -671,8 +671,7 @@ def find_decoy_anchors(anchor, unreadable=None):
         # never descend into a store, a backup/variant dir (`<store>-*`), a vendored dir, or the
         # dream's own backup root
         dirs[:] = [d for d in dirs
-                   if not d.startswith(us.STORE_DIRNAME) and d not in sig.VENDOR_DIRNAMES
-                   and (rootp / d).resolve() != audit_root]
+                   if not us.is_non_level_dirname(d) and (rootp / d).resolve() != audit_root]
     return sorted(found)
 
 

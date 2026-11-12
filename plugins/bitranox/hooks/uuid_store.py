@@ -42,6 +42,19 @@ NAMESPACE = _uuid.UUID("6f1b2c9e-8a4d-5f3b-9c7e-2d1a0b3c4d5e")
 STORE_DIRNAME = sig.MEMORY_DIRNAME               # the central body-store dir, co-located at the anchor
                                                  # (single source: self_improve_signals.MEMORY_DIRNAME)
 
+
+def is_non_level_dirname(name):
+    """True for a directory name no curated level or live store sits under: a vendored, build or
+    VCS dir (`sig.VENDOR_DIRNAMES`), the store itself, or any `<store>-*` sibling of it.
+
+    The sibling is the backup `migrate_to_slug_store.py --apply` leaves under the anchor
+    (`.claude-memory-migration-backup-<stamp>/`): it holds a copy of the store and of every pointer
+    file the migration touched, and a copy is a snapshot, not a level, so a walk that entered it
+    reported every migrated slug at two levels. THE name rule the level walk
+    (`memory_engine.curated_levels_under`), the decoy-store scan and the migration's own walk prune
+    by; the dream's backup root is pruned on top of it by resolved path, never by name."""
+    return name in sig.VENDOR_DIRNAMES or name.startswith(STORE_DIRNAME)
+
 # The type prefixes a slug may carry (single source; memory_engine aliases this).
 TYPE_PREFIXES = ("project", "feedback", "reference", "user")
 

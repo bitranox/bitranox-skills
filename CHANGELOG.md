@@ -57,6 +57,12 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   pointer line differs from what its body renders. Un-binding a fact that has lines at several
   levels leaves it one line, at the tree top.
 
+### Fixed
+
+- Level walks skip the backup directory a slug-store migration leaves under the anchor, so its
+  copied pointer files are no longer read as live levels (`--check-tree`, `lint --tree`,
+  `set-topics`, `mem_levels.py`, `factedit.py`'s owner search).
+
 ## [11.2.0]
 
 ### Added

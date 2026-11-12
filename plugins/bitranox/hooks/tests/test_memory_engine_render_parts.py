@@ -338,8 +338,6 @@ def test_a_legacy_uuid_pointer_names_the_migration_and_that_repairs_it(tmp_path,
     assert "migrate_to_slug_store.py --root %s --apply" % anchor in out
     assert mig.main(["--root", anchor, "--apply"]) == 0
     # The migration leaves its backup (a copy of every pointer file, legacy lines included) under
-    # the anchor, and the engine's level walk enters it as if it were a live level; that walk is
-    # not this guard's to change, so the backup is moved out of the tree before the bind.
-    for backup in Path(anchor).glob(mig.BACKUP_PREFIX + "*"):
-        backup.rename(tmp_path / backup.name)
+    # the anchor; the bind must succeed with it in place.
+    assert len(list(Path(anchor).glob(mig.BACKUP_PREFIX + "*"))) == 1
     assert _bind(anchor, "feedback-l") == 0

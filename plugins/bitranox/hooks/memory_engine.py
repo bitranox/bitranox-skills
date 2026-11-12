@@ -1971,7 +1971,8 @@ def _carries_pointer_block(path):
 
 def curated_levels_under(anchor, unreadable=None):
     """Every curated level dir under `anchor` (a `CLAUDE.local.md` carrying a managed pointer block),
-    pruning vendored/build/cache dirs and the dream's own backup root - a bounded os.walk of the
+    pruning what `us.is_non_level_dirname` names (vendored/build/cache dirs, the store and a
+    migration's backup beside it) and the dream's own backup root - a bounded os.walk of the
     whole subtree, SIBLINGS included.
     THE single tree-walk (reconcile's `_all_curated_levels` delegates here) so the two never drift.
 
@@ -1990,7 +1991,7 @@ def curated_levels_under(anchor, unreadable=None):
     audit_root = sig._audit_dir().resolve()
     out = []
     for root, dirs, files in os.walk(str(anchor), onerror=_walk_error_sink(unreadable)):
-        dirs[:] = [d for d in dirs if d not in sig.VENDOR_DIRNAMES
+        dirs[:] = [d for d in dirs if not us.is_non_level_dirname(d)
                    and Path(root, d).resolve() != audit_root]
         if "CLAUDE.local.md" not in files:
             continue

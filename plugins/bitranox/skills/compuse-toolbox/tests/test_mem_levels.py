@@ -473,3 +473,18 @@ def test_a_pointer_file_without_a_managed_block_is_not_a_level(tmp_path):
 
     assert "bare" not in report.levels
     assert report.levels["blocked"] == ["bare-fact"]
+
+
+def test_a_migration_backup_under_the_root_is_not_a_level(tmp_path):
+    """`migrate_to_slug_store.py --apply` leaves `.claude-memory-migration-backup-<stamp>/` under
+    the anchor, holding a copy of every pointer file it touched; a copy is not a level."""
+    root = _tree(tmp_path / "t", {".": ["top-fact"], "sub": ["sub-fact"]})
+    backup = root / ".claude-memory-migration-backup-20261112T000000" / "levels"
+    for d in (backup, backup / "sub"):
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "CLAUDE.local.md").write_text(BLOCK.format(rows=_row("top-fact")), encoding="utf-8")
+
+    report = mem_levels.scan(root)
+
+    assert sorted(report.levels) == [".", "sub"], report.levels
+    assert report.duplicates == {}

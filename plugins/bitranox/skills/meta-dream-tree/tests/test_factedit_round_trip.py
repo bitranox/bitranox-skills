@@ -199,7 +199,8 @@ def test_a_search_out_of_time_prints_the_find_command(tmp_path):
 def test_the_owner_search_skips_vendored_and_hidden_dirs(tmp_path):
     level = make_tree(tmp_path)
     anchor = level.parent
-    for junk in (".git", "node_modules", ".venv-3.12"):
+    for junk in (".git", "node_modules", ".venv-3.12",
+                 ".claude-memory-migration-backup-20261112T000000"):
         d = anchor / junk / "deep"
         d.mkdir(parents=True)
         (d / "CLAUDE.local.md").write_text(
