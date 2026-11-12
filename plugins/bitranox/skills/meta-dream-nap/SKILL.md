@@ -139,6 +139,47 @@ than deleting it.
    anchor included, is applied in every mode. Low/UNSURE and anything involving a sibling stays
    put. A pinned fact re-levels like any other entry, pin intact; only its CONTENT is out of reach
    (per the core's Boundaries).
+   A fact the routing answers with TOPICS (it holds wherever a stack or tool is used, in more
+   than one branch) is not moved and not tagged here, in any mode, and never goes to the tree
+   top on that answer: tagging facts is the tree dream's (`bitranox:meta-dream-tree` step 5),
+   and `move` refuses a fact that is already placed by topic
+   (`! refused: '<slug>' is placed by topic`). Leave it where it is and name it in the
+   deferred list.
+4b. **Topics of this directory, and the chain's lines (only when
+   `memory_engine.py topics-show --proj <cwd>` exits 0; it exits 1 printing
+   `no topic list in this tree`, and such a tree skips this step).** For the cwd's level
+   ONLY, and only when it lies below the tree top: a cwd that IS the tree top is left alone,
+   since its topics are the user's (`set-level-topics` refuses it, and `set-top-topics` is
+   never a nap's to run); a change you would make there is a proposal in the report. Run
+   `memory_engine.py topics-stale --proj <cwd level>`: `fresh` (exit 0) needs nothing. On
+   `stale: no descriptor`, first write the descriptor from the directory's own README or
+   CLAUDE.md with the tree dream's template (`bitranox:meta-dream-tree` step 0b;
+   `set-scope --scope-file`, requiring `scope updated:`), because `set-level-topics` refuses
+   a level without one. On any `stale:` line (exit 1), note the `TOPICS:` line the
+   descriptor has now, then choose the level's topics from the list `topics-show` prints by
+   reading its descriptor, by the rule of meta-dream-tree step 0b, "Topics of a level" (a cwd
+   that is a container of projects with different stacks gets none), and write them with
+   `memory_engine.py set-level-topics --proj <cwd level> --topics a,b` (`--topics ''` for
+   none), requiring `topics updated:`. One directory is far below the item count a bulk judge
+   is for. An ancestor level's descriptor or topics are not a nap's to write, stale or not:
+   name one that `topics-stale` (a read) reports stale in the deferred list.
+   Then place the chain's lines:
+   `memory_engine.py render-topics --proj <cwd> --scope chain --dry-run`, read its per-level
+   lines (`<level>: +A added, R refreshed, -D removed`), and, unless the tree top's line stops
+   you (next paragraph), run the same without `--dry-run`, requiring its last line
+   `render-topics (chain): N managed fact(s); changed M level(s)`. It writes only the chain's
+   levels: it adds each line placed at one of them and drops there a line that a level above
+   holds. It never writes a sibling, so a line that belongs at a sibling waits for the tree
+   dream's render. A real render holds the tree's placement lock (meta-dream-tree step 5): on
+   `waited 30 s for the placement lock`, run it again once the other session has finished. So
+   a new project gets the rules of its stack at its first nap.
+   When the dry run's line for the tree top counts an added line (`<anchor>: +N added` with N
+   above 0), that is a move to the top and follows the core's Mode. Auto mode renders and
+   prints each such line's cost in the report. In propose mode and under `off`: when this
+   step replaced a `TOPICS:` line the level already had, set those earlier topics again with
+   `set-level-topics`, propose the change with its cost, and dry-run again; when the dry run
+   still counts one (or the level had no line to restore), do not run the real render, and
+   list those lines with their cost in the report (un-binding a fact is the tree dream's).
 5. **Prune the obvious**: leaked task-state and dead-content entries AT the chain's levels
    (propose-first per the removal policy in `bitranox:meta-dream-tree` -> references/dream-passes.md).
    Include version-bound facts: run `versionrot.py scan --chain <cwd> --pypi --json` (home:
@@ -152,10 +193,14 @@ than deleting it.
    contract), and `TOTAL problems: 0` from ONE `reconcile_memory_index.py --check` call (home:
    `<plugin>/skills/meta-self-improve/`, not `hooks/`) given the whole chain, narrowest first: the
    cwd's level, each ancestor level, and the anchor; one call per level checks no reference
-   between levels. When the store is committed, `git add` only the paths this nap wrote,
+   between levels. In a tree with a topic list that check also reports a `repeated line` (a
+   line of a fact placed by topic that a level above already holds), and step 4b's
+   `render-topics --scope chain` is what drops it: run that render again, never edit the line.
+   When the store is committed, `git add` only the paths this nap wrote,
    never `git add -A`, and compare `git diff --cached --name-only` with the nap's own list first
    (the store is shared, per the core's verification contract) - then report counts AND an explicit
-   "deferred to the full dream" list (sibling dedup, tree-wide placement, descriptor synthesis,
+   "deferred to the full dream" list (sibling dedup, tree-wide placement, descriptor synthesis
+   for every level but the cwd's, tagging facts by topic and the tree-wide render,
    behavioral passes, unshipped skill/hook contributions (skill-fit) queued but not delivered, and
    the toolbox CONSOLIDATE half per dream-core.md - machine-global, outside the nap's chain-only
    budget; its READ half already ran at step 2b). A nap is PARTIAL BY DESIGN and says so - never silently incomplete.
@@ -170,6 +215,8 @@ than deleting it.
 - [ ] Backup + manifest of the chain's levels recorded.
 - [ ] Toolbox inventory read BEFORE the dedup/placement/prune passes (or the path confirmed absent).
 - [ ] Chain-internal dedup/placement/prune applied via the engine (fail-loud success lines).
+- [ ] In a tree with a topic list: the cwd's level is `fresh` (or is the tree top, left alone),
+      and `render-topics --scope chain` ran, or its skipped top lines are in the report.
 - [ ] Sibling branches and other trees untouched by steps 2b-6 (the capture carve-out is the only
       write allowed outside the chain, and only at a fact's owning level - name it in the report).
 - [ ] Manifest diff clean; reconcile `TOTAL problems: 0` over the chain.
