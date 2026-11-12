@@ -292,22 +292,27 @@ def test_a_level_over_the_block_cap_is_an_unchecked_placement(tmp_path, capsys):
             "---\nname: feedback-big%05d\ndescription: %s\ntitle: T\ntopics: [python]\nmetadata:\n"
             "  type: feedback\n---\n\nx\n" % (i, "y" * 1000), encoding="utf-8")
     line = _assert_unchecked(levels, capsys, "bytes")
-    # the census names the level a line first pushes past the cap, in the order the store lists
-    # the bodies: either python level
-    assert levels["a/py"] in line or levels["b/py"] in line
+    # both python levels pass the cap; the census names the first in level order, whatever order
+    # the store lists the bodies in
+    assert levels["a/py"] in line and levels["b/py"] not in line
 
 
 @pytest.mark.skipif(sys.platform == "win32" or not hasattr(os, "geteuid") or os.geteuid() == 0,
                     reason="a read-only directory refuses a lock file only for a non-root POSIX user")
-def test_a_level_the_dry_run_cannot_lock_is_an_unchecked_placement(tmp_path, capsys):
+def test_a_read_only_tree_checks_clean(tmp_path, capsys):
+    """The drift check is a dry run, which takes no lock: a tree nobody may write is checked like
+    any other, not reported as one the placement could not be checked in."""
     levels = _rendered(tmp_path)
-    level = Path(levels["b/py"])
-    mode = level.stat().st_mode
-    level.chmod(0o555)
+    paths = [Path(levels[""]), *Path(levels[""]).rglob("*")]
+    modes = {p: p.stat().st_mode for p in paths}
+    for p in paths:
+        p.chmod(modes[p] & ~0o222)
     try:
-        _assert_unchecked(levels, capsys, "could not lock or read a level file")
+        rc, out = _check_tree(levels, capsys)
     finally:
-        level.chmod(mode)
+        for p in paths:
+            p.chmod(modes[p])
+    assert rc == 0 and "TOTAL tree problems: 0" in out and "could not be checked" not in out, out
 
 
 # ---- only a fact the renderer manages is placed by topic ----------------------------------------

@@ -8,6 +8,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import tracemalloc
 from pathlib import Path
 
@@ -618,3 +619,134 @@ def test_an_unknown_scope_is_a_usage_error(tmp_path, capsys):
     assert exc.value.code == 2
     with pytest.raises(ValueError):
         E.render_topics(anchor, scope="sideways")
+
+
+# ---- a dry run locks nothing and creates nothing ------------------------------------------------
+
+def _stat_snapshot(root):
+    """Every path under `root` (the root included), files AND directories, with its mtime: a lock
+    file made and removed again leaves no file, only a directory mtime that moved."""
+    root = Path(root)
+    return {str(p): p.stat().st_mtime_ns for p in [root, *sorted(root.rglob("*"))]}
+
+
+def _example_with_work(tmp_path):
+    """The design's tree with work for either scope: a python rule held only at the top (a tree
+    render adds it under python and drops it there) and one held only at a/other, off a/py's
+    chain (a chain render from a/py adds it at a/py)."""
+    anchor, levels = _example(tmp_path)
+    _fact(levels["a/other"], "feedback-chain-rule", ("python",))
+    return anchor, levels
+
+
+@pytest.mark.parametrize("scope", ["tree", "chain"])
+def test_a_dry_run_changes_no_file_and_no_directory_mtime(tmp_path, scope):
+    anchor, levels = _example_with_work(tmp_path)
+    proj = levels["a/py"] if scope == "chain" else anchor
+    before = _stat_snapshot(anchor)
+    rep = E.render_topics(proj, scope=scope, dry_run=True)
+    assert rep["levels"]                       # the dry run had something to report
+    assert _stat_snapshot(anchor) == before
+
+
+@pytest.mark.skipif(sys.platform == "win32" or not hasattr(os, "geteuid") or os.geteuid() == 0,
+                    reason="a read-only directory refuses a new file only for a non-root POSIX user")
+@pytest.mark.parametrize("scope", ["tree", "chain"])
+def test_a_dry_run_on_a_read_only_tree_reports_what_a_writable_one_does(tmp_path, scope):
+    (tmp_path / "rw").mkdir()
+    (tmp_path / "ro").mkdir()
+    anchor, levels = _example_with_work(tmp_path / "rw")
+    ro_anchor, ro_levels = _example_with_work(tmp_path / "ro")
+    rel = "a/py" if scope == "chain" else None
+    want = E.render_topics(levels[rel] if rel else anchor, scope=scope, dry_run=True)
+    paths = [Path(ro_anchor), *Path(ro_anchor).rglob("*")]
+    modes = {p: p.stat().st_mode for p in paths}
+    for p in paths:
+        p.chmod(modes[p] & ~0o222)
+    try:
+        got = E.render_topics(ro_levels[rel] if rel else ro_anchor, scope=scope, dry_run=True)
+    finally:
+        for p in paths:
+            p.chmod(modes[p])
+    rebase = str(tmp_path / "rw"), str(tmp_path / "ro")
+    assert json.dumps(got, sort_keys=True) == json.dumps(want, sort_keys=True).replace(*rebase)
+    assert got["levels"]
+
+
+@pytest.mark.parametrize("age", [0.0, 3600.0])
+def test_a_dry_run_neither_waits_for_nor_reclaims_a_peers_lock(tmp_path, age):
+    """A held lock (age 0) made the dry run wait out its 5 s and fail; a stale one (an hour old)
+    it reclaimed, deleting a file it does not own. It must do neither."""
+    anchor, levels = _example_with_work(tmp_path)
+    want = E.render_topics(anchor, dry_run=True)
+    lock = Path(str(sig.claude_local_md_path(levels["a/py"])) + ".lock")
+    lock.write_text("peer\n", encoding="utf-8")
+    stamp = lock.stat().st_mtime - age
+    os.utime(lock, (stamp, stamp))
+    before = _stat_snapshot(anchor)
+    started = time.monotonic()
+    got = E.render_topics(anchor, dry_run=True)
+    assert time.monotonic() - started < 2.0
+    assert got == want and lock.read_text(encoding="utf-8") == "peer\n"
+    assert _stat_snapshot(anchor) == before
+
+
+@pytest.mark.skipif(sys.platform == "win32" or not hasattr(os, "geteuid") or os.geteuid() == 0,
+                    reason="a read-only directory refuses a new file only for a non-root POSIX user")
+def test_a_set_topics_dry_run_takes_no_lock_either(tmp_path):
+    anchor, levels = _example_with_work(tmp_path)
+    _fact(levels["b"], "feedback-plain")
+    paths = [Path(anchor), *Path(anchor).rglob("*")]
+    modes = {p: p.stat().st_mode for p in paths}
+    before = _stat_snapshot(anchor)
+    for p in paths:
+        p.chmod(modes[p] & ~0o222)
+    try:
+        rep = E.set_fact_topics(levels["b"], {"feedback-plain": ("python",)}, dry_run=True)
+    finally:
+        for p in paths:
+            p.chmod(modes[p])
+    assert rep["set"] == ["feedback-plain"] and _stat_snapshot(anchor) == before
+
+
+# ---- the over-cap refusal names the same level whatever order the store lists bodies in ---------
+
+class _Listing:
+    """os.scandir of the facts directory in a chosen order: the order is the filesystem's, so a
+    verdict that depends on it differs between two machines holding the same tree."""
+
+    def __init__(self, entries):
+        self._entries = entries
+
+    def __enter__(self):
+        return iter(self._entries)
+
+    def __exit__(self, *exc):
+        return False
+
+    def __iter__(self):
+        return iter(self._entries)
+
+
+@pytest.mark.parametrize("rust_first", [False, True])
+def test_the_cap_refusal_names_the_first_level_in_level_order(tmp_path, monkeypatch, rust_first):
+    """`a` (python) and `b` (rust) both pass the cap. Listed python first, `a` is the level a line
+    first pushes over; listed rust first, `b` is. The refusal names `a` both times."""
+    anchor = _tree(tmp_path)
+    first, _second = _level(anchor, "a", ("python",)), _level(anchor, "b", ("rust",))
+    _plant_tagged(anchor, "py", "python", 1200, "y" * 1000)
+    _plant_tagged(anchor, "rs", "rust", 1200, "y" * 1000)
+    facts = str(us.central_facts_dir(anchor))
+    real = os.scandir
+
+    def scandir(path="."):
+        if os.fspath(path) != facts:
+            return real(path)
+        with real(path) as it:
+            entries = sorted(it, key=lambda e: (("-rs" in e.name) != rust_first, e.name))
+        return _Listing(entries)
+
+    monkeypatch.setattr(os, "scandir", scandir)
+    with pytest.raises(E.RenderBlockTooLarge) as exc:
+        E.render_topics(anchor, dry_run=True)
+    assert exc.value.level == first

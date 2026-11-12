@@ -30,6 +30,7 @@ Pure standard library; cross-platform (pathlib, UTF-8, the O_EXCL lock in self_i
 """
 
 import argparse
+import contextlib
 import json
 import os
 import re
@@ -2662,7 +2663,7 @@ def set_fact_topics(proj, rows, dry_run=False, write=None):
     line its body renders other than in whitespace (see `_line_problem`) refuses the WHOLE call
     with TopicRefusal (the first refusals and their total). Each body is then read and written
     under the lock of the first level that points at it, the lock an ordinary write to that fact
-    holds. Pointer
+    holds; a dry run reads without it and creates no file (`_write_lock`). Pointer
     lines are placed by `render-topics`, with one exception: a fact this call un-binds that is
     bound now, pinned nowhere and has a line at several levels keeps ONE line, at the tree top
     (`_collapse_plan`; CollapseTooLarge refuses the whole call first when the top's block would
@@ -2700,7 +2701,7 @@ def set_fact_topics(proj, rows, dry_run=False, write=None):
             if not dry_run:
                 _collapse_copies(anchor, slug, *plan[slug], write)
             rep["collapsed"].append(slug)
-        with sig.memory_lock(sig.claude_local_md_path(owners[slug][0])):
+        with _write_lock(sig.claude_local_md_path(owners[slug][0]), dry_run):
             body = read_store_text(us.body_path(anchor, slug)).rstrip("\n")
             tagged = _with_topics(body, rows[slug])
             if tagged == body:
@@ -2930,18 +2931,20 @@ def _census_tally():
 def _render_census(anchor, pinned, place, dirs, adds):
     """One pass over the bodies, before anything is written: the `_census_lines` counts, and the
     bytes each level of `adds` will hold, starting from the lines it keeps (`_held_bytes`). Raises
-    RenderBlockTooLarge for the first level a line pushes past MAX_RENDER_BLOCK_BYTES, so that
-    refusal comes before ANY level is written, not after the levels ahead of it in the ADD order
-    were. It raises after the pass, with that level's whole count: a count stopped at the first
-    line past the cap would name too few bytes to move. Holds one byte count per level."""
+    RenderBlockTooLarge when a level would pass MAX_RENDER_BLOCK_BYTES, so that refusal comes
+    before ANY level is written, not after the levels ahead of it in the ADD order were. It raises
+    after the pass, with that level's whole count: a count stopped at the first line past the cap
+    would name too few bytes to move. Of several such levels it names the first in level order
+    (the sorted parts: the top first, a parent before its children, siblings by name), never the
+    one a line first pushed over, which depends on the order the store lists its bodies, so the
+    same tree would name a different level on another filesystem. Holds one byte count per level."""
     tally = _census_tally()
     kept = {parts: _held_bytes(anchor, pinned, dirs[parts])[0] for parts in adds}
-    sizes, full = dict(kept), None
+    sizes = dict(kept)
     for _slug, topics, line in _census_lines(anchor, pinned, tally):
         for parts in place(topics):     # a placement is always the top or a level with a topic
             sizes[parts] += len(line.index_line().encode("utf-8")) + 1
-            if full is None and sizes[parts] > MAX_RENDER_BLOCK_BYTES:
-                full = parts
+    full = min((parts for parts in sizes if sizes[parts] > MAX_RENDER_BLOCK_BYTES), default=None)
     if full is not None:
         raise RenderBlockTooLarge(dirs[full], kept[full], sizes[full] - kept[full],
                                   place.bound_to(full))
@@ -2985,11 +2988,26 @@ def _note(rep, level_dir, kind, slugs):
     shown.extend(sorted(slugs)[:_RENDER_SHOWN - len(shown)])
 
 
+def _write_lock(local, dry_run):
+    """The lock a read-modify-write of the level file `local` takes, or none for a dry run.
+
+    A dry run writes nothing, so it must not create a file either: a lock is a `.lock` file made
+    and removed beside the level file, which fails on a read-only tree, waits out (and then fails
+    on) a peer's lock, may reclaim a stale one, and changes the directory's mtime - a check run
+    over the store would do all of that. Unlocked, a read sees one whole text: the store's writer
+    (`write_if_changed`) renames a finished temp file over the level file, so the old text or the
+    new one is read, never a part. What a dry run cannot get is a tree-wide snapshot: a writer may
+    change one level between the reads of two, which the locks never prevented either (each is
+    held for its own level only)."""
+    return contextlib.nullcontext() if dry_run else sig.memory_lock(local)
+
+
 def _add_lines(level_dir, wanted, rep, dry_run, write):
     """Add the missing lines of `wanted` to one level and refresh an unpinned line that says
-    something else than its body, under the level's lock. Returns the slugs the level now holds."""
+    something else than its body, under the level's lock (none for a dry run, `_write_lock`).
+    Returns the slugs the level now holds."""
     local = sig.claude_local_md_path(level_dir)
-    with sig.memory_lock(local):
+    with _write_lock(local, dry_run):
         text = read_store_text(local)
         scope, pointers = us.parse_pointer_index(text)
         held = {p.slug: p for p in pointers}
@@ -3010,11 +3028,11 @@ def _add_lines(level_dir, wanted, rep, dry_run, write):
 
 
 def _drop_lines(level_dir, doomed, rep, dry_run, write):
-    """Drop the unpinned lines of `doomed` from one level, under its lock."""
+    """Drop the unpinned lines of `doomed` from one level, under its lock (none for a dry run)."""
     if not doomed:
         return
     local = sig.claude_local_md_path(level_dir)
-    with sig.memory_lock(local):
+    with _write_lock(local, dry_run):
         text = read_store_text(local)
         scope, pointers = us.parse_pointer_index(text)
         kept = [p for p in pointers if p.slug not in doomed or p.pin or p.legacy]
@@ -3164,7 +3182,8 @@ def render_topics(proj, scope="tree", dry_run=False, write=None):
     added below it and is dropped there, and a line merely placed elsewhere stays, for the tree
     scope to sweep; no file off the chain is written). `write(path, text)` is the port a
     level file is written through (default `uuid_store.write_if_changed`); a test passes a
-    recording one. Returns a report: {'list': False} alone when the tree has no topic list (then
+    recording one. A dry run takes no lock and creates no file (`_write_lock`), so it runs on a
+    read-only tree and beside a peer's held lock. Returns a report: {'list': False} alone when the tree has no topic list (then
     nothing is read further and nothing written), else scope, dry_run, managed, incomplete,
     incomplete_total and, per changed level dir, the counts added / refreshed / removed with a
     few example slugs.

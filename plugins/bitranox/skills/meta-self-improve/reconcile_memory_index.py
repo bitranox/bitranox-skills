@@ -699,16 +699,17 @@ def render_drift(anchor):
     `render-topics --scope tree` would change, read from its dry run, so the check and the
     renderer cannot disagree. Per level with a few examples, never one row per fact. `refused` is
     the reason the render could not be computed at all (a TOPICS line that does not parse, a tree
-    top with no pointer block, a damaged topic file, a level over the block limit, a level file
-    the dry run could not lock), else ''. A tree with no topic list has no drift. Raises
-    TreeWalkError when a level file or body cannot be read (the CLI exits 2 on it); `check_tree`
-    reads every one of them first and does not call this when one failed."""
+    top with no pointer block, a damaged topic file, a level over the block limit, a file the dry
+    run could not read past `check_tree`'s own reads), else ''. The dry run takes no lock, so a
+    read-only tree or a peer's held lock checks like any other. A tree with no topic list has no
+    drift. Raises TreeWalkError when a level file or body cannot be read (the CLI exits 2 on
+    it); `check_tree` reads every one of them first and does not call this when one failed."""
     try:
         rep = ME.render_topics(str(anchor), scope="tree", dry_run=True)
     except (ME.TopicRefusal, ME.topic_store.TopicStoreError, ME.tp.InvalidTopic) as exc:
         return [], str(exc) or type(exc).__name__
-    except OSError as exc:                         # the dry run takes each level's lock too
-        return [], "the dry run could not lock or read a level file (%s)" % (
+    except OSError as exc:                         # a file gone or unreadable between the reads
+        return [], "the dry run could not read a store file (%s)" % (
             str(exc) or type(exc).__name__)
     rows = []
     for level in sorted(rep.get("levels", {})):
