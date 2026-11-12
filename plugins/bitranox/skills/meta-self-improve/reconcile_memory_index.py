@@ -16,12 +16,19 @@ A curated altitude is a level dir whose `CLAUDE.local.md` holds a managed pointe
     at nothing, and only the `[[ref]]` kind is ever reported afterwards. `--force` archives anyway.
   * `--repair-appended-type`: a one-off repair for the body damage `--check-tree` reports as an
     appended `metadata: type:` block (see `appended_type_damage`); `--dry-run` lists only.
+  * a fact the engine places by topic (`render-topics`) has one line per level its topics place
+    it at: those copies are no duplicate, and a `[[ref]]` to it is judged through its body, not
+    by where its lines stand. `--check-tree` instead compares every level with a dry run of the
+    tree render (render drift), and `--check` reports such a line held again below a level of
+    the chain that holds it; each finding names the render that repairs it.
 
 `parse_frontmatter`/`derive_title`/`derive_hook` are kept for the NATIVE `~/.claude` tier (its topic
 files still carry `name`/`description` frontmatter); `migrate_memory.py` imports them.
 
-Exit codes: 0 clean; 1 a problem was found (orphan pointer or ref, downward ref, duplicate, decoy,
-frame-only or appended-type body, misplaced fact, a dangling body `--rehome` cannot re-attach
+Exit codes: 0 clean; 1 a problem was found (orphan pointer or ref, downward ref, duplicate, render
+drift, a placement by topic that could not be checked, a topic-placed line repeated below a level
+that holds it, decoy, frame-only or appended-type body, misplaced fact, a dangling body `--rehome`
+cannot re-attach
 because it is sharded or its name is not a slug, a damaged body `--repair-appended-type` could not
 repair) or `--archive` named no entry or was refused because something still names the fact;
 2 could not run: a dir argument does not exist, a level
@@ -34,6 +41,7 @@ Pure standard library; cross-platform; ASCII output only.
 """
 
 import argparse
+import os
 import re
 import shutil
 import sys
@@ -247,6 +255,7 @@ def check_references(dirs):
             targets.setdefault(s, set()).add(len(dirs) + offset)
 
     orphans, downward, checked = [], [], 0
+    pins = _TreePins()
     for pos, d in enumerate(dirs):
         for label, text in altitude_sources(d):
             for m in _WIKILINK_RX.finditer(ME.mask_code_regions(text)):
@@ -255,11 +264,14 @@ def check_references(dirs):
                     continue
                 checked += 1
                 where = targets.get(ref)
+                if not where and _placed_by_topic(ME._anchor(str(d)), ref, pins):
+                    continue                      # placed by topic: its lines need not be on this chain
                 if not where:
                     orphans.append((label, ref))
                 elif max(where) < pos:
                     downward.append((label, ref))
-    return {"checked": checked, "orphans": sorted(set(orphans)), "downward": sorted(set(downward))}
+    return {"checked": checked, "orphans": sorted(set(orphans)), "downward": sorted(set(downward)),
+            "repeated": chain_repeats(dirs)}
 
 
 def has_inbound_refs(dirs, slug):
@@ -675,6 +687,103 @@ def find_decoy_anchors(anchor, unreadable=None):
     return sorted(found)
 
 
+# ---- facts placed by topic (render-topics) ------------------------------------------------------
+
+# The repair the placement findings name, as the engine's own refusals name their routes: the
+# engine script path below the plugin dir, then the verb. Run as given it goes through.
+_RENDER_ROUTE = "hooks/memory_engine.py render-topics --proj %s --scope %s"
+
+
+def render_drift(anchor):
+    """([(level, missing, differing, extra, example slugs)], refused) for `anchor`'s tree: what a
+    `render-topics --scope tree` would change, read from its dry run, so the check and the
+    renderer cannot disagree. Per level with a few examples, never one row per fact. `refused` is
+    the reason the render could not be computed at all (a TOPICS line that does not parse, a tree
+    top with no pointer block, a damaged topic file, a level over the block limit, a level file
+    the dry run could not lock), else ''. A tree with no topic list has no drift. Raises
+    TreeWalkError when a level file or body cannot be read (the CLI exits 2 on it); `check_tree`
+    reads every one of them first and does not call this when one failed."""
+    try:
+        rep = ME.render_topics(str(anchor), scope="tree", dry_run=True)
+    except (ME.TopicRefusal, ME.topic_store.TopicStoreError, ME.tp.InvalidTopic) as exc:
+        return [], str(exc) or type(exc).__name__
+    except OSError as exc:                         # the dry run takes each level's lock too
+        return [], "the dry run could not lock or read a level file (%s)" % (
+            str(exc) or type(exc).__name__)
+    rows = []
+    for level in sorted(rep.get("levels", {})):
+        row = rep["levels"][level]
+        examples = sorted({slug for slugs in row["examples"].values() for slug in slugs})[:5]
+        rows.append((level, row["added"], row["refreshed"], row["removed"], examples))
+    return rows, ""
+
+
+class _TreePins:
+    """The slugs pinned at any level of a tree, read on first use per anchor: one tree walk, one
+    record per pinned pointer. A pinned fact is never placed by topic."""
+
+    def __init__(self):
+        self._by_anchor = {}
+
+    def __call__(self, anchor):
+        key = str(anchor)
+        if key not in self._by_anchor:
+            self._by_anchor[key] = ME._pinned_slugs(ME.curated_levels_under(key))
+        return self._by_anchor[key]
+
+
+def _placed_by_topic(anchor, slug, pins):
+    """True when the renderer manages `slug` (the engine's own test): its body carries a non-empty
+    `topics:` line and the title and description a line is built from, and no level pins it
+    (`pins(anchor)`, asked only for such a body). Its lines then stand wherever the levels' topics
+    place them, at levels a citing fact's chain need not include. Reads one body head."""
+    if not us.is_valid_slug(slug):
+        return False
+    head = ME._read_body_head(us.body_path(anchor, slug))
+    if head is None or ME._managed_topics(slug, head, ()) is None:
+        return False
+    return slug not in pins(anchor)
+
+
+def _level_pointers(level):
+    return us.parse_pointer_index(ME.read_store_text(sig.claude_local_md_path(level)))[1]
+
+
+def _levels_above(level, anchor):
+    """The curated levels above `level` up to the tree top, narrow to broad: found lexically, as
+    the engine's chain render finds its chain. [] when `level` is the top or not below it."""
+    if anchor not in level.parents:
+        return []
+    out = []
+    for up in level.parents:
+        if is_curated(up):
+            out.append(up)
+        if up == anchor:
+            break
+    return out
+
+
+def chain_repeats(dirs):
+    """[(slug, level, level above)] for every topic-placed line at one of `dirs` that a level
+    above it also holds: both are read in the same session, so the lower copy is surplus
+    (`render-topics --scope chain` from that level drops it). A fact pinned at any level, or one
+    the renderer does not manage, is not placed by topic and is left to --check-tree. Holds the
+    slugs of one level above at a time."""
+    pins, out = _TreePins(), set()
+    for d in _narrow_to_broad([Path(d) for d in dirs]):
+        if not is_curated(d):
+            continue
+        here = Path(os.path.abspath(str(d)))
+        anchor = Path(os.path.abspath(str(ME._anchor(str(here)))))
+        mine = [p.slug for p in _level_pointers(here) if not p.legacy]
+        for upper in _levels_above(here, anchor) if mine else []:
+            held = {p.slug for p in _level_pointers(upper)}
+            for slug in mine:
+                if slug in held and _placed_by_topic(anchor, slug, pins):
+                    out.add((slug, str(here), str(upper)))
+    return sorted(out)
+
+
 def check_tree(anchor):
     """Tree-wide integrity over EVERY curated level under `anchor` (SIBLINGS included) - the checks
     the chain-scoped `--check` structurally cannot make: a slug pointed at from more than one level
@@ -690,6 +799,7 @@ def check_tree(anchor):
     slug_levels = {}                            # canonical slug -> [level dirs pointing at it]
     orphan_pointers = []                        # (level, slug) whose central body is missing
     all_targets = set()                         # every slug offered anywhere in the tree
+    tagged, pinned = set(), set()               # canonical slugs: renderable topic-bound / pinned
     ref_sources = []                            # (level, source_slug, ref_slug)
     for lvl in levels:
         try:
@@ -701,6 +811,10 @@ def check_tree(anchor):
             cslug = _canon(e.slug)
             slug_levels.setdefault(cslug, []).append(lvl)
             all_targets.add(cslug)
+            if e.pin:
+                pinned.add(cslug)
+            if not e.legacy and ME._managed_topics(e.slug, bodies.get(e.slug, ""), ()) is not None:
+                tagged.add(cslug)
             body_p = us.legacy_body_path(anchor, e.uuid) if e.legacy else us.body_path(anchor, e.slug)
             if not body_p.is_file():
                 orphan_pointers.append((lvl, e.slug))
@@ -709,7 +823,10 @@ def check_tree(anchor):
                 ref = _ref_slug(m.group(1))
                 if ref and ref != cslug:
                     ref_sources.append((lvl, e.slug, ref))
-    duplicates = {s: sorted(lv) for s, lv in slug_levels.items() if len(lv) > 1}
+    # A MANAGED fact (topic-bound, never pinned) has one line per level it is placed at: those
+    # copies are the renderer's, and `render_drift` below says whether they are the right ones.
+    managed = tagged - pinned
+    duplicates = {s: sorted(lv) for s, lv in slug_levels.items() if len(lv) > 1 and s not in managed}
     orphan_refs = sorted(set((lvl, s, r) for (lvl, s, r) in ref_sources if r not in all_targets))
 
     # Downward/sideways refs: the target EXISTS in the tree but at NO level on the citing fact's
@@ -718,6 +835,10 @@ def check_tree(anchor):
     # slug that lives below it. `[[refs]]` are upward-only; the chain-only `--check` catches these
     # per chain, but tree-wide `--check-tree` must too (it saw only the nowhere-resolving orphans).
     def _reachable(ref_canon, citing_level):
+        if ref_canon in managed:
+            # placed by topic: where its lines stand follows the levels' topics, not the citer,
+            # and the ref resolves through the central body wherever they are
+            return True
         cl = Path(citing_level).resolve()
         for t in slug_levels.get(ref_canon, ()):
             tr = Path(t).resolve()
@@ -729,6 +850,8 @@ def check_tree(anchor):
     decoys = find_decoy_anchors(anchor, unreadable=unreadable)
     frame_only = find_frame_only_bodies(anchor, unreadable=unreadable)
     appended = find_appended_type_damage(anchor, unreadable=unreadable)
+    # With a level unreadable the render cannot be computed either; that finding already fails.
+    drift, refused = ([], "") if unreadable else render_drift(anchor)
     # A body pointed at only from a level that could not be read would list as dangling, and
     # --rehome would then re-attach a fact that still has a pointer - so with anything unreadable
     # the danglers are not assessed; the unreadable finding already fails the run.
@@ -736,6 +859,7 @@ def check_tree(anchor):
     if unreadable:
         danglers = []                           # a store dir the listing itself could not read
     return {"anchor": str(anchor), "levels": len(levels), "duplicates": duplicates,
+            "render_drift": drift, "render_refused": refused,
             "orphan_pointers": sorted(orphan_pointers), "orphan_refs": orphan_refs,
             "sideways_refs": sideways_refs, "danglers": danglers,
             "decoy_anchors": decoys, "unreadable_dirs": sorted(set(unreadable)),
@@ -994,7 +1118,8 @@ def _main(argv=None):
     ap.add_argument("--check-tree", action="store_true", dest="check_tree",
                     help="TREE-WIDE integrity from any dir in the tree (resolved to its anchor): flags a "
                          "slug pointed at from >1 level (tree-unique violation), orphan pointers, refs "
-                         "resolving nowhere, and dangling bodies - the cross-sibling problems --check "
+                         "resolving nowhere, render drift of the facts placed by topic, and dangling "
+                         "bodies - the cross-sibling problems --check "
                          "(chain-only) cannot see; exit 1 on any hard problem, 2 when a path could "
                          "not be read (every finding is still printed)")
     ap.add_argument("--check-misplaced", action="store_true", dest="check_misplaced",
@@ -1083,6 +1208,15 @@ def _main(argv=None):
             print("    ! duplicate pointer: %s at %d levels -> %s"
                   % (slug, len(lvls), ", ".join(lvls)))
             problems += 1
+        for level, missing, differing, extra, examples in rep["render_drift"]:
+            print("    ! render drift: %s -> %d line(s) missing, %d differing from the body, %d "
+                  "placed elsewhere (%s); %s repairs it"
+                  % (level, missing, differing, extra, ", ".join(examples),
+                     _RENDER_ROUTE % (rep["anchor"], "tree")))
+            problems += 1
+        if rep["render_refused"]:
+            print("    ! the placement by topic could not be checked: %s" % rep["render_refused"])
+            problems += 1
         for lvl, slug in rep["orphan_pointers"]:
             print("    ! orphan pointer (no central body): %s [%s]" % (slug, lvl))
             problems += 1
@@ -1154,6 +1288,10 @@ def _main(argv=None):
             problems += 1
         for src, ref in refs["downward"]:
             print("    ! downward ref: %s -> [[%s]] points to a NARROWER altitude" % (src, ref))
+            problems += 1
+        for slug, level, upper in refs["repeated"]:
+            print("    ! repeated line: %s at %s is also held by %s above it; %s drops the "
+                  "lower copy" % (slug, level, upper, _RENDER_ROUTE % (level, "chain")))
             problems += 1
         warnings = 0
         for d in args.dirs:

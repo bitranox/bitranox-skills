@@ -39,9 +39,14 @@ sharded path `facts/<2 chars>/<uuid>.md`, exactly where the engine reads them. A
 `uuid:` pointer names is dangling like a flat one, and is listed as `<2 chars>/<uuid>` (a slug
 never holds a '/', so the two kinds cannot be confused).
 
+A slug at several levels is a duplicate pointer, unless the engine places it by topic (its body is
+bound to a topic and carries the title and description a line is built from, and no level pins
+it): such a fact has one line per level its topics place it at, listed as `placed by topic`.
+
 Read-only: it never writes to the store. Writes go through the engine (`memory_engine.py`).
 """
 
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -55,9 +60,11 @@ from _cli_envelope import EXIT_ERROR, EXIT_NO, EXIT_YES, EnvelopeArgumentParser,
 # it", so main() refuses with 2 instead.
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "hooks"))
 try:
+    import topic_placement  # noqa: E402
     import uuid_store  # noqa: E402
     _IMPORT_ERROR: ImportError | None = None
 except ImportError as _exc:
+    topic_placement = None  # type: ignore[assignment]
     uuid_store = None  # type: ignore[assignment]
     _IMPORT_ERROR = _exc
 
@@ -86,6 +93,9 @@ class Report:
     root: Path
     levels: dict[str, list[str]] = field(default_factory=dict)
     duplicates: dict[str, list[str]] = field(default_factory=dict)
+    # slug -> levels, for a fact the engine places by topic: one line per level is how it is stored
+    placed: dict[str, list[str]] = field(default_factory=dict)
+    pinned: set[str] = field(default_factory=set)
     dangling: list[str] = field(default_factory=list)
     bodyless: list[str] = field(default_factory=list)
     # Level files or directories that could not be read. Any entry means every other answer may
@@ -106,6 +116,7 @@ class Report:
             "root": str(self.root),
             "levels": self.levels,
             "duplicates": self.duplicates,
+            "placed": self.placed,
             "dangling": self.dangling,
             "bodyless": self.bodyless,
             "unreadable": self.unreadable,
@@ -174,6 +185,7 @@ def _read_levels(root: Path, report: Report) -> None:
             continue
         pointers = _pointers_in(text)
         report.levels[rel] = [p.slug for p in pointers]
+        report.pinned.update(p.slug for p in pointers if p.pin)
         report.legacy.update({p.slug: p.uuid for p in pointers if p.legacy})
         report.legacy_uuids.update(p.uuid for p in pointers if p.legacy)
 
@@ -214,6 +226,39 @@ def _store_bodies(facts: Path, unreadable: list[str]) -> tuple[set[str], dict[st
     return flat, sharded
 
 
+# The engine's test of a fact it places by topic (`memory_engine._managed_topics`), read from the
+# body's frontmatter alone with the engine's own frame rule and topic parser: a closed leading
+# `---` block carrying `name:`, a `topics:` value that parses to at least one topic, and the
+# `title:` and `description:` a pointer line is built from. Without any of these the engine never
+# renders the fact, so its lines at several levels are duplicates like any other.
+_HEAD_BYTES = 16384                               # memory_engine.FRONTMATTER_HEAD_BYTES
+_FRAME_RX = re.compile(r"---[ \t]*\r?\n(.*?\r?\n)?---[ \t]*(?:\r?\n|\Z)", re.DOTALL)
+_TOPICS_RX = re.compile(r"(?m)^topics:[ \t]*([^\r\n]*)")
+_NEEDED_RX = (re.compile(r"(?m)^name:"), re.compile(r"(?m)^title:[ \t]*\S"),
+              re.compile(r"(?m)^description:[ \t]*\S"))
+
+
+def _bound_to_a_topic(root: Path, slug: str) -> bool:
+    """Whether the engine places `slug`'s lines by topic, judged from its body's frontmatter (unless
+    a level pins it, which the caller checks). Reads the head of the body only."""
+    if not uuid_store.is_valid_slug(slug):
+        return False
+    try:
+        with open(root / STORE_DIR / "facts" / (slug + ".md"), "rb") as fh:
+            head = fh.read(_HEAD_BYTES).decode("utf-8", errors="replace")
+    except OSError:
+        return False
+    frame = _FRAME_RX.match(head.lstrip())
+    meta = (frame.group(1) or "") if frame else ""
+    topics = _TOPICS_RX.search(meta)
+    if topics is None or not all(rx.search(meta) for rx in _NEEDED_RX):
+        return False
+    try:
+        return bool(topic_placement.parse_topics(topics.group(1)))
+    except topic_placement.InvalidTopic:
+        return False
+
+
 def scan(root: str | Path) -> Report:
     """Read every curated level under `root`. Raises FileNotFoundError if the root is not there.
 
@@ -230,7 +275,10 @@ def scan(root: str | Path) -> Report:
     for lvl, slugs in report.levels.items():
         for s in slugs:
             pointed.setdefault(s, []).append(lvl)
-    report.duplicates = {s: sorted(l) for s, l in pointed.items() if len(set(l)) > 1}
+    several = {s: sorted(l) for s, l in pointed.items() if len(set(l)) > 1}
+    report.placed = {s: l for s, l in several.items()
+                     if s not in report.pinned and _bound_to_a_topic(root, s)}
+    report.duplicates = {s: l for s, l in several.items() if s not in report.placed}
 
     bodies, sharded = _store_bodies(root / STORE_DIR / "facts", report.unreadable)
     report.dangling = sorted(bodies - set(pointed)) + sorted(
@@ -251,6 +299,8 @@ def _print_human(report: Report, out) -> None:
             print("          %s" % s, file=out)
     for slug, lvls in sorted(report.duplicates.items()):
         print("  ! duplicate pointer: %s at %s" % (slug, ", ".join(lvls)), file=out)
+    for slug, lvls in sorted(report.placed.items()):
+        print("  = placed by topic: %s at %s" % (slug, ", ".join(lvls)), file=out)
     for slug in report.dangling:
         print("  ~ dangling body (no pointer at any level): %s" % slug, file=out)
     for slug in report.bodyless:
