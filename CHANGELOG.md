@@ -96,6 +96,14 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   (`.venv-3.12`, `.venv-win`, `venv-<x>`, `venv_<x>`) and `target`, so a pointer block inside
   one is no longer read as a level and `render-topics` adds no line there.
 
+## [11.2.3]
+
+### Changed
+
+- `ai-llm-jev-judge` follows btx-skill-jev-judge 0.3.8: the five `uvx --from` floors name 0.3.8,
+  the release whose `main()` keeps the command's exit code when lib_log_rich's shutdown fails.
+  `JEV_JUDGE_FLOOR` in `meta-self-improve/jev_shadow.py` follows to 0.3.8.
+
 ## [11.2.2]
 
 ### Changed
