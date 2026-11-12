@@ -45,7 +45,7 @@ import uuid_store as us
 
 WRITE_VERBS = frozenset({"add", "amend-pinned", "move", "relocate", "rename", "retitle", "set-scope",
                          "heal", "ensure-memory-structure", "ensure-all-trees", "topics-set-list",
-                         "set-topics", "set-level-topics", "set-top-topics"})
+                         "set-topics", "set-level-topics", "set-top-topics", "render-topics"})
 """CLI verbs that write the store or a pointer block; refused under BITRANOX_MEMORY_WRITES=off."""
 
 SCOPE_BEGIN = sig.SCOPE_MARK_BEGIN          # <!-- bitranox:self-learning -->
@@ -2483,6 +2483,222 @@ def _current_scope(proj):
     return ("", None) if legacy is None else (legacy.strip(), md)
 
 
+# ---- render: place the lines ---------------------------------------------------------------
+
+_PLACEMENT_CACHE = 512
+
+
+class _Placer:
+    """`LevelMap.placements` remembered per topic set. Facts share few distinct sets, so the cache
+    stays small; it is emptied when it reaches _PLACEMENT_CACHE entries rather than grown."""
+
+    def __init__(self, level_map):
+        self._map, self._seen = level_map, {}
+
+    def __call__(self, topics):
+        hit = self._seen.get(topics)
+        if hit is None:
+            if len(self._seen) >= _PLACEMENT_CACHE:
+                self._seen.clear()
+            hit = self._seen[topics] = frozenset(self._map.placements(topics))
+        return hit
+
+
+def _managed_topics(slug, head, pinned):
+    """The topics a body head binds its fact to when the renderer manages it, else None: managed
+    means a non-empty `topics:` line, no pointer of it pinned, and a body a line can be built from."""
+    topics = _body_topics(head)
+    if not topics or slug in pinned or _line_from_head(slug, head) is None:
+        return None
+    return topics
+
+
+def _add_levels(level_map):
+    """The levels the ADD phase writes, in its order: the top, then every level that has a topic."""
+    return [parts for parts in level_map.levels() if parts == tp.TOP or level_map.topics(parts)]
+
+
+def _render_census(anchor, pinned, place, dirs, adds):
+    """One pass over the bodies, before anything is written: how many facts are managed, the tagged
+    unpinned ones no line can be built from (the first _RENDER_SHOWN and their total), and the
+    bytes of lines each level of `adds` will get. Raises RenderBlockTooLarge for the first level
+    past MAX_RENDER_BLOCK_BYTES, so that refusal comes before ANY level is written, not after the
+    levels ahead of it in the ADD order were. Holds one byte count per level."""
+    managed, incomplete, total, sizes = 0, [], 0, dict.fromkeys(adds, 0)
+    for slug, head in _iter_body_heads(anchor):
+        topics = _body_topics(head)
+        if not topics or slug in pinned:
+            continue
+        line = _line_from_head(slug, head)
+        if line is None:
+            total += 1
+            if len(incomplete) < _RENDER_SHOWN:
+                incomplete.append(slug)
+            continue
+        managed += 1
+        for parts in place(topics):     # a placement is always the top or a level with a topic
+            sizes[parts] += len(line.index_line().encode("utf-8")) + 1
+            if sizes[parts] > MAX_RENDER_BLOCK_BYTES:
+                raise RenderBlockTooLarge(dirs[parts], sizes[parts])
+    return {"managed": managed, "incomplete": sorted(incomplete), "incomplete_total": total}
+
+
+def _wanted_lines(anchor, place, pinned, parts, level_dir, skip=frozenset()):
+    """{slug: Pointer} for every managed fact placed at the level `parts`, from one streaming pass
+    over the bodies. This dict is what a render holds; past MAX_RENDER_BLOCK_BYTES of lines it
+    raises RenderBlockTooLarge. The census refused that case already; this check holds the bound
+    when a body grew between the census and this pass (another writer)."""
+    wanted, size = {}, 0
+    for slug, head in _iter_body_heads(anchor):
+        topics = _managed_topics(slug, head, pinned)
+        if topics is None or slug in skip or parts not in place(topics):
+            continue
+        line = _line_from_head(slug, head)
+        size += len(line.index_line().encode("utf-8")) + 1
+        if size > MAX_RENDER_BLOCK_BYTES:
+            raise RenderBlockTooLarge(level_dir, size)
+        wanted[slug] = line
+    return wanted
+
+
+def _note(rep, level_dir, kind, slugs):
+    """Count `slugs` under `kind` for `level_dir` in the report, keeping the first few as examples."""
+    if not slugs:
+        return
+    row = rep["levels"].setdefault(level_dir, {"added": 0, "refreshed": 0, "removed": 0, "examples": {}})
+    row[kind] += len(slugs)
+    shown = row["examples"].setdefault(kind, [])
+    shown.extend(sorted(slugs)[:_RENDER_SHOWN - len(shown)])
+
+
+def _add_lines(level_dir, wanted, rep, dry_run, write):
+    """Add the missing lines of `wanted` to one level and refresh an unpinned line that says
+    something else than its body, under the level's lock. Returns the slugs the level now holds."""
+    local = sig.claude_local_md_path(level_dir)
+    with sig.memory_lock(local):
+        text = read_store_text(local)
+        scope, pointers = us.parse_pointer_index(text)
+        held = {p.slug: p for p in pointers}
+        added, refreshed = [], []
+        for slug in sorted(wanted):
+            line, have = wanted[slug], held.get(slug)
+            if have is None:
+                pointers.append(line)
+                added.append(slug)
+            elif not have.pin and not have.legacy and have.index_line() != line.index_line():
+                have.title, have.hook = line.title, line.hook
+                refreshed.append(slug)
+        if (added or refreshed) and not dry_run:
+            write(local, us.upsert_pointer_block(text, scope, pointers))
+    _note(rep, level_dir, "added", added)
+    _note(rep, level_dir, "refreshed", refreshed)
+    return set(held) | set(added)
+
+
+def _drop_lines(level_dir, doomed, rep, dry_run, write):
+    """Drop the unpinned lines of `doomed` from one level, under its lock."""
+    if not doomed:
+        return
+    local = sig.claude_local_md_path(level_dir)
+    with sig.memory_lock(local):
+        text = read_store_text(local)
+        scope, pointers = us.parse_pointer_index(text)
+        kept = [p for p in pointers if p.slug not in doomed or p.pin or p.legacy]
+        removed = [p.slug for p in pointers if p.slug in doomed and not (p.pin or p.legacy)]
+        if removed and not dry_run:
+            write(local, us.upsert_pointer_block(text, scope, kept))
+    _note(rep, level_dir, "removed", removed)
+
+
+def _misplaced_lines(anchor, place, pinned, parts, level_dir):
+    """The slugs of the managed lines at one level that are placed elsewhere: one body head is read
+    per line of the level's block."""
+    doomed = set()
+    for ptr in us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level_dir)))[1]:
+        if ptr.pin or ptr.legacy:
+            continue
+        head = _read_body_head(us.body_path(anchor, ptr.slug))
+        topics = None if head is None else _managed_topics(ptr.slug, head, pinned)
+        if topics is not None and parts not in place(topics):
+            doomed.add(ptr.slug)
+    return doomed
+
+
+def _render_tree(anchor, levels, adds, place, dirs, pinned, rep, dry_run, write):
+    """Tree scope. ADD over `adds` (every level that has a topic, plus the anchor); then, only when
+    every add went through, REMOVE over every curated level. An error in the ADD phase is raised
+    before a single line is dropped, so an interrupted run leaves a surplus copy, never a fact with
+    no line."""
+    for parts in adds:
+        _add_lines(dirs[parts], _wanted_lines(anchor, place, pinned, parts, dirs[parts]), rep,
+                   dry_run, write)
+    for level in levels:
+        parts = _level_parts(anchor, level)
+        level = os.path.abspath(str(level))
+        _drop_lines(level, _misplaced_lines(anchor, place, pinned, parts, level), rep, dry_run, write)
+
+
+def render_topics(proj, scope="tree", dry_run=False, write=None):
+    """Place the pointer lines of every MANAGED fact of `proj`'s tree by topic.
+
+    A fact is managed when its body's `topics:` is non-empty, no pointer of it is pinned, and its
+    body holds the `title:` and `description:` a line is built from. Every other line is never
+    added, dropped or rewritten here. `scope` is 'tree' (every level; adds, then removes).
+    `write(path, text)` is the port a
+    level file is written through (default `uuid_store.write_if_changed`); a test passes a
+    recording one. Returns a report: {'list': False} alone when the tree has no topic list (then
+    nothing is read further and nothing written), else scope, dry_run, managed, incomplete,
+    incomplete_total and, per changed level dir, the counts added / refreshed / removed with a
+    few example slugs.
+
+    Checked before the first write: a level whose TOPICS line does not parse and a tree top with
+    no pointer block raise TopicRefusal, and a level whose lines pass MAX_RENDER_BLOCK_BYTES raises
+    RenderBlockTooLarge (a body that grew between the census and the ADD pass can still raise it
+    there, after earlier levels were added and before any line is dropped).
+    Holds: one record per level, one per pinned pointer, the lines of the ONE level being written."""
+    if scope != "tree":
+        raise ValueError("scope must be 'tree', not %r" % (scope,))
+    if not dry_run:
+        sig.refuse_if_memory_writes_off()
+    proj = os.path.abspath(str(proj))
+    anchor = _anchor(proj)
+    if topic_store.load(anchor) is None:
+        return {"list": False}
+    levels = curated_levels_under(anchor)
+    level_map, dirs = topic_level_map(anchor, levels)
+    if not any(_level_parts(anchor, level) == tp.TOP for level in levels):
+        raise TopicRefusal(["the tree top %s has no pointer block for the lines that fall back to "
+                            "it (ensure-memory-structure writes one)" % anchor])
+    pinned = _pinned_slugs(levels)
+    place, adds = _Placer(level_map), _add_levels(level_map)
+    rep = {"list": True, "scope": scope, "dry_run": bool(dry_run), "levels": {}}
+    rep.update(_render_census(anchor, pinned, place, dirs, adds))
+    write = write or us.write_if_changed
+    _render_tree(anchor, levels, adds, place, dirs, pinned, rep, dry_run, write)
+    return rep
+
+
+def _print_render(rep, as_json):
+    """Print a render report; the verb's whole output."""
+    if as_json:
+        print(json.dumps(rep, sort_keys=True))
+        return
+    if not rep["list"]:
+        print("no topic list in this tree: nothing is placed by topic")
+        return
+    verb = "would change" if rep["dry_run"] else "changed"
+    for level in sorted(rep["levels"]):
+        row = rep["levels"][level]
+        print("  %s: +%d added, %d refreshed, -%d removed" % (level, row["added"], row["refreshed"],
+                                                               row["removed"]))
+    if rep["incomplete_total"]:
+        print("~ %d tagged fact(s) have a body without title: or description: and stay where they "
+              "are: %s%s" % (rep["incomplete_total"], ", ".join(rep["incomplete"]),
+                             " ..." if rep["incomplete_total"] > len(rep["incomplete"]) else ""))
+    print("render-topics (%s): %d managed fact(s); %s %d level(s)"
+          % (rep["scope"], rep["managed"], verb, len(rep["levels"])))
+
+
 def _read_topic_batch(path):
     """({slug: topics}, error_message) from a JSONL batch file: one `{"slug": ..., "topics": [...]}`
     object per line, `[]` for bound to no topic, `null` to remove the line.
@@ -2658,13 +2874,14 @@ def _topic_read(args):
     return 0
 
 
-TOPIC_WRITE_VERBS = frozenset({"topics-set-list", "set-topics", "set-level-topics", "set-top-topics"})
+TOPIC_WRITE_VERBS = frozenset({"topics-set-list", "set-topics", "set-level-topics", "set-top-topics",
+                               "render-topics"})
 
 
 def _is_topic_dry_run(raw):
     """True when argv `raw` is a topic verb's `--dry-run`: it writes nothing, so it runs while
-    memory writes are off. Only `set-topics` has the flag (argparse refuses it on the others), and
-    `set_fact_topics` refuses a real write under the switch whatever this says."""
+    memory writes are off. Only `set-topics` and `render-topics` have the flag (argparse refuses
+    it on the others), and both refuse a real write under the switch whatever this says."""
     return raw[0] in TOPIC_WRITE_VERBS and "--dry-run" in raw[1:]
 
 
@@ -2678,7 +2895,10 @@ def _topics_arg(value):
 
 
 def _topic_write(args):
-    """The four topic write verbs; refusals are raised and mapped by the caller."""
+    """The topic write verbs; refusals are raised and mapped by the caller."""
+    if args.cmd == "render-topics":
+        _print_render(render_topics(args.proj, scope=args.scope, dry_run=args.dry_run), args.as_json)
+        return 0
     if args.cmd == "topics-set-list":
         text, err = _read_input_file(args.from_file)
         if err:
@@ -2896,6 +3116,14 @@ def _main(argv=None):
         lt = sub.add_parser(verb, help=text)
         lt.add_argument("--proj", required=True, help="the level dir")
         lt.add_argument("--topics", required=True, help="comma-separated tags; '' for none")
+    rd = sub.add_parser("render-topics",
+                        help="place the pointer lines of topic-bound facts: at each level that has "
+                             "one of a fact's topics while no level above it does")
+    rd.add_argument("--proj", required=True, help="any dir of the tree")
+    rd.add_argument("--scope", required=True, choices=["tree"],
+                    help="tree: every level, adds then removes (the dream)")
+    rd.add_argument("--dry-run", action="store_true", dest="dry_run")
+    rd.add_argument("--json", action="store_true", dest="as_json")
     sl = sub.add_parser("topics-stale", help="exit 1 when a level's topics need choosing again")
     sl.add_argument("--proj", required=True, help="the level dir")
     raw = sys.argv[1:] if argv is None else argv
