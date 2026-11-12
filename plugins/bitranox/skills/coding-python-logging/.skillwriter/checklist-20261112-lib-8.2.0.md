@@ -43,3 +43,5 @@ divergences. Frontmatter unchanged.
 - [x] Non-ASCII: none added. No added line over 105 characters. Frontmatter untouched.
 - [x] `repo-gate.py --mirror-of <lib_log_rich worktree>` reports `in sync`.
 - [x] No address, hostname or private path added (the examples use `<host>:<port>`).
+- [x] Decisions: none - the edit records measured library behaviour of 8.2.0; no wording or scope
+      choice in it is a judgement a later edit could reverse.

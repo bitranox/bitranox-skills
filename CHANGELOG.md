@@ -30,6 +30,15 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.2.1]
+
+### Changed
+
+- `coding-python-logging` follows lib_log_rich 8.2.0: after a failed send Graylog is skipped for 5 s,
+  doubling to 300 s, with one stderr line per window and no traceback; the next event after an outage
+  carries a WARNING with the skipped count in `_skipped_events` (lost if the process exits first);
+  `GraylogUnavailableError` is importable from `lib_log_rich.adapters`.
+
 ## [11.2.0]
 
 ### Added
