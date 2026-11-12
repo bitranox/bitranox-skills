@@ -54,8 +54,10 @@ while one-at-a-time checks would flag it. Write one JSON object per line,
 `{"slug": "<slug>", "to": "<level dir>"}` (plus `"from"` to assert where it sits now), then run
 `ref_map.py --root <anchor> --moves <file> [--json]`. Exit 1 lists each conflict by kind:
 `stranded-outbound` (a moved fact cites one that will sit below it), `dangling-inbound` (a citer
-will no longer see it), `stale-from` (the fact is not where the plan says), `unknown`; exit 0 is
-a clean plan, exit 2 a malformed file.
+will no longer see it), `stale-from` (the fact is not where the plan says), `placed-by-topic`
+(a fact the engine places by topic, which `move` refuses whatever its line count),
+`duplicate-pointer` (any other fact with a line at several levels), `unknown`; exit 0 is a clean
+plan, exit 2 a malformed file.
 
 ## When to run
 

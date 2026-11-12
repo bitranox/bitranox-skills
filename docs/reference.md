@@ -101,6 +101,7 @@ the three check verbs exit 1, when their answer is no: `lint --tree` when it rep
 | `set-level-topics --proj <level> --topics a,b`                                                                                           | `topics updated: <level>`                                                    |
 | `set-top-topics --proj <tree top> --topics a,b` (the user's decision only)                                                               | `topics updated: <tree top>`                                                 |
 | `topics-stale --proj <level>`                                                                                                            | `fresh` (exit 0) or `stale: <why>` (exit 1)                                  |
+| `render-topics --proj <dir> --scope tree\|chain [--dry-run] [--json]`                                                                    | `render-topics (<scope>): N managed fact(s); changed N level(s)`             |
 | `ensure-memory-structure --proj <cwd>`                                                                                                   | `created N file(s) up the chain`                                             |
 | `lint --tree <dir>`                                                                                                                      | `TOTAL over-cap hooks: N \| ...`                                             |
 | `tree-top --proj <dir> [--json]`                                                                                                         | `top: ...` / `store: ...`                                                    |
@@ -125,12 +126,34 @@ line over 4096 bytes, more than 5000 rows, a slug named twice, a line that is no
 that is not a row object.
 `set-topics --clear` works on a pinned fact; tagging one is refused. `set-topics --dry-run` also
 runs under `BITRANOX_MEMORY_WRITES=off`. A `--topics` value that is no topic list is a usage
-error. A level reached through a symlink is named by its own path below the tree top. The full
-contract is in `meta-self-improve`'s `references/memory-backend.md`.
+error. A level reached through a symlink is named by its own path below the tree top. `add`,
+`set-scope`, `move` and `relocate` refuse a level whose path crosses a directory every walk over
+the tree's levels prunes (`.git`, `node_modules`, `target`, a virtualenv such as `.venv-3.12`,
+the store, ...): one name rule, `uuid_store.is_non_level_dirname`, shared by every such walk.
+
+A fact bound to a topic, with `title:` and `description:` in its body and no line pinned, is
+placed by topic: `render-topics` gives it one line at each level that has one of its topics
+while no level above it does, and one at the tree top when none does. `--scope tree` renders
+every level; `--scope chain` only the levels from `--proj` up to the tree top, adding no line
+below a level that holds it and dropping such a lower copy. `--dry-run` writes nothing and takes
+no lock. One level's block may hold at most 1 MiB of lines; a render, a `move` or a `relocate`
+that would pass it is refused before writing and names the route that frees the bytes. Such a
+fact is refused by `move`, `relocate` and `add --pin`, and by `add` from a level holding no line
+of it; `rename` and `retitle` change every line of it. `set-topics` refuses to bind a fact whose
+line cannot be rendered yet (no `title:` or `description:`, a line that differs from its body, a
+legacy `uuid:` pointer), naming the repair; un-binding collapses its lines to one at the tree
+top. The full contract is in `meta-self-improve`'s `references/memory-backend.md`.
 
 **Consistency audit**:
 `python3 <plugin>/skills/meta-self-improve/reconcile_memory_index.py --check <dirs...>` (a level
-dir or an altitude chain) - must end `TOTAL problems: 0`; consolidations verify with it.
+dir or an altitude chain) - must end `TOTAL problems: 0`; consolidations verify with it. It also
+reports a `repeated line` (a fact placed by topic held at a level and again above it), which
+`render-topics --scope chain` drops. `--check-tree <anchor>` runs the same audit tree-wide and
+must end `TOTAL tree problems: 0`; for facts placed by topic it reports `render drift` (lines
+missing, differing from the body, or placed elsewhere, repaired by `render-topics --scope tree`)
+and `the placement by topic could not be checked` when the render would refuse. `--archive <slug>
+<level>` forgets a fact; for one placed by topic it drops every line of it before the body
+moves.
 
 **Dream scheduling**: `python3 <plugin>/skills/meta-dream-tree/dream_state.py due|mode [cwd]` -
 query whether a consolidation is due, or print the effective dream mode; `dream_state.py done
