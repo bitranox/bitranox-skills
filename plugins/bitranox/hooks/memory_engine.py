@@ -2118,6 +2118,28 @@ class RenderBlockTooLarge(TopicRefusal):
         super().__init__([text])
 
 
+class CollapseTooLarge(TopicRefusal):
+    """Raised by set-topics, before any write, when the line an un-bound fact keeps at the tree
+    top (see `set_fact_topics`) would take the top's block past MAX_RENDER_BLOCK_BYTES: `held`
+    bytes of lines are in that block and `added` bytes of lines would be added there. `over` is
+    the fewest bytes that must leave the block. The message names the move that takes them to a
+    level below the top."""
+
+    def __init__(self, top, held, added):
+        self.top, self.held, self.added = top, held, added
+        self.over = held + added - MAX_RENDER_BLOCK_BYTES
+        super().__init__([
+            "un-binding these facts leaves one line of each at the tree top %s: %d bytes of lines "
+            "are there and %d bytes would be added, %d bytes over the %d bytes one level's block "
+            "may hold. Move lines totalling at least %d bytes (a line counts its line break) from "
+            "the tree top to a level below it with hooks/memory_engine.py move --from-level %s "
+            "--to-level <level> --slug <slug> [<slug> ...] (a legacy line needs "
+            "migrate_to_slug_store.py first); the level they go to is held to the same %d bytes, "
+            "counting the lines it keeps and those placed there. Then run set-topics again"
+            % (top, held, added, self.over, MAX_RENDER_BLOCK_BYTES, self.over, top,
+               MAX_RENDER_BLOCK_BYTES)])
+
+
 def _read_body_head(path):
     """The first FRONTMATTER_HEAD_BYTES of the body at `path` as text, None when the file is
     missing. Raises TreeWalkError when it exists and cannot be read."""
@@ -2364,7 +2386,64 @@ def _topic_row_problem(slug, topics, anchor, allowed, owners):
     return None
 
 
-def set_fact_topics(proj, rows, dry_run=False):
+def _line_size(ptr):
+    """Bytes `ptr`'s line takes in a block, its line break counted."""
+    return len(ptr.index_line().encode("utf-8")) + 1
+
+
+def _copy_levels(anchor, wanted):
+    """{slug: ([every level dir holding a line of it, top first], the line at the first)} for the
+    slugs in `wanted`, from one walk over the tree's levels. Holds per slug its levels and one
+    pointer."""
+    found = {}
+    order = sorted(((_level_parts(anchor, level), os.path.abspath(str(level)))
+                    for level in curated_levels_under(anchor)),
+                   key=lambda row: (len(row[0]), row[0]))
+    for _parts, level in order:
+        for ptr in us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level)))[1]:
+            if ptr.slug in wanted:
+                found.setdefault(ptr.slug, ([], ptr))[0].append(level)
+    return found
+
+
+def _collapse_plan(anchor, rows, owners):
+    """{slug: (holders, line)} for each fact `rows` un-binds (`[]` or None) that is bound now,
+    pinned nowhere, and has a line at more than one level: those lines collapse to one at the tree
+    top. A fact that was never bound keeps its lines: a duplicate pointer, which --check-tree
+    reports. Raises CollapseTooLarge, before anything is written, when the lines the collapse adds
+    at the top would take its block past MAX_RENDER_BLOCK_BYTES. Holds the holders of each such
+    row (batch rows times copies)."""
+    unbound = {slug for slug in rows if not rows[slug] and not owners[slug][1]}
+    if not unbound:
+        return {}
+    plan = {slug: copy for slug, copy in _copy_levels(anchor, unbound).items()
+            if len(copy[0]) > 1 and read_body_topics(us.body_path(anchor, slug))}
+    added = sum(_line_size(line) for holders, line in plan.values()
+                if _level_parts(anchor, holders[0]) != tp.TOP)
+    if added:
+        top = os.path.abspath(str(anchor))
+        held = sum(_line_size(ptr) for ptr in
+                   us.parse_pointer_index(read_store_text(sig.claude_local_md_path(top)))[1])
+        if held + added > MAX_RENDER_BLOCK_BYTES:
+            raise CollapseTooLarge(top, held, added)
+    return plan
+
+
+def _collapse_copies(anchor, slug, holders, line, write):
+    """Leave ONE line of an un-bound fact: at the tree top, written before the others are dropped,
+    so no moment has the fact without a line. `holders` are the levels holding one, top first, and
+    `line` the one at the first of them."""
+    scratch = {"levels": {}}
+    if _level_parts(anchor, holders[0]) != tp.TOP:
+        _add_lines(os.path.abspath(str(anchor)),
+                   {slug: us.Pointer(slug=slug, title=line.title, hook=line.hook)},
+                   scratch, False, write)
+    for level in holders:
+        if _level_parts(anchor, level) != tp.TOP:
+            _drop_lines(level, {slug}, scratch, False, write)
+
+
+def set_fact_topics(proj, rows, dry_run=False, write=None):
     """Set the `topics:` line of each fact in `rows`, a {slug: topics} mapping where topics is a
     tuple of tags, an empty tuple (bound to no topic) or None (remove the line).
 
@@ -2376,8 +2455,16 @@ def set_fact_topics(proj, rows, dry_run=False):
     with TopicRefusal (the first refusals and their total). Each body is then read and written
     under the lock of the first level that points at it, the lock an ordinary write to that fact
     holds. Pointer
-    lines are not touched: `render-topics` places them. Returns {'set': [slugs], 'unchanged': n}.
-    Holds `rows` and one owner entry per row; a batch over MAX_TOPIC_BATCH rows is refused."""
+    lines are placed by `render-topics`, with one exception: a fact this call un-binds that is
+    bound now, pinned nowhere and has a line at several levels keeps ONE line, at the tree top
+    (`_collapse_plan`; CollapseTooLarge refuses the whole call first when the top's block would
+    pass its cap). That line is written first, then the others are dropped, then the body is
+    un-bound: an interrupted call leaves a fact still bound, which a render places again and
+    the same call, run again, collapses. `write(path, text)` is the port those level files are
+    written through (default `uuid_store.write_if_changed`).
+    Returns {'set': [slugs], 'unchanged': n, 'collapsed': [slugs]}.
+    Holds `rows`, one owner entry per row and, for a collapse, the levels holding each un-bound
+    row's line; a batch over MAX_TOPIC_BATCH rows is refused."""
     if not dry_run:
         sig.refuse_if_memory_writes_off()
     if len(rows) > MAX_TOPIC_BATCH:
@@ -2394,8 +2481,17 @@ def set_fact_topics(proj, rows, dry_run=False):
                 problems.append(why)
     if total:
         raise TopicRefusal(problems, total)
-    rep = {"set": [], "unchanged": 0}
+    plan = _collapse_plan(anchor, rows, owners)
+    write = write or us.write_if_changed
+    rep = {"set": [], "unchanged": 0, "collapsed": []}
     for slug in sorted(rows):
+        if slug in plan:
+            # Placed by topic at several levels and bound to none from now on: one line, at the
+            # tree top. Before the body changes, so a call cut short leaves a bound fact, and
+            # outside its lock: the pointer writers take their own.
+            if not dry_run:
+                _collapse_copies(anchor, slug, *plan[slug], write)
+            rep["collapsed"].append(slug)
         with sig.memory_lock(sig.claude_local_md_path(owners[slug][0])):
             body = read_store_text(us.body_path(anchor, slug)).rstrip("\n")
             tagged = _with_topics(body, rows[slug])
@@ -2565,47 +2661,61 @@ def _add_levels(level_map):
     return [parts for parts in level_map.levels() if parts == tp.TOP or level_map.topics(parts)]
 
 
-def _held_bytes(anchor, pinned, level_dir):
+def _held_bytes(anchor, pinned, level_dir, goes=None):
     """Bytes of the lines a level's block still holds once this render is done with it, beside the
-    lines it places there: pinned, legacy, and those of facts it does not place. Every managed line
-    is left out. One placed here is replaced by the body's own line, which is counted from the
-    body; one placed elsewhere is dropped by this same run's REMOVE phase. The ADD phase writes a
-    level before that drop, so its file holds those lines a while longer: no read or write of a
-    level file is bounded, and the cap judges the block the render leaves. One body head is read
-    per unpinned line."""
+    lines it places there: pinned, legacy, and those of facts it does not place. In the tree scope
+    (`goes` None) every managed line is left out. One placed here is replaced by the body's own
+    line, which is counted from the body; one placed elsewhere is dropped by this same run's REMOVE
+    phase. The chain scope drops fewer, so it passes `goes(slug, topics)`, true for a managed line
+    that leaves or is replaced: the others stay and count. The ADD phase writes a level before
+    that drop, so its file holds those lines a while longer: no read or write of a level file is
+    bounded, and the cap judges the block the render leaves. One body head is read per unpinned
+    line."""
     size = 0
     for ptr in us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level_dir)))[1]:
         if not (ptr.pin or ptr.legacy):
             head = _read_body_head(us.body_path(anchor, ptr.slug))
             topics = None if head is None else _managed_topics(ptr.slug, head, pinned)
-            if topics is not None:
+            if topics is not None and (goes is None or goes(ptr.slug, topics)):
                 continue
         size += len(ptr.index_line().encode("utf-8")) + 1
     return size
 
 
-def _render_census(anchor, pinned, place, dirs, adds):
-    """One pass over the bodies, before anything is written: how many facts are managed, the tagged
-    unpinned ones no line can be built from (the first _RENDER_SHOWN and their total), and the
-    bytes each level of `adds` will hold, starting from the lines it keeps (`_held_bytes`). Raises
-    RenderBlockTooLarge for the first level a line pushes past MAX_RENDER_BLOCK_BYTES, so that
-    refusal comes before ANY level is written, not after the levels ahead of it in the ADD order
-    were. It raises after the pass, with that level's whole count: a count stopped at the first
-    line past the cap would name too few bytes to move. Holds one byte count per level."""
-    managed, incomplete, total = 0, [], 0
-    kept = {parts: _held_bytes(anchor, pinned, dirs[parts]) for parts in adds}
-    sizes, full = dict(kept), None
+def _census_lines(anchor, pinned, tally):
+    """Yield (slug, topics, line) for every managed fact, one body head at a time, counting into
+    `tally` how many are managed and the tagged unpinned ones no line can be built from (the first
+    _RENDER_SHOWN and their total)."""
     for slug, head in _iter_body_heads(anchor):
         topics = _body_topics(head)
         if not topics or slug in pinned:
             continue
         line = _line_from_head(slug, head)
         if line is None:
-            total += 1
-            if len(incomplete) < _RENDER_SHOWN:
-                incomplete.append(slug)
+            tally["incomplete_total"] += 1
+            if len(tally["incomplete"]) < _RENDER_SHOWN:
+                tally["incomplete"].append(slug)
             continue
-        managed += 1
+        tally["managed"] += 1
+        yield slug, topics, line
+
+
+def _census_tally():
+    """An empty census report, filled by `_census_lines`."""
+    return {"managed": 0, "incomplete": [], "incomplete_total": 0}
+
+
+def _render_census(anchor, pinned, place, dirs, adds):
+    """One pass over the bodies, before anything is written: the `_census_lines` counts, and the
+    bytes each level of `adds` will hold, starting from the lines it keeps (`_held_bytes`). Raises
+    RenderBlockTooLarge for the first level a line pushes past MAX_RENDER_BLOCK_BYTES, so that
+    refusal comes before ANY level is written, not after the levels ahead of it in the ADD order
+    were. It raises after the pass, with that level's whole count: a count stopped at the first
+    line past the cap would name too few bytes to move. Holds one byte count per level."""
+    tally = _census_tally()
+    kept = {parts: _held_bytes(anchor, pinned, dirs[parts]) for parts in adds}
+    sizes, full = dict(kept), None
+    for _slug, topics, line in _census_lines(anchor, pinned, tally):
         for parts in place(topics):     # a placement is always the top or a level with a topic
             sizes[parts] += len(line.index_line().encode("utf-8")) + 1
             if full is None and sizes[parts] > MAX_RENDER_BLOCK_BYTES:
@@ -2613,20 +2723,22 @@ def _render_census(anchor, pinned, place, dirs, adds):
     if full is not None:
         raise RenderBlockTooLarge(dirs[full], kept[full], sizes[full] - kept[full],
                                   place.bound_to(full))
-    return {"managed": managed, "incomplete": sorted(incomplete), "incomplete_total": total}
+    tally["incomplete"].sort()
+    return tally
 
 
-def _wanted_lines(anchor, place, pinned, parts, level_dir, held=0):
-    """{slug: Pointer} for every managed fact placed at the level `parts`, from one streaming pass
-    over the bodies. This dict is what a render holds; once its lines and the `held` bytes the
-    level keeps beside them pass MAX_RENDER_BLOCK_BYTES it raises RenderBlockTooLarge. The census
-    refused that case already; this check holds the bound when a body or the level's block grew
-    between the census and this pass (another writer). Past the cap it stops holding lines and
-    only counts, so the refusal names the whole overflow."""
+def _wanted_lines(anchor, place, pinned, parts, level_dir, held=0, skip=frozenset()):
+    """{slug: Pointer} for every managed fact placed at the level `parts` and not in `skip` (the
+    chain scope's slugs a level above holds), from one streaming pass over the bodies. This dict
+    is what a render holds; once its lines and the `held` bytes the level keeps beside them pass
+    MAX_RENDER_BLOCK_BYTES it raises RenderBlockTooLarge. The census refused that case already;
+    this check holds the bound when a body or the level's block grew between the census and this
+    pass (another writer). Past the cap it stops holding lines and only counts, so the refusal
+    names the whole overflow."""
     wanted, size = {}, held
     for slug, head in _iter_body_heads(anchor):
         topics = _managed_topics(slug, head, pinned)
-        if topics is None or parts not in place(topics):
+        if topics is None or slug in skip or parts not in place(topics):
             continue
         line = _line_from_head(slug, head)
         size += len(line.index_line().encode("utf-8")) + 1
@@ -2717,13 +2829,115 @@ def _render_tree(anchor, levels, adds, place, dirs, pinned, rep, dry_run, write)
         _drop_lines(level, _misplaced_lines(anchor, place, pinned, parts, level), rep, dry_run, write)
 
 
+def _chain_levels(anchor, proj, levels):
+    """The curated levels from the tree top down to `proj`, as (parts, level dir), top first.
+    Found lexically, as levels are keyed: a level reached through a symlink is the level its path
+    names. `proj` need not be a level itself."""
+    here = _level_parts(anchor, proj)
+    by_parts = {_level_parts(anchor, level): os.path.abspath(str(level)) for level in levels}
+    return [(here[:cut], by_parts[here[:cut]]) for cut in range(len(here) + 1)
+            if here[:cut] in by_parts]
+
+
+def _block_slugs(level_dir):
+    """The slugs of every pointer line in one level's block."""
+    return {p.slug for p in
+            us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level_dir)))[1]}
+
+
+def _chain_target(slug, placed, chain, adds, held_at):
+    """The index of the chain level a chain render gives `slug`'s line, or None: the first level,
+    top down, of `adds` the fact is `placed` at, unless a level above it holds a line of the fact
+    already (`held_at`, the slugs of each chain level's block), which this chain reads."""
+    for i, (parts, _level) in enumerate(chain):
+        if parts in adds and parts in placed:
+            return i
+        if slug in held_at[i]:
+            return None
+    return None
+
+
+def _chain_goes(place, parts, above):
+    """The `_held_bytes` test at the chain level `parts`: a managed line leaves the block when a
+    level above holds its slug (the DROP pass removes it) and is replaced when its fact is placed
+    there (the body's own line is counted). Any other managed line stays: a chain render never
+    drops a line for being placed elsewhere."""
+    return lambda slug, topics: slug in above or parts in place(topics)
+
+
+def _chain_census(anchor, pinned, place, chain, adds):
+    """The chain scope's census, one pass over the bodies before anything is written: the
+    `_census_lines` counts and, for each chain level of `adds`, the block it will hold, the lines
+    it keeps (`_held_bytes` with `_chain_goes`) plus the lines added or refreshed there. Raises
+    RenderBlockTooLarge for the first such level, top down, past MAX_RENDER_BLOCK_BYTES, with its
+    whole count, so the refusal comes before any level is written. Holds the slugs of the chain's
+    blocks and, per chain level, the slugs added there while its count is within the cap (past it
+    the census refuses, so no level below needs them)."""
+    tally = _census_tally()
+    held_at = [_block_slugs(level) for _parts, level in chain]
+    sizes, added = [0] * len(chain), [set() for _level in chain]
+    for slug, topics, line in _census_lines(anchor, pinned, tally):
+        i = _chain_target(slug, place(topics), chain, adds, held_at)
+        if i is not None:
+            sizes[i] += len(line.index_line().encode("utf-8")) + 1
+            if sizes[i] <= MAX_RENDER_BLOCK_BYTES:
+                added[i].add(slug)
+    above = set()
+    for i, (parts, level) in enumerate(chain):
+        if parts in adds:
+            kept = _held_bytes(anchor, pinned, level, _chain_goes(place, parts, above))
+            if kept + sizes[i] > MAX_RENDER_BLOCK_BYTES:
+                raise RenderBlockTooLarge(level, kept, sizes[i], place.bound_to(parts))
+        above |= held_at[i] | added[i]
+    tally["incomplete"].sort()
+    return tally
+
+
+def _held_above(anchor, pinned, level_dir, above):
+    """The slugs of the managed lines at one level whose slug a level above it on the chain holds
+    (`above`): one body head is read per such line. A pinned, legacy or unmanaged line is never
+    among them."""
+    doomed = set()
+    for ptr in us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level_dir)))[1]:
+        if ptr.slug not in above or ptr.pin or ptr.legacy:
+            continue
+        head = _read_body_head(us.body_path(anchor, ptr.slug))
+        if head is not None and _managed_topics(ptr.slug, head, pinned) is not None:
+            doomed.add(ptr.slug)
+    return doomed
+
+
+def _render_chain(anchor, chain, adds, place, pinned, rep, dry_run, write):
+    """Chain scope: only the levels of `chain` are read for their lines or written. ADD, top
+    first: a level of `adds` gets the lines placed at it unless a level above holds the slug.
+    Then, only when every add went through, DROP: a managed line a level above holds goes. A line
+    is never dropped for being placed elsewhere: another subtree may still read it, and the tree
+    scope sweeps. The slugs each level holds after its add are kept for the DROP pass, so a dry
+    run reports the drops a real run makes. Holds the slugs of the chain's blocks."""
+    above, holds = set(), []
+    for parts, level in chain:
+        wanted = {}
+        if parts in adds:
+            held = _held_bytes(anchor, pinned, level, _chain_goes(place, parts, above))
+            wanted = _wanted_lines(anchor, place, pinned, parts, level, held, skip=above)
+        now = _add_lines(level, wanted, rep, dry_run, write)
+        holds.append(now)
+        above |= now
+    above = set()
+    for (_parts, level), now in zip(chain, holds, strict=True):
+        _drop_lines(level, _held_above(anchor, pinned, level, above), rep, dry_run, write)
+        above |= now
+
+
 def render_topics(proj, scope="tree", dry_run=False, write=None):
     """Place the pointer lines of every MANAGED fact of `proj`'s tree by topic.
 
     A fact is managed when its body's `topics:` is non-empty, no pointer of it is pinned, and its
     body holds the `title:` and `description:` a line is built from. Every other line is never
-    added, dropped or rewritten here. `scope` is 'tree' (every level; adds, then removes).
-    `write(path, text)` is the port a
+    added, dropped or rewritten here. `scope` is 'tree' (every level; adds, then removes) or
+    'chain' (only the levels from `proj` up to the tree top: a line a level above holds is not
+    added below it and is dropped there, and a line merely placed elsewhere stays, for the tree
+    scope to sweep; no file off the chain is written). `write(path, text)` is the port a
     level file is written through (default `uuid_store.write_if_changed`); a test passes a
     recording one. Returns a report: {'list': False} alone when the tree has no topic list (then
     nothing is read further and nothing written), else scope, dry_run, managed, incomplete,
@@ -2736,9 +2950,10 @@ def render_topics(proj, scope="tree", dry_run=False, write=None):
     RenderBlockTooLarge, naming the route for whichever part is larger (a body or block
     that grew between the census and the ADD pass can still raise it there, after earlier levels
     were added and before any line is dropped).
-    Holds: one record per level, one per pinned pointer, the lines of the ONE level being written."""
-    if scope != "tree":
-        raise ValueError("scope must be 'tree', not %r" % (scope,))
+    Holds: one record per level, one per pinned pointer, the lines of the ONE level being written;
+    a chain render also the slugs of the chain's blocks."""
+    if scope not in ("tree", "chain"):
+        raise ValueError("scope must be 'tree' or 'chain', not %r" % (scope,))
     if not dry_run:
         sig.refuse_if_memory_writes_off()
     proj = os.path.abspath(str(proj))
@@ -2753,9 +2968,14 @@ def render_topics(proj, scope="tree", dry_run=False, write=None):
     pinned = _pinned_slugs(levels)
     place, adds = _Placer(level_map), _add_levels(level_map)
     rep = {"list": True, "scope": scope, "dry_run": bool(dry_run), "levels": {}}
-    rep.update(_render_census(anchor, pinned, place, dirs, adds))
     write = write or us.write_if_changed
-    _render_tree(anchor, levels, adds, place, dirs, pinned, rep, dry_run, write)
+    if scope == "tree":
+        rep.update(_render_census(anchor, pinned, place, dirs, adds))
+        _render_tree(anchor, levels, adds, place, dirs, pinned, rep, dry_run, write)
+    else:
+        chain, add_set = _chain_levels(anchor, proj, levels), frozenset(adds)
+        rep.update(_chain_census(anchor, pinned, place, chain, add_set))
+        _render_chain(anchor, chain, add_set, place, pinned, rep, dry_run, write)
     return rep
 
 
@@ -3014,6 +3234,13 @@ def _topic_write(args):
         rep = set_fact_topics(args.proj, rows, dry_run=args.dry_run)
         print("%s topics on %d fact(s); %d unchanged"
               % ("would set" if args.dry_run else "set", len(rep["set"]), rep["unchanged"]))
+        if rep["collapsed"]:
+            shown = rep["collapsed"][:_REFUSALS_SHOWN]
+            print("~ note: %d un-bound fact(s) had a line at several levels; each %s one line, at "
+                  "the tree top: %s%s" % (len(rep["collapsed"]),
+                                          "would keep" if args.dry_run else "now has",
+                                          ", ".join(shown),
+                                          " ..." if len(rep["collapsed"]) > len(shown) else ""))
         return 0
     topics, err = _topics_arg(args.topics)
     if err:
@@ -3200,9 +3427,11 @@ def _main(argv=None):
     rd = sub.add_parser("render-topics",
                         help="place the pointer lines of topic-bound facts: at each level that has "
                              "one of a fact's topics while no level above it does")
-    rd.add_argument("--proj", required=True, help="any dir of the tree")
-    rd.add_argument("--scope", required=True, choices=["tree"],
-                    help="tree: every level, adds then removes (the dream)")
+    rd.add_argument("--proj", required=True,
+                    help="any dir of the tree (tree) / the dir whose chain is rendered (chain)")
+    rd.add_argument("--scope", required=True, choices=["tree", "chain"],
+                    help="tree: every level, adds then removes (the dream); chain: only the levels "
+                         "from --proj up to the tree top (the nap)")
     rd.add_argument("--dry-run", action="store_true", dest="dry_run")
     rd.add_argument("--json", action="store_true", dest="as_json")
     sl = sub.add_parser("topics-stale", help="exit 1 when a level's topics need choosing again")
