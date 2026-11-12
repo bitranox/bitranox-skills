@@ -112,6 +112,20 @@ phrase ("lead with WHEN it applies"). `add` REQUIRES a hook, so it is not the wa
 title: `retitle` changes the pointer's link text alone, and `amend-pinned --title` is the one route
 to a pinned fact's title, which `retitle` refuses by design.
 
+Topics change only through the topic verbs. Every write of a level's descriptor (`set-scope`,
+`add --scope`, and a level setup that moves a legacy `CLAUDE.md` scope block) passes one gate: it
+keeps the stored `TOPICS:` line when the new text has none, and refuses a text that brings or
+changes the line, an empty one included, before anything is written. A legacy block whose
+`TOPICS:` line does not parse refuses `set-scope`, `add` and the level setup until that line is
+fixed by hand; `ensure-memory-structure` and `heal` skip such a level. `add` refuses to create a
+fact whose body carries a `topics:` line, and a cross-tree `relocate` drops the line from its copy
+with a `~ note:`. `set-topics --batch` refuses, as an input error, a line over 4096 bytes, more
+than 5000 rows, a slug named twice, a line that is not UTF-8 and a line that is not a row object.
+`set-topics --clear` works on a pinned fact; tagging one is refused. `set-topics --dry-run` also
+runs under `BITRANOX_MEMORY_WRITES=off`. A `--topics` value that is no topic list is a usage
+error. A level reached through a symlink is named by its own path below the tree top. The full
+contract is in `meta-self-improve`'s `references/memory-backend.md`.
+
 **Consistency audit**:
 `python3 <plugin>/skills/meta-self-improve/reconcile_memory_index.py --check <dirs...>` (a level
 dir or an altitude chain) - must end `TOTAL problems: 0`; consolidations verify with it.
@@ -141,7 +155,7 @@ the model as a tool error instead.
 | `mcp__bitranox__backlog_list`  | Lists the items of the repo's `OPEN-WORK.md` (open by default) as data            | A `state` other than open, closed or all, and a directory outside a repository; a missing file returns an empty list with a note                                                                                                                                                                                    |
 | `mcp__bitranox__backlog_add`   | Adds one item (rank, origin, text, size, open, next), creating the file if absent | A directory outside a repository, a rank that is not 1 to 999999 or that any line already uses (closed included), a bad origin or date, an empty field, a field with a line break, a tab or another control character, text a UTF-8 file cannot hold, or a field that contains a ` \| size: ` style label separator |
 | `mcp__bitranox__backlog_close` | Closes one solved item by rank by DELETING its line; returns the line and reason  | A directory outside a repository, an unknown rank, an already closed item, a rank that labels several open lines, and an empty or multi-line reason                                                                                                                                                                 |
-| `mcp__bitranox__memory_add`    | Writes or updates one curated memory fact at a level (default: the session cwd)   | A level that is not a directory, a bad type, an over-long hook, an empty body, a new fact whose body brings a `topics:` line, a bad or colliding slug, a pinned entry, an excluded level                                                                                                                            |
+| `mcp__bitranox__memory_add`    | Writes or updates one curated memory fact at a level (default: the session cwd)   | A level that is not a directory, a bad type, an over-long hook, an empty body, a new fact whose body brings a `topics:` line, a level whose legacy `CLAUDE.md` scope block has a `TOPICS:` line that does not parse, a bad or colliding slug, a pinned entry, an excluded level                                     |
 | `mcp__bitranox__contrib_add`   | Queues a contribution (what, target, why) for the next dream                      | An empty or multi-line `what`, `target` or `why`; a duplicate or already-shipped entry is not a refusal but returns `queued: false` with the reason                                                                                                                                                                 |
 
 `memory_add` writes like the CLI's `--proj`: a `level` with no memory store yet creates a new tree

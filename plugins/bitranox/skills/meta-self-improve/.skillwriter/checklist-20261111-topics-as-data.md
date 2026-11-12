@@ -174,3 +174,118 @@ sentence after it on `set-scope`, the `set-topics` and `topics-set-list` rows) a
 - [x] Width check over the changed prose lines (none over 100 columns), both tables canonical
       (`reformat_tables.py` reports both files unchanged), ASCII only, no history wording.
 - Decisions: none - documents two engine refusals and corrects two refusal lists, changes no rule
+
+## Follow-up 2026-11-12: one TOPICS gate, batch limits, relocate, pinned clear
+
+Scope: `references/memory-backend.md` (the body-frame bullet, the descriptor paragraph split into
+a per-verb paragraph and a gate paragraph, a new paragraph on `set-topics --batch`, `--dry-run`,
+`--clear` on a pinned fact and the `--topics` usage error, the topic verb rows, the exit-code
+paragraph, `add`'s `--scope`, `relocate`), the topic paragraph and `memory_add` refusal cell of
+the repository's `docs/reference.md`, and the 11.2.0 `CHANGELOG.md` section. `SKILL.md` is not
+changed.
+
+### Accuracy against the engine (each message string grepped in the code)
+
+- [x] Gate message: `memory_engine.py` `scope_keeping_topics` ("a descriptor's TOPICS line changes
+      only through set-level-topics (set-top-topics at the tree top); leave the line out of the
+      new text"), raised for every descriptor writer: `set-scope` (`_main`, under
+      `sig.memory_lock(local)` for the whole read-check-write), `ensure_level` (`scope_default`
+      and the legacy harvest, `if not scope and want_scope`), and so `add --scope`.
+- [x] Legacy refusal: same function, `stored_in` branch ("the legacy scope block in %s has a
+      TOPICS line that does not parse (%s); fix or remove that line there by hand, then run this
+      again"); `_current_scope` reads the legacy block without moving it. `scaffold` catches
+      `TopicRefusal`/`InvalidTopic` and continues; `heal` skips through its per-level
+      `except Exception`. Pinned by
+      `test_ensure_memory_structure_skips_a_legacy_level_it_cannot_harvest_without_a_traceback`
+      (exit 0, `CLAUDE.md` byte-identical) and the set-scope/add legacy tests.
+- [x] `set-level-topics` reads only the pointer block (`set_level_topics`:
+      `us.parse_pointer_index(text)`, refusal "has no descriptor yet (set-scope writes one)").
+- [x] Symlinked level: `topic_store.level_key` is lexical; a path not below the anchor raises
+      `TopicStoreError`, mapped to `! refused` by the topic-verb branch of `_main`.
+- [x] Topic-file check before the descriptor write: `topic_store.record_level(..., before=...)`
+      runs the descriptor write inside the topic file's lock after the checks; an `OSError` in
+      `_write` after it reaches `main`'s `except OSError` (`! error`, stderr, exit 2), and
+      `level_topics_stale` then reports "descriptor changed since its topics were chosen".
+- [x] Batch: `_read_topic_batch` messages ("line %d is longer than %d bytes", "holds more than %d
+      rows", "slug %r is named twice (first on line %d)", "is not UTF-8 (byte at offset %d) -
+      re-save it as UTF-8"), `MAX_TOPIC_BATCH_LINE_BYTES = 4096`, `MAX_TOPIC_BATCH = 5000`, BOM
+      dropped on line 1, `RecursionError` caught; the whole file is read before
+      `set_fact_topics` runs.
+- [x] `--topics` usage error: `_topics_arg` ("! error: --topics %r: %s") via `_input_error`
+      (stderr, exit 2), used by `set-topics`, `set-level-topics` and `set-top-topics`.
+- [x] Pinned: `_topic_row_problem` refuses only `topics is not None` on a pinned fact ("%s is
+      pinned; a pinned fact stays where it is (only --clear may change it)"); byte-identity of
+      the rest pinned by
+      `test_clearing_a_pinned_facts_topics_is_allowed_and_keeps_the_rest_byte_identical`.
+- [x] Dry run: `_is_topic_dry_run` lets a topic verb's `--dry-run` past the writes-off gate;
+      `set_fact_topics` refuses a real write under the switch.
+- [x] Relocate: `relocate_entry` / `_without_topics_line` (leading frontmatter only), note
+      "dropped the topics: line of %s - topics are tagged against one tree's list; tag it in the
+      target tree with set-topics" printed as `~ note:`; same-tree delegates to `move_entry`.
+- [x] `memory_add` refusal: `mod_bridge.REFUSALS` takes `ME.ADD_REFUSALS` (which holds
+      `TopicRefusal`), envelope `ok: false` with the kind, rc 1. The bridge passes no scope, so
+      only the legacy-block refusal reaches it.
+
+### RED / GREEN
+
+Questions (text-only probes, the paragraphs pasted in, answer plus a direct quote or NONE):
+Q1 `add --scope` with an empty `TOPICS:` line on a level with no descriptor; Q2 a legacy block
+holding `TOPICS: Not A Tag!` under (a) `ensure-memory-structure`, (b) `set-scope`; Q3
+`set-topics --batch --dry-run` under `BITRANOX_MEMORY_WRITES=off`; Q4 a cross-tree `relocate` of
+a fact tagged `topics: [python]`; Q5 a batch whose third line is 5000 bytes.
+
+- [x] RED (`opus`, pre-edit paragraphs): Q1, Q2(a), Q3, Q4, Q5 NONE; Q2(b) answered only by
+      reading the legacy block as "the stored line", which the old text never said.
+- [x] GREEN (`opus` and `haiku`, 2 cells): all five answered with quotes found in the text
+      (refusal exit 2 and nothing written for Q1; skip and `CLAUDE.md` untouched, then refusal
+      for Q2; exit 0 `would set topics on ...` for Q3; line dropped plus the note for Q4;
+      `! error` naming the line for Q5).
+- [x] GREEN against RED in both directions: no answer the RED arm held is missing from GREEN.
+- [x] Re-probe on the final text after the gap fixes (`opus` and `haiku`, 2 cells): both answered
+      that `ensure-memory-structure` exits 0 and leaves `CLAUDE.md` as it is, that `set-scope`
+      exits 2 and writes nothing, that `set-level-topics` cannot repair a legacy line, and that a
+      batch with a 5000-byte third line changes no fact, each with a quote from the text. No new
+      undecided gap.
+
+### Gaps the probes reported, and what was done
+
+- CLOSED: the exit code of `ensure-memory-structure`/`heal` on a skipped legacy level, and that
+  the legacy refusal writes nothing - both stated in the gate paragraph.
+- CLOSED: whether `set-level-topics` can repair a legacy line - it reads only the pointer block,
+  stated.
+- CLOSED: whether a batch applies lines before a bad later line - "reads its whole JSONL file
+  ... before it changes any fact" and "no fact is changed".
+- CLOSED: "the level setup" read as a verb name - reworded to "every other verb that would set
+  that level up".
+- DECLINED, covered elsewhere in the file: the `TOPICS:` grammar and what "does not parse" means
+  ("Store format" bullet: "does not parse when it holds a tag that is no valid topic name or
+  more than 12 tags"); the exit code of a successful `relocate` (the exit-code paragraph: "0
+  done"); a dry run in a tree with no topic list (the topic list paragraph: "`set-topics`,
+  `set-level-topics` and `set-top-topics` refuse there").
+- DECLINED, judgement: which verbs set a level up beyond `set-scope` and `add` is not listed;
+  every verb that scaffolds a level runs the same gate (`main` maps `TopicRefusal` to a
+  refusal wherever it surfaces), so a list would only rot.
+- DECLINED, covered elsewhere: the exit code of the gate's own refusals (the exit-code paragraph
+  lists "a descriptor text from `set-scope` or `add --scope` that brings or changes a `TOPICS:`
+  line" under exit 2).
+- DECLINED, judgement: "replace a pointer block's line with `set-level-topics`" read beside the
+  legacy sentence as two remedies - the scope "a pointer block's line" and the next sentence
+  ("`set-level-topics` reads only the pointer block") separate them, and both tiers answered
+  the repair question correctly on the final text.
+- DECLINED, out of scope: "Topics are data for now" beside "read only where a topic is" - that
+  tension predates this change and is the placement work the paragraph names as not done yet.
+
+### Checks a probe cannot see
+
+- [x] Width and fence check over the added lines of all three files: nothing reported; long
+      engine messages are quoted in double quotes, not split code spans.
+- [x] Paragraphs after each insertion point read as before (the topic list paragraph after the
+      gate paragraph, "## Two tiers" after the batch paragraph, `--skill NAME` after the
+      `--scope` sentence, "**`move` is CHAIN-ONLY" after `relocate`).
+- [x] Tables canonical: `reformat_tables.py --check` reports `memory-backend.md`,
+      `docs/reference.md` and `CHANGELOG.md` unchanged.
+- [x] History finder over the added lines: no version-history wording; the CHANGELOG's "still
+      keeps" and "behaves as before" are rewritten as current behaviour.
+- [x] ASCII only; no host, private path or project name.
+- Decisions: none - documents engine behaviour and refusals, adds and removes no rule of the
+  skill's text
