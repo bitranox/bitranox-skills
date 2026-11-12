@@ -127,3 +127,36 @@ def test_a_citer_moved_beside_one_line_of_a_duplicate_keeps_its_ref(tree, tmp_pa
     plan.write_text(json.dumps({"slug": "a-citer", "to": str(tree / "b")}) + "\n", encoding="utf-8")
     code, out, _ = _run(["--root", str(tree), "--moves", str(plan)])
     assert code == 0 and "0 conflict(s)" in out
+
+
+def _one_line_tree(tmp_path, body):
+    """A tree whose `one-rule` has its only line at level `a`, its body `body`."""
+    root = tmp_path / "t"
+    facts = root / ".claude-memory" / "facts"
+    facts.mkdir(parents=True)
+    for rel, entries in {"": {}, "a": {"one-rule": body}}.items():
+        d = root / rel if rel else root
+        d.mkdir(parents=True, exist_ok=True)
+        lines = [US.INDEX_BEGIN, "", "## Memory index"]
+        lines += ["- [%s](mem:%s) - When something, do something." % (s, s) for s in entries]
+        (d / "CLAUDE.local.md").write_text("\n".join(lines + [US.INDEX_END]) + "\n", encoding="utf-8")
+        for slug, text in entries.items():
+            (facts / (slug + ".md")).write_text(text, encoding="utf-8")
+    plan = tmp_path / "moves.jsonl"
+    plan.write_text(json.dumps({"slug": "one-rule", "to": str(root)}) + "\n", encoding="utf-8")
+    return root, plan
+
+
+def test_a_planned_move_of_a_placed_fact_with_one_line_is_a_conflict(tmp_path):
+    """The engine's move refuses a placed fact whatever its line count; a plan judged clean here
+    was then refused by the move it planned."""
+    root, plan = _one_line_tree(tmp_path, PLACED.replace("py-rule", "one-rule"))
+    assert ref_map.read_copies(root) == {}
+    code, out, _ = _run(["--root", str(root), "--moves", str(plan)])
+    assert code == 1 and "placed-by-topic" in out and "one-rule" in out
+
+
+def test_a_planned_move_of_an_unbound_fact_with_one_line_is_clean(tmp_path):
+    root, plan = _one_line_tree(tmp_path, "A rule bound to no topic.\n")
+    code, out, _ = _run(["--root", str(root), "--moves", str(plan)])
+    assert code == 0 and "0 conflict(s)" in out and "placed-by-topic" not in out

@@ -25,10 +25,10 @@ FINAL level of BOTH ends, so a mutually-citing pair lifted together is clean whi
 away from a target left below is a `stranded-outbound`, and a fact moved below one of its citers
 is a `dangling-inbound` (a ref resolves only to the citer's own level or an ancestor). A `from`
 that is not where the fact sits now is a `stale-from` (the plan was made against an older tree).
-A fact with a line at several levels is not moved by a plan: it is a `placed-by-topic` conflict
-when the engine places it by topic (its levels follow the levels' topics, and a ref to it resolves
-through its body wherever they are), else a `duplicate-pointer` one. The map names its other
-levels as `also at`.
+A fact the engine places by topic is not moved by a plan, whether it has one line or several: it
+is a `placed-by-topic` conflict (its levels follow the levels' topics, and a ref to it resolves
+through its body wherever they are). Any other fact with a line at several levels is a
+`duplicate-pointer` one. The map names its other levels as `also at`.
 
 Exit codes are format-independent: 0 every slug mapped cleanly, 1 at least one slug is unknown or
 has a dangling ref, 2 the map could not be built at all (no store under the root, or a level file
@@ -106,15 +106,16 @@ def read_copies(root: Path) -> dict[str, list[str]]:
     return {slug: levels for slug, levels in held.items() if len(levels) > 1}
 
 
-def read_placed(root: Path, copies: dict[str, list[str]]) -> set[str]:
-    """The slugs of `copies` the engine places by topic (reconcile's test, the engine's rule): a
+def read_placed(root: Path, slugs) -> set[str]:
+    """The members of `slugs` the engine places by topic (reconcile's test, the engine's rule): a
     topic-bound body with a title and description, pinned at no level. Its lines stand where the
     levels' topics put them, and a ref to it resolves through the central body wherever they
-    are. Any other slug of `copies` is a duplicate pointer. One body head per slug of `copies`."""
-    if not copies:
+    are. Callers pass slugs that have a line (the engine's rule needs one); a slug with one line
+    is judged like one with several. One body head per member of `slugs`."""
+    if not slugs:
         return set()
     pinned = {p.slug for _level, pointers in _pointers(root) for p in pointers if p.pin}
-    return {slug for slug in copies
+    return {slug for slug in slugs
             if _rmi._placed_by_topic(root, slug, lambda _anchor: pinned)}  # noqa: SLF001
 
 
@@ -246,14 +247,16 @@ def judge_moves(root: Path, moves: list[dict]):
     levels = {slug: str(Path(level).resolve()) for slug, level in read_levels(root).items()}
     copies = {slug: [str(Path(level).resolve()) for level in held]
               for slug, held in read_copies(root).items()}
-    placed = read_placed(root, copies)
+    # every moved slug is tested, not only one with several lines: the engine's move refuses a
+    # placed fact whatever its line count, so a one-line one reported clean here was then refused
+    placed = read_placed(root, set(copies) | {mv["slug"] for mv in moves if mv["slug"] in levels})
     outbound, inbound = read_refs(root)
     final = dict(levels)
     conflicts = []
     for mv in moves:
-        if mv["slug"] in copies:
-            # one line per level: the engine refuses to move a fact its topics place, and a move
-            # of a duplicate takes one line and leaves the other
+        if mv["slug"] in copies or mv["slug"] in placed:
+            # the engine refuses to move a fact its topics place, and a move of a duplicate (one
+            # line per level) takes one line and leaves the other
             kind = "placed-by-topic" if mv["slug"] in placed else "duplicate-pointer"
             conflicts.append({"kind": kind, "slug": mv["slug"], "other": None,
                               "slug_level": levels[mv["slug"]], "other_level": None})
@@ -269,7 +272,7 @@ def judge_moves(root: Path, moves: list[dict]):
         final[mv["slug"]] = mv["to"]
     for mv in moves:
         slug = mv["slug"]
-        if slug not in levels or slug in copies:
+        if slug not in levels or slug in copies or slug in placed:
             continue
         here = final[slug]
         for target in outbound.get(slug, []):
