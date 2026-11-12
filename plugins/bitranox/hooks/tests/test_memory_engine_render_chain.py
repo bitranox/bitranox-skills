@@ -125,12 +125,18 @@ def _engine_route(out, pattern):
     return Path(E.__file__).resolve().parents[1] / route.group(1), route.group(2).split()
 
 
-def _run_outside(tmp_path, argv):
+def _call_outside(tmp_path, argv):
+    """(exit code, stdout + stderr) of the engine run with `argv` from a cwd outside the tree."""
     outside = tmp_path / "outside"
     outside.mkdir(exist_ok=True)
     done = subprocess.run([sys.executable, *argv], cwd=str(outside), capture_output=True,
                           text=True, encoding="utf-8", errors="replace", check=False)
-    assert done.returncode == 0, done.stdout + done.stderr
+    return done.returncode, done.stdout + done.stderr
+
+
+def _run_outside(tmp_path, argv):
+    rc, out = _call_outside(tmp_path, argv)
+    assert rc == 0, out
 
 
 # ---- render-topics --scope chain ---------------------------------------------------------------
@@ -388,6 +394,82 @@ def test_kept_and_placed_lines_that_overfill_a_chain_level_beside_stale_ones_nam
     assert _slugs(rust_level) == rust and _slugs(side) == unbound
     assert _bound(anchor, bound) == {("python",): len(bound)}
     assert _bound(anchor, unbound) == {(): len(unbound)}
+
+
+_MOVE_KEPT = r"(hooks/memory_engine\.py) (move --from-level \S+ --to-level) <level> --slug <slug>"
+
+
+def _big_line(slug, size):
+    """A line of exactly `size` bytes (its line break counted) that points at no body."""
+    ptr = us.Pointer(slug=slug, title="T", hook="")
+    ptr.hook = "k" * (size - len(ptr.index_line().encode("utf-8")) - 1)
+    return ptr
+
+
+def test_kept_and_added_lines_each_past_the_cap_name_a_move_and_a_rebind_together(
+        tmp_path, capsys):
+    """`a/py` keeps two lines no render places, together just past the cap, and more python
+    lines than that are to be added there. Moving every kept line still leaves the added ones
+    past the cap, and rebinding every python fact still leaves the kept ones past it, so neither
+    route alone frees the bytes the block is over: the refusal names both, each with an amount
+    its own pool can give. Followed from outside the tree (each kept line to its own level on the
+    chain, python facts rebound to rust), the chain goes through and no fact is un-bound."""
+    anchor = _tree(tmp_path)
+    up, level = _level(anchor, "a"), _level(anchor, "a/py", ("python",))
+    _level(anchor, "b", ("rust",))
+    side = _level(anchor, "c")
+    half = E.MAX_RENDER_BLOCK_BYTES // 2 + 100
+    kept = [_big_line("feedback-kept-big%d" % i, half) for i in range(2)]
+    _hold_lines(level, kept)
+    python = _plant_tagged(anchor, "py", "python", 110, "y" * 10000)
+    _hold_lines(side, [us.Pointer(slug=slug, title="T", hook="y" * 10000) for slug in python])
+    lines = {slug: len(us.Pointer(slug=slug, title="T", hook="y" * 10000).index_line()) + 1
+             for slug in python}
+    before = _snapshot(anchor)
+    capsys.readouterr()
+    assert E.main(["render-topics", "--proj", level, "--scope", "chain"]) == 2
+    out = capsys.readouterr().out
+    assert _snapshot(anchor) == before and _no_sweep_route(out), out
+    with pytest.raises(E.RenderBlockTooLarge) as exc:
+        E.render_topics(level, scope="chain")
+    cap = E.MAX_RENDER_BLOCK_BYTES
+    assert exc.value.stale == 0 and cap < exc.value.kept == 2 * half < exc.value.added
+    assert exc.value.added == sum(lines.values())
+    move = re.search(r"[Mm]ove kept lines totalling at least (\d+) bytes", out)
+    rebind = re.search(r"at least (\d+) bytes of their lines", out)
+    assert move is not None and rebind is not None, out
+    assert int(move.group(1)) <= exc.value.kept and int(rebind.group(1)) <= exc.value.added
+    assert int(move.group(1)) + int(rebind.group(1)) >= exc.value.need, out
+    engine = str(Path(E.__file__).resolve())
+    rebound, dests = [], [anchor, up]
+    for step in range(5):
+        rc, out = _call_outside(tmp_path, [engine, "render-topics", "--proj", level, "--scope",
+                                           "chain"])
+        if rc == 0:
+            break
+        assert rc == 2 and _no_sweep_route(out), out
+        move = re.search(r"[Mm]ove kept lines totalling at least (\d+) bytes", out)
+        rebind = re.search(r"at least (\d+) bytes of their lines", out)
+        assert move is not None or rebind is not None, out
+        if move is not None:
+            route, words = _engine_route(out, _MOVE_KEPT)
+            sizes = _line_bytes(level)
+            movable = [p.slug for p in kept if p.slug in sizes]
+            for slug in _shortest_run(movable, sizes, int(move.group(1))):
+                _run_outside(tmp_path, [str(route), *words, dests.pop(0), "--slug", slug])
+        if rebind is not None:
+            route, words = _engine_route(out, r"(hooks/memory_engine\.py) (set-topics --proj \S+) "
+                                              r"--batch <file>")
+            left = [slug for slug in python if slug not in rebound]
+            run = _shortest_run(left, lines, int(rebind.group(1)))
+            batch = tmp_path / ("rebind%d.jsonl" % step)
+            batch.write_text("".join('{"slug": "%s", "topics": ["rust"]}\n' % slug for slug in run),
+                             encoding="utf-8")
+            _run_outside(tmp_path, [str(route), *words, "--batch", str(batch)])
+            rebound += run
+    assert rc == 0, out
+    assert _bound(anchor, python) == {("python",): 110 - len(rebound), ("rust",): len(rebound)}
+    assert _slugs(level) == sorted(set(python) - set(rebound))
 
 
 def test_lines_a_level_above_holds_do_not_count_where_the_chain_drops_them(tmp_path):
@@ -727,7 +809,7 @@ def test_the_top_line_of_a_fact_the_same_call_un_binds_counts_as_kept_not_as_pla
     with pytest.raises(E.CollapseTooLarge) as exc:
         E.set_fact_topics(anchor, rows)
     assert (exc.value.stale, exc.value.placed) == (0, 0) and exc.value.kept == sum(sizes.values())
-    need = re.search(r"Move lines totalling at least (\d+) bytes", out)
+    need = re.search(_MOVE_TOP, out)
     assert need is not None and int(need.group(1)) == exc.value.need > 0, out
     engine, words = _engine_route(out, r"(hooks/memory_engine\.py) (move --from-level \S+ "
                                        r"--to-level) <level> --slug <slug>")
@@ -737,3 +819,204 @@ def test_the_top_line_of_a_fact_the_same_call_un_binds_counts_as_kept_not_as_pla
     assert E.main(["set-topics", "--proj", anchor, "--batch", str(batch)]) == 0
     assert {"feedback-py-rule", "feedback-py-held"} <= set(_slugs(anchor))
     assert _slugs(levels["a/py"]) == _slugs(levels["b/py"]) == []
+
+
+_SPLIT = r"may total at most (-?\d+) bytes now"
+_MOVE_TOP = r"Move (?:pinned, legacy or unplaced )?lines totalling at least (\d+) bytes"
+
+
+def _unbind_following_refusals(tmp_path, anchor, slugs, below, dest):
+    """Un-bind `slugs` with one set-topics batch run from outside the tree; on a refusal follow
+    the route it names and try the rest again, at most 5 times: a smaller batch of the facts whose
+    lines fit the room it gives (a fact whose line is at the top already adds none; `below` is
+    {slug: bytes of its line below the top}), or a move to `dest` of the shortest run of the top's
+    lines, other than those of facts still to be un-bound, reaching the figure it names. Returns
+    the routes taken as (kind, slugs)."""
+    engine = str(Path(E.__file__).resolve())
+    pending, taken = list(slugs), []
+    for step in range(5):
+        batch = tmp_path / ("unbind%d.jsonl" % step)
+        batch.write_text("".join('{"slug": "%s", "topics": []}\n' % slug for slug in pending),
+                         encoding="utf-8")
+        rc, out = _call_outside(tmp_path, [engine, "set-topics", "--proj", anchor, "--batch",
+                                           str(batch)])
+        if rc == 0:
+            return taken
+        assert rc == 2 and out.startswith("! refused"), out
+        room, move = re.search(_SPLIT, out), re.search(_MOVE_TOP, out)
+        assert (room is None) != (move is None), out
+        if room is not None:
+            assert "move --from-level" not in out and _no_sweep_route(out), out
+            route, words = _engine_route(out, r"(hooks/memory_engine\.py) (set-topics --proj \S+) "
+                                              r"--batch <file>")
+            at_top, part, total = set(_slugs(anchor)), [], 0
+            for slug in pending:
+                add = 0 if slug in at_top else below[slug]
+                if total + add <= int(room.group(1)):
+                    part.append(slug)
+                    total += add
+            assert part and len(part) < len(pending), out
+            batch = tmp_path / ("part%d.jsonl" % step)
+            batch.write_text("".join('{"slug": "%s", "topics": []}\n' % slug for slug in part),
+                             encoding="utf-8")
+            _run_outside(tmp_path, [str(route), *words, "--batch", str(batch)])
+            pending = [slug for slug in pending if slug not in part]
+            taken.append(("split", part))
+        else:
+            route, words = _engine_route(out, _MOVE_KEPT)
+            sizes = _line_bytes(anchor)
+            moved = _shortest_run([s for s in sizes if s not in pending], sizes, int(move.group(1)))
+            _run_outside(tmp_path, [str(route), *words, dest, "--slug", *moved])
+            taken.append(("move", moved))
+    raise AssertionError("still refused after 5 routes: %r" % taken)
+
+
+def test_un_binding_more_lines_than_the_top_can_hold_names_a_smaller_batch_not_a_move(
+        tmp_path, capsys):
+    """Three facts, each with a line of about 400 KB at two levels, are un-bound in one call on
+    an empty tree top: the lines the collapse alone would add there pass the cap, so no move of
+    what the top holds can make room. The refusal says the top cannot hold a line of each at
+    once and names a smaller batch with the bytes one call may add, never a move. Followed from
+    outside the tree, each later refusal names its own route, and the call ends with every fact
+    un-bound and one line of each in the tree."""
+    anchor, levels = _two_python_levels(tmp_path)
+    big = _plant_tagged(anchor, "big", "python", 3, "y" * 100)
+    for rel in ("a/py", "b/py"):
+        _hold_lines(levels[rel], [us.Pointer(slug=slug, title="T", hook="h" * 400000)
+                                  for slug in big])
+    below = _line_bytes(levels["a/py"])
+    batch = tmp_path / "all.jsonl"
+    batch.write_text("".join('{"slug": "%s", "topics": []}\n' % slug for slug in big),
+                     encoding="utf-8")
+    before = _snapshot(anchor)
+    capsys.readouterr()
+    for extra in ([], ["--dry-run"]):
+        assert E.main(["set-topics", "--proj", anchor, "--batch", str(batch), *extra]) == 2
+        out = capsys.readouterr().out
+        assert _snapshot(anchor) == before and "move --from-level" not in out, out
+    assert "cannot hold a line of each of them at once" in out, out
+    with pytest.raises(E.CollapseTooLarge) as exc:
+        E.set_fact_topics(anchor, dict.fromkeys(big, ()))
+    assert exc.value.added == sum(below.values()) > E.MAX_RENDER_BLOCK_BYTES
+    assert exc.value.held == 0
+    room = re.search(_SPLIT, out)
+    assert room is not None and int(room.group(1)) == E.MAX_RENDER_BLOCK_BYTES, out
+    taken = _unbind_following_refusals(tmp_path, anchor, big, below, levels["a"])
+    assert [kind for kind, _slugs_ in taken] == ["split", "move"], taken
+    assert _bound(anchor, big) == {(): 3}
+    assert _slugs(levels["a/py"]) == _slugs(levels["b/py"]) == []
+    assert sorted(_slugs(anchor) + _slugs(levels["a"])) == big
+
+
+def test_the_top_line_of_a_fact_the_same_call_un_binds_is_never_offered_to_move(
+        tmp_path, capsys):
+    """Two facts are un-bound in one call; one already has a line at the tree top that fills its
+    block to 10 bytes short of the cap. That line is the only one at the top, and the collapse
+    keeps it there whatever a move does, so a move of it would be undone by the next try: the
+    refusal offers no move, it names a smaller batch (a fact whose line is at the top adds
+    none). Followed from outside the tree, the next refusal moves that now un-bound line down,
+    and both facts end un-bound with one line each."""
+    anchor, levels = _two_python_levels(tmp_path)
+    for slug in ("feedback-py-x", "feedback-py-y"):
+        _fact(anchor, slug, ("python",))
+    E.render_topics(anchor)
+    assert _slugs(anchor) == []
+    _hold_lines(anchor, [_big_line("feedback-py-x", E.MAX_RENDER_BLOCK_BYTES - 10)])
+    below = _line_bytes(levels["a/py"])
+    rows = {"feedback-py-x": (), "feedback-py-y": ()}
+    batch = tmp_path / "both.jsonl"
+    batch.write_text("".join('{"slug": "%s", "topics": []}\n' % slug for slug in rows),
+                     encoding="utf-8")
+    before = _snapshot(anchor)
+    capsys.readouterr()
+    assert E.main(["set-topics", "--proj", anchor, "--batch", str(batch)]) == 2
+    out = capsys.readouterr().out
+    assert _snapshot(anchor) == before and "move --from-level" not in out, out
+    assert _no_sweep_route(out), out
+    with pytest.raises(E.CollapseTooLarge) as exc:
+        E.set_fact_topics(anchor, rows)
+    assert exc.value.fixed == exc.value.kept == E.MAX_RENDER_BLOCK_BYTES - 10
+    room = re.search(_SPLIT, out)
+    assert room is not None and int(room.group(1)) == 10, out
+    taken = _unbind_following_refusals(tmp_path, anchor, list(rows), below, levels["a"])
+    assert taken == [("split", ["feedback-py-x"]), ("move", ["feedback-py-x"])], taken
+    assert _bound(anchor, list(rows)) == {(): 2}
+    assert _slugs(anchor) == ["feedback-py-y"] and _slugs(levels["a"]) == ["feedback-py-x"]
+    assert _slugs(levels["a/py"]) == _slugs(levels["b/py"]) == []
+
+
+_CAP = E.MAX_RENDER_BLOCK_BYTES
+_SWEEP_ROUTE_RE = re.compile(r"render-topics --proj \S+ --scope tree")
+
+
+@pytest.mark.parametrize("figures, route", [
+    # kept, added, stale, placed, fixed, rebind
+    ((_CAP - 10, 100, 0, 0, 0, True), "move"),
+    ((10, 100, 0, _CAP - 10, 0, True), "rebind"),
+    ((_CAP // 2, 100, 0, _CAP // 2, 0, True), "move"),
+    ((60, _CAP - 20, 0, 60, 0, True), "both"),
+    ((_CAP // 2 + 10, 100, 0, _CAP // 2 - 10, _CAP // 2, True), "rebind"),
+    ((60, _CAP - 20, 0, 60, 0, False), "both"),
+    ((_CAP - 10, 100, 0, 0, _CAP - 10, True), "split"),
+    ((_CAP, 100, 0, 0, _CAP, True), "split"),
+    ((_CAP, 100, 0, 0, _CAP - 50, True), "split"),
+    ((_CAP - 100, 200, 100, 0, _CAP - 100, True), "split"),
+])
+def test_a_collapse_refusal_names_only_a_route_whose_pool_can_free_its_amount(figures, route):
+    """Each route a CollapseTooLarge names, with the amount it asks for, is one its own pool can
+    give: a move never asks for more than the kept lines that are not this call's own, a rebind
+    never for more than the lines placed at the top, and both together reach the bytes the block
+    is over. When the lines this call keeps at the top alone pass the cap it names a smaller
+    batch and no move of them; with no room left it names how to free room first, or says only
+    facts already at the top can be un-bound."""
+    kept, added, stale, placed, fixed, rebind = figures
+    exc = E.CollapseTooLarge("/t", kept, added, stale, placed, fixed=fixed, rebind=rebind)
+    text, movable = str(exc), kept - fixed
+    room, need = _CAP - kept - stale - placed, kept + placed + added - _CAP
+    moves = [int(n) for n in re.findall(r"[Mm]ove (?:pinned, legacy or unplaced )?lines "
+                                        r"totalling at least (\d+) bytes", text)]
+    rebinds = [int(n) for n in re.findall(r"whose lines total at least (\d+) bytes", text)]
+    assert all(n <= movable for n in moves) and all(n <= placed for n in rebinds), text
+    assert ("set-level-topics" in text) == (bool(rebinds) and not rebind), text
+    if route == "split":
+        assert "cannot hold a line of each of them at once" in text, text
+        said = re.search(_SPLIT, text)
+        assert said is not None and int(said.group(1)) == room, text
+        assert sum(moves) <= movable and not rebinds, text
+        pools = stale or movable or placed
+        assert ("only facts whose line is already at the top" in text) == (room <= 0
+                                                                            and not pools), text
+        assert (_SWEEP_ROUTE_RE.search(text) is not None) == (room <= 0 and bool(stale))
+        if room <= 0 and movable:
+            assert moves == [movable], text
+        if room > 0:
+            assert not moves, text
+        return
+    assert re.search(_SPLIT, text) is None, text
+    assert {"move": (len(moves), len(rebinds)) == (1, 0),
+            "rebind": (len(moves), len(rebinds)) == (0, 1),
+            "both": (len(moves), len(rebinds)) == (1, 1)}[route], text
+    assert sum(moves) + sum(rebinds) >= need, text
+
+
+@pytest.mark.parametrize("kept, added, route", [
+    (_CAP + 10, 100, "move"),
+    (_CAP - 10, 100, "move"),
+    (100, _CAP + 10, "rebind"),
+    (_CAP - 100, _CAP - 50, "rebind"),
+    (_CAP + 10, _CAP + 20, "both"),
+    (_CAP + 20, _CAP + 10, "both"),
+])
+def test_a_block_refusal_names_only_a_route_whose_pool_can_free_its_amount(kept, added, route):
+    """A RenderBlockTooLarge asks a move for no more than the kept lines and a rebind for no more
+    than the lines placed there. When each pool alone passes the cap neither can free the bytes
+    the block is over, so it names both, together reaching that figure."""
+    exc = E.RenderBlockTooLarge("/l", kept, added, "a topic this level has (python)")
+    text = str(exc)
+    moves = [int(n) for n in re.findall(r"Move kept lines totalling at least (\d+) bytes", text)]
+    rebinds = [int(n) for n in re.findall(r"at least (\d+) bytes of their lines", text)]
+    assert all(n <= kept for n in moves) and all(n <= added for n in rebinds), text
+    assert {"move": (len(moves), len(rebinds)) == (1, 0),
+            "rebind": (len(moves), len(rebinds)) == (0, 1),
+            "both": (len(moves), len(rebinds)) == (1, 1)}[route], text
+    assert sum(moves) + sum(rebinds) >= exc.need, text

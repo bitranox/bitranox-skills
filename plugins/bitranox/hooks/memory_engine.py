@@ -2093,13 +2093,17 @@ class RenderBlockTooLarge(TopicRefusal):
     - `stale` lines are there and the block fits without them (`need` <= 0): the tree-scope render
       of `anchor`, the one render that drops them (a move would take a line a later render puts
       back, and a rebind un-binds facts that are bound correctly).
-    - the kept lines are at least as large as the added ones (`kept >= added`): the move that
+    - neither pool reaches `need` alone (`kept` and `added` each pass the cap): both, a move of
+      every kept line and a rebind of the rest, with the amounts and the bounds of any other
+      split. A route is named only when its own pool can free the bytes it asks for.
+    - the kept lines are at least as large as the added ones and reach `need`: the move that
       takes at least `need` bytes of kept lines to another level of the altitude chain, whose own
       block is held to the same cap. Only kept lines are offered: a line placed by topic is the
       render's to place, not a move's.
-    - else: the set-topics batch that rebinds the facts which need not be read at that level
-      (`bound_to` says which topics put them there), at least `need` bytes of their lines.
-    The last two name `need`, not `over`: a tree-scope render would refuse at that level too (it
+    - else (the added lines reach `need`): the set-topics batch that rebinds the facts which need
+      not be read at that level (`bound_to` says which topics put them there), at least `need`
+      bytes of their lines.
+    The last three name `need`, not `over`: a tree-scope render would refuse at that level too (it
     adds at least the lines the chain does), so the stale lines cannot go first; once the rest
     fits, the next refusal is the first kind and names the render that drops them."""
 
@@ -2124,10 +2128,30 @@ class RenderBlockTooLarge(TopicRefusal):
                 " (they count here until a tree-scope render drops them, which it cannot do "
                 "before the rest fits; without them the block is %d bytes over, the figure "
                 "below, and once that is gone this refusal names that render)" % self.need)
-        if kept >= added:
-            beside = ("" if not stale else
-                      ", beside %d bytes of lines placed by topic at another level%s,"
-                      % (stale, also))
+        beside = ("" if not stale else
+                  ", beside %d bytes of lines placed by topic at another level%s,"
+                  % (stale, also))
+        if kept < self.need and added < self.need:
+            text = ("%d bytes of pinned, legacy or unplaced lines stay at %s%s and %d bytes of "
+                    "lines placed there are to be added, %d bytes over the %d bytes one level's "
+                    "block may hold. Each part alone is more than the block may hold, so neither "
+                    "moving kept lines nor rebinding facts frees the %d bytes by itself; do both. "
+                    "Move kept lines totalling at least %d bytes (a line counts its line break; a "
+                    "line placed by topic is not one to move) to levels above or below it with "
+                    "hooks/memory_engine.py move --from-level %s --to-level <level> --slug <slug> "
+                    "[<slug> ...] (a legacy line needs migrate_to_slug_store.py first; each level "
+                    "they go to is held to the same %d bytes, counting the lines it keeps and "
+                    "those placed there). And rebind facts that need not be read there (they are "
+                    "bound to %s), at least %d bytes of their lines, with hooks/memory_engine.py "
+                    "set-topics --proj %s --batch <file>, one {\"slug\": ..., \"topics\": [...]} "
+                    "per line giving its real topics ([] binds it to no topic and leaves its line "
+                    "where it is, so a line already at that level stays and still counts). Any "
+                    "split works that totals at least %d bytes, at most %d moved and %d rebound. "
+                    "Then run render-topics again"
+                    % (kept, level, beside, added, self.over, MAX_RENDER_BLOCK_BYTES, self.need,
+                       kept, level, MAX_RENDER_BLOCK_BYTES, bound_to, self.need - kept, level,
+                       self.need, kept, added))
+        elif kept >= added and kept >= self.need:
             text = ("%d bytes of pinned, legacy or unplaced lines stay at %s%s and %d bytes of "
                     "lines placed there are to be added, %d bytes over the %d bytes one level's "
                     "block may hold: the pinned, legacy or unplaced lines are the larger part. "
@@ -2160,59 +2184,117 @@ class RenderBlockTooLarge(TopicRefusal):
 class CollapseTooLarge(TopicRefusal):
     """Raised by set-topics, before any write, when the line an un-bound fact keeps at the tree
     top (see `set_fact_topics`) would take the top's block past MAX_RENDER_BLOCK_BYTES. The block
-    holds `kept` bytes of pinned, legacy or unplaced lines (the lines of the facts this call
-    un-binds among them: they stay as they are), `placed` bytes of managed lines placed at the top
-    and `stale` bytes of managed lines placed below it, which a tree-scope render drops; `added`
-    bytes would be added. `held` is the block's whole count, `over` the fewest bytes that must
-    leave it and `need` how far it passes the cap without the stale lines.
+    holds `kept` bytes of pinned, legacy or unplaced lines, `fixed` of them lines of facts this
+    call un-binds (the collapse keeps them at the top, so they never leave it in this call),
+    `placed` bytes of managed lines placed at the top and `stale` bytes of managed lines placed
+    below it, which a tree-scope render drops; `added` bytes would be added. `held` is the block's
+    whole count, `room` what it can still take, `over` the fewest bytes that must leave it and
+    `need` how far it passes the cap without the stale lines. `fit` is how many of the added lines
+    fit in `room`, smallest first; `rebind` whether a level below the top has a topic.
 
-    The message names one route, the first that applies: when `stale` lines are there and the
-    block fits without them (`need` <= 0), the tree-scope render that drops them; when the kept
-    lines are at least as large as the placed ones, the move that takes `need` bytes of kept lines
-    to a level below the top; else the set-topics batch that rebinds facts placed at the top
-    (`need` bytes of their lines) to a topic a level below has, followed by the tree-scope render
-    that moves their lines down. A line placed by topic is never offered to `move`: it is the
-    render's to place."""
+    A route is named only when it can free the bytes it asks for on its own figures: `kept -
+    fixed` bytes can be moved, `placed` bytes rebound (after set-level-topics when no level below
+    has a topic), `stale` bytes swept. The first that applies:
+    - `stale` lines are there and the block fits without them (`need` <= 0): the tree-scope render.
+    - the lines this call keeps at the top alone pass the cap (`fixed + added`): nothing that
+      leaves the top makes room, so it says the top cannot hold a line of each of these facts at
+      once and names a smaller batch, at most `room` bytes of added lines per call (and the pools
+      that free room first when `room` is not positive).
+    - the movable kept lines reach `need`: a move of them.
+    - the placed lines reach `need`: the set-topics batch that rebinds facts placed at the top,
+      then the tree-scope render.
+    - else both, each with its amount: every movable kept line moved and the rest rebound (the
+      two together always reach `need` once `fixed + added` fits)."""
 
-    def __init__(self, top, kept, added, stale=0, placed=0):
+    def __init__(self, top, kept, added, stale=0, placed=0, fixed=0, fit=0, rebind=True):
         self.top, self.kept, self.added, self.stale, self.placed = top, kept, added, stale, placed
+        self.fixed, self.fit, self.rebind = fixed, fit, rebind
+        self.movable = kept - fixed
         self.held = kept + stale + placed
+        self.room = MAX_RENDER_BLOCK_BYTES - self.held
         self.over = self.held + added - MAX_RENDER_BLOCK_BYTES
         self.need = kept + placed + added - MAX_RENDER_BLOCK_BYTES
         head = ("un-binding these facts leaves one line of each at the tree top %s: %d bytes of "
                 "lines are there and %d bytes would be added, %d bytes over the %d bytes one "
                 "level's block may hold"
                 % (top, self.held, added, self.over, MAX_RENDER_BLOCK_BYTES))
-        parts = ("; of the lines there, %d bytes are pinned, legacy or unplaced, %d bytes are "
+        parts = ("; of the lines there, %d bytes are pinned, legacy or unplaced%s, %d bytes are "
                  "placed by topic at the top and %d bytes are placed by topic at a level below it"
-                 % (kept, placed, stale)) if stale or placed else ""
-        later = ("" if not stale else
-                 " (without the lines placed below the top the block is %d bytes over; once "
-                 "that is gone this refusal names the tree-scope render that drops them)"
-                 % self.need)
+                 % (self.movable, "" if not fixed else
+                    ", %d bytes are lines of facts this call un-binds (it keeps them at the top)"
+                    % fixed, placed, stale)) if stale or placed or fixed else ""
         if stale and self.need <= 0:
             tail = (". Without the lines placed below the top the block fits, and a tree-scope "
                     "render drops them: run " + _SWEEP_ROUTE + " (it holds every level to the "
                     "same %d bytes and names its own route if one would pass them), then run "
                     "set-topics again") % (top, MAX_RENDER_BLOCK_BYTES)
-        elif kept >= placed:
-            tail = (". Move %slines totalling at least %d bytes%s (a line counts its line break; "
-                    "a line placed by topic is not one to move) from the tree top to a level "
-                    "below it with hooks/memory_engine.py move --from-level %s --to-level <level> "
-                    "--slug <slug> [<slug> ...] (a legacy line needs migrate_to_slug_store.py "
-                    "first); the level they go to is held to the same %d bytes, counting the lines "
-                    "it keeps and those placed there. Then run set-topics again"
-                    % ("pinned, legacy or unplaced " if parts else "", self.need, later, top,
-                       MAX_RENDER_BLOCK_BYTES))
+        elif fixed + added > MAX_RENDER_BLOCK_BYTES:
+            tail = self._split_text()
+        elif self.movable >= self.need and (self.movable >= placed or placed < self.need):
+            tail = ". " + self._move_text(self.need, "Move") + ". Then run set-topics again"
+        elif placed >= self.need:
+            tail = (". The lines placed by topic at the top are the larger part: "
+                    + self._rebind_text(self.need) + ", then run set-topics again")
         else:
-            tail = (". The lines placed by topic at the top are the larger part: rebind facts "
-                    "placed there whose lines total at least %d bytes to a topic a level below the "
-                    "top has, with hooks/memory_engine.py set-topics --proj %s --batch <file>, one "
-                    "{\"slug\": ..., \"topics\": [...]} per line ([] would leave each line at the "
-                    "top), run " + _SWEEP_ROUTE + " to move their lines down (it drops the lines "
-                    "placed below the top as well), then run set-topics again"
-                    ) % (self.need, top, top)
+            tail = (". Neither the movable lines (%d bytes) nor those placed by topic at the top "
+                    "(%d bytes) reach the %d bytes alone; do both: %s; and %s, then run "
+                    "set-topics again"
+                    % (self.movable, placed, self.need, self._move_text(self.movable, "move"),
+                       self._rebind_text(self.need - self.movable)))
         super().__init__([head + parts + tail])
+
+    def _later(self):
+        return ("" if not self.stale else
+                " (without the lines placed below the top the block is %d bytes over; once "
+                "that is gone this refusal names the tree-scope render that drops them)"
+                % self.need)
+
+    def _move_text(self, amount, verb):
+        return ("%s %slines totalling at least %d bytes%s (a line counts its line break; a line "
+                "placed by topic is not one to move, nor one of a fact this call un-binds) from "
+                "the tree top to a level below it with hooks/memory_engine.py move --from-level "
+                "%s --to-level <level> --slug <slug> [<slug> ...] (a legacy line needs "
+                "migrate_to_slug_store.py first); the level they go to is held to the same %d "
+                "bytes, counting the lines it keeps and those placed there"
+                % (verb, "pinned, legacy or unplaced " if self.stale or self.placed or self.fixed
+                   else "", amount, self._later(), self.top, MAX_RENDER_BLOCK_BYTES))
+
+    def _rebind_text(self, amount):
+        first = ("" if self.rebind else
+                 "no level below the top has a topic, so first give one a topic with "
+                 "hooks/memory_engine.py set-level-topics --proj <level> --topics <tags>, then ")
+        return (first + "rebind facts placed there whose lines total at least %d bytes to a "
+                "topic a level below the top has, with hooks/memory_engine.py set-topics --proj "
+                "%s --batch <file>, one {\"slug\": ..., \"topics\": [...]} per line ([] would "
+                "leave each line at the top), and run " + _SWEEP_ROUTE + " to move their lines "
+                "down (it drops the lines placed below the top as well)") % (amount, self.top,
+                                                                              self.top)
+
+    def _split_text(self):
+        text = (". One line of each fact this call un-binds stays at the top, and those lines "
+                "alone come to %d bytes (%d there already, %d to be added), more than the block "
+                "may hold: the top cannot hold a line of each of them at once, and no line that "
+                "leaves the top makes room for them all. Un-bind fewer facts per call with "
+                "hooks/memory_engine.py set-topics --proj %s --batch <file>: the lines one call "
+                "adds at the top may total at most %d bytes now (%d of the lines this call "
+                "would add fit in that, smallest first; a fact whose line is already at the top "
+                "adds none). The lines a call leaves at the top are then unplaced lines, which "
+                "a later refusal offers to move to a level below"
+                % (self.fixed + self.added, self.fixed, self.added, self.top, self.room, self.fit))
+        if self.room > 0:
+            return text
+        pools = []
+        if self.stale:
+            pools.append(("run " + _SWEEP_ROUTE + " (drops %d bytes of lines placed below the "
+                          "top)") % (self.top, self.stale))
+        if self.movable:
+            pools.append(self._move_text(self.movable, "move"))
+        if self.placed:
+            pools.append(self._rebind_text(self.placed))
+        if not pools:
+            return (text + ". The block is full and holds nothing that can leave it in this "
+                    "call: only facts whose line is already at the top can be un-bound now")
+        return text + ". The block is full: first free room - " + "; or ".join(pools)
 
 
 def _read_body_head(path):
@@ -2501,21 +2583,43 @@ def _collapse_plan(anchor, rows, owners):
                    us.parse_pointer_index(read_store_text(sig.claude_local_md_path(top)))[1])
         if held + added > MAX_RENDER_BLOCK_BYTES:
             split = _top_split(anchor, top, unbound)
-            raise CollapseTooLarge(top, split["kept"], added, split["stale"], split["placed"])
+            raise CollapseTooLarge(top, split["kept"] + split["fixed"], added, split["stale"],
+                                   split["placed"], fixed=split["fixed"],
+                                   fit=_lines_that_fit(plan, anchor, MAX_RENDER_BLOCK_BYTES - held),
+                                   rebind=split["rebind"])
     return plan
 
 
+def _lines_that_fit(plan, anchor, room):
+    """How many of the lines a collapse `plan` adds at the tree top fit in `room` bytes, smallest
+    first: what one smaller call can un-bind now. Holds one size per row of the plan."""
+    fit, total = 0, 0
+    for size in sorted(_line_size(line) for holders, line in plan.values()
+                       if _level_parts(anchor, holders[0]) != tp.TOP):
+        total += size
+        if total > room:
+            break
+        fit += 1
+    return fit
+
+
 def _top_split(anchor, top, unbound):
-    """{'kept', 'placed', 'stale': bytes} of the tree top's block, for a CollapseTooLarge message:
-    a line of a fact in `unbound` (this call leaves it as it is) is kept like a pinned, legacy or
-    unplaced one; a managed line is placed when its fact is placed at the top, else stale (a
-    tree-scope render drops it). Read only when the call refuses: one record per level and one body
-    head per line of the top's block."""
+    """{'kept', 'fixed', 'placed', 'stale': bytes, 'rebind': bool} of the tree top's block, for a
+    CollapseTooLarge message. A line of a fact in `unbound` is 'fixed': this call keeps it at the
+    top whatever a move does (the collapse would add it back), so it is never one to move. Of the
+    rest a pinned, legacy or unplaced line is kept; a managed line is placed when its fact is
+    placed at the top, else stale (a tree-scope render drops it). `rebind` says whether a level
+    below the top has a topic a fact placed at the top could be rebound to. Read only when the
+    call refuses: one record per level and one body head per line of the top's block."""
     levels = curated_levels_under(anchor)
-    place = _Placer(topic_level_map(anchor, levels)[0])
-    return _block_split(anchor, _pinned_slugs(levels), top,
-                        lambda slug, topics: "kept" if slug in unbound else
-                        "placed" if tp.TOP in place(topics) else "stale")
+    level_map = topic_level_map(anchor, levels)[0]
+    place = _Placer(level_map)
+    split = _block_split(anchor, _pinned_slugs(levels), top,
+                         lambda slug, topics: "placed" if tp.TOP in place(topics) else "stale",
+                         claim=lambda slug: "fixed" if slug in unbound else None)
+    split["rebind"] = any(level_map.topics(parts) for parts in level_map.levels()
+                          if parts != tp.TOP)
+    return split
 
 
 def _collapse_copies(anchor, slug, holders, line, write):
@@ -2750,14 +2854,15 @@ def _add_levels(level_map):
     return [parts for parts in level_map.levels() if parts == tp.TOP or level_map.topics(parts)]
 
 
-def _block_split(anchor, pinned, level_dir, part):
-    """{part name: bytes} of one level's block, each line counting its line break: a pinned,
-    legacy or unmanaged line is 'kept', a managed line goes under `part(slug, topics)`, and is not
-    counted when that is None. One body head is read per unpinned line."""
-    split = {"kept": 0, "stale": 0, "placed": 0}
+def _block_split(anchor, pinned, level_dir, part, claim=None):
+    """{part name: bytes} of one level's block, each line counting its line break: a line whose
+    slug `claim(slug)` names goes under that name whatever it is; else a pinned, legacy or
+    unmanaged line is 'kept', a managed line goes under `part(slug, topics)`, and is not counted
+    when that is None. One body head is read per unpinned line."""
+    split = {"kept": 0, "stale": 0, "placed": 0, "fixed": 0}
     for ptr in us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level_dir)))[1]:
-        name = "kept"
-        if not (ptr.pin or ptr.legacy):
+        name = "kept" if claim is None else claim(ptr.slug) or "kept"
+        if name == "kept" and not (ptr.pin or ptr.legacy):
             head = _read_body_head(us.body_path(anchor, ptr.slug))
             topics = None if head is None else _managed_topics(ptr.slug, head, pinned)
             if topics is not None:
