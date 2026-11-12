@@ -163,18 +163,18 @@ def test_a_since_rev_that_does_not_resolve_is_refused(tmp_path):
 
 def test_plain_file_targets_count_every_line_as_added(tmp_path):
     one = tmp_path / "levels" / "projects-public"
-    two = tmp_path / "levels" / "bitranox-systems"
+    two = tmp_path / "levels" / "infra"
     for d in (one, two):
         d.mkdir(parents=True)
     (one / "CLAUDE.local.md").write_text("WHAT: public repos\n", encoding="utf-8")
     (two / "CLAUDE.local.md").write_text("WHAT: projects public descriptor, wrong level\n",
                                          encoding="utf-8")
     proc = run("--target", f"projects-public={one / 'CLAUDE.local.md'}",
-               "--target", f"bitranox-systems={two / 'CLAUDE.local.md'}",
+               "--target", f"infra={two / 'CLAUDE.local.md'}",
                "--ident", "projects-public=projects public", "--json")
     assert proc.returncode == 1, (proc.stdout, proc.stderr)
     found = json.loads(proc.stdout)["data"]["findings"]
-    assert [(f["target"], f["line"]) for f in found] == [("bitranox-systems", 1)]
+    assert [(f["target"], f["line"]) for f in found] == [("infra", 1)]
 
 
 def test_zero_added_lines_is_a_refusal_not_a_clean_pass(tmp_path):

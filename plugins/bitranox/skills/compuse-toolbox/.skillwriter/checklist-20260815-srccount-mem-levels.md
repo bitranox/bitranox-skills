@@ -49,9 +49,10 @@
 ## Quality checks
 
 - [x] Contributed copy scrubbed of private specifics: the one machine-tree example in the docstring
-      and one tree name in a test docstring were replaced with generic values. Sweep for
-      `rnprivat|rotek|provmm|softdev|bitranox-systems|srvadmin|/home/|/media/` over both shipped
-      files returns nothing, with a control confirming the sweep still matches text that is present.
+      and one tree name in a test docstring were replaced with generic values. A sweep over both
+      shipped files for the authoring machine's private tree, project and user names and for
+      `/home/` and `/media/` paths returns nothing, with a control confirming the sweep still
+      matches text that is present.
 - [x] Both scripts are import-safe (work behind `main()`, run under `if __name__ == "__main__":`)
       and stdlib-only, so they import in a bare environment with only pytest.
 - [x] Both ship tests covering every main function, not import smoke tests.

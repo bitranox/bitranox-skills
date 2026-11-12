@@ -9,7 +9,7 @@ NOTIFICATION = (
     "<task-notification>\n"
     "<task-id>b6bgpwg53</task-id>\n"
     "<tool-use-id>toolu_01ABCdefGHIjklMNOpqrs</tool-use-id>\n"
-    "<output-file>/tmp/claude-1000/-media-srv-main-softdev-bitranox-systems-openvmm/tasks/"
+    "<output-file>/tmp/claude-1000/-opt-work-bitranox-tools-demo/tasks/"
     "b6bgpwg53.output</output-file>\n"
     "<status>failed</status>\n"
     "<summary>preflight did not pass</summary>\n"
@@ -67,10 +67,10 @@ def test_prose_drops_a_path_s_directories_and_stem_and_keeps_its_file_type():
     # the files-edit-* skills trigger on and what a request naming a file is usually about.
     # Dropping the whole path was the one real loss in the corpus replay: a prompt about
     # `src/bose_zonemaster/defaultconfig.toml` stopped reaching `files-edit-toml`.
-    text = "look at /tmp/claude-1000/-media-srv-main-softdev-bitranox-systems-x/tasks/a.output"
+    text = "look at /tmp/claude-1000/-opt-work-bitranox-tools-x/tasks/a.output"
     got = P.prose(text).lower()
     assert "look at" in got
-    for word in ("claude", "bitranox", "tmp", "media", "softdev", "tasks"):
+    for word in ("claude", "bitranox", "tmp", "opt", "work", "tasks"):
         assert word not in got, word
     assert "output" in got                      # the file type survives
 
@@ -165,11 +165,11 @@ def test_prose_drops_tag_markup_and_keeps_what_is_between_the_tags():
 def test_prose_drops_ids_hashes_and_slugs():
     text = ("session c68c2741-194f-44b7-9e52-11c2e5fd87b4 tool toolu_01ABCdefGHIjklMNO "
             "commit 5daaabe1f2c3d4e5a6b7c8d90123456789abcdef key "
-            "-media-srv-main-softdev-projects-public failed")
+            "-opt-work-projects-public failed")
     got = P.prose(text).lower()
     assert "session" in got and "commit" in got and "failed" in got
     for junk in ("c68c2741", "toolu", "5daaabe1f2c3d4e5a6b7c8d90123456789abcdef",
-                 "softdev", "projects"):
+                 "work", "projects"):
         assert junk not in got, junk
 
 
@@ -221,7 +221,7 @@ def test_notification_fields_read_the_stored_element_shape():
     # the exact shape from the corpus: nested child elements, one per line
     text = ("<task-notification>\n<task-id>bo23dn57j</task-id>\n"
             "<tool-use-id>toolu_01GQEKg2QdL2Hnf6oiXXaX1e</tool-use-id>\n"
-            "<output-file>/tmp/claude-1000/-media-srv-main-softdev/tasks/bo23dn57j.output"
+            "<output-file>/tmp/claude-1000/-opt-work/tasks/bo23dn57j.output"
             "</output-file>\n<status>completed</status>\n"
             "<summary>Background command \"Run the repo CI-parity gate\" completed</summary>\n"
             "</task-notification>")
