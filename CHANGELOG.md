@@ -40,6 +40,14 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   topics, which it proposes instead. A nap tags its own directory and renders its own chain. A
   tree without a topic list is consolidated as before.
 - A fact lifted or copied into another tree arrives without topics; that tree's dream tags it.
+  The crosstree dreams un-bind a misfiled fact that is placed by topic
+  (`set-topics --clear` in its source tree) before `relocate`, which refuses it otherwise, and
+  count it as one candidate although the audit lists it once per level.
+- A nap leaves a fact the routing would place by topic to the tree dream, never writes an
+  ancestor's or the tree top's topics, and in propose mode does not render a line onto the tree
+  top: it proposes it with its cost.
+- Capture onto a fact placed by topic re-runs `add` from one of the levels the refusal names;
+  the engine updates every line of the fact. A `topics:` line is never written by hand.
 - A level's `TOPICS:` line names the topics that hold for everything below it. The dream gives
   a container whose children use different stacks neither, and `topic_tagging.py questions` asks
   the judge whether a topic holds for everything below a directory rather than whether it is in

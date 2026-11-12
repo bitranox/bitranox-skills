@@ -218,6 +218,20 @@ bundled as `grep ... && add`, a hit does not stop the add, and the duplicate is 
   refuse - the derived slug is free - so `add` mints a SECOND fact, pointer and body, and says
   nothing. Read the slug off the pointer line and pass it.
 
+**A fact placed by topic has a line at SEVERAL levels and no single owner.** The `find` above
+then prints more than one file. From a level that holds none of its lines, `add` refuses with
+`placed by topic and has no line at this level; it is read at <level>, <level>`: re-run the same
+`add` with `--proj` set to any ONE of the levels the refusal names (they are equal; take the
+first). The engine then updates the body and every line of the fact, at every level, so nothing
+is left to do at the others. Do not mint a second slug for it, and do not `move` it (`move`
+refuses such a fact). A capture never changes where a fact is read, so the refusal's other
+route, `set-topics`, is not a capture's to take: when the fact now seems to belong elsewhere,
+say so in the capture's report line, for the tree dream.
+
+**Topics are never written by hand.** A new fact has no topics: `add` refuses a new fact whose
+body file carries a `topics:` line, and on an update it keeps the stored line whatever the file
+says. Only `set-topics` changes the line, and a dream chooses the topics, never a capture.
+
 **An update re-sends what `add` requires, and stores every value it is given.** `--title` and
 `--hook` (or `--hook-file`) are required on every `add`, an update included - with no hook it
 refuses with `pass --hook or --hook-file`. A new title retitles the pointer, and a different hook
