@@ -2004,6 +2004,9 @@ FRONTMATTER_HEAD_BYTES = 16384
 body of a tree must not read every body whole."""
 MAX_TOPIC_BATCH = 5000
 """Most rows one `set-topics --batch` takes: the batch is held as one dict while it is applied."""
+MAX_TOPIC_BATCH_LINE_BYTES = 4096
+"""Longest line a `set-topics --batch` file may hold, its line break counted. A row is one slug and
+at most tp.MAX_TOPICS tags of 32 characters, far under this; the reader holds one line at a time."""
 _REFUSALS_SHOWN = 20
 
 
@@ -2125,8 +2128,10 @@ def _topic_row_problem(slug, topics, anchor, allowed, owners):
         return "%r is not a valid slug" % (slug,)
     if slug not in owners:
         return "%s: no level points at it" % slug
-    if owners[slug][1]:
-        return "%s is pinned; a pinned fact stays where it is" % slug
+    if owners[slug][1] and topics is not None:
+        # Clearing (None) only removes an inert line, so a pinned fact may lose it; tagging one
+        # would change where an always-loaded rule is read.
+        return "%s is pinned; a pinned fact stays where it is (only --clear may change it)" % slug
     if topics and _outside_list(topics, allowed):
         return "%s: %s not in the topic list" % (slug, ", ".join(_outside_list(topics, allowed)))
     body = read_store_text(us.body_path(anchor, slug))
@@ -2140,7 +2145,7 @@ def set_fact_topics(proj, rows, dry_run=False):
     tuple of tags, an empty tuple (bound to no topic) or None (remove the line).
 
     Every row is checked before any is written: an invalid slug, a slug no level points at, a
-    pinned fact, a tag outside the tree's list or a body without frontmatter refuses the WHOLE call with TopicRefusal
+    pinned fact being tagged (clearing one, None, is allowed), a tag outside the tree's list or a body without frontmatter refuses the WHOLE call with TopicRefusal
     (the first refusals and their total). Each body is then read and written under the lock of
     the first level that points at it, the lock an ordinary write to that fact holds. Pointer
     lines are not touched: `render-topics` places them. Returns {'set': [slugs], 'unchanged': n}.
@@ -2284,25 +2289,54 @@ def _current_scope(proj):
 
 def _read_topic_batch(path):
     """({slug: topics}, error_message) from a JSONL batch file: one `{"slug": ..., "topics": [...]}`
-    object per line, `[]` for bound to no topic, `null` to remove the line."""
-    text, err = _read_input_file(path)
-    if err:
-        return None, err
-    rows = {}
-    for n, line in enumerate(text.split("\n"), 1):
-        if not line.strip():
-            continue
-        try:
-            obj = json.loads(line)
-            slug, raw = obj["slug"], obj["topics"]
-            if not isinstance(slug, str) or not (raw is None or isinstance(raw, list)):
-                raise TypeError("'slug' must be a string and 'topics' a list or null")
-            rows[slug] = None if raw is None else tp.normalise_topics(raw)
-        except (ValueError, KeyError, TypeError) as exc:
-            return None, "! error: %s line %d: %s" % (path, n, exc)
-        if len(rows) > MAX_TOPIC_BATCH:
-            return None, "! error: %s holds more than %d rows" % (path, MAX_TOPIC_BATCH)
-    return rows, None
+    object per line, `[]` for bound to no topic, `null` to remove the line.
+
+    Read one line at a time and never past the first problem, so what it holds is the rows taken
+    so far (at most MAX_TOPIC_BATCH) and one line of at most MAX_TOPIC_BATCH_LINE_BYTES, whatever
+    the file's size. Each of these is an error naming the line: a line over that byte cap (its
+    line break counted), a row past MAX_TOPIC_BATCH, a slug a row before already named, bytes
+    that are not UTF-8 (a leading BOM is dropped), and a line that is no such object."""
+    try:
+        fh = open(path, "rb")
+    except OSError as exc:
+        return None, "! error: cannot read %s (%s)" % (path, exc.strerror or exc)
+    rows, first_on = {}, {}
+    with fh:
+        n = 0
+        while True:
+            n += 1
+            try:
+                raw_line = fh.readline(MAX_TOPIC_BATCH_LINE_BYTES + 1)
+            except OSError as exc:
+                return None, "! error: cannot read %s (%s)" % (path, exc.strerror or exc)
+            if not raw_line:
+                return rows, None
+            if len(raw_line) > MAX_TOPIC_BATCH_LINE_BYTES:
+                return None, "! error: %s line %d is longer than %d bytes" % (
+                    path, n, MAX_TOPIC_BATCH_LINE_BYTES)
+            if n == 1 and raw_line.startswith(b"\xef\xbb\xbf"):
+                raw_line = raw_line[3:]
+            try:
+                line = raw_line.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                return None, "! error: %s line %d is not UTF-8 (byte at offset %d) - re-save it " \
+                             "as UTF-8" % (path, n, exc.start)
+            if not line.strip():
+                continue
+            try:
+                obj = json.loads(line)
+                slug, raw = obj["slug"], obj["topics"]
+                if not isinstance(slug, str) or not (raw is None or isinstance(raw, list)):
+                    raise TypeError("'slug' must be a string and 'topics' a list or null")
+                topics = None if raw is None else tp.normalise_topics(raw)
+            except (ValueError, KeyError, TypeError, RecursionError) as exc:
+                return None, "! error: %s line %d: %s" % (path, n, exc)
+            if slug in rows:
+                return None, "! error: %s line %d: slug %r is named twice (first on line %d)" % (
+                    path, n, slug, first_on[slug])
+            if len(rows) >= MAX_TOPIC_BATCH:
+                return None, "! error: %s holds more than %d rows" % (path, MAX_TOPIC_BATCH)
+            rows[slug], first_on[slug] = topics, n
 
 
 # ---- multi-tree: whole-machine discovery + scaffolding -------------------------------------------
@@ -2428,6 +2462,25 @@ def _topic_read(args):
     return 0
 
 
+TOPIC_WRITE_VERBS = frozenset({"topics-set-list", "set-topics", "set-level-topics", "set-top-topics"})
+
+
+def _is_topic_dry_run(raw):
+    """True when argv `raw` is a topic verb's `--dry-run`: it writes nothing, so it runs while
+    memory writes are off. Only `set-topics` has the flag (argparse refuses it on the others), and
+    `set_fact_topics` refuses a real write under the switch whatever this says."""
+    return raw[0] in TOPIC_WRITE_VERBS and "--dry-run" in raw[1:]
+
+
+def _topics_arg(value):
+    """(topics, error_message) for a `--topics` value: a value that is no topic list is a usage
+    error (exit 2, `! error` on stderr) like any other bad argument, not the engine declining."""
+    try:
+        return tp.parse_topics(value), None
+    except tp.InvalidTopic as exc:
+        return None, "! error: --topics %r: %s" % (value, exc)
+
+
 def _topic_write(args):
     """The four topic write verbs; refusals are raised and mapped by the caller."""
     if args.cmd == "topics-set-list":
@@ -2455,14 +2508,20 @@ def _topic_write(args):
             if not args.slug or sum(given) != 1:
                 return _input_error("! error: pass --batch, or --slug with exactly one of "
                                     "--topics, --universal, --clear")
-            rows = {args.slug: None if args.clear else
-                    tp.parse_topics("" if args.universal else args.topics)}
+            topics = None
+            if not args.clear:
+                topics, err = _topics_arg("" if args.universal else args.topics)
+                if err:
+                    return _input_error(err)
+            rows = {args.slug: topics}
         rep = set_fact_topics(args.proj, rows, dry_run=args.dry_run)
         print("%s topics on %d fact(s); %d unchanged"
               % ("would set" if args.dry_run else "set", len(rep["set"]), rep["unchanged"]))
         return 0
-    changed = set_level_topics(args.proj, tp.parse_topics(args.topics),
-                               top=args.cmd == "set-top-topics")
+    topics, err = _topics_arg(args.topics)
+    if err:
+        return _input_error(err)
+    changed = set_level_topics(args.proj, topics, top=args.cmd == "set-top-topics")
     print("topics %s: %s" % ("updated" if changed else "unchanged", args.proj))
     return 0
 
@@ -2644,7 +2703,7 @@ def _main(argv=None):
     sl = sub.add_parser("topics-stale", help="exit 1 when a level's topics need choosing again")
     sl.add_argument("--proj", required=True, help="the level dir")
     raw = sys.argv[1:] if argv is None else argv
-    if raw and raw[0] in WRITE_VERBS and sig.memory_writes_off():
+    if raw and raw[0] in WRITE_VERBS and sig.memory_writes_off() and not _is_topic_dry_run(raw):
         return _refused(sig.MEMORY_WRITES_OFF_LINE)
     args = ap.parse_args(raw)
     if getattr(args, "proj", None):
@@ -2669,7 +2728,7 @@ def _main(argv=None):
             print("! error: %s" % exc, file=sys.stderr)
             return 2
 
-    if args.cmd in ("topics-set-list", "set-topics", "set-level-topics", "set-top-topics"):
+    if args.cmd in TOPIC_WRITE_VERBS:
         try:
             return _topic_write(args)
         except (TopicRefusal, tp.InvalidTopic, topic_store.TopicStoreError) as exc:

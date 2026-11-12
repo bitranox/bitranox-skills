@@ -554,3 +554,144 @@ def test_record_level_runs_the_callers_write_only_after_the_store_checks_pass(tm
     topic_store.save_list(anchor, LIST, "jev")
     topic_store.record_level(anchor, anchor, "d", before=lambda: ran.append(1))
     assert ran == [1] and topic_store.load(anchor)["levels"] == {"": "d"}
+
+
+# ---- dry runs, batches, pinned facts and usage errors ------------------------------------------
+
+def test_a_dry_run_of_set_topics_runs_when_memory_writes_are_off(tmp_path, monkeypatch, capsys):
+    anchor, proj = _tree(tmp_path)
+    _fact(proj, "feedback-a")
+    files_before = sorted(p.name for p in (tmp_path / "tree").rglob("*"))
+    monkeypatch.setenv("BITRANOX_MEMORY_WRITES", "off")
+    assert E.main(["set-topics", "--proj", proj, "--slug", "feedback-a", "--topics", "python",
+                   "--dry-run"]) == 0
+    assert "would set topics on 1 fact(s)" in capsys.readouterr().out
+    assert _topics(anchor, "feedback-a") is None
+    assert sorted(p.name for p in (tmp_path / "tree").rglob("*")) == files_before
+    assert E.main(["set-topics", "--proj", proj, "--slug", "feedback-a", "--topics", "python"]) == 2
+    assert "refused" in capsys.readouterr().out
+    assert _topics(anchor, "feedback-a") is None
+
+
+def _batch(tmp_path, lines, name="batch.jsonl"):
+    f = tmp_path / name
+    f.write_text("".join(line + "\n" for line in lines), encoding="utf-8")
+    return str(f)
+
+
+def test_a_batch_naming_one_slug_twice_is_a_usage_error_and_writes_nothing(tmp_path, capsys):
+    anchor, proj = _tree(tmp_path)
+    _fact(proj, "feedback-a")
+    path = _batch(tmp_path, ['{"slug": "feedback-a", "topics": ["python"]}',
+                             '{"slug": "feedback-a", "topics": ["rust"]}'])
+    assert E.main(["set-topics", "--proj", proj, "--batch", path]) == 2
+    err = capsys.readouterr().err
+    assert "line 2" in err and "feedback-a" in err and "line 1" in err
+    assert _topics(anchor, "feedback-a") is None
+
+
+def test_a_batch_line_over_the_byte_cap_is_a_usage_error(tmp_path, capsys):
+    anchor, proj = _tree(tmp_path)
+    _fact(proj, "feedback-a")
+    long_line = '{"slug": "feedback-a", "topics": ["python"], "pad": "%s"}' % ("x" * E.MAX_TOPIC_BATCH_LINE_BYTES)
+    path = _batch(tmp_path, ['{"slug": "feedback-a", "topics": []}', long_line])
+    assert E.main(["set-topics", "--proj", proj, "--batch", path]) == 2
+    assert "line 2" in capsys.readouterr().err
+    assert _topics(anchor, "feedback-a") is None
+
+
+def test_a_batch_over_the_row_cap_is_refused_at_the_first_row_past_it(tmp_path):
+    rows = ['{"slug": "feedback-n%05d", "topics": []}' % i for i in range(E.MAX_TOPIC_BATCH + 1)]
+    rows_ok, err = E._read_topic_batch(_batch(tmp_path, rows))
+    assert rows_ok is None and "more than %d rows" % E.MAX_TOPIC_BATCH in err
+    rows_ok, err = E._read_topic_batch(_batch(tmp_path, rows[:-1], name="ok.jsonl"))
+    assert err is None and len(rows_ok) == E.MAX_TOPIC_BATCH
+
+
+def test_a_batch_with_a_bom_and_one_that_is_not_utf8(tmp_path):
+    f = tmp_path / "bom.jsonl"
+    f.write_bytes(b'\xef\xbb\xbf{"slug": "feedback-a", "topics": []}\n')
+    assert E._read_topic_batch(str(f)) == ({"feedback-a": ()}, None)
+    f.write_bytes(b'{"slug": "feedback-a", "topics": []}\n{"slug": "feedback-\xff", "topics": []}\n')
+    rows, err = E._read_topic_batch(str(f))
+    assert rows is None and "line 2" in err and "UTF-8" in err
+
+
+def _batch_peak(path):
+    tracemalloc.start()
+    try:
+        rows, err = E._read_topic_batch(path)
+        return rows, err, tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+
+def test_reading_a_batch_holds_one_capped_line_not_the_whole_file(tmp_path):
+    # One huge line: the reader stops at the byte cap, so its peak does not grow with the line.
+    small, large = tmp_path / "small.jsonl", tmp_path / "large.jsonl"
+    small.write_bytes(b'{"slug": "' + b"a" * 1_000_000 + b'"}\n')
+    large.write_bytes(b'{"slug": "' + b"a" * 8_000_000 + b'"}\n')
+    *_, peak_small = _batch_peak(str(small))
+    rows, err, peak_large = _batch_peak(str(large))
+    assert rows is None and "line 1" in err
+    assert peak_large < 1_000_000 and peak_large < peak_small * 2 + 50_000
+
+
+def test_reading_a_batch_past_the_row_cap_does_not_grow_with_the_file(tmp_path):
+    line = '{"slug": "feedback-n%07d", "topics": []}\n'
+    small, large = tmp_path / "small.jsonl", tmp_path / "large.jsonl"
+    small.write_text("".join(line % i for i in range(E.MAX_TOPIC_BATCH + 10)), encoding="utf-8")
+    large.write_text("".join(line % i for i in range(E.MAX_TOPIC_BATCH * 20)), encoding="utf-8")
+    *_, peak_small = _batch_peak(str(small))
+    rows, err, peak_large = _batch_peak(str(large))
+    assert rows is None and "more than" in err
+    assert peak_large < peak_small * 1.5 + 50_000
+
+
+def _pinned_tagged(tmp_path):
+    anchor, proj = _tree(tmp_path)
+    _fact(proj, "feedback-pinned", pin=True)
+    path = us.body_path(anchor, "feedback-pinned")
+    untagged = path.read_bytes()
+    us.put_body(anchor, "feedback-pinned", E._with_topics(path.read_text(encoding="utf-8"), ("python",)))
+    return anchor, proj, path, untagged
+
+
+def test_clearing_a_pinned_facts_topics_is_allowed_and_keeps_the_rest_byte_identical(tmp_path, capsys):
+    anchor, proj, path, untagged = _pinned_tagged(tmp_path)
+    pointers_before = sig.claude_local_md_path(proj).read_bytes()
+    assert E.main(["set-topics", "--proj", proj, "--slug", "feedback-pinned", "--clear"]) == 0
+    assert path.read_bytes() == untagged
+    assert sig.claude_local_md_path(proj).read_bytes() == pointers_before
+
+
+@pytest.mark.parametrize("how", [["--topics", "rust"], ["--universal"]])
+def test_setting_a_pinned_facts_topics_stays_refused(tmp_path, capsys, how):
+    anchor, proj, path, _untagged = _pinned_tagged(tmp_path)
+    before = path.read_bytes()
+    assert E.main(["set-topics", "--proj", proj, "--slug", "feedback-pinned", *how]) == 2
+    assert "is pinned" in capsys.readouterr().out
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("argv", [["set-topics", "--slug", "feedback-a", "--topics", "Not A Tag"],
+                                  ["set-level-topics", "--topics", "python, Bad Tag"],
+                                  ["set-top-topics", "--topics", "UPPER"]])
+def test_a_topics_value_that_does_not_parse_is_a_usage_error(tmp_path, capsys, argv):
+    anchor, proj = _tree(tmp_path)
+    _fact(proj, "feedback-a")
+    E.main(["set-scope", "--proj", anchor, "--scope", SCOPE])
+    E.main(["set-scope", "--proj", proj, "--scope", SCOPE])
+    capsys.readouterr()
+    where = anchor if argv[0] == "set-top-topics" else proj
+    assert E.main([argv[0], "--proj", where, *argv[1:]]) == 2
+    captured = capsys.readouterr()
+    assert "! error" in captured.err and "--topics" in captured.err
+    assert "refused" not in captured.out
+
+
+def test_a_deeply_nested_batch_line_is_a_usage_error_naming_the_line(tmp_path):
+    # Under the byte cap a line can still nest past the decoder's depth: a RecursionError there
+    # (or, on an unlimited stack, a list where an object belongs) names the line, never a traceback.
+    rows, err = E._read_topic_batch(_batch(tmp_path, ["[" * 2000 + "]" * 2000]))
+    assert rows is None and "line 1" in err
