@@ -38,7 +38,9 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   pointer line of every fact bound to a topic: at each level that has one of its topics while no
   level above it does, and at the tree top when no level has one. Lines are added before any is
   removed, a pinned or untagged fact is never touched, and a tree without a topic list is left
-  as it is.
+  as it is. A level's block is held to `MAX_RENDER_BLOCK_BYTES` (1 MiB): a render that would
+  pass it writes nothing and names the repair (a `set-topics --batch` rebind, a `move` of the
+  lines that stay, or a tree-scope render).
 - `reconcile_memory_index.py --check-tree` reports `render drift` (a line missing, differing
   from its body, or placed elsewhere), and `--check` a `repeated line` that a level above
   already holds.
@@ -56,12 +58,23 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 - `set-topics` refuses to bind a fact whose body has no `title:` or `description:`, or whose
   pointer line differs from what its body renders. Un-binding a fact that has lines at several
   levels leaves it one line, at the tree top.
+- `move`, and a cross-tree `relocate`, refuse a set of lines that would leave the target level's
+  block past `MAX_RENDER_BLOCK_BYTES` and larger than it is, naming how many of the lines fit.
+- `add`, `move`, `relocate` and `set-scope` refuse a level inside a directory the level walk
+  prunes (a virtualenv, a vendored, build or cache dir, the store), naming the call at a level
+  outside it.
+- `render-topics --dry-run`, `set-topics --dry-run` and `--check-tree` take no lock and create
+  no file, so a check runs on a read-only tree and never waits behind a peer's lock.
 
 ### Fixed
 
 - Level walks skip the backup directory a slug-store migration leaves under the anchor, so its
   copied pointer files are no longer read as live levels (`--check-tree`, `lint --tree`,
   `set-topics`, `mem_levels.py`, `factedit.py`'s owner search).
+- Every level walk (the engine's, `--check-tree`, `mem_levels.py`, `store_manifest.py`,
+  `dedup_scan.py`) prunes the same directory names, now including virtualenvs named by a prefix
+  (`.venv-3.12`, `.venv-win`, `venv-<x>`, `venv_<x>`) and `target`, so a pointer block inside
+  one is no longer read as a level and `render-topics` adds no line there.
 
 ## [11.2.2]
 
