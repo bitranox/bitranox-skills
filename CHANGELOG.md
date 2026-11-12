@@ -30,6 +30,17 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.4.0]
+
+### Changed
+
+- In a tree that has a topic list, the tree dream tags a rule that holds wherever a stack or
+  tool is used and lets `render-topics` place it, instead of moving it up to a common parent;
+  it tags each level whose topics are missing or out of date and never changes the tree top's
+  topics, which it proposes instead. A nap tags its own directory and renders its own chain. A
+  tree without a topic list is consolidated as before.
+- A fact lifted or copied into another tree arrives without topics; that tree's dream tags it.
+
 ## [11.3.0]
 
 ### Added
