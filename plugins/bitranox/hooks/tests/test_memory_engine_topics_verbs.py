@@ -658,7 +658,7 @@ def _pinned_tagged(tmp_path):
 
 
 def test_clearing_a_pinned_facts_topics_is_allowed_and_keeps_the_rest_byte_identical(tmp_path, capsys):
-    anchor, proj, path, untagged = _pinned_tagged(tmp_path)
+    _anchor, proj, path, untagged = _pinned_tagged(tmp_path)
     pointers_before = sig.claude_local_md_path(proj).read_bytes()
     assert E.main(["set-topics", "--proj", proj, "--slug", "feedback-pinned", "--clear"]) == 0
     assert path.read_bytes() == untagged
@@ -667,7 +667,7 @@ def test_clearing_a_pinned_facts_topics_is_allowed_and_keeps_the_rest_byte_ident
 
 @pytest.mark.parametrize("how", [["--topics", "rust"], ["--universal"]])
 def test_setting_a_pinned_facts_topics_stays_refused(tmp_path, capsys, how):
-    anchor, proj, path, _untagged = _pinned_tagged(tmp_path)
+    _anchor, proj, path, _untagged = _pinned_tagged(tmp_path)
     before = path.read_bytes()
     assert E.main(["set-topics", "--proj", proj, "--slug", "feedback-pinned", *how]) == 2
     assert "is pinned" in capsys.readouterr().out

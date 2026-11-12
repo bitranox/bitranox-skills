@@ -1477,6 +1477,17 @@ def scaffold(proj):
 
 # ---- tree-wide sweeps (curated-level walk shared by the engine + reconcile) ----------------------
 
+def _without_topics_line(data):
+    """(bytes, dropped): a body's bytes with its frontmatter `topics:` line removed, and whether
+    there was one. Only the leading frontmatter is read, so a `topics:` line in the prose stays.
+    Decoded with surrogateescape, so bytes that are not UTF-8 and CRLF line ends come back as
+    they were."""
+    text = data.decode("utf-8", "surrogateescape")
+    if _body_topics_line(text) is None:
+        return data, False
+    return _with_topics_line(text, None).encode("utf-8", "surrogateescape"), True
+
+
 def relocate_entry(from_level, to_level, slug, force=False):
     """Relocate a fact to another level, INCLUDING across knowledge trees.
 
@@ -1496,11 +1507,13 @@ def relocate_entry(from_level, to_level, slug, force=False):
     It also refuses when any level of the target tree OTHER than the target level already points at
     the slug: that level owns it, whatever its body. The archived source body never replaces an
     earlier archived body of the same slug.
-    Returns {"slug","from","to","cross_tree","relocated","refused","warnings"}.
+    A cross-tree copy drops the body's frontmatter `topics:` line (topics are tagged against one
+    tree's closed list) and says so in `notes`; a same-tree move leaves the body untouched.
+    Returns {"slug","from","to","cross_tree","relocated","refused","warnings","notes"}.
     """
     sig.refuse_if_memory_writes_off()
     rep = {"slug": slug, "from": str(from_level), "to": str(to_level),
-           "cross_tree": False, "relocated": False, "refused": None, "warnings": []}
+           "cross_tree": False, "relocated": False, "refused": None, "warnings": [], "notes": []}
     src, dst = Path(from_level).resolve(), Path(to_level).resolve()
     a_from, a_to = us.resolve_anchor(str(src)), us.resolve_anchor(str(dst))
     if a_from is None or a_to is None:
@@ -1548,11 +1561,20 @@ def relocate_entry(from_level, to_level, slug, force=False):
     # sees only the target level. A different body there is a different fact; an identical one is
     # the residue of an interrupted relocate, which re-running completes.
     src_body, dst_body = us.body_path(a_from, slug), us.body_path(a_to, slug)
+    try:
+        src_data = src_body.read_bytes() if src_body.is_file() else b""
+    except OSError as exc:
+        rep["refused"] = "could not read the body %s: %s" % (src_body, exc)
+        return rep
+    # Topics are tagged against ONE tree's closed list, so the copy leaves them behind.
+    data, dropped_topics = _without_topics_line(src_data)
     if dst_body.is_file():
         # BYTES, not text: whether two files are one fact needs no decoding, and a text compare
-        # crashed on a target body that was not UTF-8 instead of refusing to land on it.
+        # crashed on a target body that was not UTF-8 instead of refusing to land on it. Either
+        # copy is the residue of an interrupted relocate: with its topics line dropped, or one
+        # made before relocate dropped it.
         try:
-            same = dst_body.read_bytes() == (src_body.read_bytes() if src_body.is_file() else b"")
+            same = dst_body.read_bytes() in (data, src_data)
         except OSError as exc:
             rep["refused"] = "could not compare with the target tree's body %s: %s" % (dst_body, exc)
             return rep
@@ -1574,11 +1596,10 @@ def relocate_entry(from_level, to_level, slug, force=False):
         rep["warnings"].append("relocated despite dangling inbound [[refs]]: %s" % what)
 
     # COPY-THEN-DROP (same crash-safety direction as move_entry): a crash between the two leaves a
-    # visible duplicate, never a lost fact. The body file is copied VERBATIM - it is already framed,
-    # and re-writing it through add_or_update_entry would double-wrap the frontmatter. As BYTES: a
-    # text round-trip rewrote a CRLF body's line endings on the way across.
+    # visible duplicate, never a lost fact. The body file is copied VERBATIM but for its topics
+    # line - it is already framed, and re-writing it through add_or_update_entry would double-wrap
+    # the frontmatter. As BYTES: a text round-trip rewrote a CRLF body's line endings on the way.
     try:
-        data = src_body.read_bytes() if src_body.is_file() else b""
         dst_body.parent.mkdir(parents=True, exist_ok=True)
         dst_body.write_bytes(data)
     except OSError as exc:
@@ -1587,6 +1608,9 @@ def relocate_entry(from_level, to_level, slug, force=False):
     us.add_pointer(str(dst), slug=slug, title=entry.title, hook=entry.hook,
                    pin=entry.pin)
     _drop_pointer(str(src), slug)
+    if dropped_topics:
+        rep["notes"].append("dropped the topics: line of %s - topics are tagged against one tree's "
+                            "list; tag it in the target tree with set-topics" % slug)
 
     # Archive the source body only once nothing in the source tree points at the slug any more.
     if not _other_levels_pointing_in(a_from, slug):
@@ -2783,6 +2807,8 @@ def _main(argv=None):
             return _refused(rep["refused"])
         for w in rep["warnings"]:
             print("~ warning: %s" % w)
+        for note in rep.get("notes", []):
+            print("~ note: %s" % note)
         print("relocated %s: %s -> %s (%s)" % (
             rep["slug"], rep["from"], rep["to"],
             "CROSS-TREE: body moved + source archived" if rep["cross_tree"]

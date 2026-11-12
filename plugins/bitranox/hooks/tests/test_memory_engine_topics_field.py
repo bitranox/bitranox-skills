@@ -153,3 +153,98 @@ def test_the_library_create_raises_and_a_topics_line_in_the_prose_is_no_frame(tm
     slug = E.add_or_update_entry(proj, title="T", hook=HOOK, slug="s",
                                  body=FRAME + "topics: [python]\n")
     assert E._body_topics(_stored(anchor, slug)) is None
+
+
+# ---- a topics: line in the prose is no data ----------------------------------------------------
+
+PROSE_LINE = "topics: [rust]"
+
+
+def _with_prose_line(tmp_path):
+    anchor, proj = _tree(tmp_path)
+    (Path(anchor) / us.STORE_DIRNAME / "topics.json").write_text(
+        '{"version": 1, "tagger": "jev", "topics": {"python": "P", "rust": "R"}, "levels": {}}\n',
+        encoding="utf-8")
+    slug = E.add_or_update_entry(proj, title="T", hook=HOOK, body="first\n\n%s\n" % PROSE_LINE,
+                                 type_="feedback")
+    return anchor, proj, slug
+
+
+def test_set_topics_and_clear_touch_only_the_frame_never_a_prose_topics_line(tmp_path):
+    anchor, proj, slug = _with_prose_line(tmp_path)
+    assert E._body_topics(_stored(anchor, slug)) is None
+    E.set_fact_topics(proj, {slug: ("python",)})
+    stored = _stored(anchor, slug)
+    assert E._body_topics(stored) == ("python",) and stored.count(PROSE_LINE) == 1
+    E.set_fact_topics(proj, {slug: None})
+    stored = _stored(anchor, slug)
+    assert E._body_topics(stored) is None and stored.count("topics:") == 1
+    assert stored.count(PROSE_LINE) == 1
+
+
+def test_an_update_neither_lifts_a_prose_topics_line_into_the_frame_nor_drops_it(tmp_path):
+    anchor, proj, slug = _with_prose_line(tmp_path)
+    E.add_or_update_entry(proj, title="T", hook=HOOK, slug=slug,
+                          body="second\n\n%s\n" % PROSE_LINE)
+    stored = _stored(anchor, slug)
+    assert E._body_topics_line(stored) is None and stored.count(PROSE_LINE) == 1
+
+
+# ---- a fact leaving its tree leaves its topics behind ------------------------------------------
+
+def _tag_raw(anchor, slug, line):
+    stored = _stored(anchor, slug)
+    assert stored.count("\ntitle: T\n") == 1
+    us.put_body(anchor, slug, stored.replace("\ntitle: T\n", "\ntitle: T\n%s\n" % line))
+
+
+@pytest.mark.parametrize("line", ["topics: [python]", "topics: []", "topics: [Not A Tag]"])
+def test_a_cross_tree_relocate_drops_the_topics_line_and_says_so(two_trees, capsys, line):
+    src, dst = str(two_trees.proj_a), str(two_trees.proj_b)
+    slug = E.add_or_update_entry(src, title="T", hook=HOOK, body="prose\n\n%s\n" % PROSE_LINE,
+                                 type_="feedback", slug="feedback-moving")
+    _tag_raw(us.resolve_anchor(src), slug, line)
+    untagged = _stored(us.resolve_anchor(src), slug).replace(line + "\n", "")
+    assert E.main(["relocate", "--from-level", src, "--to-level", dst, "--slug", slug]) == 0
+    out = capsys.readouterr().out
+    assert "topics" in out and "dropped" in out
+    moved = _stored(us.resolve_anchor(dst), slug)
+    assert moved == untagged and moved.count(PROSE_LINE) == 1
+
+
+def test_a_cross_tree_relocate_of_an_untagged_fact_copies_it_verbatim_and_says_nothing(two_trees, capsys):
+    src, dst = str(two_trees.proj_a), str(two_trees.proj_b)
+    slug = E.add_or_update_entry(src, title="T", hook=HOOK, body="prose\n\n%s\n" % PROSE_LINE,
+                                 type_="feedback", slug="feedback-moving")
+    before = us.body_path(us.resolve_anchor(src), slug).read_bytes()
+    assert E.main(["relocate", "--from-level", src, "--to-level", dst, "--slug", slug]) == 0
+    assert "dropped" not in capsys.readouterr().out
+    assert us.body_path(us.resolve_anchor(dst), slug).read_bytes() == before
+
+
+def test_a_cross_tree_relocate_keeps_crlf_line_endings_when_it_drops_the_line(two_trees):
+    src, dst = str(two_trees.proj_a), str(two_trees.proj_b)
+    slug = E.add_or_update_entry(src, title="T", hook=HOOK, body="prose", type_="feedback",
+                                 slug="feedback-moving")
+    path = us.body_path(us.resolve_anchor(src), slug)
+    tagged = E._with_topics(path.read_text(encoding="utf-8"), ("python",))
+    path.write_bytes(tagged.replace("\n", "\r\n").encode("utf-8"))
+    E.relocate_entry(src, dst, slug)
+    moved = us.body_path(us.resolve_anchor(dst), slug).read_bytes()
+    assert b"topics:" not in moved and moved == E._with_topics(tagged, None).replace("\n", "\r\n").encode("utf-8")
+
+
+def test_a_same_tree_move_keeps_the_topics_line(tmp_path):
+    anchor = tmp_path / "tree"
+    proj = anchor / "proj"
+    proj.mkdir(parents=True)
+    for d in (anchor, proj):
+        (d / "CLAUDE.md").write_text("x\n", encoding="utf-8")
+    (anchor / us.STORE_DIRNAME).mkdir()
+    slug = E.add_or_update_entry(str(proj), title="T", hook=HOOK, body="prose", type_="feedback",
+                                 slug="feedback-staying")
+    _tag_raw(str(anchor), slug, "topics: [python]")
+    before = us.body_path(anchor, slug).read_bytes()
+    rep = E.relocate_entry(str(proj), str(anchor), slug)
+    assert rep["relocated"] and not rep["cross_tree"]
+    assert us.body_path(anchor, slug).read_bytes() == before
