@@ -30,6 +30,18 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.2.2]
+
+### Changed
+
+- `coding-python-logging` follows lib_log_rich 8.2.1: guard `shutdown()` in a CLI's `main()` so a
+  sink that stalls past `queue_stop_timeout` cannot replace the command's exit code with a
+  traceback; what a failed shutdown leaves (runtime still initialised, a later retry works) and how
+  to test the guard against the binding `main()` calls.
+- `devops-bmk` follows bmk 3.33.3: a floor raised by hand to a release PyPI's JSON does not list
+  yet is kept and reported; bmk 3.33.2 lowered it, so check `git diff pyproject.toml` after a gate
+  on that version and restore the floor.
+
 ## [11.2.1]
 
 ### Changed
