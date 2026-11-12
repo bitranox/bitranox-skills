@@ -334,12 +334,17 @@ def body_file(anchor: Path, slug: str) -> Path:
 
 
 # Dirs that hold vendored or generated trees, never a memory level. Walking them is most of the
-# cost of a tree-wide search, and a CLAUDE.local.md inside one is a copy, not an owner.
-_SKIP_DIRS = frozenset({".git", ".hg", ".svn", "node_modules", "__pycache__", STORE_DIRNAME,
-                        ".tox", ".nox", ".mypy_cache", ".pytest_cache", ".ruff_cache", "venv",
-                        "site-packages", "target"})
-# The virtualenv shapes of the engine's `uuid_store.VENV_DIR_PREFIXES`, copied for the reason
-# `_skip_dir` gives: `.venv-3.12`, `venv-<user>` and `venv_<project>` all occur on real trees.
+# cost of a tree-wide search, and a CLAUDE.local.md inside one is a copy, not an owner. A copy of
+# the engine's `uuid_store.NON_LEVEL_DIRNAMES` (`self_improve_signals.VENDOR_DIRNAMES` plus
+# `target`), for the reason `_skip_dir` gives. It must stay EQUAL to it, not merely overlap: a name
+# only this side skips hides an owner the engine's walk reports, and a name only the engine skips
+# reports an owner the engine never renders. tests/test_factedit.py pins the two name by name.
+_SKIP_DIRS = frozenset({".git", "node_modules", ".venv", "venv", "__pycache__", "site-packages",
+                        ".mypy_cache", ".pytest_cache", ".tox", ".idea", ".ruff_cache", "dist",
+                        "build", ".eggs", "target"})
+# The virtualenv shapes of the engine's `uuid_store.VENV_DIR_PREFIXES`, plus the store and every
+# `<store>-*` sibling of it, copied likewise: `.venv-3.12`, `venv-<user>` and `venv_<project>` all
+# occur on real trees.
 _SKIP_PREFIXES = (".venv", "venv-", "venv_", STORE_DIRNAME)
 SEARCH_BUDGET_S = 10.0
 

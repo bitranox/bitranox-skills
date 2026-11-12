@@ -24,6 +24,7 @@ from pathlib import Path
 
 import factedit as FE  # tests/conftest.py puts the skill dir on sys.path
 import pytest
+import uuid_store as US  # and the hooks dir, so the engine's own name rule can be compared
 
 # Resolved from the imported module, never a hard-coded layout: the tool sits at the skill
 # root here and in a tools/ dir in the personal toolbox it came from, and a path constant
@@ -1177,3 +1178,29 @@ def test_shrink_problem_states_both_lengths():
 def test_the_frame_is_not_counted_as_prose():
     framed = "---\nname: a\ndescription: " + "d" * 500 + "\n---\n\n" + "p" * 100
     assert FE.shrink_problem(framed, "q" * 80) is None
+
+
+# ---- the owner search prunes by the engine's name rule -----------------------------------------
+# factedit keeps its own copy of the rule because it runs against whichever engine --engine names;
+# these pin that copy to the shipped engine's, name by name, in both directions.
+
+ORDINARY_NAMES = ("venvnotes", "myvenv", "venv3", "src", "docs", "projects", "docs.venv")
+
+
+def _parity_names():
+    shaped = (".venv", ".venv-3.12", ".venv-win", ".venv_x", "venv", "venv-foo", "venv_bar",
+              US.STORE_DIRNAME, US.STORE_DIRNAME + "-migration-backup-1")
+    return sorted(set(US.NON_LEVEL_DIRNAMES) | set(FE._SKIP_DIRS) | set(shaped)
+                  | set(ORDINARY_NAMES))
+
+
+def test_the_owner_search_skips_every_name_the_engine_rule_prunes():
+    pruned = [n for n in _parity_names() if US.is_non_level_dirname(n)]
+    assert "target" in pruned and "dist" in pruned  # control: the engine set reached the check
+    assert [n for n in pruned if not FE._skip_dir(n)] == []
+
+
+def test_the_owner_search_walks_every_name_the_engine_rule_walks():
+    walked = [n for n in _parity_names() if not US.is_non_level_dirname(n)]
+    assert set(ORDINARY_NAMES) <= set(walked)
+    assert [n for n in walked if FE._skip_dir(n)] == []
