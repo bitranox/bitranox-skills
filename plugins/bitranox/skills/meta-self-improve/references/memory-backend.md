@@ -189,7 +189,10 @@ other lines differ from the text its topics were set on.
 
 **A fact placed by topic.** A fact is placed by topic when its body is bound to at least one
 topic (a non-empty `topics:` line), holds the `title:` and `description:` its line is built from,
-has a line at some level, and no line of it is pinned at any level. Its lines then belong to
+has a line at some level, and no line of it is pinned or a legacy `uuid:` line at any level
+(either one keeps the whole fact where its lines are, so the tree and chain renders,
+`--check-tree`, `mem_levels.py`, `ref_map.py` and `topic_tagging.py` all treat it as unplaced, and
+an un-bind leaves its lines as they are). Its lines then belong to
 `render-topics`: one line at each level that has one of its topics while no level above it does,
 and one line at the tree top when no level has any of them, each built from the body's `title:`
 and `description:`. Every other line (pinned, legacy, unbound, `topics: []`) is never added,

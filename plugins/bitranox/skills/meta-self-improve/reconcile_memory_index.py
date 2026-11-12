@@ -802,8 +802,9 @@ def render_drift(anchor):
 
 
 class _TreePins:
-    """The slugs pinned at any level of a tree, read on first use per anchor: one tree walk, one
-    record per pinned pointer. A pinned fact is never placed by topic."""
+    """The slugs with a pinned or legacy line at any level of a tree (the engine's
+    `_unplaceable_slugs`), read on first use per anchor: one tree walk, one record per such
+    pointer. Such a fact is never placed by topic."""
 
     def __init__(self):
         self._by_anchor = {}
@@ -811,14 +812,14 @@ class _TreePins:
     def __call__(self, anchor):
         key = str(anchor)
         if key not in self._by_anchor:
-            self._by_anchor[key] = ME._pinned_slugs(ME.curated_levels_under(key))
+            self._by_anchor[key] = ME._unplaceable_slugs(ME.curated_levels_under(key))
         return self._by_anchor[key]
 
 
 def _placed_by_topic(anchor, slug, pins):
     """True when the renderer manages `slug` (the engine's own test): its body carries a non-empty
-    `topics:` line and the title and description a line is built from, and no level pins it
-    (`pins(anchor)`, asked only for such a body). Its lines then stand wherever the levels' topics
+    `topics:` line and the title and description a line is built from, and no level pins it or
+    holds a legacy line of it (`pins(anchor)`, asked only for such a body). Its lines then stand wherever the levels' topics
     place them, at levels a citing fact's chain need not include. Reads one body head."""
     if not us.is_valid_slug(slug):
         return False
@@ -894,7 +895,7 @@ def check_tree(anchor):
             cslug = _canon(e.slug)
             slug_levels.setdefault(cslug, []).append(lvl)
             all_targets.add(cslug)
-            if e.pin:
+            if e.pin or e.legacy:           # the engine's rule: such a fact is never placed
                 pinned.add(cslug)
             if not e.legacy and ME._managed_topics(e.slug, bodies.get(e.slug, ""), ()) is not None:
                 tagged.add(cslug)
@@ -906,7 +907,7 @@ def check_tree(anchor):
                 ref = _ref_slug(m.group(1))
                 if ref and ref != cslug:
                     ref_sources.append((lvl, e.slug, ref))
-    # A MANAGED fact (topic-bound, never pinned) has one line per level it is placed at: those
+    # A MANAGED fact (topic-bound, no line pinned or legacy) has one line per level it is placed at: those
     # copies are the renderer's, and `render_drift` below says whether they are the right ones.
     managed = tagged - pinned
     duplicates = {s: sorted(lv) for s, lv in slug_levels.items() if len(lv) > 1 and s not in managed}

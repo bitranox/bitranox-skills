@@ -42,7 +42,7 @@ never holds a '/', so the two kinds cannot be confused).
 
 A slug at several levels is a duplicate pointer, unless the engine places it by topic (its body is
 bound to a topic and carries the title and description a line is built from, and no level pins
-it): such a fact has one line per level its topics place it at, listed as `placed by topic`.
+it or holds a legacy `uuid:` line of it): such a fact has one line per level its topics place it at, listed as `placed by topic`.
 
 Read-only: it never writes to the store. Writes go through the engine (`memory_engine.py`).
 """
@@ -259,8 +259,11 @@ def scan(root: str | Path) -> Report:
         for s in slugs:
             pointed.setdefault(s, []).append(lvl)
     several = {s: sorted(l) for s, l in pointed.items() if len(set(l)) > 1}
+    # The engine's rule (`memory_engine._unplaceable_slugs`): a pinned or legacy line anywhere
+    # keeps a fact from being placed, so its lines at several levels stay duplicates.
     report.placed = {s: l for s, l in several.items()
-                     if s not in report.pinned and _bound_to_a_topic(root, s)}
+                     if s not in report.pinned and s not in report.legacy
+                     and _bound_to_a_topic(root, s)}
     report.duplicates = {s: l for s, l in several.items() if s not in report.placed}
 
     bodies, sharded = _store_bodies(root / STORE_DIR / "facts", report.unreadable)

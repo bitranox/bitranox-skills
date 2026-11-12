@@ -126,7 +126,8 @@ def _copies_of(anchor, slug):
 def _placed_slugs(anchor, slugs):
     """The members of `slugs` whose facts are placed by topic: what the renderer manages, a body
     bound to at least one topic that a line can be built from (`title:` and `description:`),
-    with a line at some level and no line of it pinned at any level. A bound fact the renderer
+    with a line at some level and no line of it pinned or legacy (`uuid:`) at any level (see
+    `_unplaceable_slugs`). A bound fact the renderer
     does not manage stays where its lines are, so the verbs that place lines by hand still take
     it, and the refusals of render-topics and set-topics offer to move exactly those lines.
     Reads one body head per slug; walks the tree's levels once, and only when a body is
@@ -138,14 +139,14 @@ def _placed_slugs(anchor, slugs):
             managed.add(slug)
     if not managed:
         return set()
-    seen, pinned = set(), set()
+    seen, fixed = set(), set()
     for level in curated_levels_under(anchor):
         for ptr in us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level)))[1]:
             if ptr.slug in managed:
                 seen.add(ptr.slug)
-                if ptr.pin:
-                    pinned.add(ptr.slug)
-    return seen - pinned
+                if _keeps_in_place(ptr):
+                    fixed.add(ptr.slug)
+    return seen - fixed
 
 
 def _placed_copies(anchor, slug):
@@ -155,7 +156,15 @@ def _placed_copies(anchor, slug):
     if head is None or _managed_topics(slug, head, ()) is None:
         return []
     copies = _copies_of(anchor, slug)
-    return [] if any(ptr.pin for _level, ptr in copies) else copies
+    return [] if any(_keeps_in_place(ptr) for _level, ptr in copies) else copies
+
+
+def _keeps_in_place(ptr):
+    """True when the line `ptr` keeps its fact from being placed by topic, wherever it is: a
+    pinned line (an always-loaded rule stays where it was put) or a legacy `uuid:` line (the
+    renderer builds a line from the body alone and never drops a legacy one, so a tree render
+    would add lines no render or check could account for beside it)."""
+    return ptr.pin or ptr.legacy
 
 
 def _same_level(a, b):
@@ -2875,14 +2884,15 @@ def topic_level_map(anchor, levels=None):
     return tp.LevelMap(declared), dirs
 
 
-def _pinned_slugs(levels):
-    """The slugs pinned at any of `levels`: one record per pinned pointer."""
-    pinned = set()
+def _unplaceable_slugs(levels):
+    """The slugs with a pinned or legacy line at any of `levels` (`_keeps_in_place`): the facts
+    the renderer never places, whatever their bodies' `topics:` say. One record per such pointer."""
+    fixed = set()
     for level in levels:
         for ptr in us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level)))[1]:
-            if ptr.pin:
-                pinned.add(ptr.slug)
-    return pinned
+            if _keeps_in_place(ptr):
+                fixed.add(ptr.slug)
+    return fixed
 
 
 def _comparable_line(ptr):
@@ -3071,7 +3081,10 @@ def _collapse_plan(anchor, rows, owners):
     reports. Raises CollapseTooLarge, before anything is written, when the lines the collapse adds
     at the top would take its block past MAX_RENDER_BLOCK_BYTES. Holds the holders of each such
     row (batch rows times copies)."""
-    unbound = {slug for slug in rows if not rows[slug] and not owners[slug][1]}
+    # A fact with a pinned or legacy line was never placed by topic (`_keeps_in_place`), so its
+    # lines are where they were put, not copies a collapse may fold.
+    unbound = {slug for slug in rows if not rows[slug] and not owners[slug][1]
+               and not any(ptr.legacy for _level, ptr in owners[slug][2].values())}
     if not unbound:
         return {}
     plan = {slug: copy for slug, copy in _copy_levels(anchor, unbound).items()
@@ -3118,7 +3131,7 @@ def _top_split(anchor, top, unbound):
     levels = curated_levels_under(anchor)
     level_map = topic_level_map(anchor, levels)[0]
     place = _Placer(level_map)
-    split = _block_split(anchor, _pinned_slugs(levels), top,
+    split = _block_split(anchor, _unplaceable_slugs(levels), top,
                          lambda slug, topics: "placed" if tp.TOP in place(topics) else "stale",
                          claim=lambda slug: "fixed" if slug in unbound and read_body_topics(
                              us.body_path(anchor, slug)) else None)
@@ -3360,7 +3373,9 @@ class _Placer:
 
 def _managed_topics(slug, head, pinned):
     """The topics a body head binds its fact to when the renderer manages it, else None: managed
-    means a non-empty `topics:` line, no pointer of it pinned, and a body a line can be built from."""
+    means a non-empty `topics:` line, a slug not in `pinned` (the slugs with a pinned or legacy
+    line anywhere, `_unplaceable_slugs`, or () when the caller judges that apart), and a body a
+    line can be built from."""
     topics = _body_topics(head)
     if not topics or slug in pinned or _line_from_head(slug, head) is None:
         return None
@@ -3717,8 +3732,9 @@ def render_topics(proj, scope="tree", dry_run=False, write=None, *,
                   lock_timeout=PLACEMENT_LOCK_TIMEOUT_S):
     """Place the pointer lines of every MANAGED fact of `proj`'s tree by topic.
 
-    A fact is managed when its body's `topics:` is non-empty, no pointer of it is pinned, and its
-    body holds the `title:` and `description:` a line is built from. Every other line is never
+    A fact is managed when its body's `topics:` is non-empty, no pointer of it is pinned or
+    legacy (`uuid:`) at any level, and its body holds the `title:` and `description:` a line is
+    built from. Every other line is never
     added, dropped or rewritten here. `scope` is 'tree' (every level; adds, then removes) or
     'chain' (only the levels from `proj` up to the tree top: a line a level above holds is not
     added below it and is dropped there, and a line merely placed elsewhere stays, for the tree
@@ -3764,7 +3780,7 @@ def _render_held(anchor, proj, scope, dry_run, write):
     if not any(_level_parts(anchor, level) == tp.TOP for level in levels):
         raise TopicRefusal(["the tree top %s has no pointer block for the lines that fall back to "
                             "it (ensure-memory-structure writes one)" % anchor])
-    pinned = _pinned_slugs(levels)
+    pinned = _unplaceable_slugs(levels)     # pinned or legacy anywhere: never placed
     place, adds = _Placer(level_map), _add_levels(level_map)
     rep = {"list": True, "scope": scope, "dry_run": bool(dry_run), "levels": {}}
     write = write or us.write_if_changed

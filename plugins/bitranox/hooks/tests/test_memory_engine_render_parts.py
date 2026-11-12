@@ -149,12 +149,12 @@ def test_a_topics_line_that_does_not_parse_refuses_the_map_and_names_the_level(t
     assert level in str(exc.value) and "does not parse" in str(exc.value)
 
 
-def test_pinned_slugs_are_found_at_any_level(tmp_path):
+def test_pinned_slugs_are_unplaceable_at_any_level(tmp_path):
     anchor = _tree(tmp_path)
     level = _level(anchor, "a")
     _fact(level, "feedback-pinned", pin=True)
     _fact(anchor, "feedback-free")
-    assert E._pinned_slugs(E.curated_levels_under(anchor)) == {"feedback-pinned"}
+    assert E._unplaceable_slugs(E.curated_levels_under(anchor)) == {"feedback-pinned"}
 
 
 # ---- set-topics: a fact is bound only when its line equals what its body renders ---------------

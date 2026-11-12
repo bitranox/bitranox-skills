@@ -37,10 +37,11 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 - `memory_engine.py render-topics --proj D --scope tree|chain [--dry-run] [--json]` places the
   pointer line of every fact bound to a topic: at each level that has one of its topics while no
   level above it does, and at the tree top when no level has one. Lines are added before any is
-  removed, a pinned or untagged fact is never touched, and a tree without a topic list is left
-  as it is. A level's block is held to `MAX_RENDER_BLOCK_BYTES` (1 MiB): a render that would
-  leave a block past it and larger than it is writes nothing and names the repair (a
-  `set-topics --batch` rebind, a `move` of the lines that stay, or a tree-scope render).
+  removed, a pinned or untagged fact, and one with a legacy `uuid:` line at any level, is never
+  touched, and a tree without a topic list is left as it is. A level's block is held to
+  `MAX_RENDER_BLOCK_BYTES` (1 MiB): a render that would leave a block past it and larger than it
+  is writes nothing and names the repair (a `set-topics --batch` rebind, a `move` of the lines
+  that stay, or a tree-scope render).
 - `reconcile_memory_index.py --check-tree` reports `render drift` (a line missing, differing
   from its body, or placed elsewhere), and `--check` a `repeated line` that a level above
   already holds.

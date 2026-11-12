@@ -131,9 +131,9 @@ error. A level reached through a symlink is named by its own path below the tree
 the tree's levels prunes (`.git`, `node_modules`, `target`, a virtualenv such as `.venv-3.12`,
 the store, ...): one name rule, `uuid_store.is_non_level_dirname`, shared by every such walk.
 
-A fact bound to a topic, with `title:` and `description:` in its body and no line pinned, is
-placed by topic: `render-topics` gives it one line at each level that has one of its topics
-while no level above it does, and one at the tree top when none does. `--scope tree` renders
+A fact bound to a topic, with `title:` and `description:` in its body and no line pinned or
+legacy (`uuid:`) at any level, is placed by topic: `render-topics` gives it one line at each
+level that has one of its topics while no level above it does, and one at the tree top when none does. `--scope tree` renders
 every level; `--scope chain` only the levels from `--proj` up to the tree top, adding no line
 below a level that holds it and dropping such a lower copy. `--dry-run` writes nothing and takes
 no lock. One level's block may hold at most 1 MiB of lines; a render, `add`, `amend-pinned`,

@@ -108,15 +108,17 @@ def read_copies(root: Path) -> dict[str, list[str]]:
 
 def read_placed(root: Path, slugs) -> set[str]:
     """The members of `slugs` the engine places by topic (reconcile's test, the engine's rule): a
-    topic-bound body with a title and description, pinned at no level. Its lines stand where the
-    levels' topics put them, and a ref to it resolves through the central body wherever they
-    are. Callers pass slugs that have a line (the engine's rule needs one); a slug with one line
+    topic-bound body with a title and description, with no pinned or legacy line at any level. Its
+    lines stand where the levels' topics put them, and a ref to it resolves through the central
+    body wherever they are. Callers pass slugs that have a line (the engine's rule needs one); a slug with one line
     is judged like one with several. One body head per member of `slugs`."""
     if not slugs:
         return set()
-    pinned = {p.slug for _level, pointers in _pointers(root) for p in pointers if p.pin}
+    # `_pointers` leaves legacy lines out, and a legacy line keeps a fact unplaced just as a pin
+    # does: the engine's own set, from the engine's walk.
+    fixed = ME._unplaceable_slugs(ME.curated_levels_under(root))  # noqa: SLF001
     return {slug for slug in slugs
-            if _rmi._placed_by_topic(root, slug, lambda _anchor: pinned)}  # noqa: SLF001
+            if _rmi._placed_by_topic(root, slug, lambda _anchor: fixed)}  # noqa: SLF001
 
 
 def read_hooks(root: Path) -> dict[str, str]:

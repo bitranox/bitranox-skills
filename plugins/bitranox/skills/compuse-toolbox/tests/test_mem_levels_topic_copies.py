@@ -6,7 +6,6 @@ from pathlib import Path
 
 import mem_levels
 import memory_engine  # noqa: E402  (mem_levels put hooks/ on sys.path at import)
-import uuid_store  # noqa: E402
 
 BLOCK = """<!-- BITRANOX-MEMORY-INDEX:BEGIN managed by bitranox self-improve; do not hand-edit. -->
 <!-- bitranox:self-learning -->
@@ -91,7 +90,8 @@ def test_placed_by_topic_is_the_engines_own_verdict_on_every_edge_case(tmp_path)
     """mem_levels asks the engine (`memory_engine._managed_topics` on `_read_body_head`) rather
     than keeping a copy of its rule, so the two cannot drift. Pinned at one level, bound with no
     description, untagged at two levels, and held by a legacy `uuid:` line at one level: the facts
-    listed as placed are exactly those the engine manages and no level pins."""
+    listed as placed are exactly those the engine's own `_placed_slugs` places (a pinned or a
+    legacy line anywhere keeps a fact unplaced)."""
     rows = {"a": [_row("pinned", pin=True), _row("nodesc"), _row("plain"), _legacy_row("legacy"),
                   _row("full")],
             "b": [_row("pinned"), _row("nodesc"), _row("plain"), _row("legacy"), _row("full")]}
@@ -105,10 +105,8 @@ def test_placed_by_topic_is_the_engines_own_verdict_on_every_edge_case(tmp_path)
     several = set(report.placed) | set(report.duplicates)
 
     def engine_places(slug):
-        head = memory_engine._read_body_head(uuid_store.body_path(root, slug))  # noqa: SLF001
-        managed = head is not None and memory_engine._managed_topics(slug, head, ()) is not None  # noqa: SLF001
-        return managed and slug not in report.pinned
+        return bool(memory_engine._placed_slugs(root, [slug]))  # noqa: SLF001
 
     assert several == {"pinned", "nodesc", "plain", "legacy", "full"}
     assert set(report.placed) == {slug for slug in several if engine_places(slug)}
-    assert sorted(report.placed) == ["full", "legacy"]
+    assert sorted(report.placed) == ["full"]
