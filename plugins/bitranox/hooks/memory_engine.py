@@ -272,6 +272,39 @@ class ExcludedLevel(ValueError):
         super().__init__("%s is an excluded altitude (home/tempdir/root)" % proj)
 
 
+class NonLevelDir(ExcludedLevel):
+    """Raised, before any write, when `add` targets a level whose path below the tree's anchor
+    crosses a directory every walk over the tree's levels prunes (`uuid_store.is_non_level_dirname`:
+    a virtualenv, a vendored, build or cache dir, the store). No walk reads a level there, so the
+    fact's line would be read by nobody and its body reported dangling by every check. An
+    ExcludedLevel, so every caller that reports an excluded altitude reports this."""
+
+    def __init__(self, proj, name, outside):
+        ValueError.__init__(self, "%s is no memory level: its path crosses %r, a directory every "
+                                  "walk over the tree's levels prunes (a virtualenv, a vendored, "
+                                  "build or cache dir, or the store), so a fact written there "
+                                  "would be read by no walk and its body reported dangling. Write "
+                                  "it at a level outside it, e.g. hooks/memory_engine.py add "
+                                  "--proj %s ..." % (proj, name, outside))
+        self.proj, self.name, self.outside = proj, name, outside
+
+
+def _pruned_part(anchor, proj):
+    """(name, the dir holding it) for the first directory on the way from `anchor` down to `proj`
+    that the level walk prunes, else None. Lexical, like the walk's own names; the anchor itself
+    is never pruned (the walk starts there), and a `proj` outside it has nothing to cross."""
+    top = Path(os.path.abspath(str(anchor)))
+    try:
+        rel = Path(os.path.abspath(str(proj))).relative_to(top)
+    except ValueError:
+        return None
+    for name in rel.parts:
+        if us.is_non_level_dirname(name):
+            return name, str(top)
+        top = top / name
+    return None
+
+
 class UnknownSlug(ValueError):
     """Raised when `amend-pinned` targets a slug this level has no pointer for. The verb carries no
     `--title` (it amends, it does not create), so there is nothing to attach a first write to; use
@@ -460,7 +493,8 @@ def upsert_entry(proj, title, hook, body="", type_=None, pin=False,
 
     A fact placed by topic (see `_placed_slugs`) is written only from a level holding one of its
     lines, else `PlacedElsewhere`; the write then refreshes its other lines too. Pinning one raises
-    TopicRefusal. Both before any write.
+    TopicRefusal. A level whose path below the anchor crosses a directory the level walk prunes
+    raises `NonLevelDir`. All three before any write.
 
     `skill` ties the fact to the skill it belongs with (`metadata: skill:`); it follows the same
     rules as `type_` - kept on an update that does not name it, set in place by one with no body -
@@ -490,6 +524,9 @@ def upsert_entry(proj, title, hook, body="", type_=None, pin=False,
     if not allow_over_cap_hook and us.hook_over_hard_cap(hook):
         raise HookTooLong(len(hook))
     anchor = _anchor(proj)
+    pruned = _pruned_part(anchor, proj)
+    if pruned is not None:
+        raise NonLevelDir(proj, *pruned)
     # An empty body is the documented UPDATE path ("keep the stored one"), but on a CREATE there is
     # nothing to keep: it writes the frontmatter frame and stops, leaving a convincing always-loaded
     # hook with nothing behind it. Nothing downstream reports that - heal normalizes grammar, --check
