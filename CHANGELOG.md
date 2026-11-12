@@ -30,6 +30,33 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.3.0]
+
+### Added
+
+- `memory_engine.py render-topics --proj D --scope tree|chain [--dry-run] [--json]` places the
+  pointer line of every fact bound to a topic: at each level that has one of its topics while no
+  level above it does, and at the tree top when no level has one. Lines are added before any is
+  removed, a pinned or untagged fact is never touched, and a tree without a topic list is left
+  as it is.
+- `reconcile_memory_index.py --check-tree` reports `render drift` (a line missing, differing
+  from its body, or placed elsewhere), and `--check` a `repeated line` that a level above
+  already holds.
+- `topic_tagging.py` (meta-dream-tree) builds the questions and items a bulk judge needs to
+  choose topics for facts or levels, and turns its rows into a `set-topics --batch` file.
+
+### Changed
+
+- A fact placed by topic may have a pointer line at several levels: `--check-tree`,
+  `mem_levels.py` and `ref_map.py` no longer report those as duplicates, and a `[[ref]]` to it is
+  no sideways ref or orphan.
+- `move` and `relocate` refuse a fact placed by topic; `add` from a level that holds no line of
+  it is refused, naming the levels that do; `add --pin` on it is refused. `rename`, `retitle`,
+  an `add` that changes its title or hook, and `--archive` act on every line.
+- `set-topics` refuses to bind a fact whose body has no `title:` or `description:`, or whose
+  pointer line differs from what its body renders. Un-binding a fact that has lines at several
+  levels leaves it one line, at the tree top.
+
 ## [11.2.0]
 
 ### Added
