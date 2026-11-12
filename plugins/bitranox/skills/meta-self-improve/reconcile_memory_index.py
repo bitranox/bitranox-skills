@@ -541,8 +541,9 @@ def archive_entry(level_dir, slug, archive_subdir=".archive", dry_run=False, *, 
 
 
 def _archive_here(d, anchor, slug, scope, entries, kept, bodies, archive_subdir, move, commit):
-    """Move the body to the archive when no level still holds a line of `slug`, then write this
-    level's block without it; a failed write moves the body back (see `archive_entry`)."""
+    """Move the body to the archive when no OTHER level still holds a line of `slug` (the caller
+    has dropped them), then write this level's block without it; a failed write moves the body
+    back (see `archive_entry`)."""
     qcanon = _canon(slug)
     moved = []
     for e in entries:

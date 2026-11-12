@@ -152,8 +152,8 @@ reports a `repeated line` (a fact placed by topic held at a level and again abov
 must end `TOTAL tree problems: 0`; for facts placed by topic it reports `render drift` (lines
 missing, differing from the body, or placed elsewhere, repaired by `render-topics --scope tree`)
 and `the placement by topic could not be checked` when the render would refuse. `--archive <slug>
-<level>` forgets a fact; for one placed by topic it drops every line of it before the body
-moves.
+<level>` forgets a fact; for one placed by topic it drops the other levels' lines, then moves
+the body and drops the line at `<level>` (a failed write there moves the body back).
 
 **Dream scheduling**: `python3 <plugin>/skills/meta-dream-tree/dream_state.py due|mode [cwd]` -
 query whether a consolidation is due, or print the effective dream mode; `dream_state.py done

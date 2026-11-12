@@ -230,7 +230,10 @@ the placed lines are; both, with the amount of each, when neither part alone is 
 <why>`. `move` and `relocate` hold the level they move lines to to the same cap: "! refused:
 moving these lines to <level> would leave its block at N bytes, M bytes over the 1048576 bytes
 one level's block may hold ...", naming how many of the lines fit there, smallest first, and to
-move the rest to another level of the altitude chain that has room; exit 2, nothing written.
+move the rest to another level of the altitude chain that has room. When none fits, it says
+"None of the lines fits there: move them to another level of the altitude chain that has room,
+with <route>, or first free room at <level> by moving lines out of it with <route>". Exit 2,
+nothing written.
 
 What the other verbs do with a fact placed by topic:
 
@@ -252,16 +255,17 @@ What the other verbs do with a fact placed by topic:
   facts un-bound per call.
 - `add` from a level that holds no line of it is refused (exit 2, `! refused:`), naming the
   levels it is read at; from a level that holds one it updates the body and every line.
-  `add --pin` of a fact bound to topics is refused, exit 2: un-bind it first
+  `add --pin` of a fact placed by topic is refused, exit 2: un-bind it first
   (`set-topics --proj <anchor> --slug S --clear`).
 - `move` and `relocate` refuse it (exit 2, `! refused:`, nothing written): where it is read
   follows its topics and the levels'. To place it by hand, un-bind it first; its lines collapse
   to one at the tree top, where a move or relocate takes it.
 - `rename` and `retitle` change every line of it; `retitle` prints `also retitled at: <levels>`.
-- `reconcile_memory_index.py --archive S D` drops every line of it, the other levels' first and
-  then D's before the body moves, so the archive is always its last pointer and the inbound check
-  always applies. It prints `archived S (pointer dropped at D and at the N other level(s) its
-  topics place it at: <levels>)`. A failure after some lines were dropped exits 2: the message
+- `reconcile_memory_index.py --archive S D` drops every line of it: the other levels' lines
+  first, then it moves the body and drops D's line (a failed write of D's block moves the body
+  back), so the archive is always its last pointer and the inbound check always applies. It
+  prints `archived S (pointer dropped at D and at the N other level(s) its topics place it at:
+  <levels>)`. A failure after some lines were dropped exits 2: the message
   names the dropped lines and the ones left, the body is not archived, and it names both repairs -
   re-run the same `--archive`, or put the dropped lines back with `render-topics --scope tree`.
 
@@ -421,8 +425,9 @@ a level whose path crosses a directory every walk over the tree's levels prunes,
 nothing written ("! refused: <path> is no memory level: its path crosses '<name>', a directory
 every walk over the tree's levels prunes ..."): the names in `uuid_store.NON_LEVEL_DIRNAMES`
 (`.git`, `node_modules`, `venv`, `site-packages`, `build`, `dist`, `target`, the tool caches and
-the rest of the vendored dirs), a name starting `.venv`, `venv-` or `venv_`, and the store dir and
-its `<store>-*` siblings. It is one rule, `uuid_store.is_non_level_dirname`, so a level the
+the rest of the vendored dirs), a name starting `.venv`, `venv-` or `venv_`, and any directory
+whose name starts with the store dir's name (`.claude-memory`).
+It is one rule, `uuid_store.is_non_level_dirname`, so a level the
 engine accepts is a level every walk finds; `venvnotes` or `vendor` stay ordinary names.
 `move` relocates only a pointer LINE (the body never moves); if the
 target ALREADY points at the slug with a different hook it REFUSES (a duplicate, not a relocation -
