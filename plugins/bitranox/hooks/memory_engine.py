@@ -2191,25 +2191,32 @@ def _line_problem(slug, anchor, lines):
     for level, ptr in lines.values():
         if ptr.legacy:
             return ("%s: its line at %s is a legacy uuid: pointer, so the fact is not migrated to "
-                    "the slug store; run migrate_to_slug_store.py --root %s --apply (without "
+                    "the slug store; run hooks/migrate_to_slug_store.py --root %s --apply (without "
                     "--apply it only reports), then tag it" % (slug, level, anchor))
     head = _read_body_head(us.body_path(anchor, slug)) or ""
     if not _body_description(head):
         return ("%s: its body has no description:, so no line can be rendered from it; write its "
-                "prose (without the --- frontmatter) to a file and run factedit apply --slug %s "
+                "prose (without the --- frontmatter) to a file and run "
+                "skills/meta-dream-tree/factedit.py apply --slug %s "
                 "--body-file <that file> (or add --body-file), which rebuilds the frame from its "
                 "line, then tag it" % (slug, slug))
     if not _body_title(head):
         return ("%s: its body has no title:, so no line can be rendered from it; run "
-                "memory_engine.py heal --proj %s --backfill-titles (or factedit apply --slug %s "
+                "hooks/memory_engine.py heal --proj %s --backfill-titles (or "
+                "skills/meta-dream-tree/factedit.py apply --slug %s "
                 "--title <title>), then tag it" % (slug, anchor, slug))
     wanted = _comparable_line(_line_from_head(slug, head))
     for line, (level, _ptr) in lines.items():
         if line != wanted:
-            return ("%s: its line at %s differs from what its body renders; run factedit apply "
-                    "--slug %s --hook-file <file> (or add --hook-file) with the body's "
-                    "description: as the hook, or with the hook you want if it is not the line's "
-                    "current one, then tag it" % (slug, level, slug))
+            # Both routes name the level: factedit otherwise resolves the owning level by
+            # walking up from its cwd, and rewrites a line that already matched while this one
+            # stays as it is.
+            return ("%s: its line at %s differs from what its body renders; run "
+                    "skills/meta-dream-tree/factedit.py apply --slug %s --level %s --hook-file "
+                    "<file> (or hooks/memory_engine.py add --proj %s --slug %s --title <the "
+                    "body's title:> --hook-file <file>) with the body's description: as the "
+                    "hook, or with the hook you want if it is not the line's current one, then "
+                    "tag it" % (slug, level, slug, level, level, slug))
     return None
 
 

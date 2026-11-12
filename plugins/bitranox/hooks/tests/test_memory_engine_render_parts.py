@@ -4,6 +4,7 @@ fact's stored line equal to what its body renders before the fact is bound. All 
 """
 
 import os
+import re
 import subprocess
 import sys
 import tracemalloc
@@ -203,7 +204,8 @@ def test_binding_a_fact_whose_line_equals_its_body_goes_through(tmp_path):
 
 # ---- each refusal names a repair that works: run the named route, then the bind goes through --
 
-FACTEDIT = Path(E.__file__).parent.parent / "skills" / "meta-dream-tree" / "factedit.py"
+PLUGIN = Path(E.__file__).resolve().parent.parent
+FACTEDIT = PLUGIN / "skills" / "meta-dream-tree" / "factedit.py"
 
 
 def _bind(anchor, slug):
@@ -284,7 +286,7 @@ def test_a_differing_line_names_the_body_description_as_the_hook_and_that_repair
     _fact(anchor, "feedback-a")
     _replant_pointer(anchor, "feedback-a", "When the line was edited by hand, it says this.")
     out = _refusal(anchor, "feedback-a", capsys)
-    assert "with the body's description: as the hook" in out and "factedit apply" in out
+    assert "with the body's description: as the hook" in out and "factedit.py apply" in out
     assert "not the line's current one" in out
     hook = tmp_path / "hook.txt"
     hook.write_text(HOOK + "\n", encoding="utf-8")       # the body's description:
@@ -305,8 +307,9 @@ def test_a_line_differing_only_in_whitespace_binds(tmp_path):
     assert _bind(anchor, "feedback-w") == 0
 
 
-def test_every_line_of_the_fact_is_checked_and_the_differing_level_is_named(tmp_path, capsys):
-    anchor = _tree(tmp_path)
+def _second_line_edited_by_hand(anchor):
+    """`feedback-a` with its body and a matching line at the anchor, plus a hand-edited second
+    line at `<anchor>/a`. Returns that level."""
     level = _level(anchor, "a")
     _fact(anchor, "feedback-a")
     local = sig.claude_local_md_path(level)
@@ -315,9 +318,58 @@ def test_every_line_of_the_fact_is_checked_and_the_differing_level_is_named(tmp_
     pointers.append(us.Pointer(slug="feedback-a", title="T feedback-a",
                                hook="When the second line was edited by hand, it says this."))
     local.write_text(us.upsert_pointer_block(text, scope, pointers), encoding="utf-8")
+    return level
+
+
+def _named_route(out, script):
+    """(how the refusal spells `script`, its verb, the arguments up to `<file>`): the route exactly
+    as the message gives it, so a route that names no level is run as such. `script` is a bare
+    stem; the spelling is returned so the caller can check where the message says it lives."""
+    m = re.search(r"(\S*%s(?:\.py)?) (\w+) (.*?--hook-file) <file>" % re.escape(script), out)
+    assert m, "the refusal names no %s route: %s" % (script, out)
+    return m.group(1), m.group(2), m.group(3).split()
+
+
+def test_every_line_of_the_fact_is_checked_and_the_differing_level_is_named(tmp_path, capsys):
+    anchor = _tree(tmp_path)
+    level = _second_line_edited_by_hand(anchor)
     out = _refusal(anchor, "feedback-a", capsys)
     assert "its line at %s differs" % level in out
     assert "its line at %s " % anchor not in out
+
+
+def test_the_factedit_route_named_for_a_differing_lower_line_repairs_it(tmp_path, capsys):
+    anchor = _tree(tmp_path)
+    _second_line_edited_by_hand(anchor)
+    spelled, verb, args = _named_route(_refusal(anchor, "feedback-a", capsys), "factedit")
+    assert verb == "apply"
+    hook = tmp_path / "hook.txt"
+    hook.write_text(HOOK + "\n", encoding="utf-8")       # the body's description:
+    # Run from the anchor, which is NOT the level named: factedit resolves the owning level by
+    # walking up from its cwd, so a route that leaves the level out rewrites the anchor's line.
+    r = subprocess.run([sys.executable, str(FACTEDIT), verb, "--python", sys.executable, *args,
+                        str(hook)], cwd=anchor, capture_output=True, text=True,
+                       encoding="utf-8", errors="replace")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert _bind(anchor, "feedback-a") == 0
+    assert spelled == "skills/meta-dream-tree/factedit.py" and (PLUGIN / spelled).is_file()
+
+
+def test_the_add_route_named_for_a_differing_lower_line_repairs_it(tmp_path, capsys):
+    anchor = _tree(tmp_path)
+    _second_line_edited_by_hand(anchor)
+    spelled, verb, args = _named_route(_refusal(anchor, "feedback-a", capsys), "memory_engine")
+    assert verb == "add"
+    assert spelled == "hooks/memory_engine.py" and (PLUGIN / spelled).is_file()
+    title = "<the body's title:>"
+    joined = " ".join(args)
+    assert title in joined
+    hook = tmp_path / "hook.txt"
+    hook.write_text(HOOK + "\n", encoding="utf-8")
+    argv = joined.replace(title, "TITLE").split()
+    argv[argv.index("TITLE")] = "T feedback-a"
+    assert E.main([verb, *argv, str(hook)]) == 0
+    assert _bind(anchor, "feedback-a") == 0
 
 
 def test_a_legacy_uuid_pointer_names_the_migration_and_that_repairs_it(tmp_path, capsys):
@@ -335,7 +387,8 @@ def test_a_legacy_uuid_pointer_names_the_migration_and_that_repairs_it(tmp_path,
     local.write_text(us.upsert_pointer_block(text, scope, pointers), encoding="utf-8")
     out = _refusal(anchor, "feedback-l", capsys)
     assert "legacy uuid: pointer" in out
-    assert "migrate_to_slug_store.py --root %s --apply" % anchor in out
+    assert "hooks/migrate_to_slug_store.py --root %s --apply" % anchor in out
+    assert (PLUGIN / "hooks" / "migrate_to_slug_store.py").is_file()
     assert mig.main(["--root", anchor, "--apply"]) == 0
     # The migration leaves its backup (a copy of every pointer file, legacy lines included) under
     # the anchor; the bind must succeed with it in place.
