@@ -69,6 +69,10 @@ unknown, defer - a blind gather pulls noise.
    - **ANOTHER tree** -> ALWAYS a self-contained, labeled COPY; trees share no ancestor, so
      lifting is impossible and a cross-tree `[[reference]]` would dangle. Never link across
      trees.
+   - **Every COPY:** drop a `topics:` line from the copied body's frontmatter before engine
+     `add`: `add` refuses to create a fact whose body carries one, and a line from another tree
+     names that tree's topic list. Tag the copy afterwards with `set-topics` if this tree's list
+     fits it.
 4. **Privacy scrub on anything crossing a boundary.** Scrub secrets/PII before writing; never
    carry a credential across. Concrete operational detail (paths, hostnames) is the useful part -
    keep it.
