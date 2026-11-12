@@ -5,6 +5,9 @@ and a pinned, untagged or unrenderable fact is never touched. All content ASCII.
 
 import json
 import os
+import re
+import subprocess
+import sys
 import tracemalloc
 from pathlib import Path
 
@@ -265,7 +268,6 @@ def test_the_lines_of_one_level_are_capped_and_the_refusal_drops_nothing(tmp_pat
     assert "! refused" in capsys.readouterr().out and _snapshot(anchor) == before
 
 
-
 def _plant_tagged(anchor, prefix, topic, count, description):
     facts = us.central_facts_dir(anchor)
     facts.mkdir(parents=True, exist_ok=True)
@@ -292,7 +294,6 @@ def test_a_level_past_the_cap_refuses_before_an_earlier_level_is_written(tmp_pat
     assert "! refused" in capsys.readouterr().out and _snapshot(anchor) == before
 
 
-
 def test_a_body_that_grows_after_the_census_still_cannot_pass_the_cap(tmp_path):
     """Another writer grows the rust bodies while the render writes `a`: the census saw them fit,
     so the ADD pass's own check is what keeps `b`'s lines bounded. Nothing is dropped."""
@@ -316,6 +317,7 @@ def test_a_body_that_grows_after_the_census_still_cannot_pass_the_cap(tmp_path):
     assert sig.claude_local_md_path(second).read_bytes() == second_before
     assert sig.claude_local_md_path(anchor).read_bytes() == top_before
 
+
 def test_the_route_the_missing_top_block_refusal_names_repairs_it(tmp_path, capsys):
     anchor = tmp_path / "tree"
     anchor.mkdir()
@@ -330,6 +332,124 @@ def test_the_route_the_missing_top_block_refusal_names_repairs_it(tmp_path, caps
     _fact(str(anchor), "feedback-py-rule", ("python",))
     assert E.main(["render-topics", "--proj", str(anchor), "--scope", "tree"]) == 0
     assert _slugs(level) == ["feedback-py-rule"] and _slugs(str(anchor)) == []
+
+
+def test_the_route_the_block_cap_refusal_names_repairs_it(tmp_path, capsys):
+    """The refusal names a set-topics batch: run it as the message gives it, from a directory
+    outside the tree, and the next render goes through. The facts' lines sit at an untagged level
+    `z`, so the batch has a level pointing at every slug it rebinds."""
+    anchor = _tree(tmp_path)
+    level, holder = _level(anchor, "a", ("python",)), _level(anchor, "z", ())
+    slugs = ["feedback-py%05d" % i for i in range(1200)]
+    _plant_tagged(anchor, "py", "python", len(slugs), "y" * 1000)
+    local = sig.claude_local_md_path(holder)
+    text = local.read_text(encoding="utf-8")
+    pointers = [us.Pointer(slug=slug, title="T", hook="h") for slug in slugs]
+    local.write_text(us.upsert_pointer_block(text, us.parse_pointer_index(text)[0], pointers),
+                     encoding="utf-8")
+    capsys.readouterr()
+    assert E.main(["render-topics", "--proj", anchor, "--scope", "tree"]) == 2
+    out = capsys.readouterr().out
+    route = re.search(r"(hooks/memory_engine\.py) (set-topics --proj \S+ --batch) <file>", out)
+    assert route is not None and "a topic this level has (python)" in out
+    assert route.group(2).split()[2] == level
+    batch = tmp_path / "rebind.jsonl"
+    batch.write_text("".join(json.dumps({"slug": slug, "topics": []}) + "\n" for slug in slugs),
+                     encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    engine = Path(E.__file__).resolve().parents[1] / route.group(1)
+    done = subprocess.run([sys.executable, str(engine), *route.group(2).split(), str(batch)],
+                          cwd=str(outside), capture_output=True, text=True, encoding="utf-8",
+                          errors="replace", check=False)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert E.main(["render-topics", "--proj", anchor, "--scope", "tree"]) == 0
+    assert _slugs(level) == [] and _slugs(holder) == slugs
+
+
+def _keep_lines(level, count):
+    """Give `level` `count` lines of about 1 KB the render keeps: every other one pinned, the rest
+    pointing at no body, so neither kind is a managed line."""
+    kept = [us.Pointer(slug="feedback-kept%05d" % i, title="T", hook="k" * 1000, pin=i % 2 == 0)
+            for i in range(count)]
+    local = sig.claude_local_md_path(level)
+    text = local.read_text(encoding="utf-8")
+    local.write_text(us.upsert_pointer_block(text, us.parse_pointer_index(text)[0], kept),
+                     encoding="utf-8")
+
+
+def test_the_block_cap_counts_the_lines_a_level_keeps_beside_the_rendered_ones(tmp_path):
+    """Pinned and unmanaged lines stay in the block through the ADD phase, so they count against
+    the cap with the lines the render builds: either part alone fits, both together do not. The
+    census refuses before `a`, ahead of `b` in the ADD order, is written."""
+    anchor = _tree(tmp_path)
+    first, second = _level(anchor, "a", ("python",)), _level(anchor, "b", ("rust",))
+    _keep_lines(second, 600)
+    _plant_tagged(anchor, "py", "python", 2, "fits")
+    _plant_tagged(anchor, "rs", "rust", 600, "y" * 1000)
+    before, calls = _snapshot(anchor), []
+    with pytest.raises(E.RenderBlockTooLarge) as exc:
+        E.render_topics(anchor, write=_recording(calls))
+    assert exc.value.level == second and calls == [] and _snapshot(anchor) == before
+    assert _slugs(first) == []
+
+
+def test_lines_a_level_gains_after_the_census_still_count_against_the_cap(tmp_path):
+    """Another writer fills `b`'s block while the render writes `a`: the census saw `b` fit, so
+    the ADD pass must count the kept lines again before it writes `b`."""
+    anchor = _tree(tmp_path)
+    first, second = _level(anchor, "a", ("python",)), _level(anchor, "b", ("rust",))
+    _plant_tagged(anchor, "py", "python", 2, "fits")
+    _plant_tagged(anchor, "rs", "rust", 600, "y" * 1000)
+    calls = []
+
+    def write(path, text):
+        calls.append(str(path))
+        _keep_lines(second, 600)
+        return us.write_if_changed(path, text)
+
+    with pytest.raises(E.RenderBlockTooLarge) as exc:
+        E.render_topics(anchor, write=write)
+    assert exc.value.level == second and calls == [str(sig.claude_local_md_path(first))]
+    assert not any(slug.startswith("feedback-rs") for slug in _slugs(second))
+
+
+def test_the_tagged_facts_without_a_title_are_all_counted_and_the_first_few_shown(tmp_path):
+    anchor = _tree(tmp_path)
+    _level(anchor, "a", ("python",))
+    facts = us.central_facts_dir(anchor)
+    facts.mkdir(parents=True, exist_ok=True)
+    names = {"feedback-untitled%03d" % i for i in range(25)}
+    for name in names:
+        (facts / (name + ".md")).write_text(
+            "---\nname: %s\ndescription: d\ntopics: [python]\nmetadata:\n  type: feedback\n"
+            "---\n\nx\n" % name, encoding="utf-8")
+    rep = E.render_topics(anchor)
+    assert rep["incomplete_total"] == 25 and len(rep["incomplete"]) == 20
+    assert set(rep["incomplete"]) <= names
+
+
+def test_a_level_counts_every_added_line_and_shows_only_the_first_few(tmp_path):
+    anchor = _tree(tmp_path)
+    level = _level(anchor, "a", ("python",))
+    _plant_tagged(anchor, "py", "python", 25, "d")
+    row = E.render_topics(anchor)["levels"][level]
+    assert row["added"] == 25 == len(_slugs(level))
+    assert row["examples"]["added"] == ["feedback-py%05d" % i for i in range(20)]
+
+
+def test_the_placement_cache_never_holds_more_topic_sets_than_its_cap(tmp_path):
+    """Read through the placer's own count, with the tree's real LevelMap: 513 and more distinct
+    topic sets leave at most 512 remembered, and every answer still matches the map's."""
+    anchor, _levels = _example(tmp_path)
+    level_map, _dirs = E.topic_level_map(anchor)
+    place = E._Placer(level_map)
+    for i in range(E._PLACEMENT_CACHE * 2 + 1):
+        topics = ("t%04d" % i,)
+        assert place(topics) == frozenset(level_map.placements(topics))
+        assert place.remembered() <= E._PLACEMENT_CACHE
+    assert place(("python",)) == frozenset(level_map.placements(("python",)))
+
 
 def _render_peak(tmp_path, name, count):
     anchor = _tree(tmp_path / name)
