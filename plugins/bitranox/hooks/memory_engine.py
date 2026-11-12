@@ -102,7 +102,9 @@ class PlacedElsewhere(SlugCollision):
     level that holds one. A SlugCollision, so every caller that reports a collision reports this."""
 
     def __init__(self, slug, levels):
-        levels = list(levels)
+        # level order (sorted parts: the top first, a parent before its children, siblings by
+        # name), so the message and the level it suggests do not follow the walk's listing order
+        levels = sorted(levels, key=lambda level: Path(os.path.abspath(str(level))).parts)
         ValueError.__init__(self, "slug %r is placed by topic and has no line at this level; it is "
                                   "read at %s. Write it from one of those levels (%s add --proj "
                                   "%s --slug %s ...), or change where it is read with set-topics"
@@ -273,19 +275,21 @@ class ExcludedLevel(ValueError):
 
 
 class NonLevelDir(ExcludedLevel):
-    """Raised, before any write, when `add` targets a level whose path below the tree's anchor
-    crosses a directory every walk over the tree's levels prunes (`uuid_store.is_non_level_dirname`:
-    a virtualenv, a vendored, build or cache dir, the store). No walk reads a level there, so the
-    fact's line would be read by nobody and its body reported dangling by every check. An
-    ExcludedLevel, so every caller that reports an excluded altitude reports this."""
+    """Raised, before any write, when `add`, `set-scope`, `move` or `relocate` targets a level
+    whose path below the tree's anchor crosses a directory every walk over the tree's levels
+    prunes (`uuid_store.is_non_level_dirname`: a virtualenv, a vendored, build or cache dir, the
+    store). No walk reads a level there, so a line written there would be read by nobody and its
+    body reported dangling by every check. An ExcludedLevel, so every caller that reports an
+    excluded altitude reports this. `route` is the verb's own call with `{level}` where the level
+    outside the pruned dir goes; `add`'s by default."""
 
-    def __init__(self, proj, name, outside):
+    def __init__(self, proj, name, outside, route=_ENGINE_ROUTE + " add --proj {level} ..."):
         ValueError.__init__(self, "%s is no memory level: its path crosses %r, a directory every "
                                   "walk over the tree's levels prunes (a virtualenv, a vendored, "
                                   "build or cache dir, or the store), so a fact written there "
                                   "would be read by no walk and its body reported dangling. Write "
-                                  "it at a level outside it, e.g. hooks/memory_engine.py add "
-                                  "--proj %s ..." % (proj, name, outside))
+                                  "it at a level outside it, e.g. %s"
+                            % (proj, name, route.replace("{level}", str(outside))))
         self.proj, self.name, self.outside = proj, name, outside
 
 
@@ -303,6 +307,14 @@ def _pruned_part(anchor, proj):
             return name, str(top)
         top = top / name
     return None
+
+
+def _pruned_refusal(anchor, level, route):
+    """The `NonLevelDir` text when `level` crosses a directory the level walk prunes below
+    `anchor`, else None; `route` as `NonLevelDir` takes it. For the verbs that report a refusal
+    rather than raise one."""
+    pruned = _pruned_part(anchor, level)
+    return None if pruned is None else str(NonLevelDir(str(level), *pruned, route=route))
 
 
 class UnknownSlug(ValueError):
@@ -1228,7 +1240,8 @@ def move_entry(from_level, to_level, slug, force=False):
     It also refuses, before any write, a set holding a fact placed by topic (its place follows its
     topics; un-bind it first), and a set whose lines would leave the target's block past
     MAX_RENDER_BLOCK_BYTES, the cap render-topics holds every level to, unless the move does not
-    grow that block (see `_move_cap_refusal`).
+    grow that block (see `_move_cap_refusal`), and a target level whose path below the anchor
+    crosses a directory the level walk prunes (see `NonLevelDir`).
 
     Returns {"slug","slugs","from","to","direction","moved","moved_slugs","refused","warnings"};
     `slug` is the comma-joined set, identical to the input for a single slug."""
@@ -1245,6 +1258,11 @@ def move_entry(from_level, to_level, slug, force=False):
     a_from, a_to = us.resolve_anchor(str(src)), us.resolve_anchor(str(dst))
     if a_from is None or a_to is None or a_from != a_to:
         rep["refused"] = "cross-tree move (or no anchor) - a move stays within one tree; use a lift/copy for cross-tree"
+        return rep
+    pruned = _pruned_refusal(a_to, dst, "%s move --from-level %s --to-level {level} --slug %s"
+                             % (_ENGINE_ROUTE, src, " ".join(slugs)))
+    if pruned:
+        rep["refused"] = pruned
         return rep
     if src == dst:
         rep["refused"] = "same level - nothing to move"
@@ -1353,14 +1371,16 @@ def move_entry(from_level, to_level, slug, force=False):
     return rep
 
 
-def _move_cap_refusal(src, dst, plan):
+def _move_cap_refusal(src, dst, plan, verb="move"):
     """The refusal text when the lines `plan` ([(slug, (title, hook, pin))]) moves to `dst` would
     leave its block past MAX_RENDER_BLOCK_BYTES and larger than it is now, else None. A line the
     target already holds for a moving slug is replaced by the planned one (`plan` already carries
     the merged pin and the kept hook of a forced dedup, and an identical line is its own
     replacement); every other line stays. A move that does not grow the block (completing an
-    interrupted one) is never refused: it makes no level fuller than it was. Holds the target's
-    block and one size per moving line."""
+    interrupted one) is never refused: it makes no level fuller than it was. `verb` is the one
+    the refusal names for taking the lines from `src` elsewhere (`relocate` across trees); room
+    at `dst` is freed with `move`, which stays in its tree. Holds the target's block and one size
+    per moving line."""
     pointers = us.parse_pointer_index(read_store_text(sig.claude_local_md_path(str(dst))))[1]
     moving = {s for s, _fields in plan}
     before = sum(_line_size(p) for p in pointers)
@@ -1378,6 +1398,7 @@ def _move_cap_refusal(src, dst, plan):
             break
         fit += 1
     route = _ENGINE_ROUTE + " move --from-level %s --to-level <level> --slug <slug> [<slug> ...]"
+    take = route.replace(" move ", " %s " % verb, 1)
     text = ("moving these lines to %s would leave its block at %d bytes, %d bytes over the %d "
             "bytes one level's block may hold (render-topics holds every level to it; a line "
             "counts its line break): the lines it keeps come to %d bytes and the %d line(s) "
@@ -1387,10 +1408,10 @@ def _move_cap_refusal(src, dst, plan):
     if fit:
         return text + (". %d of the %d line(s) fit there, smallest first: move those there and "
                        "the rest to another level of the altitude chain that has room, with "
-                       + route + "; every level is held to the same %d bytes") % (
+                       + take + "; every level is held to the same %d bytes") % (
                            fit, len(sizes), src, MAX_RENDER_BLOCK_BYTES)
     return text + (". None of the lines fits there: move them to another level of the altitude "
-                   "chain that has room, with " + route + ", or first free room at %s by moving "
+                   "chain that has room, with " + take + ", or first free room at %s by moving "
                    "lines out of it with " + route + "; every level is held to the same %d "
                    "bytes") % (src, dst, dst, MAX_RENDER_BLOCK_BYTES)
 
@@ -1723,6 +1744,10 @@ def relocate_entry(from_level, to_level, slug, force=False):
     A cross-tree copy drops the body's frontmatter `topics:` line (topics are tagged against one
     tree's closed list) and says so in `notes`; a same-tree move leaves the body untouched. A fact
     placed by topic is refused across trees: its other lines would stay behind in the source tree.
+    A target level whose path below its anchor crosses a directory the level walk prunes is
+    refused (see `NonLevelDir`), and a cross-tree line that would leave the target's block past
+    MAX_RENDER_BLOCK_BYTES is refused as `move` refuses it (see `_move_cap_refusal`); both before
+    any write.
     Returns {"slug","from","to","cross_tree","relocated","refused","warnings","notes"}.
     """
     sig.refuse_if_memory_writes_off()
@@ -1732,6 +1757,11 @@ def relocate_entry(from_level, to_level, slug, force=False):
     a_from, a_to = us.resolve_anchor(str(src)), us.resolve_anchor(str(dst))
     if a_from is None or a_to is None:
         rep["refused"] = "no anchor for the source or the target level"
+        return rep
+    pruned = _pruned_refusal(a_to, dst, "%s relocate --from-level %s --to-level {level} --slug %s"
+                             % (_ENGINE_ROUTE, src, slug))
+    if pruned:
+        rep["refused"] = pruned
         return rep
     if Path(a_from).resolve() == Path(a_to).resolve():
         m = move_entry(from_level, to_level, slug, force=force)
@@ -1812,6 +1842,14 @@ def relocate_entry(from_level, to_level, slug, force=False):
                               "(fix the citers, or --force to relocate anyway)" % what)
             return rep
         rep["warnings"].append("relocated despite dangling inbound [[refs]]: %s" % what)
+
+    # The target's block is held to the cap `move` holds it to (render-topics holds every level
+    # to it); checked before the body is copied, so a refusal writes nothing.
+    full = _move_cap_refusal(src, dst, [(slug, (entry.title, entry.hook, entry.pin))],
+                             verb="relocate")
+    if full:
+        rep["refused"] = full
+        return rep
 
     # COPY-THEN-DROP (same crash-safety direction as move_entry): a crash between the two leaves a
     # visible duplicate, never a lost fact. The body file is copied VERBATIM but for its topics
@@ -4021,6 +4059,10 @@ def _main(argv=None):
         local = sig.claude_local_md_path(args.proj)
         if _is_excluded_level(args.proj):             # before the lock, which creates a file there
             raise ExcludedLevel(args.proj)
+        pruned = _pruned_part(_anchor(os.path.abspath(args.proj)), args.proj)
+        if pruned is not None:                        # same: no walk would read the descriptor
+            raise NonLevelDir(os.path.abspath(args.proj), *pruned,
+                              route=_ENGINE_ROUTE + " set-scope --proj {level} --scope ...")
         # One read-modify-write under the level's lock. The topics check runs on the level's
         # CURRENT descriptor - its pointer block's, else the legacy CLAUDE.md block ensure_level
         # would harvest, else none - before ensure_level writes anything, so a refused call leaves

@@ -48,7 +48,12 @@ def test_a_name_that_only_mentions_venv_is_still_walked(name):
 def _level(path, topics=("python",)):
     path.mkdir(parents=True, exist_ok=True)
     (path / "CLAUDE.md").write_text("x\n", encoding="utf-8")
-    assert E.main(["set-scope", "--proj", str(path), "--scope", SCOPE]) == 0
+    if any(us.is_non_level_dirname(part) for part in path.parts[-3:]):
+        # set-scope refuses a level inside a pruned dir; plant the block the way an installed
+        # package ships one, which is the file a walk entering the dir would find
+        E.ensure_level(str(path), scope_default=SCOPE)
+    else:
+        assert E.main(["set-scope", "--proj", str(path), "--scope", SCOPE]) == 0
     E.set_level_topics(str(path), topics)
     return path
 
