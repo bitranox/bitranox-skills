@@ -2066,9 +2066,28 @@ InvalidTopic come from the level's descriptor (an add --scope with a TOPICS line
 whose line does not parse)."""
 
 
-def read_body_topics(path):
-    """`_body_topics` of the body at `path`, reading only its first FRONTMATTER_HEAD_BYTES.
-    None too when the file is missing. Raises TreeWalkError when it exists and cannot be read."""
+# ---- render: the parts a pointer line placed by topic is built from ---------------------------
+
+MAX_RENDER_BLOCK_BYTES = 1 << 20
+"""Most bytes of pointer lines `render-topics` collects for ONE level: a level's lines are the
+one thing a render holds, and a block past this is a tagging mistake to fix, not text to load."""
+_RENDER_SHOWN = 20
+
+
+class RenderBlockTooLarge(TopicRefusal):
+    """Raised, before that level is written, when the lines placed at one level pass
+    MAX_RENDER_BLOCK_BYTES."""
+
+    def __init__(self, level, size):
+        self.level, self.size = level, size
+        super().__init__(["the lines placed at %s come to over %d bytes (%d and counting), the most "
+                          "one level's block may hold; too many facts carry a topic this level has"
+                          % (level, MAX_RENDER_BLOCK_BYTES, size)])
+
+
+def _read_body_head(path):
+    """The first FRONTMATTER_HEAD_BYTES of the body at `path` as text, None when the file is
+    missing. Raises TreeWalkError when it exists and cannot be read."""
     try:
         with open(path, "rb") as fh:
             head = fh.read(FRONTMATTER_HEAD_BYTES)
@@ -2076,12 +2095,12 @@ def read_body_topics(path):
         return None
     except OSError as exc:
         raise TreeWalkError(path, "unreadable: %s" % exc) from exc
-    return _body_topics(head.decode("utf-8", errors="replace"))
+    return head.decode("utf-8", errors="replace")
 
 
-def iter_fact_topics(anchor):
-    """Yield (slug, topics) for every body of the tree that carries a `topics:` line, one body at a
-    time: nothing is held but the body's head being read."""
+def _iter_body_heads(anchor):
+    """Yield (slug, head text) for every body of the tree, one at a time: nothing is held but the
+    head being read."""
     facts = us.central_facts_dir(anchor)
     try:
         scan = os.scandir(facts)
@@ -2093,9 +2112,92 @@ def iter_fact_topics(anchor):
         for item in scan:
             if not item.name.endswith(".md") or not us.is_valid_slug(item.name[:-3]):
                 continue
-            topics = read_body_topics(item.path)
-            if topics is not None:
-                yield item.name[:-3], topics
+            head = _read_body_head(item.path)
+            if head is not None:
+                yield item.name[:-3], head
+
+
+def _level_parts(anchor, level):
+    """`level` as the path parts below `anchor` that `topic_placement` works on; () for the anchor.
+    Lexical, like `topic_store.level_key` it is built on."""
+    key = topic_store.level_key(anchor, level)
+    return tuple(key.split("/")) if key else tp.TOP
+
+
+def _line_from_head(slug, head):
+    """The pointer line a managed fact gets, built from its body alone: title from `title:`, hook
+    from `description:`, never pinned. None when the body lacks either: such a fact is never
+    rendered, it stays where its pointer is."""
+    title, hook = _body_title(head), _body_description(head)
+    if not title or not hook:
+        return None
+    return us.Pointer(slug=slug, title=title, hook=hook)
+
+
+def topic_level_map(anchor, levels=None):
+    """(LevelMap, {parts: level dir}) of the tree: every curated level whose descriptor is not
+    empty, with the topics its `TOPICS:` line declares (none without the line), plus the anchor.
+    A level with no descriptor is left out, so a scaffold-only level cannot block a roll-up.
+    Raises TopicRefusal, naming the levels, when a `TOPICS:` line does not parse: placing by a
+    guessed line would move rules. Holds one small record per level."""
+    declared, dirs, bad, total = {}, {tp.TOP: os.path.abspath(str(anchor))}, [], 0
+    for level in curated_levels_under(anchor) if levels is None else levels:
+        scope = us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level)))[0]
+        if not scope.strip():
+            continue
+        try:
+            topics = tp.descriptor_topics(scope) or ()
+        except tp.InvalidTopic as exc:
+            total += 1
+            if len(bad) < _RENDER_SHOWN:
+                bad.append("%s: its TOPICS line does not parse (%s); set-level-topics replaces it"
+                           % (level, exc))
+            continue
+        parts = _level_parts(anchor, level)
+        declared[parts], dirs[parts] = topics, os.path.abspath(str(level))
+    if total:
+        raise TopicRefusal(bad, total)
+    return tp.LevelMap(declared), dirs
+
+
+def _pinned_slugs(levels):
+    """The slugs pinned at any of `levels`: one record per pinned pointer."""
+    pinned = set()
+    for level in levels:
+        for ptr in us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level)))[1]:
+            if ptr.pin:
+                pinned.add(ptr.slug)
+    return pinned
+
+
+def _line_problem(slug, anchor, stored_line):
+    """Why `slug` cannot be bound to a topic yet, or None: a rendered line is built from the body
+    alone, so a body without `title:` or `description:`, or a stored line that says something else
+    than the body would render, has to be made to agree first."""
+    line = _line_from_head(slug, _read_body_head(us.body_path(anchor, slug)) or "")
+    if line is None:
+        return ("%s: its body lacks title: or description:, so no line can be rendered from it; "
+                "write it once through factedit apply (or add), then tag it" % slug)
+    if line.index_line() != stored_line:
+        return ("%s: its pointer line differs from what its body would render; apply the wanted "
+                "title and hook once through factedit apply (or add), then tag it" % slug)
+    return None
+
+
+def read_body_topics(path):
+    """`_body_topics` of the body at `path`, reading only its first FRONTMATTER_HEAD_BYTES.
+    None too when the file is missing. Raises TreeWalkError when it exists and cannot be read."""
+    head = _read_body_head(path)
+    return None if head is None else _body_topics(head)
+
+
+def iter_fact_topics(anchor):
+    """Yield (slug, topics) for every body of the tree that carries a `topics:` line, one body at a
+    time: nothing is held but the body's head being read."""
+    for slug, head in _iter_body_heads(anchor):
+        topics = _body_topics(head)
+        if topics is not None:
+            yield slug, topics
 
 
 def _topic_list(anchor):
@@ -2148,14 +2250,14 @@ def set_topic_list(proj, topics, tagger):
 
 
 def _pointer_owners(anchor, wanted):
-    """{slug: (first level pointing at it, pinned anywhere)} for the slugs in `wanted`, from one
-    walk over the tree's levels. Holds one entry per wanted slug."""
+    """{slug: (first level pointing at it, pinned anywhere, that first pointer's line)} for the
+    slugs in `wanted`, from one walk over the tree's levels. Holds one entry per wanted slug."""
     owners = {}
     for level in curated_levels_under(anchor):
         for ptr in us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level)))[1]:
             if ptr.slug in wanted:
-                first, pinned = owners.get(ptr.slug, (level, False))
-                owners[ptr.slug] = (first, pinned or ptr.pin)
+                first, pinned, line = owners.get(ptr.slug, (level, False, ptr.index_line()))
+                owners[ptr.slug] = (first, pinned or ptr.pin, line)
     return owners
 
 
@@ -2174,6 +2276,9 @@ def _topic_row_problem(slug, topics, anchor, allowed, owners):
     body = read_store_text(us.body_path(anchor, slug))
     if _frontmatter(body)[1] is None:
         return "%s: its body has no frontmatter to carry topics" % slug
+    if topics:
+        # Binding a fact hands its lines to the renderer, which builds them from the body alone.
+        return _line_problem(slug, anchor, owners[slug][2])
     return None
 
 
@@ -2182,8 +2287,10 @@ def set_fact_topics(proj, rows, dry_run=False):
     tuple of tags, an empty tuple (bound to no topic) or None (remove the line).
 
     Every row is checked before any is written: an invalid slug, a slug no level points at, a
-    pinned fact being tagged (clearing one, None, is allowed), a tag outside the tree's list or a body without frontmatter refuses the WHOLE call with TopicRefusal
-    (the first refusals and their total). Each body is then read and written under the lock of
+    pinned fact being tagged (clearing one, None, is allowed), a tag outside the tree's list, a
+    body without frontmatter, or a fact being bound to a topic whose body lacks `title:` or
+    `description:` or whose first pointer line differs from the line its body renders (see
+    `_line_problem`) refuses the WHOLE call with TopicRefusal (the first refusals and their total). Each body is then read and written under the lock of
     the first level that points at it, the lock an ordinary write to that fact holds. Pointer
     lines are not touched: `render-topics` places them. Returns {'set': [slugs], 'unchanged': n}.
     Holds `rows` and one owner entry per row; a batch over MAX_TOPIC_BATCH rows is refused."""
