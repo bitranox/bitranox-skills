@@ -77,6 +77,11 @@ from emptiness or a new-entry-only grep. For a rule found in the chain:
     before deleting.
 - **Belongs higher** (recurs across the subtree) -> lift the general to the broadest covering
   tier, leave only the DELTA below (`[[general]]` + delta), or remove it if there is no delta.
+- **Belongs wherever a stack is used** (a memory fact that recurs because several branches use
+  the same stack or tool, in a tree with a topic list) -> do not lift it: tag it with
+  `set-topics` and let `render-topics` place it at the levels that have the topic
+  (meta-dream-tree step 5). Lifting it would load it in every branch below the common parent,
+  the ones without that stack included.
 - **Genuinely only-here** -> leave it (it IS the delta). **Contradiction** -> verify against
   ground truth (see Contradiction / override above): evidence decides which side is outdated;
   unresolvable -> ask the user.

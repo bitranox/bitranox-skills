@@ -155,6 +155,27 @@ the success line, abort-and-show on a miss).
     agent RETURNED; keep each agent's returned text (the only restore source - the backup holds just
     the stale version).
 
+    **Topics of a level (only when `memory_engine.py topics-show --proj <anchor>` exits 0; it
+    exits 1 printing `no topic list in this tree`, and such a tree skips this paragraph).** A
+    level's descriptor also carries a `TOPICS:` line: the topics of the tree's list that are in
+    use below that directory. Never type it into `set-scope` text (`set-scope` keeps the stored
+    line and refuses a text that changes it). Once the descriptors are fresh, run
+    `memory_engine.py topics-stale --proj <level>` for every level below the tree top, a level
+    whose descriptor has no `TOPICS:` line included (it prints `stale: never tagged`): it prints
+    `fresh` (exit 0) or `stale: <why>` (exit 1). For each stale level, choose its topics from
+    the list `topics-show` prints by reading its descriptor - a container with two stacks gets
+    both, a level nothing on the list fits gets none - and write them with
+    `memory_engine.py set-level-topics --proj <level> --topics a,b` (`--topics ''` for none, which
+    also makes the level fresh), requiring `topics updated:`. With more than about twenty stale
+    levels, hand the judgment to `bitranox:ai-llm-jev-judge`: `topic_tagging.py questions`,
+    `items --levels` and `decide --kind levels` (home: `<plugin>/skills/meta-dream-tree/`; each
+    takes `--from <anchor>`, and `--help` lists the rest) build its inputs and read its rows. Each
+    line of the decided file is one `set-level-topics` call, and the levels its unsure file holds
+    are tagged by reading. NEVER run `set-top-topics`, and never `topics-set-list`: the tree
+    top's topics decide what every session loads and are the user's decision
+    (`set-level-topics` refuses the tree top). A change you would make to the top's line or to
+    the list goes into the report as a proposal, with the facts it would move.
+
 0c. **Read the toolbox inventory (one command, and it belongs HERE, not at the end).**
     `uv run ~/.claude/skills/toolbox/tools/toolbox.py list` - the READ half of the toolbox pass per
     references/dream-core.md "Toolbox pass"; skip only if that path does not exist. This is a
@@ -347,6 +368,29 @@ the success line, abort-and-show on a miss).
      <dream id> --items "$D/items.jsonl" --verdicts "$D/verdicts.jsonl"`, then `rm -rf "$D"`. `run`
      prints counts only. Move by your own routing, whatever `run` printed or exited with.
 
+   **A rule about a stack or tool is tagged, not moved (only when `topics-show` exits 0).**
+   When the routing answers with TOPICS instead of a level (references/dream-core.md, the
+   routing prompt) - the fact holds wherever a stack or tool on the tree's list is used, in more
+   than one branch - do not move it up to the common parent. Bind it:
+   `memory_engine.py set-topics --proj <anchor> --slug <slug> --topics a,b`, or one `--batch`
+   file for the whole pass (`--help` gives its line format), run with `--dry-run` first (it
+   prints `would set topics on N fact(s); M unchanged`); require
+   `set topics on N fact(s); M unchanged`. Step 8 then places its line at each level that has
+   one of its topics while no level above it does; a line it already has at such a level stays
+   as it is. A `! refused:` that names a line differing from what its body renders, or
+   a body with no `title:`, prints its own repair command (`factedit.py apply`, or
+   `heal --backfill-titles`): run that, then tag; never force it. A pinned fact is never tagged
+   (`set-topics` refuses it), and a fact one of whose lines is a legacy `uuid:` line is not
+   placed until it is migrated. A fact about a PLACE - one project, one container, the whole
+   tree - gets a level and moves as above, a move to the tree top still by the mode and with its
+   cost. `move` refuses a fact that is already placed by topic: its place changes only through
+   its topics (`set-topics`) or its levels' topics (step 0b). A fact that fits no topic of the
+   list is not forced into one: it stays where it is, and three or more such facts about one
+   subject are a proposed list change in the report, never a `topics-set-list` run.
+   `set-topics` and a real `render-topics` hold the tree's placement lock. One that prints
+   `! error: <verb> waited 30 s for the placement lock` (exit 2) met another session placing
+   lines: run the same verb again once that one has finished, and never delete the lock file.
+
 6. **Voice + firing check (maintenance).** The engine lints new hooks at add-time; here, sweep the
    whole store for residue with `memory_engine.py lint --tree "<cwd>"` (reports, tree-wide, hooks over
    the 500-char HARD cap - `add` refuses one, so any that exist were hand-edited or arrived with a
@@ -430,7 +474,20 @@ the success line, abort-and-show on a miss).
 
 8. **Re-dedup, then verify.** Sweep the entries placement touched (a lifted general now overlaps
    its origin and siblings) and normalize - re-run `dedup_scan.py` from step 4, whose control line
-   applies again. Then re-derive the manifest and diff against step 2 with
+   applies again.
+   When `topics-show` exits 0, place the lines now, before the manifest diff:
+   `memory_engine.py render-topics --proj <anchor> --scope tree --dry-run`, read what it would
+   change (one line per level, `<level>: +A added, R refreshed, -D removed`), then the same
+   without `--dry-run`, requiring its last line
+   `render-topics (tree): N managed fact(s); changed M level(s)`. A `! refused:` names its cause
+   and the route that clears it (a level whose `TOPICS:` line does not parse; a level whose
+   block would end over 1 MiB and grow): follow it and run the render again. Lines are added
+   before any is removed, so a run that stopped half-way is completed by running it again. In
+   the diff below, a fact placed by topic shows as `added` at each level its line arrived at and
+   `removed` where it left (`moved` when its one line changed level), and a fact tagged in step
+   5 as `changed` with `(body)`, the `topics:` line `set-topics` wrote; these are decided rows,
+   and the render's own per-level lines explain the first three.
+   Then re-derive the manifest and diff against step 2 with
    `store_manifest.py verify --out <the same backup dir>`: exit 0 is identical, exit 1 NAMES what
    was added, removed, changed or moved; a change names its fields (`title`, `pin`, `hook`,
    `body`), so a hook or body rewritten without a decision shows up here. Only `level` may differ
@@ -457,7 +514,9 @@ the success line, abort-and-show on a miss).
    `<plugin>/skills/meta-self-improve/reconcile_memory_index.py`) and require `TOTAL problems: 0`,
    AND `reconcile_memory_index.py --check-tree "<cwd>"` for `TOTAL tree problems: 0` (the cross-sibling
    duplicate/orphan check the chain-only `--check` cannot make); fix integrity failures via the engine
-   (re-point a downward ref, resolve an orphan, dedup a duplicate pointer). Size warnings are
+   (re-point a downward ref, resolve an orphan, dedup a duplicate pointer; a `render drift` line
+   is repaired by running `render-topics --scope tree` again, never by editing a line). Size
+   warnings are
    advisory: a large-index warning's advice to trim long hooks is met by step 6's shortening
    proposal, reported and never applied unasked.
    A `decoy anchor` line is never fixed by deleting the directory: drain it first, then move it
@@ -507,7 +566,9 @@ the success line, abort-and-show on a miss).
     rows, so the site counts as fed and its report entry is
     `error <message>`; one that exited 2 before asking (a missing verdicts file, a malformed line)
     logged nothing - fix the input and run it again. Exit 0 prints the receipt line. Report
-    counts + one line each: merges, placements (with direction), voice rewrites, prunes (the
+    counts + one line each: merges, placements (with direction), facts tagged and levels tagged,
+    the render's per-level lines as printed, proposed changes to the tree top's topics or to the
+    topic list, voice rewrites, prunes (the
     versionrot candidates by outcome: reworded, archived, merged, kept), retired or
     proposed-retired skill-covered pointers (each with its (a) quote and (b) reason, per
     references/dream-passes.md "Point a rule at its skill or HOOK"), skill changes, toolbox

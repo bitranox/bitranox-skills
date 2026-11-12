@@ -277,9 +277,15 @@ dropped trigger in all 5 drafted merges.)
 > what the fact is ABOUT - a fact about tool X whose trigger fires in every CONSUMER of X belongs
 > where the consumers are (the common parent), not at X's own repo, or the hook never loads where
 > the symptom appears; EVIDENCE, not wording, decides reach; tie or unsure -> keep + UNSURE.
-> Return: `LEVEL | CONFIDENCE high/low | WHY`.
+> When the tree has a topic list (`topics-show` exits 0), decide the KIND of reach first: a fact
+> that holds wherever a stack or tool named on the list is used, in more than one branch, is
+> placed by TOPIC - answer with topics from the list, not a level, and never invent a topic; a
+> fact about a place (one project, one container, the whole tree) gets a level as above.
+> Return: `LEVEL | CONFIDENCE high/low | WHY`, or `TOPICS a,b | CONFIDENCE high/low | WHY`.
 
-Low/UNSURE never moves. A pinned fact is placed by this SAME routing prompt, up or down, like any
+Low/UNSURE never moves and is never tagged. A pinned fact always gets a LEVEL answer, never
+TOPICS (it is never placed by topic).
+A pinned fact is placed by this SAME routing prompt, up or down, like any
 other entry - `move` carries the pin through unchanged and never refuses on it. Only a pinned
 fact's CONTENT is out of reach: the engine REFUSES an ordinary `add` on a pinned slug
 (`PinnedEntry`); `amend-pinned` is the deliberate way through and is human-only - report a pinned
@@ -366,6 +372,11 @@ TREE-WIDE run (meta-dream-tree and the crosstree variants) ALSO run
 chain-only `--check` structurally cannot see a slug DUPLICATED across sibling chains (slugs are
 tree-unique), which `heal` also misses.
 
+In a tree with a topic list, run `render-topics` before these checks (tree scope for a tree-wide
+run, chain scope for a nap): `--check-tree` reports a line that is missing, differs from its
+body or stands outside its fact's placement as `render drift`, and `--check` reports a
+`repeated line` that a level above already holds.
+
 **A `decoy anchor` line is data loss in progress, not clutter: drain it, then move it out.** It names
 a `.claude-memory` left BELOW the tree top. The engine ignores it (the anchor is the topmost dir
 holding a `CLAUDE.md` and a store), but the walk-up retrieval recipe stops at the NEAREST store, so
@@ -384,7 +395,9 @@ re-run `--check-tree` and also assert the invariant directly:
 one path, the anchor's own store (the `-not -path` drops stores nested in a backup copy, which
 `--check-tree` skips too). The dream is not finished while a second path prints.
 
-Report counts (merges, placements with direction, prunes, pinned untouched), then the
+Report counts (merges, placements with direction, prunes, pinned untouched, facts and levels
+tagged, the lines `render-topics` added and removed per level as it printed them, and every
+proposed change to the tree top's topics), then the
 `pointer blocks` lines `store_manifest.py verify` prints, as printed: one per level whose block
 changed, top first, with bytes and pointers before and after and how many slugs arrived and left.
 Name every slug that arrived at the tree top (verify's `--json` lists them in `data.levels[]`).
