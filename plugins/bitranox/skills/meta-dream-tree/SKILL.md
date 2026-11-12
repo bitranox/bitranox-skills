@@ -157,14 +157,17 @@ the success line, abort-and-show on a miss).
 
     **Topics of a level (only when `memory_engine.py topics-show --proj <anchor>` exits 0; it
     exits 1 printing `no topic list in this tree`, and such a tree skips this paragraph).** A
-    level's descriptor also carries a `TOPICS:` line: the topics of the tree's list that are in
-    use below that directory. Never type it into `set-scope` text (`set-scope` keeps the stored
-    line and refuses a text that changes it). Once the descriptors are fresh, run
-    `memory_engine.py topics-stale --proj <level>` for every level below the tree top, a level
-    whose descriptor has no `TOPICS:` line included (it prints `stale: never tagged`): it prints
-    `fresh` (exit 0) or `stale: <why>` (exit 1). For each stale level, choose its topics from
-    the list `topics-show` prints by reading its descriptor - a container with two stacks gets
-    both, a level nothing on the list fits gets none - and write them with
+    level's descriptor also carries a `TOPICS:` line: the topics of the tree's list that hold
+    for everything below that directory, never one only some of its projects use. Never type it
+    into `set-scope` text (`set-scope` keeps the stored line and refuses a text that changes it).
+    Once the descriptors are fresh, run `memory_engine.py topics-stale --proj <level>` for
+    every level below the tree top, a level whose descriptor has no `TOPICS:` line included (it
+    prints `stale: never tagged`): it prints `fresh` (exit 0) or `stale: <why>` (exit 1). For
+    each stale level, choose its topics from the list `topics-show` prints by reading its
+    descriptor - a container whose children use different stacks gets none of them, even when
+    its descriptor names them all (when it has two or more child levels, a topic EVERY one of
+    them has reaches it through the engine's roll-up, not through its own line), a level nothing
+    on the list fits gets none - and write them with
     `memory_engine.py set-level-topics --proj <level> --topics a,b` (`--topics ''` for none, which
     also makes the level fresh), requiring `topics updated:`. With more than about twenty stale
     levels, hand the judgment to `bitranox:ai-llm-jev-judge`: `topic_tagging.py questions`,

@@ -142,8 +142,11 @@ Each altitude's `CLAUDE.local.md` carries ONE managed, fenced pointer block:
   the bracketed word. Only an inline code span or a fenced block is masked, so quote such syntax in
   code ticks or write it as plain words.
 
-A level's scope descriptor may carry one line `TOPICS: python, uv`: the topics this directory
-has, at most 12 and each from the tree's list. To record that a fact is read only where a topic
+A level's scope descriptor may carry one line `TOPICS: python, uv`: the topics that hold for
+everything below this directory, at most 12 and each from the tree's list. A container whose
+children use different stacks declares none of them. A level HAS a topic when its line declares
+it, or, below the tree top, when it has two or more child levels and every one of them has it.
+To record that a fact is read only where a topic
 is, bind the fact with `set-topics` and give each such directory the topic with
 `set-level-topics`. `set-level-topics` refuses the tree top. The top's line is set with
 `set-top-topics`, which refuses every other level and is run only on the user's decision, never

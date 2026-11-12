@@ -85,17 +85,27 @@ def _topic_list(start):
 
 
 def build_questions(topics):
-    """The judge's questions for a topic list {tag: meaning}: one `noul` per topic, id = the tag."""
+    """The judge's questions for a topic list {tag: meaning}: one `noul` per topic, id = the tag.
+
+    A directory's question asks whether the topic holds for EVERYTHING below it, never whether
+    it is used somewhere below: a level's `TOPICS:` line places rules, so a container tagged for
+    one python child would render python rules at the container and load them in its rust
+    branches. A container whose two or more child levels all have a topic gets it from the
+    engine's roll-up (`topic_placement`), not from its own line."""
     return [{
         "id": tag,
         "type": "noul",
         "instructions": ("The item is either a rule (its title and one-line trigger) or a "
                          "directory (its path and a description of everything below it). "
                          "Topic '%s': %s. For a rule: does it hold wherever this topic is in "
-                         "use, and only there? For a directory: is this topic in use below it?"
-                         % (tag, topics[tag])),
-        "criteria": {"true": "the item is about topic '%s'" % tag,
-                     "false": "the item is not about it, or holds regardless of it"},
+                         "use, and only there? For a directory: does this topic hold for "
+                         "everything below it, so that every project under it uses it? A "
+                         "directory whose children differ, some using the topic and some not, "
+                         "answers no." % (tag, topics[tag])),
+        "criteria": {"true": "the rule is about topic '%s', or the topic holds for everything "
+                             "below the directory" % tag,
+                     "false": "the rule is not about it or holds regardless of it, or only part "
+                              "of what is below the directory uses it"},
     } for tag in sorted(topics)]
 
 

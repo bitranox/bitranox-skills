@@ -105,6 +105,19 @@ def test_one_question_per_topic_with_the_topic_as_its_id(tree, tmp_path, capsys)
     assert json.loads(capsys.readouterr().out)["questions"] == 2
 
 
+def test_a_directory_has_a_topic_only_when_it_holds_for_everything_below_it():
+    # A level's TOPICS line places rules there, so "in use somewhere below" would tag a container
+    # with python and rust children for both and load python rules in its rust branch.
+    for question in T.build_questions(LIST):
+        text = question["instructions"]
+        directory_half = text[text.index("For a directory:"):]
+        assert "everything below it" in directory_half
+        assert "children differ" in directory_half and "answers no" in directory_half
+        assert "in use below" not in text
+        assert "everything below the directory" in question["criteria"]["true"]
+        assert "only part" in question["criteria"]["false"]
+
+
 def test_fact_items_are_the_unpinned_lines_of_one_level(tree, tmp_path):
     out = tmp_path / "items.jsonl"
     assert T.main(["items", "--from", str(tree), "--facts-at", str(tree), "--out", str(out)]) == 0

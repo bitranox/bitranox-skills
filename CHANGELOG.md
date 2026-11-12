@@ -40,6 +40,11 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   topics, which it proposes instead. A nap tags its own directory and renders its own chain. A
   tree without a topic list is consolidated as before.
 - A fact lifted or copied into another tree arrives without topics; that tree's dream tags it.
+- A level's `TOPICS:` line names the topics that hold for everything below it. The dream gives
+  a container whose children use different stacks neither, and `topic_tagging.py questions` asks
+  the judge whether a topic holds for everything below a directory rather than whether it is in
+  use somewhere below, so python rules no longer render at a mixed container and load in its
+  rust branches.
 
 ## [11.3.0]
 
