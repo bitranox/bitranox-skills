@@ -55,13 +55,13 @@ no set of exact names covers them. `venvnotes` or `myvenv` has no such prefix an
 
 def is_non_level_dirname(name):
     """True for a directory name no curated level or live store sits under: a name in
-    NON_LEVEL_DIRNAMES, a virtualenv by VENV_DIR_PREFIXES, the store itself, or any `<store>-*`
-    sibling of it.
+    NON_LEVEL_DIRNAMES, a virtualenv by VENV_DIR_PREFIXES, or any name starting with the store's
+    name (the store itself, `.claude-memoryX`, `.claude-memory-<anything>`).
 
     Installed packages ship CLAUDE.md files of their own, so a walk that enters a virtualenv can
     find levels in it, and a render would write lines there.
 
-    The sibling is the backup `migrate_to_slug_store.py --apply` leaves under the anchor
+    The prefix covers the backup `migrate_to_slug_store.py --apply` leaves under the anchor
     (`.claude-memory-migration-backup-<stamp>/`): it holds a copy of the store and of every pointer
     file the migration touched, and a copy is a snapshot, not a level, so a walk that entered it
     reported every migrated slug at two levels. THE name rule every walk over a tree's levels
