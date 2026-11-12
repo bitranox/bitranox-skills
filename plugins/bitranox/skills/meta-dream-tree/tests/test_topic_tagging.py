@@ -158,6 +158,12 @@ def test_decided_rows_become_a_batch_the_engine_takes(tree, tmp_path, capsys):
      "no answer for rust"),
     ({"id": 7, "ok": True, "answers": {}}, "no string id"),
     ("not json", "line 1 is not a JSON object"),
+    ('{"id": "feedback-one", "ok": true, "answers": {"python": {"value": NaN}, "rust": {"value": 0.0}}}',
+     "no answer for python"),
+    ('{"id": "feedback-one", "ok": true, "answers": {"python": {"value": 0.9}, "rust": {"value": Infinity}}}',
+     "no answer for rust"),
+    (_row("feedback-one", 0.9, 7.0), "no answer for rust"),
+    (_row("feedback-one", -0.5, 0.0), "no answer for python"),
 ])
 def test_a_row_that_is_no_decision_goes_to_the_unsure_file_with_its_reason(tree, tmp_path, row, reason):
     rc, out, unsure = _decide(tmp_path, tree, [row])
@@ -185,14 +191,79 @@ def test_level_rows_are_keyed_by_level(tree, tmp_path):
     assert _lines(out) == [{"level": "a/py", "topics": ["python"]}]
 
 
-def test_a_decided_fact_whose_batch_line_the_engine_would_refuse_is_unsure(tree, tmp_path):
-    long_slug = "feedback-" + "a" * ME.MAX_TOPIC_BATCH_LINE_BYTES
-    rc, out, unsure = _decide(tmp_path, tree, [_row(long_slug, 0.9, 0.0), _row("feedback-one", 0.9, 0.0)])
+@pytest.mark.parametrize("ident, reason", [
+    ("../x", "is not a valid slug"),
+    ("feedback-" + "a" * ME.MAX_TOPIC_BATCH_LINE_BYTES, "no level points at it"),
+    ("no-such-fact", "no level points at it"),
+    ("feedback-pinned", "is pinned"),
+])
+def test_a_fact_row_the_engine_would_refuse_is_unsure_with_the_engine_s_reason(tree, tmp_path, ident, reason):
+    rc, out, unsure = _decide(tmp_path, tree, [_row(ident, 0.9, 0.0), _row("feedback-x", 0.9, 0.0)])
     assert rc == 0
-    assert _lines(out) == [{"slug": "feedback-one", "topics": ["python"]}]
+    assert _lines(out) == [{"slug": "feedback-x", "topics": ["python"]}]
     reasons = [u["reason"] for u in _lines(unsure)]
-    assert len(reasons) == 1 and "over the %d bytes" % ME.MAX_TOPIC_BATCH_LINE_BYTES in reasons[0]
+    assert len(reasons) == 1 and reason in reasons[0]
+
+
+def test_an_unknown_id_is_reported_as_such_even_when_its_answers_are_unsure(tree, tmp_path):
+    rc, out, unsure = _decide(tmp_path, tree, [_row("no-such-fact", 0.5, 0.0)])
+    assert _lines(out) == [] and "no level points at it" in _lines(unsure)[0]["reason"]
+
+
+def test_a_decided_file_with_refusable_ids_among_its_rows_is_applied_by_the_engine(tree, tmp_path, outside):
+    rows = _rows_file(outside, [_row("feedback-one", 0.9, 0.0), _row("../x", 0.9, 0.0),
+                                _row("no-such-fact", 0.0, 0.9), _row("feedback-pinned", 0.0, 0.0)])
+    out, unsure = outside / "decided.jsonl", outside / "unsure.jsonl"
+    done = _run(["decide", "--from", str(tree), "--rows", rows, "--kind", "facts", "--threshold", "0.8",
+                 "--out", str(out), "--unsure-out", str(unsure)], outside)
+    assert done.returncode == 0, done.stderr
+    assert json.loads(done.stdout)["decided"] == 1 and len(_lines(unsure)) == 3
+    applied = _run(["set-topics", "--proj", str(tree), "--batch", str(out)], outside, ENGINE)
+    assert applied.returncode == 0, applied.stderr
+    assert ME.read_body_topics(us.body_path(tree, "feedback-one")) == ("python",)
+
+
+def test_a_fact_whose_line_differs_from_its_body_is_unsure_when_bound_and_decided_when_cleared(tree, tmp_path):
+    local = tree / "CLAUDE.local.md"
+    text = local.read_text(encoding="utf-8")
+    line = next(ln for ln in text.splitlines() if "(mem:feedback-two)" in ln)
+    local.write_text(text.replace(line, line.replace(HOOK, "When something else holds, do that.")),
+                     encoding="utf-8")
+    rc, out, unsure = _decide(tmp_path, tree, [_row("feedback-two", 0.9, 0.0)])
+    assert _lines(out) == [] and "differs from what its body renders" in _lines(unsure)[0]["reason"]
+    rc, out, unsure = _decide(tmp_path, tree, [_row("feedback-two", 0.0, 0.0)])
+    assert _lines(out) == [{"slug": "feedback-two", "topics": []}] and _lines(unsure) == []
     assert ME.main(["set-topics", "--proj", str(tree), "--batch", str(out)]) == 0
+
+
+def test_the_batch_line_limit_is_a_backstop_for_a_line_the_engine_would_refuse():
+    # Unreachable through `decide` for a row the engine's check passed (its slug names a body
+    # file, at most tp.MAX_TOPICS short tags); this pins that the check still holds if a limit moves.
+    line, why = T._decided_line("slug", "a" * ME.MAX_TOPIC_BATCH_LINE_BYTES, [], "facts")
+    assert line is None and "over the %d bytes" % ME.MAX_TOPIC_BATCH_LINE_BYTES in why
+    assert T._decided_line("level", "a" * ME.MAX_TOPIC_BATCH_LINE_BYTES, [], "levels")[1] is None
+
+
+@pytest.mark.parametrize("how", ["same-string", "another-spelling", "a-hard-link", "a-new-file-spelt-twice"])
+def test_out_and_unsure_out_naming_one_file_is_refused(tree, tmp_path, capsys, how):
+    work = tmp_path / "work"
+    work.mkdir()
+    out = work / ("new.jsonl" if how == "a-new-file-spelt-twice" else "decided.jsonl")
+    if how != "a-new-file-spelt-twice":
+        out.write_bytes(b"old decided\n")
+    unsure = {"same-string": out, "a-hard-link": work / "link.jsonl"}.get(
+        how, work / "." / "x" / ".." / out.name)
+    (work / "x").mkdir()
+    if how == "a-hard-link":
+        os.link(out, unsure)
+    listing = _dir_listing(work)
+    rows = _rows_file(tmp_path, [_row("feedback-one", 0.9, 0.0)])
+    assert T.main(["decide", "--from", str(tree), "--rows", rows, "--kind", "facts", "--threshold", "0.8",
+                   "--out", str(out), "--unsure-out", str(unsure)]) == 2
+    captured = capsys.readouterr()
+    assert "! error" in captured.err and "same file" in captured.err and captured.out == ""
+    assert _dir_listing(work) == listing
+    assert (not out.exists()) if how == "a-new-file-spelt-twice" else out.read_bytes() == b"old decided\n"
 
 
 def test_nothing_in_the_store_changes(tree, tmp_path):
@@ -270,8 +341,9 @@ def test_rows_over_the_engine_batch_limit_are_refused_and_the_split_route_works(
                      "--unsure-out", str(unsure)], outside)
         assert done.returncode == 0, done.stderr
         summary = json.loads(done.stdout)
-        assert summary["decided"] == len(chunk) and summary["unsure"] == 0
-        total += summary["decided"]
+        # these ids name no fact of the tree, so every row is read and lands in the unsure file
+        assert summary["rows"] == len(chunk) and summary["unsure"] == len(chunk)
+        total += summary["rows"]
     assert total == limit + 1
 
 
@@ -324,7 +396,8 @@ def _decide_peak(tmp_path, tree, count):
             fh.write(json.dumps(_row("feedback-n%06d" % n, 0.9, 0.0, note="x" * 2000)) + "\n")
     tracemalloc.start()
     try:
-        T.decide(str(rows), LIST, "facts", 0.8, (0.2, 0.8), str(tmp_path / "d"), str(tmp_path / "u"))
+        T.decide(str(rows), LIST, "facts", 0.8, (0.2, 0.8), str(tmp_path / "d"), str(tmp_path / "u"),
+                 anchor=str(tree))
         return tracemalloc.get_traced_memory()[1]
     finally:
         tracemalloc.stop()

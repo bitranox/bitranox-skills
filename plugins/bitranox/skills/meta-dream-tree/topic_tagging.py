@@ -19,19 +19,28 @@ answers back. It never calls the judge and never writes the memory store; the en
       the unsure band (default 0.2 to 0.8, bounds excluded): its topics are those answered at
       T or above. facts: {"slug", "topics"} lines, the file `set-topics --batch` takes. levels:
       {"level", "topics"} lines, one `set-level-topics` call each. Every other row goes to the
-      unsure file with its reason and answers, for a model to tag by reading.
+      unsure file with its reason and answers, for a model to tag by reading. An answer counts
+      only when it is a finite probability within 0..1; any other value is no answer.
+      `--out` and `--unsure-out` must name two files.
+
+`set-topics --batch` refuses the WHOLE batch for one line it cannot apply, so a decided file
+must hold none. A fact row is therefore put through the engine's own row check
+(`memory_engine._topic_row_problem`): an id that is no valid slug, one no level of the tree
+points at, a pinned fact, a body without frontmatter, or a line the engine may not bind goes to
+the unsure file with the engine's reason, whatever the judge answered.
 
 `decide` takes at most `memory_engine.MAX_TOPIC_BATCH` rows, for both kinds: a decided file of
 more rows is one `set-topics --batch` refuses, so a larger rows file is refused here, and the
 route is to split the items file into parts of at most that many lines and run the judge and
-`decide` once per part. A decided fact whose batch line would be longer than the engine's
-`MAX_TOPIC_BATCH_LINE_BYTES` goes to the unsure file for the same reason.
+`decide` once per part.
 
 Items and rows are streamed, one line held at a time; `decide` also keeps the id of each row,
 to send a second row for one item to the unsure file, so what it holds grows by one short id per
-row and the row limit above bounds it. Every output is written to a temporary file beside its
-target and renamed into place only when the whole input was read, so a run that fails leaves an
-earlier output as it was and no half file. Prints one JSON summary on stdout.
+row and the row limit above bounds it. For `--kind facts` it also holds, read before the first
+row, the engine's pointer record of every fact of the tree (`_pointer_owners`): that
+grows with the store, never with the rows file. Every output is written to a temporary file
+beside its target and renamed into place only when the whole input was read, so a run that
+fails leaves an earlier output as it was and no half file. Prints one JSON summary on stdout.
 Exit codes: 0 done; 2 could not run (bad arguments, an input it cannot read, no topic list).
 """
 
@@ -102,6 +111,15 @@ def iter_level_items(anchor):
         yield {"id": key, "state": {"path": key, "descriptor": "\n".join(lines).strip()}}
 
 
+def _probability(entry):
+    """The judge's value in `entry` when it is a number within 0..1, else None (NaN and the
+    infinities included: NaN fails both comparisons)."""
+    value = entry.get("value") if isinstance(entry, dict) else None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value if 0.0 <= value <= 1.0 else None
+
+
 def judge_row(row, topics, threshold, band):
     """(topics, reason) for one judge row: (sorted tags, None) when decided, else (None, why)."""
     if not isinstance(row, dict) or not isinstance(row.get("id"), str) or not row["id"]:
@@ -113,8 +131,8 @@ def judge_row(row, topics, threshold, band):
         return None, "no answers"
     taken = []
     for tag in sorted(topics):
-        value = answers.get(tag, {}).get("value") if isinstance(answers.get(tag), dict) else None
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
+        value = _probability(answers.get(tag))
+        if value is None:
             return None, "no answer for %s" % tag
         if band[0] < value < band[1]:
             return None, "unsure about %s (%.2f)" % (tag, value)
@@ -173,8 +191,25 @@ def _over_batch_limit(rows_path):
         "judge and `decide` once per part" % (rows_path, ME.MAX_TOPIC_BATCH, ME.MAX_TOPIC_BATCH))
 
 
+def fact_owners(anchor):
+    """The engine's pointer record (`memory_engine._pointer_owners`) of every fact a level of the
+    tree at `anchor` points at, from the engine's own level walk and pointer parser: what
+    `set-topics` resolves a slug against. Two walks of the levels, one for the slugs and the
+    engine's own for their record; grows with the store, not with any rows file."""
+    pointed = set()
+    for level in ME.curated_levels_under(anchor):
+        pointed.update(ptr.slug for ptr in us.parse_pointer_index(
+            ME.read_store_text(sig.claude_local_md_path(level)))[1])
+    return ME._pointer_owners(anchor, pointed)
+
+
 def _decided_line(key, ident, taken, kind):
-    """(line, None) for a decided row, or (None, why) when the engine would refuse its line."""
+    """(line, None) for a decided row, or (None, why) when the engine would refuse its line.
+
+    The byte limit is a backstop, unreachable for a row the engine's check passed: such a slug
+    names a body file (a filename of at most 255 bytes on the filesystems the store lives on)
+    and carries at most tp.MAX_TOPICS tags of at most 32 characters. It is kept so a later change
+    to one of those limits cannot hand the engine a line it refuses."""
     line = json.dumps({key: ident, "topics": taken}, sort_keys=True) + "\n"
     if kind == "facts" and len(line.encode("utf-8")) > ME.MAX_TOPIC_BATCH_LINE_BYTES:
         return None, ("its batch line is over the %d bytes `set-topics --batch` reads"
@@ -191,11 +226,14 @@ def _unsure_line(row, number, why, topics):
                       sort_keys=True) + "\n"
 
 
-def decide(rows_path, topics, kind, threshold, band, out_path, unsure_path):
+def decide(rows_path, topics, kind, threshold, band, out_path, unsure_path, *, anchor):
     """Split a rows file into the decided batch and the unsure rest; returns the counts. An id
-    seen twice is unsure the second time: two answers for one item are no decision. Raises
-    TaggingError, writing neither output, for a file of more than MAX_TOPIC_BATCH rows."""
+    seen twice is unsure the second time: two answers for one item are no decision. A fact row
+    the engine would refuse (`_topic_row_problem` against the tree at `anchor`) is unsure with
+    the engine's reason. Raises TaggingError, writing neither output, for a file of more than
+    MAX_TOPIC_BATCH rows."""
     key = "slug" if kind == "facts" else "level"
+    owners = fact_owners(anchor) if kind == "facts" else None
     counts = {"rows": 0, "decided": 0, "unsure": 0}
     seen = set()
     with _replacing(out_path, unsure_path) as (out, unsure):
@@ -206,6 +244,9 @@ def decide(rows_path, topics, kind, threshold, band, out_path, unsure_path):
             taken, why = judge_row(row, topics, threshold, band) if row is not None \
                 else (None, "line %d is not a JSON object" % number)
             ident = row.get("id") if isinstance(row, dict) else None
+            if owners is not None and isinstance(ident, str) and ident:
+                # The engine's reason wins: no reading of the answers makes its line applicable.
+                why = ME._topic_row_problem(ident, tuple(taken or ()), anchor, topics, owners) or why
             if why is None and ident in seen:
                 taken, why = None, "a second row for this id"
             if isinstance(ident, str):
@@ -231,6 +272,14 @@ def _write_items(items, out_path):
     return count
 
 
+def _same_file(first, second):
+    """True when two paths name one file: the same file on disk when both exist (a hard link
+    included), else the same resolved path."""
+    if os.path.exists(first) and os.path.exists(second):
+        return os.path.samefile(first, second)
+    return os.path.normcase(os.path.realpath(first)) == os.path.normcase(os.path.realpath(second))
+
+
 def _run(args):
     anchor, topics = _topic_list(args.start)
     if args.cmd == "questions":
@@ -244,7 +293,11 @@ def _run(args):
     low, high = args.band
     if not (0.0 <= low <= high <= 1.0 and 0.0 <= args.threshold <= 1.0):
         raise TaggingError("--threshold and --band take probabilities, LOW <= HIGH, within 0..1")
-    counts = decide(args.rows, topics, args.kind, args.threshold, (low, high), args.out, args.unsure_out)
+    if _same_file(args.out, args.unsure_out):
+        raise TaggingError("--out and --unsure-out name the same file %s: the unsure rows would "
+                           "replace the decided ones" % args.out)
+    counts = decide(args.rows, topics, args.kind, args.threshold, (low, high), args.out,
+                    args.unsure_out, anchor=anchor)
     return dict(counts, command="decide", out=args.out, unsure_out=args.unsure_out)
 
 
