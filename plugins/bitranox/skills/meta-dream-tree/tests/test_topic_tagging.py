@@ -389,22 +389,56 @@ def test_a_failed_items_run_leaves_no_half_file(tree, tmp_path, capsys):
     assert out.read_bytes() == b"old items\n" and _dir_listing(work) == listing
 
 
+def _bulk_facts(tree, count):
+    """`count` facts the engine can tag, at a level `bulk` of `tree`: one body written by the
+    engine as the template, the rest its copies under their own slug and title, and one pointer
+    block holding a line per fact. Writing them one `add_or_update_entry` each rewrites the block
+    per fact; this writes it once."""
+    bulk = tree / "bulk"
+    bulk.mkdir()
+    (bulk / "CLAUDE.md").write_text("x\n", encoding="utf-8")
+    ME.add_or_update_entry(str(bulk), title="T template", hook=HOOK, body="body", slug="feedback-template")
+    template = Path(us.body_path(tree, "feedback-template")).read_text(encoding="utf-8")
+    local = bulk / "CLAUDE.local.md"
+    text = local.read_text(encoding="utf-8")
+    scope, pointers = us.parse_pointer_index(text)
+    for n in range(count):
+        slug = "feedback-n%06d" % n
+        us.put_body(str(tree), slug, template.replace("feedback-template", slug)
+                    .replace("T template", "T " + slug))
+        pointers.append(us.Pointer(slug=slug, title="T " + slug, hook=HOOK))
+    us.write_if_changed(str(local), us.upsert_pointer_block(text, scope, pointers))
+
+
 def _decide_peak(tmp_path, tree, count):
+    """Peak traced memory of one `decide` over `count` rows, each naming a fact of `tree` once:
+    three in four decided, each carrying 2 KB the decided line drops; every fourth unsure, its
+    python answer a 2 KB string, which the unsure line echoes as the answer it was given."""
     rows = tmp_path / ("rows-%d.jsonl" % count)
     with open(rows, "w", encoding="utf-8") as fh:
         for n in range(count):
-            fh.write(json.dumps(_row("feedback-n%06d" % n, 0.9, 0.0, note="x" * 2000)) + "\n")
+            row = _row("feedback-n%06d" % n, 0.9, 0.0, note="x" * 2000)
+            if n % 4 == 3:
+                row["answers"]["python"]["value"] = "x" * 2000
+            fh.write(json.dumps(row) + "\n")
     tracemalloc.start()
     try:
-        T.decide(str(rows), LIST, "facts", 0.8, (0.2, 0.8), str(tmp_path / "d"), str(tmp_path / "u"),
-                 anchor=str(tree))
-        return tracemalloc.get_traced_memory()[1]
+        counts = T.decide(str(rows), LIST, "facts", 0.8, (0.2, 0.8), str(tmp_path / "d"),
+                          str(tmp_path / "u"), anchor=str(tree))
+        return tracemalloc.get_traced_memory()[1], counts
     finally:
         tracemalloc.stop()
 
 
 def test_rows_are_streamed_and_only_their_ids_are_kept(tree, tmp_path):
-    peak_small = _decide_peak(tmp_path, tree, 200)
-    peak_large = _decide_peak(tmp_path, tree, 4000)
-    # 4000 rows of 2 KB are 8 MB of text; what grows is one short id per row
-    assert peak_large < 1_500_000 and peak_large < peak_small + 1_000_000
+    _bulk_facts(tree, 4000)
+    peak_small, small = _decide_peak(tmp_path, tree, 200)
+    peak_large, large = _decide_peak(tmp_path, tree, 4000)
+    # Every row names a fact of the tree once: both paths are taken at both sizes, mostly decided.
+    assert small == {"rows": 200, "decided": 150, "unsure": 50}
+    assert large == {"rows": 4000, "decided": 3000, "unsure": 1000}
+    # Both runs hold the same pointer record of the tree's 4000 facts (it grows with the store,
+    # not the rows), so the difference is what the 3800 extra rows of 2 KB (7.6 MB of text) leave
+    # held: one short id each, a few hundred KB in all. Keeping the rows, the decided rows, or
+    # the 950 extra unsure lines of 2 KB would each add megabytes.
+    assert peak_large < peak_small + 1_000_000

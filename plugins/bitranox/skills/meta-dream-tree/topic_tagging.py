@@ -23,11 +23,18 @@ answers back. It never calls the judge and never writes the memory store; the en
       only when it is a finite probability within 0..1; any other value is no answer.
       `--out` and `--unsure-out` must name two files.
 
-`set-topics --batch` refuses the WHOLE batch for one line it cannot apply, so a decided file
+`set-topics --batch` refuses the WHOLE batch for one row it cannot apply, so a decided file
 must hold none. A fact row is therefore put through the engine's own row check
 (`memory_engine._topic_row_problem`): an id that is no valid slug, one no level of the tree
 points at, a pinned fact, a body without frontmatter, or a line the engine may not bind goes to
-the unsure file with the engine's reason, whatever the judge answered.
+the unsure file with the engine's reason, whatever the judge answered. That clears every refusal
+of one row, not the one refusal of the batch as a whole: a row of `[]` un-binds a fact, and a
+fact bound now whose lines sit at several levels keeps one line at the tree top, so when the
+facts a batch un-binds would take the top's block past `memory_engine.MAX_RENDER_BLOCK_BYTES`
+the engine refuses the whole call (`CollapseTooLarge`) and writes nothing. `decide` does not
+predict this; the engine's refusal names the route that frees the room (a tree-scope render, a
+move of lines from the top, a rebind of facts placed there, or un-binding fewer facts per call):
+follow it, then run `set-topics --batch` again.
 
 `decide` takes at most `memory_engine.MAX_TOPIC_BATCH` rows, for both kinds: a decided file of
 more rows is one `set-topics --batch` refuses, so a larger rows file is refused here, and the
