@@ -411,11 +411,23 @@ the success line, abort-and-show on a miss).
    them follows the mode, as a misplacement re-home to the top does (references/dream-core.md,
    Mode). In propose mode and under `off`, take its binding back with
    `set-topics --proj <anchor> --slug <slug> --clear` (for a fact that had topics before this
-   step, set those again instead), requiring `set topics on 1 fact(s); 0 unchanged`, so that its
-   line stays where it is, and list it in the report as a proposal with its cost (the UTF-8
-   bytes of its pointer line plus the newline) and the topics no level has; then run the dry
-   run again and require that the top's line no longer counts a fact you took back. In auto mode
-   keep the binding and print that cost in the report.
+   step, set those again instead; for one that was universal before it, `topics: []`, use
+   `--universal`, since `--clear` would remove that line and leave it never tagged), requiring
+   `set topics on 1 fact(s); 0 unchanged`, so that its line stays where it is, and list it in
+   the report as a proposal with its cost (the UTF-8 bytes of its pointer line plus the
+   newline) and the topics no level has; then run the dry run again and require that the
+   top's line no longer counts a fact you took back. When the top's line counts more arrivals
+   than `examples` names, take the named ones back, dry-run again, and repeat until the top's
+   line counts none of this step's facts. In auto mode keep the binding and print that cost in
+   the report.
+   A fact tagged BEFORE this run can arrive at the top too, because step 0b changed a level's
+   topics in this run and no level has its topic any more (once this step's facts are taken
+   back, the names the dry run still lists are such facts). Its binding stays as it is. In
+   propose mode and under `off`, put that level's earlier `TOPICS:` back with
+   `set-level-topics --proj <level> --topics <the earlier ones>`, requiring `topics updated:`,
+   and list the level change in the report as a proposal with its cost (the lines it would
+   bring to the top, each as above); the dry run must then no longer count that fact at the
+   top. In auto mode keep the level's new topics and print that cost.
 
 6. **Voice + firing check (maintenance).** The engine lints new hooks at add-time; here, sweep the
    whole store for residue with `memory_engine.py lint --tree "<cwd>"` (reports, tree-wide, hooks over

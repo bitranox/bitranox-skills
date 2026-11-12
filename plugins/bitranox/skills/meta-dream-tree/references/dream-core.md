@@ -92,7 +92,8 @@ Read the mode first (`dream_state.py mode`; knobs in `~/.claude/.bitranox-memory
 
 In a tree with a topic list, a fact tagged with topics that no level has would get its line at
 the tree top. That is a move to the top too and follows the same three rules: proposed with its
-cost and left untagged in propose mode and under `off`, tagged with its cost printed in auto
+cost and its earlier binding restored in propose mode and under `off`, tagged with its cost
+printed in auto
 (meta-dream-tree step 5, which shows how to see it before the render).
 
 ## Boundaries (the whole family; skills point here, they do not restate it)

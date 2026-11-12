@@ -48,6 +48,10 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   top: it proposes it with its cost.
 - Capture onto a fact placed by topic re-runs `add` from one of the levels the refusal names;
   the engine updates every line of the fact. A `topics:` line is never written by hand.
+- The tree dream restores a fact that was universal with `set-topics --universal`, repeats the
+  take-back until the tree top's dry-run line counts none of the step's facts, and puts a
+  level's earlier topics back when its own level change would bring an earlier-tagged fact to
+  the tree top in propose mode.
 - A level's `TOPICS:` line names the topics that hold for everything below it. The dream gives
   a container whose children use different stacks neither, and `topic_tagging.py questions` asks
   the judge whether a topic holds for everything below a directory rather than whether it is in
