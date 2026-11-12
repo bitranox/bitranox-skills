@@ -198,7 +198,7 @@ def _tag_raw(anchor, slug, line):
     us.put_body(anchor, slug, stored.replace("\ntitle: T\n", "\ntitle: T\n%s\n" % line))
 
 
-@pytest.mark.parametrize("line", ["topics: [python]", "topics: []", "topics: [Not A Tag]"])
+@pytest.mark.parametrize("line", ["topics: []", "topics: [Not A Tag]"])
 def test_a_cross_tree_relocate_drops_the_topics_line_and_says_so(two_trees, capsys, line):
     src, dst = str(two_trees.proj_a), str(two_trees.proj_b)
     slug = E.add_or_update_entry(src, title="T", hook=HOOK, body="prose\n\n%s\n" % PROSE_LINE,
@@ -227,7 +227,7 @@ def test_a_cross_tree_relocate_keeps_crlf_line_endings_when_it_drops_the_line(tw
     slug = E.add_or_update_entry(src, title="T", hook=HOOK, body="prose", type_="feedback",
                                  slug="feedback-moving")
     path = us.body_path(us.resolve_anchor(src), slug)
-    tagged = E._with_topics(path.read_text(encoding="utf-8"), ("python",))
+    tagged = E._with_topics(path.read_text(encoding="utf-8"), ())
     path.write_bytes(tagged.replace("\n", "\r\n").encode("utf-8"))
     E.relocate_entry(src, dst, slug)
     moved = us.body_path(us.resolve_anchor(dst), slug).read_bytes()
@@ -243,7 +243,7 @@ def test_a_same_tree_move_keeps_the_topics_line(tmp_path):
     (anchor / us.STORE_DIRNAME).mkdir()
     slug = E.add_or_update_entry(str(proj), title="T", hook=HOOK, body="prose", type_="feedback",
                                  slug="feedback-staying")
-    _tag_raw(str(anchor), slug, "topics: [python]")
+    _tag_raw(str(anchor), slug, "topics: []")
     before = us.body_path(anchor, slug).read_bytes()
     rep = E.relocate_entry(str(proj), str(anchor), slug)
     assert rep["relocated"] and not rep["cross_tree"]

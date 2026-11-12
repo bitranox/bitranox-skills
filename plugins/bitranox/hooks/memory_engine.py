@@ -93,6 +93,80 @@ class SlugCollision(ValueError):
         self.slug, self.suggestion = slug, suggestion
 
 
+_ENGINE_ROUTE = "hooks/memory_engine.py"
+
+
+class PlacedElsewhere(SlugCollision):
+    """Raised when `add` names a fact that is placed by topic from a level holding none of its
+    lines. Adopting it there would add a line the placement does not have; the write goes to a
+    level that holds one. A SlugCollision, so every caller that reports a collision reports this."""
+
+    def __init__(self, slug, levels):
+        levels = list(levels)
+        ValueError.__init__(self, "slug %r is placed by topic and has no line at this level; it is "
+                                  "read at %s. Write it from one of those levels (%s add --proj "
+                                  "%s --slug %s ...), or change where it is read with set-topics"
+                            % (slug, ", ".join(str(level) for level in levels), _ENGINE_ROUTE,
+                               levels[0], slug))
+        self.slug, self.suggestion, self.levels = slug, None, levels
+
+
+def _copies_of(anchor, slug):
+    """[(level dir, Pointer)] for every line of `slug` in the tree, from one walk over its levels."""
+    out = []
+    for level in curated_levels_under(anchor):
+        for ptr in us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level)))[1]:
+            if ptr.slug == slug:
+                out.append((level, ptr))
+    return out
+
+
+def _placed_slugs(anchor, slugs):
+    """The members of `slugs` whose facts are placed by topic: what the renderer manages, a body
+    bound to at least one topic that a line can be built from (`title:` and `description:`),
+    with a line at some level and no line of it pinned at any level. A bound fact the renderer
+    does not manage stays where its lines are, so the verbs that place lines by hand still take
+    it, and the refusals of render-topics and set-topics offer to move exactly those lines.
+    Reads one body head per slug; walks the tree's levels once, and only when a body is
+    managed. Holds one small record per managed slug."""
+    managed = set()
+    for slug in slugs:
+        head = _read_body_head(us.body_path(anchor, slug))
+        if head is not None and _managed_topics(slug, head, ()) is not None:
+            managed.add(slug)
+    if not managed:
+        return set()
+    seen, pinned = set(), set()
+    for level in curated_levels_under(anchor):
+        for ptr in us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level)))[1]:
+            if ptr.slug in managed:
+                seen.add(ptr.slug)
+                if ptr.pin:
+                    pinned.add(ptr.slug)
+    return seen - pinned
+
+
+def _placed_copies(anchor, slug):
+    """[(level dir, Pointer)] for every line of `slug` when its fact is placed by topic (see
+    `_placed_slugs`), else []. One body head; one walk over the levels for a managed body."""
+    head = _read_body_head(us.body_path(anchor, slug))
+    if head is None or _managed_topics(slug, head, ()) is None:
+        return []
+    copies = _copies_of(anchor, slug)
+    return [] if any(ptr.pin for _level, ptr in copies) else copies
+
+
+def _same_level(a, b):
+    return os.path.normcase(os.path.abspath(str(a))) == os.path.normcase(os.path.abspath(str(b)))
+
+
+_PLACED_BY_TOPIC = ("%r is placed by topic: where it is read follows its topics and the levels' "
+                    "(set-topics, set-level-topics, then render-topics). To place it by hand, "
+                    "un-bind it first: " + _ENGINE_ROUTE + " set-topics --proj %s --slug %s "
+                    "--clear (its lines collapse to one at the tree top, where a move or "
+                    "relocate takes it)")
+
+
 # A slug that is not a plain filename (`uuid_store.is_valid_slug`). Defined by the store, whose path
 # builder raises it too, so the engine's up-front refusal and the store's last line of defence are
 # one exception type.
@@ -384,6 +458,10 @@ def upsert_entry(proj, title, hook, body="", type_=None, pin=False,
     raises ValueError, both BEFORE any write. On an UPDATE, a `type_` with no body re-types the
     stored body in place (its prose untouched). A relative `proj` is taken relative to the cwd.
 
+    A fact placed by topic (see `_placed_slugs`) is written only from a level holding one of its
+    lines, else `PlacedElsewhere`; the write then refreshes its other lines too. Pinning one raises
+    TopicRefusal. Both before any write.
+
     `skill` ties the fact to the skill it belongs with (`metadata: skill:`); it follows the same
     rules as `type_` - kept on an update that does not name it, set in place by one with no body -
     and an invalid name raises `InvalidSkill` before any write.
@@ -426,6 +504,19 @@ def upsert_entry(proj, title, hook, body="", type_=None, pin=False,
     # the refusal writes nothing at all.
     if _body_topics_line(body) is not None and not us.body_path(anchor, slug).is_file():
         raise TopicsOnCreate(slug)
+    # A fact placed by topic (see `_placed_slugs`) has a line at each level its topics place it
+    # at. Checked here, before the level is scaffolded, so each refusal writes nothing: it is not
+    # pinned (a pinned fact is never placed by topic), and it is written from a level that holds
+    # one of its lines (adopting it elsewhere would add a line the placement lacks). One tree
+    # walk, and only for a body the renderer manages; a new fact has no body and skips it.
+    copies = _placed_copies(anchor, slug)
+    placed = bool(copies)
+    if placed and pin:
+        raise TopicRefusal(["%s is bound to topics, and a pinned fact is never placed by topic; "
+                            "un-bind it first (%s set-topics --proj %s --slug %s --clear), then "
+                            "pin it" % (slug, _ENGINE_ROUTE, anchor, slug)])
+    if placed and not any(_same_level(level, proj) for level, _ptr in copies):
+        raise PlacedElsewhere(slug, [level for level, _ptr in copies])
     store_dir = us.central_facts_dir(anchor).parent   # the `.claude-memory` store dir for this tree
     store_existed = store_dir.exists()
     lock_target = sig.claude_local_md_path(proj)
@@ -493,6 +584,13 @@ def upsert_entry(proj, title, hook, body="", type_=None, pin=False,
         e.body = _with_title(e.body, e.title)
         bodies[slug] = e.body
         _commit_store(proj, scope or scope_default, entries, bodies)
+    if placed:
+        # The other lines of a fact placed by topic say what this one now says. After the commit
+        # and outside its lock (add_pointer takes each level's own): a failure here leaves the
+        # body and this level written and the rest as render drift, which --check-tree names.
+        for level, ptr in copies:
+            if not _same_level(level, proj) and (ptr.title, ptr.hook) != (e.title, e.hook):
+                us.add_pointer(str(level), slug, e.title, e.hook)
     if not store_existed and store_dir.exists():      # this add created a brand-new store dir:
         sig.bump_stores_generation()                  # bust the cross-tree dir-cache so recall sees it
     _warn_dangling_wikilinks(anchor, "%s\n%s" % (e.hook or "", e.body or ""), slug)
@@ -1090,6 +1188,9 @@ def move_entry(from_level, to_level, slug, force=False):
     command completes it (both halves are idempotent); a write error is reported as a refusal naming
     how many pointers already moved, with that same re-run instruction.
 
+    It also refuses, before any write, a set holding a fact placed by topic (its place follows its
+    topics; un-bind it first).
+
     Returns {"slug","slugs","from","to","direction","moved","moved_slugs","refused","warnings"};
     `slug` is the comma-joined set, identical to the input for a single slug."""
     sig.refuse_if_memory_writes_off()
@@ -1135,6 +1236,11 @@ def move_entry(from_level, to_level, slug, force=False):
                               "migrate_to_slug_store.py first" % s)
             return rep
         moving.append(entry)
+    placed = _placed_slugs(a_from, slugs)
+    if placed:
+        s = next(s for s in slugs if s in placed)       # the first in the caller's order
+        rep["refused"] = _PLACED_BY_TOPIC % (s, a_from, s)
+        return rep
 
     if rep["direction"] == "down":
         # a citing entry must sit AT or BELOW the new home, or its [[ref]] leaves cascade reach
@@ -1527,7 +1633,8 @@ def relocate_entry(from_level, to_level, slug, force=False):
     the slug: that level owns it, whatever its body. The archived source body never replaces an
     earlier archived body of the same slug.
     A cross-tree copy drops the body's frontmatter `topics:` line (topics are tagged against one
-    tree's closed list) and says so in `notes`; a same-tree move leaves the body untouched.
+    tree's closed list) and says so in `notes`; a same-tree move leaves the body untouched. A fact
+    placed by topic is refused across trees: its other lines would stay behind in the source tree.
     Returns {"slug","from","to","cross_tree","relocated","refused","warnings","notes"}.
     """
     sig.refuse_if_memory_writes_off()
@@ -1554,6 +1661,10 @@ def relocate_entry(from_level, to_level, slug, force=False):
         return rep
     if entry.legacy:
         rep["refused"] = "entry is an unmigrated legacy pointer - run migrate_to_slug_store.py first"
+        return rep
+    if _placed_slugs(a_from, [slug]):
+        # its other lines would stay behind in the source tree, pointing at an archived body
+        rep["refused"] = _PLACED_BY_TOPIC % (slug, a_from, slug)
         return rep
 
     # Slugs are TREE-unique, so a divergent slug already in the target tree is a different fact.
@@ -1761,6 +1872,10 @@ def rename_entry(level, slug, to_slug):
         rep["refused"] = "entry is an unmigrated legacy pointer - run migrate_to_slug_store.py first"
         return rep
 
+    # A fact placed by topic has a line at each level its topics place it at: renamed there too,
+    # and no duplicate to report. Decided before any write, while the old body answers.
+    placed = bool(_placed_slugs(anchor, [slug]))
+
     # Slugs are TREE-unique, so an existing one names a DIFFERENT fact. Landing on it would destroy
     # that fact silently; never pick a winner here, deduping is a decision.
     for other in curated_levels_under(anchor):
@@ -1806,6 +1921,8 @@ def rename_entry(level, slug, to_slug):
         us.add_pointer(str(other), slug=to_slug, title=dup.title, hook=dup.hook,
                        pin=dup.pin)
         _drop_pointer(str(other), slug)
+        if placed:
+            continue                                 # placed by topic: one line per level, by design
         rep["warnings"].append("slug was ALSO pointed at from %s - a pre-existing duplicate; "
                                "renamed there too, dedup it deliberately" % other)
 
@@ -1881,6 +1998,9 @@ def retitle_entry(level, slug, to_title):
     if entry.title == title:
         rep["refused"] = "the new title is the same as the old one"
         return rep
+    # Decided before any write: a fact placed by topic has a line at each level its topics place
+    # it at, retitled there too, and none of them is a duplicate.
+    placed = bool(_placed_slugs(anchor, [slug]))
 
     us.add_pointer(str(lvl), slug=slug, title=title, hook=entry.hook,
                    pin=entry.pin)
@@ -1915,6 +2035,8 @@ def retitle_entry(level, slug, to_title):
         us.add_pointer(str(other), slug=slug, title=title, hook=dup.hook,
                        pin=dup.pin)
         rep["levels"].append(str(other))
+        if placed:
+            continue                                 # placed by topic: one line per level, by design
         rep["warnings"].append("slug was ALSO pointed at from %s - a pre-existing duplicate; "
                                "retitled there too, dedup it deliberately" % other)
 
