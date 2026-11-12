@@ -6743,7 +6743,27 @@ exceeds what the phase 1 firing test actually spent.
 **Files:** the live store, through the engine only. Artifacts in `$RUN3/apply/`.
 
 **STOP if:** G2 does not hold; the live tree changed since `$TREE` was built in a way that
-changes a placement (Step 2); a verify difference cannot be attributed.
+changes a placement (Step 2); a verify difference cannot be attributed; any precondition below
+is not met.
+
+**Preconditions (user requirement 2026-11-12 22:02: "we should not loose anything from the
+contribution queue, or memory/pointers which are created inbetween"), all four before Step 1:**
+
+1. No live session runs an engine without the placement lock and the topic guards (plugin
+   11.3.0 or newer): every older session has run `/reload-plugins` or ended, checked per session.
+2. Backlog item [160] (adding a fact at a sibling level overwrites another level's body) is fixed
+   and released first.
+3. Every live peer session confirms a hold window for captures, and the run starts only after
+   each has confirmed.
+4. Before/after inventory proven equal: every pointer, every fact body (only a `topics:` line may
+   differ), and every contribution-queue entry by count and hash; a fact added during the window
+   is tagged and placed, never dropped.
+
+The scratch run also fixed 50 stale descriptors (`$RUN3/descriptors/fixes.jsonl`) and set level
+topics including the busy-container policy (`$RUN3/report/review/round1-fixes.jsonl`,
+`round2-fixes.jsonl`, logged at CHECKPOINT B): Step 3 applies the descriptors with `set-scope`
+before `set-level-topics`, and takes every level's topics from `$TREE`, not from
+`levels.decided.jsonl` alone.
 
 - [ ] **Step 1: Backup.** `python3 $REC --check-tree $ANCHOR` -> 0; `python3 $SM backup --from
   $ANCHOR --scope tree --out $RUN3/apply/backup`; record the store's dirty paths.
