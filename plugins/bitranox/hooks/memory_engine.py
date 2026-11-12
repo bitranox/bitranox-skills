@@ -2136,8 +2136,10 @@ def _line_from_head(slug, head):
 
 def topic_level_map(anchor, levels=None):
     """(LevelMap, {parts: level dir}) of the tree: every curated level whose descriptor is not
-    empty, with the topics its `TOPICS:` line declares (none without the line), plus the anchor.
-    A level with no descriptor is left out, so a scaffold-only level cannot block a roll-up.
+    empty, with the topics its `TOPICS:` line declares (none without the line). The anchor is
+    always in the dir map, and in the LevelMap only when its own descriptor is not empty, like any
+    other level. A level with no descriptor is left out, so a scaffold-only level cannot block a
+    roll-up.
     Raises TopicRefusal, naming the levels, when a `TOPICS:` line does not parse: placing by a
     guessed line would move rules. Holds one small record per level."""
     declared, dirs, bad, total = {}, {tp.TOP: os.path.abspath(str(anchor))}, [], 0
@@ -2170,17 +2172,43 @@ def _pinned_slugs(levels):
     return pinned
 
 
-def _line_problem(slug, anchor, stored_line):
-    """Why `slug` cannot be bound to a topic yet, or None: a rendered line is built from the body
-    alone, so a body without `title:` or `description:`, or a stored line that says something else
-    than the body would render, has to be made to agree first."""
-    line = _line_from_head(slug, _read_body_head(us.body_path(anchor, slug)) or "")
-    if line is None:
-        return ("%s: its body lacks title: or description:, so no line can be rendered from it; "
-                "write it once through factedit apply (or add), then tag it" % slug)
-    if line.index_line() != stored_line:
-        return ("%s: its pointer line differs from what its body would render; apply the wanted "
-                "title and hook once through factedit apply (or add), then tag it" % slug)
+def _comparable_line(ptr):
+    """`ptr`'s line with title and hook single-spaced (`_normalised_title`), never pinned: the form
+    a body stores them in. A line that differs from its body only in whitespace says the same
+    thing, and the renderer rewrites it to the body's form, so it is no reason to refuse a bind."""
+    return us.Pointer(slug=ptr.slug, title=_normalised_title(ptr.title),
+                      hook=_normalised_title(ptr.hook), uuid=ptr.uuid,
+                      legacy=ptr.legacy).index_line()
+
+
+def _line_problem(slug, anchor, lines):
+    """Why `slug` cannot be bound to a topic yet, or None. `lines` is {comparable line: (level,
+    pointer)} for every distinct line of the fact (see `_pointer_owners`). A rendered line is built
+    from the body alone, so a legacy pointer, a body without `description:` or `title:`, or any
+    line that says something else than the body would render has to be repaired first; each
+    refusal names the route that repairs that cause."""
+    for level, ptr in lines.values():
+        if ptr.legacy:
+            return ("%s: its line at %s is a legacy uuid: pointer, so the fact is not migrated to "
+                    "the slug store; run migrate_to_slug_store.py --root %s --apply (without "
+                    "--apply it only reports), then tag it" % (slug, level, anchor))
+    head = _read_body_head(us.body_path(anchor, slug)) or ""
+    if not _body_description(head):
+        return ("%s: its body has no description:, so no line can be rendered from it; write its "
+                "prose (without the --- frontmatter) to a file and run factedit apply --slug %s "
+                "--body-file <that file> (or add --body-file), which rebuilds the frame from its "
+                "line, then tag it" % (slug, slug))
+    if not _body_title(head):
+        return ("%s: its body has no title:, so no line can be rendered from it; run "
+                "memory_engine.py heal --proj %s --backfill-titles (or factedit apply --slug %s "
+                "--title <title>), then tag it" % (slug, anchor, slug))
+    wanted = _comparable_line(_line_from_head(slug, head))
+    for line, (level, _ptr) in lines.items():
+        if line != wanted:
+            return ("%s: its line at %s differs from what its body renders; run factedit apply "
+                    "--slug %s --hook-file <file> (or add --hook-file) with the body's "
+                    "description: as the hook, or with the hook you want if it is not the line's "
+                    "current one, then tag it" % (slug, level, slug))
     return None
 
 
@@ -2250,14 +2278,17 @@ def set_topic_list(proj, topics, tagger):
 
 
 def _pointer_owners(anchor, wanted):
-    """{slug: (first level pointing at it, pinned anywhere, that first pointer's line)} for the
-    slugs in `wanted`, from one walk over the tree's levels. Holds one entry per wanted slug."""
+    """{slug: (first level pointing at it, pinned anywhere, {comparable line: (first level holding
+    it, its pointer)})} for the slugs in `wanted`, from one walk over the tree's levels. Holds one
+    entry per wanted slug, and per slug one record per DISTINCT line (`_comparable_line`): lines
+    that say the same thing at several levels are one record, so a placed fact costs one."""
     owners = {}
     for level in curated_levels_under(anchor):
         for ptr in us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level)))[1]:
             if ptr.slug in wanted:
-                first, pinned, line = owners.get(ptr.slug, (level, False, ptr.index_line()))
-                owners[ptr.slug] = (first, pinned or ptr.pin, line)
+                first, pinned, lines = owners.get(ptr.slug) or (level, False, {})
+                lines.setdefault(_comparable_line(ptr), (level, ptr))
+                owners[ptr.slug] = (first, pinned or ptr.pin, lines)
     return owners
 
 
@@ -2273,6 +2304,10 @@ def _topic_row_problem(slug, topics, anchor, allowed, owners):
         return "%s is pinned; a pinned fact stays where it is (only --clear may change it)" % slug
     if topics and _outside_list(topics, allowed):
         return "%s: %s not in the topic list" % (slug, ", ".join(_outside_list(topics, allowed)))
+    if topics and any(ptr.legacy for _level, ptr in owners[slug][2].values()):
+        # Ahead of the frontmatter check: a legacy body sits at its uuid path, so the slug path
+        # reads as empty and that check would name the wrong cause.
+        return _line_problem(slug, anchor, owners[slug][2])
     body = read_store_text(us.body_path(anchor, slug))
     if _frontmatter(body)[1] is None:
         return "%s: its body has no frontmatter to carry topics" % slug
@@ -2288,10 +2323,12 @@ def set_fact_topics(proj, rows, dry_run=False):
 
     Every row is checked before any is written: an invalid slug, a slug no level points at, a
     pinned fact being tagged (clearing one, None, is allowed), a tag outside the tree's list, a
-    body without frontmatter, or a fact being bound to a topic whose body lacks `title:` or
-    `description:` or whose first pointer line differs from the line its body renders (see
-    `_line_problem`) refuses the WHOLE call with TopicRefusal (the first refusals and their total). Each body is then read and written under the lock of
-    the first level that points at it, the lock an ordinary write to that fact holds. Pointer
+    body without frontmatter, or a fact being bound to a topic that has a legacy `uuid:` pointer,
+    whose body lacks `title:` or `description:`, or any of whose pointer lines differs from the
+    line its body renders other than in whitespace (see `_line_problem`) refuses the WHOLE call
+    with TopicRefusal (the first refusals and their total). Each body is then read and written
+    under the lock of the first level that points at it, the lock an ordinary write to that fact
+    holds. Pointer
     lines are not touched: `render-topics` places them. Returns {'set': [slugs], 'unchanged': n}.
     Holds `rows` and one owner entry per row; a batch over MAX_TOPIC_BATCH rows is refused."""
     if not dry_run:
