@@ -45,7 +45,14 @@ STORE_DIRNAME = sig.MEMORY_DIRNAME               # the central body-store dir, c
 
 def is_non_level_dirname(name):
     """True for a directory name no curated level or live store sits under: a vendored, build or
-    VCS dir (`sig.VENDOR_DIRNAMES`), the store itself, or any `<store>-*` sibling of it.
+    VCS dir (`sig.VENDOR_DIRNAMES`), any name starting with `.venv` (a virtualenv kept per
+    interpreter or platform: `.venv-3.12`, `.venv-win`, `.venv-bmk`), the store itself, or any
+    `<store>-*` sibling of it.
+
+    The `.venv` prefix is matched, never `venv`: a dot-named virtualenv is all such a name holds,
+    while a plain `venv-notes` can be a real project dir, so only the exact `venv` stays pruned.
+    Installed packages ship CLAUDE.md files of their own, so a walk that enters a virtualenv can
+    find levels in it, and a render would write lines there.
 
     The sibling is the backup `migrate_to_slug_store.py --apply` leaves under the anchor
     (`.claude-memory-migration-backup-<stamp>/`): it holds a copy of the store and of every pointer
@@ -53,7 +60,8 @@ def is_non_level_dirname(name):
     reported every migrated slug at two levels. THE name rule the level walk
     (`memory_engine.curated_levels_under`), the decoy-store scan and the migration's own walk prune
     by; the dream's backup root is pruned on top of it by resolved path, never by name."""
-    return name in sig.VENDOR_DIRNAMES or name.startswith(STORE_DIRNAME)
+    return (name in sig.VENDOR_DIRNAMES or name.startswith(".venv")
+            or name.startswith(STORE_DIRNAME))
 
 # The type prefixes a slug may carry (single source; memory_engine aliases this).
 TYPE_PREFIXES = ("project", "feedback", "reference", "user")
