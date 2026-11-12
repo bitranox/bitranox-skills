@@ -153,9 +153,9 @@ class TopicsOnCreate(ValueError):
 
     def __init__(self, slug):
         self.slug = slug
-        super().__init__("%r is new and its body's frontmatter carries a topics: line; topics change "
-                         "only through set-topics. Add the fact without the line, then run "
-                         "set-topics on it" % slug)
+        super().__init__("%r has no body file yet and the body given carries a frontmatter topics: "
+                         "line; topics change only through set-topics. Write the fact without the "
+                         "line, then run set-topics on it" % slug)
 
 
 class HookTooLong(ValueError):
@@ -1215,7 +1215,11 @@ def ensure_level(proj, scope_default="", _locked=False):
     that pollutes recall (bitten twice on 2026-07-05).
 
     Refuses first under BITRANOX_MEMORY_WRITES=off, before the lock: it writes both level files
-    with no entry, so `upsert_entry`'s guard does not cover a direct caller."""
+    with no entry, so `upsert_entry`'s guard does not cover a direct caller.
+
+    A descriptor it writes new (harvested or `scope_default`) passes `scope_keeping_topics` against
+    the level's current one first: TopicRefusal or InvalidTopic, before either file is written, for
+    a `scope_default` carrying a `TOPICS:` line and for a legacy block whose line does not parse."""
     sig.refuse_if_memory_writes_off()
     proj = os.path.abspath(str(proj))
     if _is_excluded_level(proj):
@@ -1226,12 +1230,19 @@ def ensure_level(proj, scope_default="", _locked=False):
         # files, and text it could not decode is text it would write back wrong.
         md = read_store_text(md_path)
         legacy_scope = sig.read_scope_block(md)             # a scope block left in CLAUDE.md (migration)
-        if legacy_scope is not None:
-            _write_if_changed(md_path, _strip_scope_block(md))
         local = sig.claude_local_md_path(proj)
         text = read_store_text(local)
         scope, pointers = us.parse_pointer_index(text)
         want_scope = scope or (legacy_scope or scope_default or "").strip()
+        if not scope and want_scope:
+            # A new descriptor passes the one TOPICS gate before either file is written: checked
+            # against what the level holds now - its legacy block, else nothing - so a scope_default
+            # cannot bring a TOPICS line, nor a harvest move one that does not parse.
+            want_scope = scope_keeping_topics(
+                (legacy_scope or "").strip(), want_scope,
+                stored_in=md_path if legacy_scope is not None else None)
+        if legacy_scope is not None:
+            _write_if_changed(md_path, _strip_scope_block(md))
         if us.INDEX_BEGIN not in text or want_scope != scope:
             us.write_if_changed(local, us.upsert_pointer_block(text, want_scope, pointers))
         if not sig.load_config().get("track_private"):     # keep local wiring + central store unpushed
@@ -1449,7 +1460,9 @@ def scaffold(proj):
             ensure_level(level)
             if not local_before and sig.claude_local_md_path(level).exists():
                 created.append(str(sig.claude_local_md_path(level)))
-        except OSError:
+        except (OSError, TopicRefusal, tp.InvalidTopic):
+            # a legacy block ensure_level refuses to harvest stays where it is; the next level
+            # is still scaffolded, as after an unwritable one
             continue
     try:
         facts_dir = us.central_facts_dir(_anchor(proj))
@@ -2005,6 +2018,14 @@ class TopicRefusal(ValueError):
         super().__init__("; ".join(self.reasons) + more)
 
 
+ADD_REFUSALS = (SlugCollision, HookTooLong, EmptyBody, TopicsOnCreate, PinnedEntry, InvalidSlug,
+                InvalidSkill, TopicRefusal, tp.InvalidTopic)
+"""What a fact write through `add_with_advice` raises when it declines the whole write (nothing
+written): the CLI `add` and the mod bridge both report these as a refusal. TopicRefusal and
+InvalidTopic come from the level's descriptor (an add --scope with a TOPICS line, a legacy block
+whose line does not parse)."""
+
+
 def read_body_topics(path):
     """`_body_topics` of the body at `path`, reading only its first FRONTMATTER_HEAD_BYTES.
     None too when the file is missing. Raises TreeWalkError when it exists and cannot be read."""
@@ -2210,17 +2231,25 @@ def level_topics_stale(level):
     return False, ""
 
 
-def scope_keeping_topics(old_scope, new_scope):
-    """`new_scope` for a `set-scope` write, with the stored `TOPICS:` line carried over when the
-    new text has none. Raises TopicRefusal when the new text carries a DIFFERENT `TOPICS:` line:
+def scope_keeping_topics(old_scope, new_scope, stored_in=None):
+    """`new_scope` for a descriptor write, with the stored `TOPICS:` line carried over when the
+    new text has none. The one gate every descriptor writer passes: set-scope, add's --scope (an
+    ensure_level `scope_default`) and ensure_level's harvest of a legacy CLAUDE.md block.
+
+    Raises TopicRefusal when the new text carries a DIFFERENT `TOPICS:` line:
     topics change only through set-level-topics / set-top-topics, so a rewritten descriptor can
     neither drop nor change them by accident; a never-tagged level gains no line this way either,
     not even an empty one. Raises TopicRefusal too when the stored line does not parse (carried
     over or dropped, the result would be a guess; set-level-topics replaces it), and InvalidTopic
-    when the new text's line does not parse."""
+    when the new text's line does not parse. `stored_in` names the CLAUDE.md whose legacy block
+    holds `old_scope`: no verb rewrites that block, so the refusal names the file to fix by hand."""
     try:
         old = tp.descriptor_topics(old_scope)
     except tp.InvalidTopic as exc:
+        if stored_in is not None:
+            raise TopicRefusal(["the legacy scope block in %s has a TOPICS line that does not parse "
+                                "(%s); fix or remove that line there by hand, then run this again"
+                                % (stored_in, exc)]) from exc
         raise TopicRefusal(["the stored TOPICS line does not parse (%s); replace it with "
                             "set-level-topics (set-top-topics at the tree top) first" % exc]) from exc
     new = tp.descriptor_topics(new_scope)
@@ -2230,6 +2259,18 @@ def scope_keeping_topics(old_scope, new_scope):
     if old is None or new is not None:
         return new_scope
     return tp.with_descriptor_topics(new_scope, old)
+
+
+def _current_scope(proj):
+    """(descriptor, stored_in): `proj`'s descriptor as a descriptor writer must judge it - its
+    pointer block's, else the legacy CLAUDE.md block ensure_level would harvest (read here, never
+    moved) together with that CLAUDE.md's path, else ("", None) for a level that has none."""
+    scope = us.parse_pointer_index(read_store_text(sig.claude_local_md_path(proj)))[0]
+    if scope:
+        return scope, None
+    md = sig.claude_md_path(proj)
+    legacy = sig.read_scope_block(read_store_text(md))
+    return ("", None) if legacy is None else (legacy.strip(), md)
 
 
 def _read_topic_batch(path):
@@ -2443,7 +2484,9 @@ def main(argv=None):
     except TreeWalkError as exc:
         print("! error: cannot read the memory store - %s" % exc, file=sys.stderr)
         return 2
-    except ExcludedLevel as exc:
+    except (ExcludedLevel, TopicRefusal) as exc:
+        # TopicRefusal: ensure_level's descriptor gate, reachable from any verb that scaffolds a
+        # level; it raises before writing, so it is a refusal wherever it surfaces
         return _refused(exc)
     except OSError as exc:
         # TimeoutError (lock contention) is an OSError subclass whose strerror is None
@@ -2713,22 +2756,26 @@ def _main(argv=None):
         if err:
             return _input_error(err)
         local = sig.claude_local_md_path(args.proj)
-        # The topics check runs on the level's CURRENT text (empty when it was never scaffolded)
-        # before ensure_level writes anything, so a refused call leaves no level behind. It runs
-        # again below on what ensure_level produced: a scope it harvests from a legacy CLAUDE.md
-        # block is a stored text the first check could not see.
-        try:
-            scope_keeping_topics(us.parse_pointer_index(read_store_text(local))[0], scope.strip())
-        except (TopicRefusal, tp.InvalidTopic) as exc:
-            return _refused(exc)
-        ensure_level(args.proj)                       # make sure the pointer block exists first
-        text = read_store_text(local)
-        old_scope, pointers = us.parse_pointer_index(text)
-        try:
-            scope = scope_keeping_topics(old_scope, scope.strip())
-        except (TopicRefusal, tp.InvalidTopic) as exc:
-            return _refused(exc)
-        changed = us.write_if_changed(local, us.upsert_pointer_block(text, scope, pointers))
+        if _is_excluded_level(args.proj):             # before the lock, which creates a file there
+            raise ExcludedLevel(args.proj)
+        # One read-modify-write under the level's lock. The topics check runs on the level's
+        # CURRENT descriptor - its pointer block's, else the legacy CLAUDE.md block ensure_level
+        # would harvest, else none - before ensure_level writes anything, so a refused call leaves
+        # no level behind and no legacy block moved.
+        with sig.memory_lock(local):
+            current, stored_in = _current_scope(args.proj)
+            try:
+                scope_keeping_topics(current, scope.strip(), stored_in=stored_in)
+            except (TopicRefusal, tp.InvalidTopic) as exc:
+                return _refused(exc)
+            ensure_level(args.proj, _locked=True)     # make sure the pointer block exists first
+            text = read_store_text(local)
+            old_scope, pointers = us.parse_pointer_index(text)
+            try:
+                scope = scope_keeping_topics(old_scope, scope.strip())
+            except (TopicRefusal, tp.InvalidTopic) as exc:
+                return _refused(exc)
+            changed = us.write_if_changed(local, us.upsert_pointer_block(text, scope, pointers))
         print("scope %s: %s" % ("updated" if changed else "unchanged", local))
         return 0
 
@@ -2786,8 +2833,7 @@ def _main(argv=None):
             slug, _created, advice = add_with_advice(
                 args.proj, title=args.title, hook=hook, body=body, type_=args.type_,
                 pin=args.pin, scope_default=scope_default, slug=args.slug, skill=args.skill)
-        except (SlugCollision, HookTooLong, EmptyBody, TopicsOnCreate, PinnedEntry, InvalidSlug,
-                InvalidSkill) as c:
+        except ADD_REFUSALS as c:
             return _refused(c)
         print(slug)
         for line in advice:

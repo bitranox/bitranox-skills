@@ -606,12 +606,17 @@ def add_pointer(altitude_dir, slug, title, hook, pin=False, scope_default=""):
     via `put_body`. Returns the slug. Raises `InvalidSlug` before writing for a slug that is not a
     plain filename. Raises TreeWalkError, before writing, for a level file that exists but cannot
     be read or is not UTF-8: read as empty, the merge would rewrite it as the managed block alone
-    and drop every other line in it."""
+    and drop every other line in it. Raises ValueError, before writing, when it would write a
+    `scope_default` carrying a `TOPICS:` line: a level's topics change only through
+    set-level-topics, and this writer checks none."""
     require_valid_slug(slug)
     local = sig.claude_local_md_path(altitude_dir)
     with sig.memory_lock(local):
         text = read_store_text(local)
         scope, pointers = parse_pointer_index(text)
+        if not scope and re.search(r"(?m)^TOPICS:", scope_default or ""):
+            raise ValueError("a scope_default may not carry a TOPICS line; a level's topics change "
+                             "only through set-level-topics")
         by_slug = {p.slug: p for p in pointers}
         if slug in by_slug:
             p = by_slug[slug]

@@ -677,3 +677,13 @@ def test_pointer_region_is_the_managed_block_else_the_whole_text_and_empty_for_n
     assert us.pointer_region("# Memory index\n- [X](mem:x) - When x.\n") == (
         "# Memory index\n- [X](mem:x) - When x.\n")
     assert us.pointer_region(None) == ""
+
+
+def test_add_pointer_refuses_a_scope_default_carrying_a_topics_line(tmp_path):
+    # A level's TOPICS line changes only through set-level-topics: a descriptor add_pointer writes
+    # from scope_default would bring one past every check.
+    (tmp_path / "CLAUDE.md").write_text("x\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="TOPICS"):
+        us.add_pointer(str(tmp_path), slug="a-fact", title="Fact", hook="h",
+                       scope_default="lvl scope\nTOPICS: python")
+    assert not (tmp_path / "CLAUDE.local.md").exists()

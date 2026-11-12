@@ -33,9 +33,8 @@ class BadRequest(ValueError):
         self.tool = tool
 
 
-REFUSALS = (ow.BacklogError, BadInput, ME.SlugCollision, ME.HookTooLong, ME.EmptyBody,
-            ME.TopicsOnCreate, ME.PinnedEntry, ME.InvalidSlug, ME.InvalidSkill, ME.ExcludedLevel,
-            sig.MemoryWritesOff)
+# ME.ADD_REFUSALS is what the CLI `add` reports as a refusal; taken whole so the two cannot drift.
+REFUSALS = (ow.BacklogError, BadInput, *ME.ADD_REFUSALS, ME.ExcludedLevel, sig.MemoryWritesOff)
 
 
 def _backlog_list(inp, cwd):

@@ -401,3 +401,101 @@ def test_a_refused_set_scope_leaves_no_level_scaffolded_behind_it(tmp_path, caps
     assert E.main(["set-scope", "--proj", proj, "--scope", SCOPE + "\n" + line]) == 2
     assert "! refused" in capsys.readouterr().out
     assert not local.exists()
+
+
+# ---- one TOPICS gate for every descriptor writer -----------------------------------------------
+
+def _legacy_md(level, descriptor):
+    """Give `level` a CLAUDE.md that still holds a legacy scope block, as older stores did."""
+    md = sig.claude_md_path(level)
+    md.write_text("# Proj\n\n%s\n%s\n%s\n\nuser text\n"
+                  % (sig.SCOPE_MARK_BEGIN, descriptor, sig.SCOPE_MARK_END), encoding="utf-8")
+    return md, md.read_bytes()
+
+
+@pytest.mark.parametrize("line", ["TOPICS: python", "TOPICS: notonlist, Bad Tag", "TOPICS:"])
+def test_add_with_a_scope_carrying_a_topics_line_on_a_fresh_level_writes_nothing(tmp_path, capsys, line):
+    # add --scope reaches ensure_level's scope_default on a level with no descriptor; without the
+    # gate the TOPICS line was written there unchecked, even one that does not parse.
+    anchor, proj = _tree(tmp_path)
+    md_before = sig.claude_md_path(proj).read_bytes()
+    rc = E.main(["add", "--proj", proj, "--title", "T", "--hook", HOOK, "--slug", "feedback-s",
+                 "--body", "b", "--scope", SCOPE + "\n" + line])
+    assert rc == 2
+    assert "! refused" in capsys.readouterr().out
+    assert not sig.claude_local_md_path(proj).exists()
+    assert not us.body_path(anchor, "feedback-s").exists()
+    assert sig.claude_md_path(proj).read_bytes() == md_before
+
+
+def test_the_library_ensure_level_refuses_a_scope_default_with_a_topics_line(tmp_path):
+    _anchor, proj = _tree(tmp_path)
+    with pytest.raises(E.TopicRefusal):
+        E.ensure_level(proj, scope_default=SCOPE + "\nTOPICS: python")
+    assert not sig.claude_local_md_path(proj).exists()
+
+
+def test_set_scope_against_a_legacy_block_whose_topics_line_does_not_parse_writes_nothing(tmp_path, capsys):
+    _anchor, proj = _tree(tmp_path)
+    md, before = _legacy_md(proj, SCOPE + "\nTOPICS: Not A Tag!")
+    assert E.main(["set-scope", "--proj", proj, "--scope", SCOPE]) == 2
+    out = capsys.readouterr().out
+    assert "! refused" in out and str(md) in out
+    assert md.read_bytes() == before
+    assert not sig.claude_local_md_path(proj).exists()
+
+
+def test_an_add_harvesting_a_legacy_block_whose_topics_line_does_not_parse_writes_nothing(tmp_path, capsys):
+    anchor, proj = _tree(tmp_path)
+    md, before = _legacy_md(proj, SCOPE + "\nTOPICS: Not A Tag!")
+    rc = E.main(["add", "--proj", proj, "--title", "T", "--hook", HOOK, "--slug", "feedback-s",
+                 "--body", "b"])
+    assert rc == 2 and "! refused" in capsys.readouterr().out
+    assert md.read_bytes() == before
+    assert not sig.claude_local_md_path(proj).exists()
+    assert not us.body_path(anchor, "feedback-s").exists()
+
+
+def test_ensure_memory_structure_skips_a_legacy_level_it_cannot_harvest_without_a_traceback(tmp_path, capsys):
+    anchor, proj = _tree(tmp_path)
+    md, before = _legacy_md(proj, SCOPE + "\nTOPICS: Not A Tag!")
+    assert E.main(["ensure-memory-structure", "--proj", proj]) == 0
+    assert md.read_bytes() == before
+    assert not sig.claude_local_md_path(proj).exists()
+    assert sig.claude_local_md_path(anchor).exists()
+
+
+def test_set_scope_carrying_the_legacy_blocks_own_topics_is_accepted(tmp_path, capsys):
+    _anchor, proj = _tree(tmp_path)
+    md, _before = _legacy_md(proj, "WHAT: old text\nTOPICS: python")
+    rewritten = SCOPE + "\nTOPICS: python"
+    assert E.main(["set-scope", "--proj", proj, "--scope", rewritten]) == 0
+    assert tp.descriptor_topics(_scope(proj)) == ("python",)
+    assert "WHAT: a level" in _scope(proj)
+    assert sig.SCOPE_MARK_BEGIN not in md.read_text(encoding="utf-8")
+
+
+def test_set_scope_without_topics_keeps_the_legacy_blocks_topics(tmp_path, capsys):
+    _anchor, proj = _tree(tmp_path)
+    _legacy_md(proj, "WHAT: old text\nTOPICS: python")
+    assert E.main(["set-scope", "--proj", proj, "--scope", SCOPE]) == 0
+    assert tp.descriptor_topics(_scope(proj)) == ("python",)
+
+
+def test_set_scope_with_other_topics_than_the_legacy_block_is_refused(tmp_path, capsys):
+    _anchor, proj = _tree(tmp_path)
+    md, before = _legacy_md(proj, "WHAT: old text\nTOPICS: python")
+    assert E.main(["set-scope", "--proj", proj, "--scope", SCOPE + "\nTOPICS: rust"]) == 2
+    assert "changes only through set-level-topics" in capsys.readouterr().out
+    assert md.read_bytes() == before
+    assert not sig.claude_local_md_path(proj).exists()
+
+
+def test_topics_on_create_says_what_is_true_for_a_pointer_without_a_body(tmp_path):
+    anchor, proj = _tree(tmp_path)
+    _fact(proj, "feedback-s")
+    us.body_path(anchor, "feedback-s").unlink()           # a pointer whose body went missing
+    framed = "---\nname: feedback-s\ndescription: d\ntitle: T\ntopics: [python]\n---\n\nprose\n"
+    with pytest.raises(E.TopicsOnCreate) as exc:
+        E.add_or_update_entry(proj, title="T feedback-s", hook=HOOK, body=framed, slug="feedback-s")
+    assert "has no body file yet" in str(exc.value) and "is new" not in str(exc.value)

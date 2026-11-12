@@ -7,6 +7,10 @@ from pathlib import Path
 
 import pytest
 
+import memory_engine as ME
+import mod_bridge as MB
+import self_improve_signals as sig
+
 BRIDGE = Path(__file__).resolve().parents[1] / "mod_bridge.py"
 
 
@@ -389,3 +393,32 @@ def test_an_os_error_is_could_not_run_not_a_refusal(repo, env):
     rc, out = call(repo, env, "backlog_add", ITEM)
     assert (rc, out["ok"], out["error"]["kind"]) == (2, False, "Internal"), out
     assert out["error"]["message"].split(":")[0] in ("IsADirectoryError", "PermissionError")
+
+
+def test_a_create_whose_frame_carries_topics_is_a_topics_on_create_refusal(tmp_path, env):
+    level = tmp_path / "proj"
+    level.mkdir()
+    body = "---\nname: rule\ndescription: d\ntopics: [python]\nmetadata:\n  type: project\n---\n\nprose\n"
+    rc, out = call(tmp_path, env, "memory_add",
+                   {"title": "Rule", "hook": "When x, y.", "body": body, "level": str(level)})
+    assert (rc, out["ok"], out["error"]["kind"]) == (1, False, "TopicsOnCreate"), out
+    assert _stored_bodies(tmp_path) == {}
+
+
+def test_a_level_whose_legacy_topics_line_does_not_parse_is_a_refusal_not_internal(tmp_path, env):
+    level = tmp_path / "proj"
+    level.mkdir()
+    (level / "CLAUDE.md").write_text(
+        "# P\n\n<!-- bitranox:self-learning -->\nWHAT: p\nTOPICS: Not A Tag!\n"
+        "<!-- /bitranox:self-learning -->\n", encoding="utf-8")
+    rc, out = call(tmp_path, env, "memory_add", {**FACT, "level": str(level)})
+    assert (rc, out["ok"], out["error"]["kind"]) == (1, False, "TopicRefusal"), out
+    assert not (level / "CLAUDE.local.md").exists()
+
+
+def test_the_bridge_refuses_everything_the_cli_add_refuses():
+    # The CLI `add` reports ADD_REFUSALS as `! refused`, plus an excluded level and memory writes
+    # off (both mapped before or around the verb); the bridge must call each a refusal too, not
+    # an Internal error.
+    cli = set(ME.ADD_REFUSALS) | {ME.ExcludedLevel, sig.MemoryWritesOff}
+    assert cli - set(MB.REFUSALS) == set()
