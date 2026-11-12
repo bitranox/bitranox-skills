@@ -24,7 +24,8 @@ Exit: 0 = listed, or the slug was found. 1 = the slug is at no level (a real "no
       works in a gate). 2 = could not answer: a missing root, a root that is not a tree anchor (no
       `.claude-memory/` there, so the body checks would be silently off), a level file or directory
       that could not be read (listed on stderr; a "no" over a partial read is not a "no"), the
-      engine's pointer parser (`hooks/uuid_store.py`) not importable, or an internal error.
+      engine's modules (`hooks/uuid_store.py`, `hooks/memory_engine.py`) not importable, or an
+      internal error.
 
 `--json` prints `{ok, command, data, skipped}` on every exit, 2 included; `ok` is false exactly
 when the exit is 2, so "no level holds it" (exit 1) is `ok: true`. Unreadable paths are listed in
@@ -46,25 +47,25 @@ it): such a fact has one line per level its topics place it at, listed as `place
 Read-only: it never writes to the store. Writes go through the engine (`memory_engine.py`).
 """
 
-import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from _cli_envelope import EXIT_ERROR, EXIT_NO, EXIT_YES, EnvelopeArgumentParser, emit, guarded
 
-# The engine's pointer parser, from the plugin's hooks dir: scripts -> compuse-toolbox -> skills
-# -> bitranox. A private regex matched `](mem:x)` anywhere, so a pointer-shaped line in the prose
-# around the managed block counted as a fact at that level and hid a real dangling body. A failed
-# import is held rather than raised: its traceback exits 1, which is this tool's "no level holds
-# it", so main() refuses with 2 instead.
+# The engine's pointer parser and its test of a fact placed by topic, from the plugin's hooks dir:
+# scripts -> compuse-toolbox -> skills -> bitranox. A private regex matched `](mem:x)` anywhere, so
+# a pointer-shaped line in the prose around the managed block counted as a fact at that level and
+# hid a real dangling body; a private copy of the placement test drifts from the engine's the same
+# way. A failed import is held rather than raised: its traceback exits 1, which is this tool's "no
+# level holds it", so main() refuses with 2 instead.
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "hooks"))
 try:
-    import topic_placement  # noqa: E402
+    import memory_engine  # noqa: E402
     import uuid_store  # noqa: E402
     _IMPORT_ERROR: ImportError | None = None
 except ImportError as _exc:
-    topic_placement = None  # type: ignore[assignment]
+    memory_engine = None  # type: ignore[assignment]
     uuid_store = None  # type: ignore[assignment]
     _IMPORT_ERROR = _exc
 
@@ -226,37 +227,19 @@ def _store_bodies(facts: Path, unreadable: list[str]) -> tuple[set[str], dict[st
     return flat, sharded
 
 
-# The engine's test of a fact it places by topic (`memory_engine._managed_topics`), read from the
-# body's frontmatter alone with the engine's own frame rule and topic parser: a closed leading
-# `---` block carrying `name:`, a `topics:` value that parses to at least one topic, and the
-# `title:` and `description:` a pointer line is built from. Without any of these the engine never
-# renders the fact, so its lines at several levels are duplicates like any other.
-_HEAD_BYTES = 16384                               # memory_engine.FRONTMATTER_HEAD_BYTES
-_FRAME_RX = re.compile(r"---[ \t]*\r?\n(.*?\r?\n)?---[ \t]*(?:\r?\n|\Z)", re.DOTALL)
-_TOPICS_RX = re.compile(r"(?m)^topics:[ \t]*([^\r\n]*)")
-_NEEDED_RX = (re.compile(r"(?m)^name:"), re.compile(r"(?m)^title:[ \t]*\S"),
-              re.compile(r"(?m)^description:[ \t]*\S"))
-
-
 def _bound_to_a_topic(root: Path, slug: str) -> bool:
-    """Whether the engine places `slug`'s lines by topic, judged from its body's frontmatter (unless
-    a level pins it, which the caller checks). Reads the head of the body only."""
+    """Whether the engine places `slug`'s lines by topic: the engine's own test
+    (`memory_engine._managed_topics`) on the head of the body it reads (`_read_body_head`), so the
+    two cannot disagree. A level that pins the fact is the caller's check. A body that is missing
+    or cannot be read is not judged placed: its lines at several levels stay duplicates. Reads the
+    head of the body only."""
     if not uuid_store.is_valid_slug(slug):
         return False
     try:
-        with open(root / STORE_DIR / "facts" / (slug + ".md"), "rb") as fh:
-            head = fh.read(_HEAD_BYTES).decode("utf-8", errors="replace")
-    except OSError:
+        head = memory_engine._read_body_head(uuid_store.body_path(root, slug))  # noqa: SLF001
+    except uuid_store.TreeWalkError:
         return False
-    frame = _FRAME_RX.match(head.lstrip())
-    meta = (frame.group(1) or "") if frame else ""
-    topics = _TOPICS_RX.search(meta)
-    if topics is None or not all(rx.search(meta) for rx in _NEEDED_RX):
-        return False
-    try:
-        return bool(topic_placement.parse_topics(topics.group(1)))
-    except topic_placement.InvalidTopic:
-        return False
+    return head is not None and memory_engine._managed_topics(slug, head, ()) is not None  # noqa: SLF001
 
 
 def scan(root: str | Path) -> Report:
@@ -386,8 +369,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--json", action="store_true", dest="as_json", help="machine-readable envelope")
     args = ap.parse_args(argv)
     if uuid_store is None:
-        return _fail("mem_levels: cannot import the engine's pointer parser (hooks/uuid_store.py): "
-                     "%s" % _IMPORT_ERROR, args.as_json)
+        return _fail("mem_levels: cannot import the engine's modules (hooks/uuid_store.py, "
+                     "hooks/memory_engine.py): %s" % _IMPORT_ERROR, args.as_json)
     return _run(args)
 
 

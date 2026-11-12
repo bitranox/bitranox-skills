@@ -5,6 +5,8 @@ is listed as placed, anything else stays a duplicate pointer. All content ASCII.
 from pathlib import Path
 
 import mem_levels
+import memory_engine  # noqa: E402  (mem_levels put hooks/ on sys.path at import)
+import uuid_store  # noqa: E402
 
 BLOCK = """<!-- BITRANOX-MEMORY-INDEX:BEGIN managed by bitranox self-improve; do not hand-edit. -->
 <!-- bitranox:self-learning -->
@@ -76,3 +78,37 @@ def test_a_bound_fact_without_a_title_or_description_or_a_valid_topic_stays_a_du
     report = mem_levels.scan(root)
     assert report.placed == {"bare": ["a", "b"]}
     assert sorted(report.duplicates) == ["bad-tag", "undescribed", "untitled"]
+
+
+LEGACY_UUID = "5f0e1c2a-0000-5000-8000-000000000001"
+
+
+def _legacy_row(slug):
+    return "- [T](uuid:%s) - When x, do y. <!-- bx:slug=%s -->" % (LEGACY_UUID, slug)
+
+
+def test_placed_by_topic_is_the_engines_own_verdict_on_every_edge_case(tmp_path):
+    """mem_levels asks the engine (`memory_engine._managed_topics` on `_read_body_head`) rather
+    than keeping a copy of its rule, so the two cannot drift. Pinned at one level, bound with no
+    description, untagged at two levels, and held by a legacy `uuid:` line at one level: the facts
+    listed as placed are exactly those the engine manages and no level pins."""
+    rows = {"a": [_row("pinned", pin=True), _row("nodesc"), _row("plain"), _legacy_row("legacy"),
+                  _row("full")],
+            "b": [_row("pinned"), _row("nodesc"), _row("plain"), _row("legacy"), _row("full")]}
+    root = _tree(tmp_path / "t", rows, {
+        "pinned": LINE + "topics: [python]\n",
+        "nodesc": "title: T\ntopics: [python]\n",
+        "plain": LINE,
+        "legacy": LINE + "topics: [python]\n",
+        "full": LINE + "topics: [python]\n"})
+    report = mem_levels.scan(root)
+    several = set(report.placed) | set(report.duplicates)
+
+    def engine_places(slug):
+        head = memory_engine._read_body_head(uuid_store.body_path(root, slug))  # noqa: SLF001
+        managed = head is not None and memory_engine._managed_topics(slug, head, ()) is not None  # noqa: SLF001
+        return managed and slug not in report.pinned
+
+    assert several == {"pinned", "nodesc", "plain", "legacy", "full"}
+    assert set(report.placed) == {slug for slug in several if engine_places(slug)}
+    assert sorted(report.placed) == ["full", "legacy"]

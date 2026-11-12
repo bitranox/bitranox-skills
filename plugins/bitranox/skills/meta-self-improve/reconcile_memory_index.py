@@ -264,8 +264,12 @@ def check_references(dirs):
                     continue
                 checked += 1
                 where = targets.get(ref)
-                if not where and _placed_by_topic(ME._anchor(str(d)), ref, pins):
-                    continue                      # placed by topic: its lines need not be on this chain
+                # Placed by topic, its lines stand where the levels' topics put them: it may have
+                # none on this chain, or only below the citer, and neither is the citer's to fix.
+                # Asked only for a ref that would be reported, so a clean ref reads no body.
+                if (not where or max(where) < pos) and _placed_by_topic(
+                        ME._anchor(str(d)), ref, pins):
+                    continue
                 if not where:
                     orphans.append((label, ref))
                 elif max(where) < pos:

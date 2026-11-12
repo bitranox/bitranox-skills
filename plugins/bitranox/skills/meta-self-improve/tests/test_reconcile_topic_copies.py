@@ -162,6 +162,25 @@ def test_a_clean_chain_has_no_problem_and_a_ref_to_a_placed_fact_is_no_orphan(tm
     assert R.check_references([levels[""]])["checked"] == 1
 
 
+def test_a_ref_from_above_to_a_placed_fact_is_no_downward_ref(tmp_path, capsys):
+    """feedback-py-rule's lines stand at a/py and b/py, where python is: a citer at `a` cannot sit
+    above them, so --check agrees with --check-tree that nothing is wrong. A ref from `a` to a fact
+    NOT placed by topic, held only at a/py, is still a downward ref."""
+    levels = _rendered(tmp_path)
+    _fact(levels["a"], "feedback-citer-a", body="See [[feedback-py-rule]].")
+    capsys.readouterr()
+    assert R.main(["--check", levels["a/py"], levels["a"], levels[""]]) == 0
+    out = capsys.readouterr().out
+    assert "downward ref" not in out and "TOTAL problems: 0" in out, out
+    assert R.check_references([levels["a/py"], levels["a"], levels[""]])["downward"] == []
+    _fact(levels["a/py"], "feedback-plain-py")
+    _fact(levels["a"], "feedback-citer-b", body="See [[feedback-plain-py]].")
+    refs = R.check_references([levels["a/py"], levels["a"], levels[""]])
+    assert refs["downward"] == [("feedback-citer-b", "feedback-plain-py")]
+    rc, out = _check_tree(levels, capsys)
+    assert "[[feedback-py-rule]]" not in out
+
+
 def test_a_placed_line_a_level_above_also_holds_is_a_chain_problem(tmp_path, capsys):
     levels = _rendered(tmp_path)
     _plant_line(levels["a"], "feedback-py-rule")
