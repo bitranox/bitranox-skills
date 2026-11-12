@@ -2198,8 +2198,9 @@ class CollapseTooLarge(TopicRefusal):
     - `stale` lines are there and the block fits without them (`need` <= 0): the tree-scope render.
     - the lines this call keeps at the top alone pass the cap (`fixed + added`): nothing that
       leaves the top makes room, so it says the top cannot hold a line of each of these facts at
-      once and names a smaller batch, at most `room` bytes of added lines per call (and the pools
-      that free room first when `room` is not positive).
+      once and names a smaller batch, at most `room` bytes of added lines per call - only when
+      that batch can un-bind a fact (`room` positive, and `fit` or `fixed` non-zero); else the
+      pools that free room first.
     - the movable kept lines reach `need`: a move of them.
     - the placed lines reach `need`: the set-topics batch that rebinds facts placed at the top,
       then the tree-scope render.
@@ -2281,7 +2282,11 @@ class CollapseTooLarge(TopicRefusal):
                 "adds none). The lines a call leaves at the top are then unplaced lines, which "
                 "a later refusal offers to move to a level below"
                 % (self.fixed + self.added, self.fixed, self.added, self.top, self.room, self.fit))
-        if self.room > 0:
+        # A smaller batch is a route only when it can un-bind a fact: one whose added line fits
+        # the room, or one whose line is already at the top. With room left but less than any
+        # added line and no such fact, a batch of none would be named and nothing freed, so the
+        # pools that free room are named exactly as for a full block.
+        if self.room > 0 and (self.fit or self.fixed):
             return text
         pools = []
         if self.stale:
@@ -2292,9 +2297,15 @@ class CollapseTooLarge(TopicRefusal):
         if self.placed:
             pools.append(self._rebind_text(self.placed))
         if not pools:
-            return (text + ". The block is full and holds nothing that can leave it in this "
-                    "call: only facts whose line is already at the top can be un-bound now")
-        return text + ". The block is full: first free room - " + "; or ".join(pools)
+            return (text + ". The block is %s and holds nothing that can leave it in this "
+                    "call: only facts whose line is already at the top can be un-bound now"
+                    % self._fullness())
+        return (text + ". The block is %s: first free room - " % self._fullness()
+                + "; or ".join(pools))
+
+    def _fullness(self):
+        return ("full" if self.room <= 0 else
+                "too full for any line this call would add (%d bytes left)" % self.room)
 
 
 def _read_body_head(path):
@@ -2605,18 +2616,22 @@ def _lines_that_fit(plan, anchor, room):
 
 def _top_split(anchor, top, unbound):
     """{'kept', 'fixed', 'placed', 'stale': bytes, 'rebind': bool} of the tree top's block, for a
-    CollapseTooLarge message. A line of a fact in `unbound` is 'fixed': this call keeps it at the
-    top whatever a move does (the collapse would add it back), so it is never one to move. Of the
-    rest a pinned, legacy or unplaced line is kept; a managed line is placed when its fact is
-    placed at the top, else stale (a tree-scope render drops it). `rebind` says whether a level
-    below the top has a topic a fact placed at the top could be rebound to. Read only when the
-    call refuses: one record per level and one body head per line of the top's block."""
+    CollapseTooLarge message. A line of a fact in `unbound` whose body is still bound is 'fixed':
+    this call keeps it at the top whatever a move does (the collapse would add it back), so it is
+    never one to move. A fact in `unbound` that is un-bound already is not: the call leaves its
+    line alone, a move of it stays moved, and counting it as fixed would name a smaller batch of
+    facts that un-binds nothing. Of the rest a pinned, legacy or unplaced line is kept; a managed
+    line is placed when its fact is placed at the top, else stale (a tree-scope render drops it).
+    `rebind` says whether a level below the top has a topic a fact placed at the top could be
+    rebound to. Read only when the call refuses: one record per level and one body head per line
+    of the top's block (two for a line of a fact in `unbound` that is un-bound already)."""
     levels = curated_levels_under(anchor)
     level_map = topic_level_map(anchor, levels)[0]
     place = _Placer(level_map)
     split = _block_split(anchor, _pinned_slugs(levels), top,
                          lambda slug, topics: "placed" if tp.TOP in place(topics) else "stale",
-                         claim=lambda slug: "fixed" if slug in unbound else None)
+                         claim=lambda slug: "fixed" if slug in unbound and read_body_topics(
+                             us.body_path(anchor, slug)) else None)
     split["rebind"] = any(level_map.topics(parts) for parts in level_map.levels()
                           if parts != tp.TOP)
     return split

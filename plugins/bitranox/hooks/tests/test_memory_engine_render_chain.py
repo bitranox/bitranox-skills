@@ -961,14 +961,20 @@ _SWEEP_ROUTE_RE = re.compile(r"render-topics --proj \S+ --scope tree")
     ((_CAP, 100, 0, 0, _CAP, True), "split"),
     ((_CAP, 100, 0, 0, _CAP - 50, True), "split"),
     ((_CAP - 100, 200, 100, 0, _CAP - 100, True), "split"),
+    # room left, but less than any added line and no line of this call at the top: a smaller
+    # batch could un-bind nothing, so the pools that free room are named
+    ((_CAP - 49, _CAP + 1000, 0, 0, 0, True), "split"),
+    ((_CAP - 549, _CAP + 1000, 500, 0, 0, True), "split"),
+    ((_CAP - 549, _CAP + 1000, 0, 500, 0, False), "split"),
 ])
 def test_a_collapse_refusal_names_only_a_route_whose_pool_can_free_its_amount(figures, route):
     """Each route a CollapseTooLarge names, with the amount it asks for, is one its own pool can
     give: a move never asks for more than the kept lines that are not this call's own, a rebind
     never for more than the lines placed at the top, and both together reach the bytes the block
     is over. When the lines this call keeps at the top alone pass the cap it names a smaller
-    batch and no move of them; with no room left it names how to free room first, or says only
-    facts already at the top can be un-bound."""
+    batch and no move of them; with no room left, or room no added line fits and no line of this
+    call at the top (a smaller batch would un-bind nothing), it names how to free room first, or
+    says only facts already at the top can be un-bound."""
     kept, added, stale, placed, fixed, rebind = figures
     exc = E.CollapseTooLarge("/t", kept, added, stale, placed, fixed=fixed, rebind=rebind)
     text, movable = str(exc), kept - fixed
@@ -982,14 +988,17 @@ def test_a_collapse_refusal_names_only_a_route_whose_pool_can_free_its_amount(fi
         assert "cannot hold a line of each of them at once" in text, text
         said = re.search(_SPLIT, text)
         assert said is not None and int(said.group(1)) == room, text
-        assert sum(moves) <= movable and not rebinds, text
+        stuck = room <= 0 or not fixed
+        assert sum(moves) <= movable and rebinds == ([placed] if stuck and placed else []), text
         pools = stale or movable or placed
-        assert ("only facts whose line is already at the top" in text) == (room <= 0
+        assert ("only facts whose line is already at the top" in text) == (stuck
                                                                             and not pools), text
-        assert (_SWEEP_ROUTE_RE.search(text) is not None) == (room <= 0 and bool(stale))
-        if room <= 0 and movable:
+        # a rebind moves its lines down with the same tree-scope render
+        assert (_SWEEP_ROUTE_RE.search(text) is not None) == (stuck and bool(stale or placed))
+        assert ("first free room" in text) == (stuck and bool(pools)), text
+        if stuck and movable:
             assert moves == [movable], text
-        if room > 0:
+        if not stuck:
             assert not moves, text
         return
     assert re.search(_SPLIT, text) is None, text
@@ -1020,3 +1029,142 @@ def test_a_block_refusal_names_only_a_route_whose_pool_can_free_its_amount(kept,
             "rebind": (len(moves), len(rebinds)) == (0, 1),
             "both": (len(moves), len(rebinds)) == (1, 1)}[route], text
     assert sum(moves) + sum(rebinds) >= exc.need, text
+
+
+_MOVE_ANY = r"[Mm]ove (?:pinned, legacy or unplaced )?lines totalling at least (\d+) bytes"
+
+
+def _top_full_by_less_than_a_line(tmp_path, count, hook):
+    """A tree whose top holds ten lines no render places (pointing at no body), 49 bytes short of
+    the cap, beside `count` python facts each with a line at a/py and b/py whose hook is `hook`
+    characters long, and three rust facts whose lines sit at `c`. Returns (anchor, levels,
+    python slugs, rust slugs)."""
+    anchor, levels = _two_python_levels(tmp_path)
+    levels["c"] = _level(anchor, "c", ("rust",))
+    py = _plant_tagged(anchor, "py", "python", count, "y" * 100)
+    for rel in ("a/py", "b/py"):
+        _hold_lines(levels[rel], [us.Pointer(slug=slug, title="T", hook="h" * hook)
+                                  for slug in py])
+    rust = _plant_tagged(anchor, "rs", "rust", 3, "y" * 100)
+    _hold_lines(levels["c"], [us.Pointer(slug=slug, title="T", hook="r") for slug in rust])
+    # ten big lines rather than _fill_top's thousand small ones: a move of a few lines is cheap
+    share = (_CAP - 49) // 10
+    _hold_lines(anchor, [_big_line("feedback-kept%05d" % i, share + (i < (_CAP - 49) % 10))
+                         for i in range(10)])
+    assert sum(_line_bytes(anchor).values()) == _CAP - 49
+    return anchor, levels, py, rust
+
+
+def _unbind_by_the_original_call(tmp_path, anchor, slugs, below, dests):
+    """Run ONE set-topics batch un-binding `slugs` from outside the tree until it exits 0, at
+    most 6 times, following each refusal's route in between: a smaller batch of the facts still
+    bound whose added lines fit the room it names (a fact whose line is at the top adds none), or
+    a move of the shortest run of top lines that are no still-bound fact's to whichever of
+    `dests` holds the fewest bytes, reaching the figure it names. Every refusal must write
+    nothing and name a route that makes progress. Returns the routes taken as (kind, count)."""
+    engine = str(Path(E.__file__).resolve())
+    batch = tmp_path / "original.jsonl"
+    batch.write_text("".join('{"slug": "%s", "topics": []}\n' % slug for slug in slugs),
+                     encoding="utf-8")
+    taken = []
+    for step in range(6):
+        before = _snapshot(anchor)
+        rc, out = _call_outside(tmp_path, [engine, "set-topics", "--proj", anchor, "--batch",
+                                           str(batch)])
+        if rc == 0:
+            return taken
+        assert rc == 2 and out.startswith("! refused") and _snapshot(anchor) == before, out
+        assert "rebind facts placed there" not in out and _no_sweep_route(out), out
+        still = [slug for slug in slugs if E.read_body_topics(us.body_path(anchor, slug))]
+        move = re.search(_MOVE_ANY, out)
+        if move is None:
+            room = re.search(_SPLIT, out)
+            assert room is not None, out
+            route, words = _engine_route(out, r"(hooks/memory_engine\.py) (set-topics --proj \S+) "
+                                              r"--batch <file>")
+            at_top, part, total = set(_slugs(anchor)), [], 0
+            for slug in still:
+                add = 0 if slug in at_top else below[slug]
+                if total + add <= int(room.group(1)):
+                    part.append(slug)
+                    total += add
+            assert part, "the refusal named a smaller batch that can un-bind nothing: " + out
+            small = tmp_path / ("part%d.jsonl" % step)
+            small.write_text("".join('{"slug": "%s", "topics": []}\n' % slug for slug in part),
+                             encoding="utf-8")
+            _run_outside(tmp_path, [str(route), *words, "--batch", str(small)])
+            taken.append(("split", len(part)))
+            continue
+        route, words = _engine_route(out, _MOVE_KEPT)
+        sizes = _line_bytes(anchor)
+        moved = _shortest_run([s for s in sizes if s not in still], sizes, int(move.group(1)))
+        dest = min(dests, key=lambda level: sum(_line_bytes(level).values()))
+        assert sum(_line_bytes(dest).values()) + sum(sizes[s] for s in moved) <= _CAP
+        _run_outside(tmp_path, [str(route), *words, dest, "--slug", *moved])
+        taken.append(("move", len(moved)))
+    raise AssertionError("still refused after 6 routes: %r" % taken)
+
+
+def test_a_top_with_room_for_no_added_line_names_the_pools_that_free_room_not_a_batch_of_none(
+        tmp_path):
+    """The top is 49 bytes short of the cap, each of 11 python facts has a line of about 100 KB
+    at two levels and none at the top yet, and together they pass the cap (the shape of 1100
+    facts with lines of about 1 KB, at a hundredth of the rows). A smaller batch could un-bind
+    none of them, so the refusal names the pools that free room (here a move of the top's
+    unplaced lines), never a split alone. Followed from outside the tree, re-running the ORIGINAL
+    call each time, every refusal writes nothing and names a route that makes progress (a
+    fact the call un-binds already is no longer one whose line it keeps at the top); the call
+    ends with every python fact un-bound, the rust facts still bound, and no block past the
+    cap."""
+    anchor, levels, py, rust = _top_full_by_less_than_a_line(tmp_path, 11, 100000)
+    below = _line_bytes(levels["a/py"])
+    assert min(below.values()) > 49 and sum(below.values()) > _CAP
+    rows = dict.fromkeys(py, ())
+    with pytest.raises(E.CollapseTooLarge) as exc:
+        E.set_fact_topics(anchor, rows)
+    assert (exc.value.room, exc.value.fit, exc.value.fixed) == (49, 0, 0)
+    assert "first free room" in str(exc.value), str(exc.value)
+    taken = _unbind_by_the_original_call(tmp_path, anchor, py, below,
+                                         [levels["a/other"], levels["b/other"]])
+    assert [kind for kind, _n in taken] == ["move", "split", "move"], taken
+    assert _bound(anchor, py) == {(): 11} and _bound(anchor, rust) == {("rust",): 3}
+    assert _slugs(levels["a/py"]) == _slugs(levels["b/py"]) == []
+    for level in [anchor, *levels.values()]:
+        assert sum(_line_bytes(level).values()) <= _CAP, level
+
+
+def test_a_top_with_room_for_exactly_one_added_line_names_a_batch_of_that_one(tmp_path, capsys):
+    """The boundary of the case above: the top's room is exactly one python line. The refusal
+    names a smaller batch with room for one and no move; that batch of one, run as given from
+    outside the tree, goes through and leaves the top's block exactly at the cap."""
+    anchor, levels, py, _rust = _top_full_by_less_than_a_line(tmp_path, 11, 100000)
+    below = _line_bytes(levels["a/py"])
+    line = below[py[0]]
+    assert set(below.values()) == {line}
+    filler = max(_line_bytes(anchor).items(), key=lambda item: item[1])[0]
+    top = sig.claude_local_md_path(anchor)
+    text = top.read_text(encoding="utf-8")
+    scope, held = us.parse_pointer_index(text)
+    held = [p if p.slug != filler else _big_line(filler, _line_bytes(anchor)[filler] - line + 49)
+            for p in held]
+    top.write_text(us.upsert_pointer_block(text, scope, held), encoding="utf-8")
+    assert sum(_line_bytes(anchor).values()) == _CAP - line
+    batch = tmp_path / "all.jsonl"
+    batch.write_text("".join('{"slug": "%s", "topics": []}\n' % slug for slug in py),
+                     encoding="utf-8")
+    before = _snapshot(anchor)
+    capsys.readouterr()
+    assert E.main(["set-topics", "--proj", anchor, "--batch", str(batch)]) == 2
+    out = capsys.readouterr().out
+    assert _snapshot(anchor) == before, out
+    assert "first free room" not in out and "move --from-level" not in out, out
+    room = re.search(_SPLIT, out)
+    assert room is not None and int(room.group(1)) == line, out
+    assert "(1 of the lines this call would add fit" in out, out
+    route, words = _engine_route(out, r"(hooks/memory_engine\.py) (set-topics --proj \S+) "
+                                      r"--batch <file>")
+    one = tmp_path / "one.jsonl"
+    one.write_text('{"slug": "%s", "topics": []}\n' % py[0], encoding="utf-8")
+    _run_outside(tmp_path, [str(route), *words, "--batch", str(one)])
+    assert _bound(anchor, [py[0]]) == {(): 1} and _bound(anchor, py[1:]) == {("python",): 10}
+    assert py[0] in _slugs(anchor) and sum(_line_bytes(anchor).values()) == _CAP
