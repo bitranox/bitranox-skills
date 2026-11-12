@@ -352,6 +352,7 @@ def test_the_route_the_block_cap_refusal_names_repairs_it(tmp_path, capsys):
     out = capsys.readouterr().out
     route = re.search(r"(hooks/memory_engine\.py) (set-topics --proj \S+ --batch) <file>", out)
     assert route is not None and "a topic this level has (python)" in out
+    assert "move --from-level" not in out
     assert route.group(2).split()[2] == level
     batch = tmp_path / "rebind.jsonl"
     batch.write_text("".join(json.dumps({"slug": slug, "topics": []}) + "\n" for slug in slugs),
@@ -412,6 +413,101 @@ def test_lines_a_level_gains_after_the_census_still_count_against_the_cap(tmp_pa
         E.render_topics(anchor, write=write)
     assert exc.value.level == second and calls == [str(sig.claude_local_md_path(first))]
     assert not any(slug.startswith("feedback-rs") for slug in _slugs(second))
+    # the 600 kept lines are the larger part, so the route moves them; rebinding cannot help
+    assert exc.value.kept >= exc.value.added > 0 and "move --from-level" in str(exc.value)
+
+
+def _hold_lines(level, slugs, hook):
+    """Append an unpinned line per slug to `level`'s block, each carrying `hook`."""
+    local = sig.claude_local_md_path(level)
+    text = local.read_text(encoding="utf-8")
+    scope, pointers = us.parse_pointer_index(text)
+    pointers += [us.Pointer(slug=slug, title="T", hook=hook) for slug in slugs]
+    local.write_text(us.upsert_pointer_block(text, scope, pointers), encoding="utf-8")
+
+
+def test_lines_this_render_moves_away_do_not_count_against_the_level_they_leave(tmp_path):
+    """`b` still holds about 1.1 MB of python lines from before python moved to `z`. This render
+    adds them to `z` and drops them from `b`, so they do not count against `b`'s cap when `b`
+    gains its one rust line: the render goes through."""
+    anchor = _tree(tmp_path)
+    old, new = _level(anchor, "b", ("rust",)), _level(anchor, "z", ("python",))
+    slugs = ["feedback-py%05d" % i for i in range(1100)]
+    _plant_tagged(anchor, "py", "python", len(slugs), "short")
+    _hold_lines(old, slugs, "y" * 1000)
+    assert sig.claude_local_md_path(old).stat().st_size > E.MAX_RENDER_BLOCK_BYTES
+    _fact(anchor, "feedback-rs-rule", ("rust",))
+    assert E.main(["render-topics", "--proj", anchor, "--scope", "tree"]) == 0
+    assert _slugs(new) == slugs and _slugs(old) == ["feedback-rs-rule"] and _slugs(anchor) == []
+
+
+def test_a_line_already_where_the_render_places_it_counts_once(tmp_path):
+    """About 730 KB of python lines already sit at `a`, where the render places them: the body's
+    own line replaces each, so a re-render counts them once and goes through. Counted twice they
+    would come to about 1.5 MB, past the cap."""
+    anchor = _tree(tmp_path)
+    level = _level(anchor, "a", ("python",))
+    _plant_tagged(anchor, "py", "python", 700, "y" * 1000)
+    assert E.main(["render-topics", "--proj", anchor, "--scope", "tree"]) == 0
+    assert len(_slugs(level)) == 700
+    before = _snapshot(anchor)
+    assert E.main(["render-topics", "--proj", anchor, "--scope", "tree"]) == 0
+    assert _snapshot(anchor) == before
+
+
+def _keep_three_kinds(anchor, level, count):
+    """`count` lines of about 1 KB at `level` that no render places, a third of each kind:
+    pinned, pointing at no body, and the line of an untagged fact. Returns their slugs."""
+    facts = us.central_facts_dir(anchor)
+    facts.mkdir(parents=True, exist_ok=True)
+    kept = []
+    for i in range(count):
+        slug = "feedback-kept%05d" % i
+        if i % 3 == 2:
+            (facts / (slug + ".md")).write_text(
+                "---\nname: %s\ndescription: d\ntitle: T\nmetadata:\n  type: feedback\n---\n\nx\n"
+                % slug, encoding="utf-8")
+        kept.append(us.Pointer(slug=slug, title="T", hook="k" * 1000, pin=i % 3 == 0))
+    local = sig.claude_local_md_path(level)
+    text = local.read_text(encoding="utf-8")
+    local.write_text(us.upsert_pointer_block(text, us.parse_pointer_index(text)[0], kept),
+                     encoding="utf-8")
+    return [p.slug for p in kept]
+
+
+def test_kept_lines_that_fill_the_block_are_refused_with_a_route_that_moves_them(tmp_path, capsys):
+    """`b` keeps about 1.1 MB of lines no render places; one rust line is to be added there. No
+    rebinding can help, so the refusal names the kept bytes and a move route: run it as given,
+    from a directory outside the tree, for part of the kept lines, and the next render goes
+    through. Each kind of kept line counts: without any one third the block would fit."""
+    anchor = _tree(tmp_path)
+    level = _level(anchor, "b", ("rust",))
+    kept = _keep_three_kinds(anchor, level, 1100)
+    _fact(anchor, "feedback-rs-rule", ("rust",))
+    before = _snapshot(anchor)
+    capsys.readouterr()
+    assert E.main(["render-topics", "--proj", anchor, "--scope", "tree"]) == 2
+    out = capsys.readouterr().out
+    assert _snapshot(anchor) == before
+    said = re.search(r"(\d+) bytes of pinned, legacy or unplaced lines stay at (\S+) and (\d+) "
+                     r"bytes of lines placed there", out)
+    assert said is not None and said.group(2) == level, out
+    assert int(said.group(1)) > E.MAX_RENDER_BLOCK_BYTES > int(said.group(3)) > 0
+    assert "set-topics" not in out
+    route = re.search(r"(hooks/memory_engine\.py) (move --from-level \S+ --to-level) <level> "
+                      r"--slug <slug>", out)
+    assert route is not None and route.group(2).split()[2] == level, out
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    engine = Path(E.__file__).resolve().parents[1] / route.group(1)
+    done = subprocess.run([sys.executable, str(engine), *route.group(2).split(), anchor,
+                           "--slug", *kept[:600]],
+                          cwd=str(outside), capture_output=True, text=True, encoding="utf-8",
+                          errors="replace", check=False)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert E.main(["render-topics", "--proj", anchor, "--scope", "tree"]) == 0
+    assert _slugs(level) == sorted(kept[600:] + ["feedback-rs-rule"])
+    assert _slugs(anchor) == kept[:600]
 
 
 def test_the_tagged_facts_without_a_title_are_all_counted_and_the_first_few_shown(tmp_path):

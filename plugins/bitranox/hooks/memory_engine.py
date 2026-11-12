@@ -2070,27 +2070,44 @@ whose line does not parse)."""
 # ---- render: the parts a pointer line placed by topic is built from ---------------------------
 
 MAX_RENDER_BLOCK_BYTES = 1 << 20
-"""Most bytes of pointer lines one level's block may hold once `render-topics` has added its lines:
-the lines it builds plus every line it keeps there (pinned, legacy, unmanaged, and a managed line
-placed elsewhere, which is dropped only after every add). A level's lines are the one thing a
-render holds, and a block past this is a tagging mistake to fix, not text to load."""
+"""Most bytes of pointer lines one level's block may hold once `render-topics` is done with it:
+the lines it places there plus the lines that stay there (pinned, legacy, and those of facts it
+does not place). A managed line placed elsewhere does not count: the same run drops it. A level's
+lines are the one thing a render holds, and a block past this is a mistake to fix, not text to
+load."""
 _RENDER_SHOWN = 20
 
 
 class RenderBlockTooLarge(TopicRefusal):
     """Raised, before that level is written, when the block one level would hold passes
-    MAX_RENDER_BLOCK_BYTES. `bound_to` says which topics put the lines there; the message names
-    the set-topics batch that rebinds the facts which need not be read at that level."""
+    MAX_RENDER_BLOCK_BYTES: `kept` bytes of lines that stay there plus `added` bytes (so far) of
+    lines the render places there. `size` is their sum.
 
-    def __init__(self, level, size, bound_to):
-        self.level, self.size = level, size
-        super().__init__(["the lines placed at %s come to over %d bytes (%d and counting), the most "
-                          "one level's block may hold: too many facts are bound to %s. Rebind each "
-                          "fact that need not be read there with hooks/memory_engine.py set-topics "
-                          "--proj %s --batch <file>, one {\"slug\": ..., \"topics\": [...]} per "
-                          "line giving its real topics ([] binds it to no topic and leaves its line "
-                          "where it is), then run render-topics again"
-                          % (level, MAX_RENDER_BLOCK_BYTES, size, bound_to, level)])
+    The message names the route for the larger part. When the lines placed there are larger, it
+    names the set-topics batch that rebinds the facts which need not be read at that level
+    (`bound_to` says which topics put them there). When the kept lines are at least as large
+    (`kept >= added`), no rebinding can bring the block under the cap, so it names the move that
+    takes kept lines to another level of the altitude chain."""
+
+    def __init__(self, level, kept, added, bound_to):
+        self.level, self.kept, self.added, self.size = level, kept, added, kept + added
+        if kept >= added:
+            text = ("%d bytes of pinned, legacy or unplaced lines stay at %s and %d bytes of lines "
+                    "placed there (and counting) are to be added, over the %d bytes one level's "
+                    "block may hold: the lines that stay are the larger part. Move kept lines to a "
+                    "level above or below it with hooks/memory_engine.py move --from-level %s "
+                    "--to-level <level> --slug <slug> [<slug> ...] (a legacy line needs "
+                    "migrate_to_slug_store.py first), then run render-topics again"
+                    % (kept, level, added, MAX_RENDER_BLOCK_BYTES, level))
+        else:
+            text = ("%d bytes of lines placed at %s (and counting) beside %d bytes of lines that "
+                    "stay there come to over %d bytes, the most one level's block may hold: too "
+                    "many facts are bound to %s. Rebind each fact that need not be read there with "
+                    "hooks/memory_engine.py set-topics --proj %s --batch <file>, one {\"slug\": "
+                    "..., \"topics\": [...]} per line giving its real topics ([] binds it to no "
+                    "topic and leaves its line where it is), then run render-topics again"
+                    % (added, level, kept, MAX_RENDER_BLOCK_BYTES, bound_to, level))
+        super().__init__([text])
 
 
 def _read_body_head(path):
@@ -2540,17 +2557,20 @@ def _add_levels(level_map):
     return [parts for parts in level_map.levels() if parts == tp.TOP or level_map.topics(parts)]
 
 
-def _held_bytes(anchor, place, pinned, parts, level_dir):
-    """Bytes of the lines a level's block keeps through the ADD phase beside the lines a render
-    builds for it: pinned, legacy and unmanaged lines, and a managed line placed elsewhere (it is
-    dropped only after every add). A managed line placed here is left out, since the body's own
-    line takes its place and is counted from the body. One body head is read per unpinned line."""
+def _held_bytes(anchor, pinned, level_dir):
+    """Bytes of the lines a level's block still holds once this render is done with it, beside the
+    lines it places there: pinned, legacy, and those of facts it does not place. Every managed line
+    is left out. One placed here is replaced by the body's own line, which is counted from the
+    body; one placed elsewhere is dropped by this same run's REMOVE phase. The ADD phase writes a
+    level before that drop, so its file holds those lines a while longer: no read or write of a
+    level file is bounded, and the cap judges the block the render leaves. One body head is read
+    per unpinned line."""
     size = 0
     for ptr in us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level_dir)))[1]:
         if not (ptr.pin or ptr.legacy):
             head = _read_body_head(us.body_path(anchor, ptr.slug))
             topics = None if head is None else _managed_topics(ptr.slug, head, pinned)
-            if topics is not None and parts in place(topics):
+            if topics is not None:
                 continue
         size += len(ptr.index_line().encode("utf-8")) + 1
     return size
@@ -2564,7 +2584,8 @@ def _render_census(anchor, pinned, place, dirs, adds):
     refusal comes before ANY level is written, not after the levels ahead of it in the ADD order
     were. Holds one byte count per level."""
     managed, incomplete, total = 0, [], 0
-    sizes = {parts: _held_bytes(anchor, place, pinned, parts, dirs[parts]) for parts in adds}
+    kept = {parts: _held_bytes(anchor, pinned, dirs[parts]) for parts in adds}
+    sizes = dict(kept)
     for slug, head in _iter_body_heads(anchor):
         topics = _body_topics(head)
         if not topics or slug in pinned:
@@ -2579,7 +2600,8 @@ def _render_census(anchor, pinned, place, dirs, adds):
         for parts in place(topics):     # a placement is always the top or a level with a topic
             sizes[parts] += len(line.index_line().encode("utf-8")) + 1
             if sizes[parts] > MAX_RENDER_BLOCK_BYTES:
-                raise RenderBlockTooLarge(dirs[parts], sizes[parts], place.bound_to(parts))
+                raise RenderBlockTooLarge(dirs[parts], kept[parts], sizes[parts] - kept[parts],
+                                          place.bound_to(parts))
     return {"managed": managed, "incomplete": sorted(incomplete), "incomplete_total": total}
 
 
@@ -2597,7 +2619,7 @@ def _wanted_lines(anchor, place, pinned, parts, level_dir, held=0):
         line = _line_from_head(slug, head)
         size += len(line.index_line().encode("utf-8")) + 1
         if size > MAX_RENDER_BLOCK_BYTES:
-            raise RenderBlockTooLarge(level_dir, size, place.bound_to(parts))
+            raise RenderBlockTooLarge(level_dir, held, size - held, place.bound_to(parts))
         wanted[slug] = line
     return wanted
 
@@ -2671,7 +2693,7 @@ def _render_tree(anchor, levels, adds, place, dirs, pinned, rep, dry_run, write)
     before a single line is dropped, so an interrupted run leaves a surplus copy, never a fact with
     no line."""
     for parts in adds:
-        held = _held_bytes(anchor, place, pinned, parts, dirs[parts])
+        held = _held_bytes(anchor, pinned, dirs[parts])
         _add_lines(dirs[parts], _wanted_lines(anchor, place, pinned, parts, dirs[parts], held), rep,
                    dry_run, write)
     for level in levels:
@@ -2695,7 +2717,8 @@ def render_topics(proj, scope="tree", dry_run=False, write=None):
 
     Checked before the first write: a level whose TOPICS line does not parse and a tree top with
     no pointer block raise TopicRefusal, and a level whose block - the lines placed there plus the
-    lines it keeps - would pass MAX_RENDER_BLOCK_BYTES raises RenderBlockTooLarge (a body or block
+    lines that stay there, never a line this run drops - would pass MAX_RENDER_BLOCK_BYTES raises
+    RenderBlockTooLarge, naming the route for whichever part is larger (a body or block
     that grew between the census and the ADD pass can still raise it there, after earlier levels
     were added and before any line is dropped).
     Holds: one record per level, one per pinned pointer, the lines of the ONE level being written."""
