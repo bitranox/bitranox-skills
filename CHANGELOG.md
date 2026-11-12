@@ -78,8 +78,10 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   a `set-topics` landing between a render's add and remove passes no longer leaves a fact with
   no line, and a render no longer puts back the lines a `--clear` collapse just dropped, which
   left an unplaced fact with several lines. A verb waits up to 30 s for it, then exits 2 naming
-  the lock and to run it again. A tree render's remove pass also keeps a line whose fact has no
-  line where it is placed, and warns.
+  the lock and to run it again. A long render or `set-topics --batch` refreshes the lock file
+  at each level or row, so a waiter never reclaims the lock of a holder that is still working.
+  A tree render's remove pass also keeps a line whose fact has no line where it is placed, and
+  warns.
 
 ### Fixed
 

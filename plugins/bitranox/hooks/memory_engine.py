@@ -35,6 +35,7 @@ import json
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
 import capture_constraints
@@ -362,8 +363,10 @@ def _anchor(proj):
 # calls any of them.
 #
 # The mechanism is the level locks' own: `sig.memory_lock`, an O_EXCL `<target>.lock` file,
-# reclaimed when older than `sig._LOCK_STALE_S` (a crashed holder). So a holder busy for longer
-# than that loses it to a waiter, as a level lock's holder does.
+# reclaimed when its mtime is older than `sig._LOCK_STALE_S` (a crashed holder). A long holder
+# keeps it from looking stale with a heartbeat (`_placement_heartbeat`): a render refreshes the
+# lock file's mtime once per level it walks in each pass, and set-topics once per row, so only a
+# holder that stops walking (crashed or hung) ages past the reclaim.
 
 PLACEMENT_LOCK_TIMEOUT_S = 30.0
 """How long a verb waits for the placement lock before refusing with PlacementLockBusy: longer than
@@ -392,16 +395,44 @@ class PlacementLockBusy(TimeoutError):
             % (verb, waited, anchor, placement_lock_path(anchor), verb, int(sig._LOCK_STALE_S)))
 
 
+_HEARTBEAT_AFTER_S = sig._LOCK_STALE_S / 4
+"""How old the held placement lock's mtime may get before a heartbeat refreshes it: well inside
+the reclaim age, so a holder that beats at least once per this many seconds never looks stale,
+and one stat per beat is all a fresh lock costs."""
+
+_HELD_PLACEMENT_LOCKS = []
+"""The lock files of the placement locks this process holds now, innermost last."""
+
+
+def _placement_heartbeat():
+    """Refresh the mtime of every placement lock this process holds once it is older than
+    _HEARTBEAT_AFTER_S. The long holders call it once per level they walk in each pass (render)
+    and once per row (set-topics), so a holder that is still working never ages past
+    `sig._LOCK_STALE_S` and has its lock reclaimed by a waiter. A lock file gone (a peer
+    reclaimed it) is left alone: refreshing would not give the lock back."""
+    for lock in _HELD_PLACEMENT_LOCKS:
+        try:
+            if time.time() - lock.stat().st_mtime > _HEARTBEAT_AFTER_S:
+                os.utime(lock)
+        except OSError:
+            continue
+
+
 @contextlib.contextmanager
 def placement_lock(anchor, verb, timeout=PLACEMENT_LOCK_TIMEOUT_S):
     """Hold `anchor`'s placement lock for the block; `verb` names the caller in a timeout's
-    PlacementLockBusy. Take it before any level lock (see the section comment)."""
+    PlacementLockBusy. Take it before any level lock (see the section comment). While it is held,
+    `_placement_heartbeat` keeps its mtime fresh."""
     with contextlib.ExitStack() as held:
         try:
             held.enter_context(sig.memory_lock(_placement_target(anchor), timeout=timeout))
         except TimeoutError as exc:
             raise PlacementLockBusy(anchor, verb, timeout) from exc
-        yield
+        _HELD_PLACEMENT_LOCKS.append(placement_lock_path(anchor))
+        try:
+            yield
+        finally:
+            _HELD_PLACEMENT_LOCKS.pop()
 
 
 def _placement_lock_if_bound(anchor, slug, verb):
@@ -3209,6 +3240,7 @@ def _set_fact_topics_held(anchor, rows, allowed, dry_run, write):
     write = write or us.write_if_changed
     rep = {"set": [], "unchanged": 0, "collapsed": []}
     for slug in sorted(rows):
+        _placement_heartbeat()
         if slug in plan:
             # Placed by topic at several levels and bound to none from now on: one line, at the
             # tree top. Before the body changes, so a call cut short leaves a bound fact, and
@@ -3612,11 +3644,13 @@ def _render_tree(anchor, levels, adds, place, dirs, pinned, rep, dry_run, write)
     no line; nor does REMOVE drop a line whose fact has none where it is placed
     (`_keep_last_lines`)."""
     for parts in adds:
+        _placement_heartbeat()
         held = _held_bytes(anchor, pinned, dirs[parts])
         _add_lines(dirs[parts], _wanted_lines(anchor, place, pinned, parts, dirs[parts], held,
                                               now=_block_bytes(dirs[parts])), rep,
                    dry_run, write)
     for level in levels:
+        _placement_heartbeat()
         parts = _level_parts(anchor, level)
         level = os.path.abspath(str(level))
         drop, kept = _keep_last_lines(dirs, _misplaced_lines(anchor, place, pinned, parts, level),
@@ -3714,6 +3748,7 @@ def _render_chain(anchor, chain, adds, place, pinned, rep, dry_run, write):
     run reports the drops a real run makes. Holds the slugs of the chain's blocks."""
     above, holds = set(), []
     for parts, level in chain:
+        _placement_heartbeat()
         wanted = {}
         if parts in adds:
             held = _held_bytes(anchor, pinned, level, _chain_goes(place, parts, above))
@@ -3724,6 +3759,7 @@ def _render_chain(anchor, chain, adds, place, pinned, rep, dry_run, write):
         above |= now
     above = set()
     for (_parts, level), now in zip(chain, holds, strict=True):
+        _placement_heartbeat()
         _drop_lines(level, _held_above(anchor, pinned, level, above), rep, dry_run, write)
         above |= now
 
