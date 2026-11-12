@@ -379,3 +379,41 @@ def test_a_body_that_cannot_be_put_back_names_the_dropped_lines_too(levels):
         R.archive_entry(levels["a"], "feedback-py-rule", move=move_once, commit=refuse)
     assert "dropped" in str(err.value) and levels["b"] in str(err.value)
 
+
+
+# ---- the placement lock ------------------------------------------------------------------------
+
+@pytest.mark.parametrize("slug", ["feedback-py-rule", "feedback-plain"])
+def test_archiving_waits_for_the_placement_lock(levels, tmp_path, slug):
+    """Its lines go at several levels and its body moves: a render between them would place it
+    again. The lock file is the lock; held here as a render holds it, the archive must wait, for
+    an unbound fact too (a peer may bind and place it between two of the archive's steps)."""
+    lock = Path(levels[""], us.STORE_DIRNAME, "placement.lock")
+    lock.write_text("peer\n", encoding="utf-8")
+    proc = subprocess.Popen([sys.executable, str(PLUGIN / "skills/meta-self-improve/"
+                                                  "reconcile_memory_index.py"),
+                             "--archive", slug, levels["a" if slug == "feedback-py-rule" else ""]],
+                            cwd=str(_outside(tmp_path)), stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
+    try:
+        proc.wait(timeout=1.5)
+        waited = False
+    except subprocess.TimeoutExpired:
+        waited = True
+    lock.unlink()
+    out = proc.communicate(timeout=90)[0]
+    assert proc.returncode == 0, out
+    assert waited, "the archive of %s did not wait for the placement lock" % slug
+    assert slug not in _slugs(levels["a"]) + _slugs(levels["b"]) + _slugs(levels[""])
+
+
+def test_archiving_in_a_tree_without_a_topic_list_takes_no_placement_lock(levels):
+    """A tree that places nothing by topic has nothing to serialise: a held lock file there is
+    no reason to wait."""
+    topic_store.store_path(levels[""]).unlink()
+    lock = Path(levels[""], us.STORE_DIRNAME, "placement.lock")
+    lock.write_text("peer\n", encoding="utf-8")
+    try:
+        assert R.archive_entry(levels[""], "feedback-plain") is True
+    finally:
+        lock.unlink()

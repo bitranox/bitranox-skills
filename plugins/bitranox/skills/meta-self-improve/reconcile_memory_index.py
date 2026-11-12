@@ -42,6 +42,7 @@ Pure standard library; cross-platform; ASCII output only.
 """
 
 import argparse
+import contextlib
 import os
 import re
 import shutil
@@ -490,9 +491,24 @@ def archive_entry(level_dir, slug, archive_subdir=".archive", dry_run=False, *, 
     Raises `sig.MemoryWritesOff` before anything is read under BITRANOX_MEMORY_WRITES=off, unless
     `dry_run`. It cannot leave that to the commit's own guard: the body is moved BEFORE the commit,
     and a refusal there is not the OSError `_put_back` answers, so the body would stay in the
-    archive while its pointer still named it."""
-    if not dry_run:
+    archive while its pointer still named it.
+
+    A real archive in a tree with a topic list holds the tree's placement lock (the engine's
+    `placement_lock_if_listed`) across every line it drops and the body move, so no render places
+    the fact again between them; it waits for it as `set-topics` does and raises
+    PlacementLockBusy (a TimeoutError, so an OSError) when it stays held."""
+    if dry_run:
+        held = contextlib.nullcontext()
+    else:
         sig.refuse_if_memory_writes_off()
+        held = ME.placement_lock_if_listed(ME._anchor(str(level_dir)),
+                                           "reconcile_memory_index.py --archive")
+    with held:
+        return _archive_entry(level_dir, slug, archive_subdir, dry_run, move, commit, force)
+
+
+def _archive_entry(level_dir, slug, archive_subdir, dry_run, move, commit, force):
+    """`archive_entry` itself; its caller holds the placement lock for a bound fact."""
     move = move or shutil.move
     commit = commit or ME._commit_store
     d = Path(level_dir)

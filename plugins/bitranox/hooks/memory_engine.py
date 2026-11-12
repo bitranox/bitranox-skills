@@ -336,6 +336,91 @@ def _anchor(proj):
     return us.resolve_anchor(proj) or Path(proj)
 
 
+# ---- the placement lock: one per tree, held by everything that changes where a line is read ---
+#
+# A level lock covers one level's file, and a render, a set-topics and a write to a placed fact
+# each touch several levels plus a body: a peer landing between two of their steps saw half a
+# change and acted on it (a render's REMOVE dropping every line of a fact its ADD never placed; a
+# render putting back the lines a --clear collapse had just dropped). So each of them holds this
+# lock across ALL of its reads and writes: `render_topics` (a real run, both scopes, census to
+# last drop), `set_fact_topics` (checks, collapse lines and bodies), `upsert_entry` of a fact
+# bound to a topic, and `retitle_entry`, `rename_entry` and reconcile's archive of any fact in a
+# tree with a topic list. Dry runs and read-only checks take none (see `_write_lock`).
+#
+# Lock order, which keeps this deadlock-free by construction: the placement lock is taken FIRST,
+# before any level lock, and never while one is held. Every holder above takes it as its first
+# lock and takes level locks (one at a time) only inside it; nothing that holds a level lock
+# calls any of them.
+#
+# The mechanism is the level locks' own: `sig.memory_lock`, an O_EXCL `<target>.lock` file,
+# reclaimed when older than `sig._LOCK_STALE_S` (a crashed holder). So a holder busy for longer
+# than that loses it to a waiter, as a level lock's holder does.
+
+PLACEMENT_LOCK_TIMEOUT_S = 30.0
+"""How long a verb waits for the placement lock before refusing with PlacementLockBusy: longer than
+a level lock's 5 s, because the holder may be a whole-tree render."""
+
+
+def _placement_target(anchor):
+    """The path `sig.memory_lock` locks for `anchor`'s tree: `<anchor>/.claude-memory/placement`."""
+    return us.central_facts_dir(anchor).parent / "placement"
+
+
+def placement_lock_path(anchor):
+    """The file whose existence IS the tree's placement lock: `<store>/placement.lock`."""
+    return Path(str(_placement_target(anchor)) + ".lock")
+
+
+class PlacementLockBusy(TimeoutError):
+    """The placement lock stayed held past the wait. A TimeoutError with only a message (strerror
+    None), so the CLI prints it as `! error: <message>` and exits 2 like any lock contention."""
+
+    def __init__(self, anchor, verb, waited):
+        super().__init__(
+            "%s waited %g s for the placement lock of the tree %s (%s): another render-topics, "
+            "set-topics, or write to a fact placed by topic holds it. Run %s again once that one "
+            "finishes; a lock left by a holder that crashed is reclaimed once it is %d s old"
+            % (verb, waited, anchor, placement_lock_path(anchor), verb, int(sig._LOCK_STALE_S)))
+
+
+@contextlib.contextmanager
+def placement_lock(anchor, verb, timeout=PLACEMENT_LOCK_TIMEOUT_S):
+    """Hold `anchor`'s placement lock for the block; `verb` names the caller in a timeout's
+    PlacementLockBusy. Take it before any level lock (see the section comment)."""
+    with contextlib.ExitStack() as held:
+        try:
+            held.enter_context(sig.memory_lock(_placement_target(anchor), timeout=timeout))
+        except TimeoutError as exc:
+            raise PlacementLockBusy(anchor, verb, timeout) from exc
+        yield
+
+
+def _placement_lock_if_bound(anchor, slug, verb):
+    """`add`'s placement lock: held when `slug`'s body is bound to a topic, else none.
+
+    Read without the lock, as a superset of "placed by topic": `add` then decides placed under
+    the lock. `add` writes the fact at ONE level, under that level's lock, so a fact bound and
+    placed by peers after this read meets an `add` that either finds its line there (and updates
+    it, a line the next render refreshes) or finds it gone and refuses as a collision; it can
+    neither drop a line elsewhere nor put one back. `add` is also the per-turn capture path, so it
+    does not wait behind a render for a fact no render manages."""
+    if not us.is_valid_slug(slug) or not read_body_topics(us.body_path(anchor, slug)):
+        return contextlib.nullcontext()
+    return placement_lock(anchor, verb)
+
+
+def placement_lock_if_listed(anchor, verb):
+    """The placement lock for a verb that walks EVERY level holding a fact's line (`rename`,
+    `retitle`, reconcile's archive): held whenever `anchor`'s tree has a topic list, else none.
+    Such a verb reads a level, then writes it, level after level; a fact bound, placed and
+    un-bound by peers between two of those steps would get a line put back where a collapse had
+    dropped it. Holding the lock for any fact of a tree that places by topic rules that out; a
+    tree without a list places nothing, and nothing there takes it."""
+    if anchor is None or not topic_store.store_path(anchor).is_file():
+        return contextlib.nullcontext()
+    return placement_lock(anchor, verb)
+
+
 # mtime-neutral writer: one implementation, in uuid_store.
 _write_if_changed = us.write_if_changed
 
@@ -506,7 +591,9 @@ def upsert_entry(proj, title, hook, body="", type_=None, pin=False,
     A fact placed by topic (see `_placed_slugs`) is written only from a level holding one of its
     lines, else `PlacedElsewhere`; the write then refreshes its other lines too. Pinning one raises
     TopicRefusal. A level whose path below the anchor crosses a directory the level walk prunes
-    raises `NonLevelDir`. All three before any write.
+    raises `NonLevelDir`. All three before any write. A fact whose body is bound to a topic is
+    decided and written under the tree's placement lock (`_placement_lock_if_bound`), so its
+    lines change with no render or set-topics half done; PlacementLockBusy when it stays held.
 
     `skill` ties the fact to the skill it belongs with (`metadata: skill:`); it follows the same
     rules as `type_` - kept on an update that does not name it, set in place by one with no body -
@@ -553,6 +640,17 @@ def upsert_entry(proj, title, hook, body="", type_=None, pin=False,
     # the refusal writes nothing at all.
     if _body_topics_line(body) is not None and not us.body_path(anchor, slug).is_file():
         raise TopicsOnCreate(slug)
+    # A write to a fact bound to a topic holds the tree's placement lock from here on, so the
+    # placed decision below and every line it rewrites see no render or set-topics half done.
+    with _placement_lock_if_bound(anchor, slug, "add"):
+        return _upsert_checked(proj, anchor, slug, title, hook, body, type_, pin, scope_default,
+                               allow_pinned_overwrite, skill)
+
+
+def _upsert_checked(proj, anchor, slug, title, hook, body, type_, pin, scope_default,
+                    allow_pinned_overwrite, skill):
+    """The writing half of `upsert_entry`, from the placed-by-topic checks on: its caller has
+    validated every argument and holds the placement lock when the fact is bound."""
     # A fact placed by topic (see `_placed_slugs`) has a line at each level its topics place it
     # at. Checked here, before the level is scaffolded, so each refusal writes nothing: it is not
     # pinned (a pinned fact is never placed by topic), and it is written from a level that holds
@@ -1966,6 +2064,16 @@ def rename_entry(level, slug, to_slug):
     Returns {"slug","to_slug","level","renamed","refs_rewritten","refused","warnings"}.
     """
     sig.refuse_if_memory_writes_off()
+    # In a tree that places by topic, a rename holds the placement lock: the fact's lines at
+    # every level change together, with no render or set-topics between them.
+    anchor = us.resolve_anchor(str(Path(level).resolve()))
+    with placement_lock_if_listed(anchor, "rename"):
+        return _rename_entry(level, slug, to_slug)
+
+
+def _rename_entry(level, slug, to_slug):
+    """`rename_entry` itself; its caller holds the placement lock when the fact is bound."""
+    sig.refuse_if_memory_writes_off()
     rep = {"slug": slug, "to_slug": to_slug, "level": str(level), "renamed": False,
            "refs_rewritten": [], "refused": None, "warnings": []}
     lvl = Path(level).resolve()
@@ -2091,6 +2199,16 @@ def retitle_entry(level, slug, to_title):
     deliberate route through the pin gate. Returns
     {"slug","to_title","level","retitled","levels","refused","warnings"}.
     """
+    sig.refuse_if_memory_writes_off()
+    # In a tree that places by topic, a retitle holds the placement lock: the fact's lines at
+    # every level change together, with no render or set-topics between them.
+    anchor = us.resolve_anchor(str(Path(level).resolve()))
+    with placement_lock_if_listed(anchor, "retitle"):
+        return _retitle_entry(level, slug, to_title)
+
+
+def _retitle_entry(level, slug, to_title):
+    """`retitle_entry` itself; its caller holds the placement lock when the fact is bound."""
     sig.refuse_if_memory_writes_off()
     rep = {"slug": slug, "to_title": to_title, "level": str(level), "retitled": False,
            "levels": [], "refused": None, "warnings": []}
@@ -2900,7 +3018,8 @@ def _collapse_copies(anchor, slug, holders, line, write):
             _drop_lines(level, {slug}, scratch, False, write)
 
 
-def set_fact_topics(proj, rows, dry_run=False, write=None):
+def set_fact_topics(proj, rows, dry_run=False, write=None, *,
+                    lock_timeout=PLACEMENT_LOCK_TIMEOUT_S):
     """Set the `topics:` line of each fact in `rows`, a {slug: topics} mapping where topics is a
     tuple of tags, an empty tuple (bound to no topic) or None (remove the line).
 
@@ -2919,6 +3038,10 @@ def set_fact_topics(proj, rows, dry_run=False, write=None):
     un-bound: an interrupted call leaves a fact still bound, which a render places again and
     the same call, run again, collapses. `write(path, text)` is the port those level files are
     written through (default `uuid_store.write_if_changed`).
+    A real call holds the tree's placement lock (`placement_lock`) from the row checks to the
+    last body write, so no render runs between a collapse's line writes and its un-bind,
+    and none between its own passes while a body changes; it waits up to `lock_timeout`
+    seconds for it, then raises PlacementLockBusy. A dry run takes no lock.
     Returns {'set': [slugs], 'unchanged': n, 'collapsed': [slugs]}.
     Holds `rows`, one owner entry per row and, for a collapse, the levels holding each un-bound
     row's line; a batch over MAX_TOPIC_BATCH rows is refused."""
@@ -2928,6 +3051,14 @@ def set_fact_topics(proj, rows, dry_run=False, write=None):
         raise TopicRefusal(["%d rows, over the limit of %d per call" % (len(rows), MAX_TOPIC_BATCH)])
     anchor = _anchor(proj)
     allowed = _topic_list(anchor)
+    if dry_run:
+        return _set_fact_topics_held(anchor, rows, allowed, True, write)
+    with placement_lock(anchor, "set-topics", lock_timeout):
+        return _set_fact_topics_held(anchor, rows, allowed, False, write)
+
+
+def _set_fact_topics_held(anchor, rows, allowed, dry_run, write):
+    """`set_fact_topics` from the row checks on; a real call's caller holds the placement lock."""
     owners = _pointer_owners(anchor, set(rows))
     problems, total = [], 0
     for slug in sorted(rows):
@@ -3231,7 +3362,7 @@ def _note(rep, level_dir, kind, slugs):
     if not slugs:
         return
     row = rep["levels"].setdefault(level_dir, {"added": 0, "refreshed": 0, "removed": 0, "examples": {}})
-    row[kind] += len(slugs)
+    row[kind] = row.get(kind, 0) + len(slugs)        # `kept` is counted only where it happened
     shown = row["examples"].setdefault(kind, [])
     shown.extend(sorted(slugs)[:_RENDER_SHOWN - len(shown)])
 
@@ -3291,24 +3422,54 @@ def _drop_lines(level_dir, doomed, rep, dry_run, write):
 
 
 def _misplaced_lines(anchor, place, pinned, parts, level_dir):
-    """The slugs of the managed lines at one level that are placed elsewhere: one body head is read
-    per line of the level's block."""
-    doomed = set()
+    """{slug: the levels (parts) its fact is placed at} for the managed lines at one level that are
+    placed elsewhere: one body head is read per line of the level's block."""
+    doomed = {}
     for ptr in us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level_dir)))[1]:
         if ptr.pin or ptr.legacy:
             continue
         head = _read_body_head(us.body_path(anchor, ptr.slug))
         topics = None if head is None else _managed_topics(ptr.slug, head, pinned)
         if topics is not None and parts not in place(topics):
-            doomed.add(ptr.slug)
+            doomed[ptr.slug] = place(topics)
     return doomed
+
+
+_HOME_BLOCKS = 8
+"""Most level blocks `_keep_last_lines` keeps read at once; emptied, not grown, when it fills."""
+
+
+def _keep_last_lines(dirs, doomed, dry_run):
+    """(drop, kept) from `doomed` ({slug: the levels it is placed at}): a line is dropped only
+    when a level its fact is placed at holds a line of it NOW, read from disk; else it is kept,
+    since dropping it could leave the fact with no line anywhere. The ADD pass put a line at every
+    such level, so under the placement lock nothing is kept; a body rebound by a writer that
+    ignores the lock (a hand edit) between the passes is what this catches. A dry run wrote no
+    line to read back and drops what it would drop. Holds the slugs of at most _HOME_BLOCKS
+    levels' blocks."""
+    if dry_run:
+        return set(doomed), set()
+    blocks, kept = {}, set()
+
+    def held(level):
+        if level not in blocks:
+            if len(blocks) >= _HOME_BLOCKS:
+                blocks.clear()
+            blocks[level] = _block_slugs(level)
+        return blocks[level]
+
+    for slug, placed_at in doomed.items():
+        if not any(slug in held(dirs[parts]) for parts in placed_at if parts in dirs):
+            kept.add(slug)
+    return set(doomed) - kept, kept
 
 
 def _render_tree(anchor, levels, adds, place, dirs, pinned, rep, dry_run, write):
     """Tree scope. ADD over `adds` (every level that has a topic, plus the anchor); then, only when
     every add went through, REMOVE over every curated level. An error in the ADD phase is raised
     before a single line is dropped, so an interrupted run leaves a surplus copy, never a fact with
-    no line."""
+    no line; nor does REMOVE drop a line whose fact has none where it is placed
+    (`_keep_last_lines`)."""
     for parts in adds:
         held = _held_bytes(anchor, pinned, dirs[parts])
         _add_lines(dirs[parts], _wanted_lines(anchor, place, pinned, parts, dirs[parts], held), rep,
@@ -3316,7 +3477,10 @@ def _render_tree(anchor, levels, adds, place, dirs, pinned, rep, dry_run, write)
     for level in levels:
         parts = _level_parts(anchor, level)
         level = os.path.abspath(str(level))
-        _drop_lines(level, _misplaced_lines(anchor, place, pinned, parts, level), rep, dry_run, write)
+        drop, kept = _keep_last_lines(dirs, _misplaced_lines(anchor, place, pinned, parts, level),
+                                      dry_run)
+        _note(rep, level, "kept", kept)
+        _drop_lines(level, drop, rep, dry_run, write)
 
 
 def _chain_levels(anchor, proj, levels):
@@ -3420,7 +3584,8 @@ def _render_chain(anchor, chain, adds, place, pinned, rep, dry_run, write):
         above |= now
 
 
-def render_topics(proj, scope="tree", dry_run=False, write=None):
+def render_topics(proj, scope="tree", dry_run=False, write=None, *,
+                  lock_timeout=PLACEMENT_LOCK_TIMEOUT_S):
     """Place the pointer lines of every MANAGED fact of `proj`'s tree by topic.
 
     A fact is managed when its body's `topics:` is non-empty, no pointer of it is pinned, and its
@@ -3442,6 +3607,11 @@ def render_topics(proj, scope="tree", dry_run=False, write=None):
     RenderBlockTooLarge, naming the route for whichever part is larger (a body or block
     that grew between the census and the ADD pass can still raise it there, after earlier levels
     were added and before any line is dropped).
+    A real run holds the tree's placement lock (`placement_lock`) from the level walk to its last
+    drop, so no set-topics or write to a placed fact lands between its passes; it waits up to
+    `lock_timeout` seconds for it, then raises PlacementLockBusy. The tree scope's REMOVE never
+    drops the last line of a fact: a misplaced line whose fact has no line at any level it is
+    placed at is kept and counted as `kept` (`_keep_last_lines`).
     Holds: one record per level, one per pinned pointer, the lines of the ONE level being written;
     a chain render also the slugs of the chain's blocks."""
     if scope not in ("tree", "chain"):
@@ -3452,6 +3622,14 @@ def render_topics(proj, scope="tree", dry_run=False, write=None):
     anchor = _anchor(proj)
     if topic_store.load(anchor) is None:
         return {"list": False}
+    if dry_run:
+        return _render_held(anchor, proj, scope, True, write)
+    with placement_lock(anchor, "render-topics", lock_timeout):
+        return _render_held(anchor, proj, scope, False, write)
+
+
+def _render_held(anchor, proj, scope, dry_run, write):
+    """`render_topics` from the level walk on; a real run's caller holds the placement lock."""
     levels = curated_levels_under(anchor)
     level_map, dirs = topic_level_map(anchor, levels)
     if not any(_level_parts(anchor, level) == tp.TOP for level in levels):
@@ -3484,6 +3662,14 @@ def _print_render(rep, as_json):
         row = rep["levels"][level]
         print("  %s: +%d added, %d refreshed, -%d removed" % (level, row["added"], row["refreshed"],
                                                                row["removed"]))
+    kept = [(level, row) for level, row in sorted(rep["levels"].items()) if row.get("kept")]
+    if kept:
+        print("~ warning: kept %d line(s) placed elsewhere, because no level the fact is placed at "
+              "holds a line of it (its body changed during the render): %s. Run render-topics "
+              "--scope tree again to place them"
+              % (sum(row["kept"] for _level, row in kept),
+                 ", ".join(sorted({slug for _level, row in kept
+                                   for slug in row["examples"]["kept"]}))))
     if rep["incomplete_total"]:
         print("~ %d tagged fact(s) have a body without title: or description: and stay where they "
               "are: %s%s" % (rep["incomplete_total"], ", ".join(rep["incomplete"]),

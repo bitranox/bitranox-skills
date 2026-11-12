@@ -65,6 +65,14 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   outside it.
 - `render-topics --dry-run`, `set-topics --dry-run` and `--check-tree` take no lock and create
   no file, so a check runs on a read-only tree and never waits behind a peer's lock.
+- A real `render-topics` and `set-topics`, an `add` of a fact bound to a topic, and a `rename`,
+  `retitle` or `--archive` in a tree with a topic list hold one placement lock per tree
+  (`.claude-memory/placement.lock`) for all of their reads and writes, so none of them changes placement while another is half done:
+  a `set-topics` landing between a render's add and remove passes no longer leaves a fact with
+  no line, and a render no longer puts back the lines a `--clear` collapse just dropped, which
+  left an unplaced fact with several lines. A verb waits up to 30 s for it, then exits 2 naming
+  the lock and to run it again. A tree render's remove pass also keeps a line whose fact has no
+  line where it is placed, and warns.
 
 ### Fixed
 

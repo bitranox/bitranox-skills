@@ -200,7 +200,11 @@ description: and stay where they are: <slugs>`.
 `render-topics --proj D --scope tree|chain [--dry-run] [--json]` places them:
 
 - `--scope tree` renders every level of D's tree, adding every missing line before it removes
-  any, so an interruption leaves a line twice, never a fact with no line.
+  any, so an interruption leaves a line twice, never a fact with no line. Nor does its remove pass
+  drop a line whose fact has no line, read back from disk, at any level its topics place it at
+  (its body changed during the render without the placement lock, for example by hand): that line
+  is kept, counted as `kept` in the `--json` row of its level, and named in `~ warning: kept N
+  line(s) placed elsewhere, ... Run render-topics --scope tree again to place them`.
 - `--scope chain` renders only the levels from D up to the tree top and writes no file off that
   chain: it adds no line below a level of the chain that already holds it, drops such a lower
   copy, and leaves a line placed at some other level for a tree render to sweep. Run the tree
@@ -211,7 +215,8 @@ description: and stay where they are: <slugs>`.
   list prints `no topic list in this tree: nothing is placed by topic`, exit 0.
 - `--dry-run` writes nothing and takes no lock, so it runs on a read-only tree, beside a lock
   another session holds and under `BITRANOX_MEMORY_WRITES=off`; without `--dry-run` that switch
-  refuses it, exit 2.
+  refuses it, exit 2. A real run holds the tree's placement lock (below) from its walk over the
+  levels to its last drop.
 - Before the first write it refuses, exit 2 and `! refused:`, the dry run too: a level whose
   `TOPICS:` line does not parse ("set-level-topics replaces it"), a tree top with no pointer block
   ("ensure-memory-structure writes one"), and a level whose block would pass the block cap.
@@ -234,6 +239,24 @@ move the rest to another level of the altitude chain that has room. When none fi
 "None of the lines fits there: move them to another level of the altitude chain that has room,
 with <route>, or first free room at <level> by moving lines out of it with <route>". Exit 2,
 nothing written.
+
+**The placement lock.** A level's lock covers that one file, and a render, a `set-topics` and a
+write to a placed fact each read and write several levels and a body, so each of them also holds
+ONE lock for the whole tree, `<anchor>/.claude-memory/placement.lock`, across all of its reads and
+writes: `render-topics` (a real run, either scope), `set-topics` (from its row checks to its last
+body write, a collapse's line writes included, `--batch` too), `add` of a fact whose body is
+bound to a topic (`factedit.py apply` writes through `add`, so it holds it too), and `rename`,
+`retitle` and `reconcile_memory_index.py --archive` of any fact in a tree that has a topic list
+(they read and write level after level, so a fact bound, placed and un-bound by peers between
+two of their steps could get a line put back). So no render runs between a collapse's line writes
+and its un-bind, and no `set-topics` between a render's add and remove passes. An `add` of a fact
+bound to no topic, any verb in a tree without a topic list, dry runs and checks take none. It is taken
+before any level lock and never while one is held, so the two kinds cannot deadlock. A verb waits
+up to 30 s for it, then exits 2 with `! error: <verb> waited 30 s for the placement lock of the
+tree <anchor> (<lock file>): another render-topics, set-topics, or write to a fact placed by topic
+holds it. Run <verb> again once that one finishes; a lock left by a holder that crashed is
+reclaimed once it is 120 s old`. Reclaiming is the level locks' rule (the lock file's age), so a
+holder busy for longer than 120 s can lose the lock to a waiter.
 
 What the other verbs do with a fact placed by topic:
 
@@ -384,8 +407,8 @@ that brings or changes a `TOPICS:` line, a legacy `CLAUDE.md` scope block whose 
 does not parse; nothing is written), or `! error: <why>` on stderr when it could not run (a
 usage error, a `--topics` value that is no topic list included, an input file it could not read
 or decode, a `set-topics --batch` file over its limits, a store it could not read, a
-`topics.json` that `topics-show` or `topics-stale` cannot use, a level lock held past its
-timeout, a failed write). Among the topic verbs one failed write leaves a change behind: the
+`topics.json` that `topics-show` or `topics-stale` cannot use, a level lock or the placement
+lock held past its timeout, a failed write). Among the topic verbs one failed write leaves a change behind: the
 topic file write that `set-level-topics` or `set-top-topics` makes after writing the descriptor
 (see the descriptor paragraph above). `heal` exits 2 when it left a level it could not read
 untouched. A refusal is fixed by changing the input (rewrite the hook, pick the suggested slug,
