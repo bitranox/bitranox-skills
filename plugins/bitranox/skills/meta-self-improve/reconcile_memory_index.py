@@ -11,7 +11,8 @@ A curated altitude is a level dir whose `CLAUDE.local.md` holds a managed pointe
     fabricated). A body no level points at is a DANGLING body: `--check` / `--check-tree` report
     it and `--rehome` re-attaches it; nothing here deletes one.
   * `archive_entry` forgets a fact: drop its pointer line + move its central body to `.archive/`.
-    Archiving the LAST pointer is refused while another fact links it (`[[slug]]`), names it in
+    A fact placed by topic has a line at each level its topics place it at; archiving it drops
+    them all. Archiving the LAST pointer is refused while another fact links it (`[[slug]]`), names it in
     plain prose, or a level's CLAUDE.md names it (`inbound_mentions`): each would be left pointing
     at nothing, and only the `[[ref]]` kind is ever reported afterwards. `--force` archives anyway.
   * `--repair-appended-type`: a one-off repair for the body damage `--check-tree` reports as an
@@ -435,6 +436,34 @@ def _put_back(moved, cause, move):
             "the pointer still names the old path, so move it back by hand") from cause
 
 
+def placed_copies(anchor, level_dir, slug):
+    """The OTHER levels holding a line of `slug` when its fact is placed by topic, in level order
+    (the top first, a parent before its children, siblings by name); [] for every other fact.
+    Placed means what the engine's renderer manages (`memory_engine._placed_copies`: a body bound
+    to a topic with `title:` and `description:`, no line of it pinned at any level). Levels are
+    compared lexically, as the engine compares them. Archiving such a fact forgets it at every
+    level: one line dropped would only be render drift the next render puts back."""
+    others = [str(level) for level, _ptr in ME._placed_copies(anchor, slug)
+              if not ME._same_level(level, level_dir)]
+    return sorted(others, key=lambda level: Path(os.path.abspath(level)).parts)
+
+
+class ArchiveIncomplete(OSError):
+    """Archiving a fact placed by topic failed after some of its other lines were dropped. The body
+    was not moved (or was moved back), so the fact is whole at the levels in `remaining`; the
+    message names the re-run that finishes the archive and the render that puts the dropped lines
+    back."""
+
+    def __init__(self, slug, level, anchor, dropped, remaining, cause):
+        super().__init__(
+            "could not finish archiving %s (%s): its line(s) at %s are dropped; its body and its "
+            "line(s) at %s are unchanged. Re-run skills/meta-self-improve/reconcile_memory_index.py "
+            "--archive %s %s once the cause is fixed, or put the dropped line(s) back with "
+            "%s" % (slug, cause, ", ".join(dropped), ", ".join(remaining), slug, level,
+                    _RENDER_ROUTE % (anchor, "tree")))
+        self.slug, self.dropped, self.remaining = slug, list(dropped), list(remaining)
+
+
 def archive_entry(level_dir, slug, archive_subdir=".archive", dry_run=False, *, move=None,
                   commit=None, force=False):
     """Forget a fact: drop its pointer line and move its central body to `<anchor>/.claude-memory/
@@ -450,7 +479,10 @@ def archive_entry(level_dir, slug, archive_subdir=".archive", dry_run=False, *, 
 
     Raises ArchiveBlocked, before any write and under `dry_run` too, when this is the LAST pointer
     of the fact and `inbound_mentions` finds anything still naming it, unless `force`. Dropping one
-    of several pointers keeps the fact, so nothing is left dangling and nothing is checked.
+    of several pointers keeps the fact, so nothing is left dangling and nothing is checked - except
+    for a fact placed by topic (`placed_copies`): its lines at the other levels are dropped first,
+    before the body moves, so the archive is always its last pointer. A failure after some of them
+    were dropped raises ArchiveIncomplete (an OSError) naming them; the body is not in the archive.
 
     `move` and `commit` are the body-move and pointer-write seams (shutil.move and the engine's
     store commit when omitted), resolved at call time.
@@ -476,12 +508,42 @@ def archive_entry(level_dir, slug, archive_subdir=".archive", dry_run=False, *, 
             commit(str(d), scope, entries, bodies)
         return True
     anchor = ME._anchor(str(d))
-    if not force and not _other_levels_pointing(anchor, d, slug):
+    # A fact placed by topic is archived at EVERY level it has a line at, so this is its last
+    # pointer whatever the other levels hold, and whatever names it is left naming nothing.
+    others = placed_copies(anchor, d, slug)
+    if not force and (others or not _other_levels_pointing(anchor, d, slug)):
         found = inbound_mentions(anchor, slug)
         if found["refs"] or found["prose"] or found["docs"]:
             raise ArchiveBlocked(slug, found)
     if dry_run:                                  # a dry run reports the outcome and writes NOTHING
         return True
+    dropped = []
+    try:
+        for other in others:
+            # before the body moves: a failure here leaves the body, this level's line and the
+            # lines not yet reached, which a render repairs, never a line with no body
+            ME._drop_pointer(other, slug)
+            dropped.append(other)
+        _archive_here(d, anchor, slug, scope, entries, kept, bodies, archive_subdir, move, commit)
+    except ArchiveRollbackFailed as exc:
+        if not dropped:
+            raise
+        raise ArchiveRollbackFailed("%s; its line(s) at %s were dropped before that"
+                                    % (exc, ", ".join(dropped))) from exc
+    except OSError as exc:
+        if not dropped:
+            raise
+        # absolute, so the re-run it names works from any cwd; lexical, as the levels compare
+        here = os.path.abspath(str(d))
+        remaining = sorted([here, *others[len(dropped):]], key=lambda level: Path(level).parts)
+        raise ArchiveIncomplete(slug, here, anchor, dropped, remaining, exc) from exc
+    return True
+
+
+def _archive_here(d, anchor, slug, scope, entries, kept, bodies, archive_subdir, move, commit):
+    """Move the body to the archive when no level still holds a line of `slug`, then write this
+    level's block without it; a failed write moves the body back (see `archive_entry`)."""
+    qcanon = _canon(slug)
     moved = []
     for e in entries:
         if _canon(e.slug) == qcanon:
@@ -500,7 +562,6 @@ def archive_entry(level_dir, slug, archive_subdir=".archive", dry_run=False, *, 
     except OSError as exc:
         _put_back(moved, exc, move)
         raise
-    return True
 
 
 # ---- CLI ---------------------------------------------------------------------------------------
@@ -1175,7 +1236,10 @@ def _main(argv=None):
         anchor = ME._anchor(level)
         # Only a LAST pointer leaves its mentions dangling; while another level still points at
         # the slug the fact survives, and listing its mentions would claim they now name nothing.
-        if args.force and not _other_levels_pointing(anchor, level, args.archive):
+        # a slug that is no filename owns no body; archive_entry reports it as no entry
+        others = (placed_copies(anchor, level, args.archive) if us.is_valid_slug(args.archive)
+                  else [])
+        if args.force and (others or not _other_levels_pointing(anchor, level, args.archive)):
             found = inbound_mentions(anchor, args.archive)
         try:
             removed = archive_entry(level, args.archive, dry_run=args.dry_run, force=args.force)
@@ -1184,7 +1248,7 @@ def _main(argv=None):
                   "prose mentions), or pass --force to archive anyway:" % exc)
             _print_mentions(exc.found)
             return 1
-        except ArchiveRollbackFailed as exc:
+        except (ArchiveRollbackFailed, ArchiveIncomplete) as exc:
             print(f"! failed: could not archive {args.archive}: {exc}", file=sys.stderr)
             return 2
         except OSError as exc:
@@ -1193,11 +1257,13 @@ def _main(argv=None):
                   % (args.archive, exc), file=sys.stderr)
             return 2
         if removed:
+            also = (" and at the %d other level(s) its topics place it at: %s"
+                    % (len(others), ", ".join(others))) if others else ""
             if args.dry_run:
-                print("would archive %s (pointer would be dropped at %s) - dry run, nothing written"
-                      % (args.archive, level))
+                print("would archive %s (pointer would be dropped at %s%s) - dry run, nothing written"
+                      % (args.archive, level, also))
             else:
-                print("archived %s (pointer dropped at %s)" % (args.archive, level))
+                print("archived %s (pointer dropped at %s%s)" % (args.archive, level, also))
             if found and (found["refs"] or found["prose"] or found["docs"]):
                 print("--force: these still name %s and now point at nothing:" % args.archive)
                 _print_mentions(found)

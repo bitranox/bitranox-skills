@@ -393,7 +393,8 @@ def unknown_fact_message(slug: str, start: Path, anchor: Path, owners: list[Path
     if len(owners) == 1:
         return f"{head}; the tree points at it from {owners[0]}: retry with --level {owners[0]}"
     if owners:
-        return (f"{head}; {len(owners)} levels point at it (a duplicate pointer): "
+        return (f"{head}; {len(owners)} levels point at it (placed by topic, or a duplicate "
+                "pointer that --check-tree names): "
                 + ", ".join(str(o) for o in owners)
                 + f"; retry with --level <one of them>, e.g. --level {owners[0]}")
     body = body_file(anchor, slug)
