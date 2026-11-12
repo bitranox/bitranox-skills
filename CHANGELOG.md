@@ -81,6 +81,8 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   left an unplaced fact with several lines. A verb waits up to 30 s for it, then exits 2 naming
   the lock and to run it again. A long render or `set-topics --batch` refreshes the lock file
   at each level or row, so a waiter never reclaims the lock of a holder that is still working.
+  A render or `set-topics` stopped part-way by a level it cannot write says what the stop left
+  and that the same call, run again once the cause is fixed, completes it.
   A tree render's remove pass also keeps a line whose fact has no line where it is placed, and
   warns.
 

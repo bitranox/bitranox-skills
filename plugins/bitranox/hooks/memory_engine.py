@@ -436,6 +436,32 @@ _HELD_PLACEMENT_LOCKS = []
 """The lock files of the placement locks this process holds now, innermost last."""
 
 
+class PlacementInterrupted(OSError):
+    """A real render or set-topics stopped on an OSError (a level file it could not lock or write,
+    a level lock held past its timeout) after it may have written part of the tree. Only a
+    message (strerror None), so the CLI prints it as `! error: <message>` and exits 2. The message
+    says what such a stop can leave and that running the same verb again, once the cause is
+    fixed, completes it: a render adds every line before it drops any, and a collapse writes the
+    top's line before it drops the others and un-binds the body last, so each step a re-run finds
+    done it skips."""
+
+    def __init__(self, verb, cause, route):
+        detail = cause if cause.strerror is None else "%s: %s" % (cause.strerror,
+                                                                 cause.filename or "")
+        super().__init__("%s stopped before it finished: %s. %s Fix that cause, then run %s "
+                         "again: it finds what was already written and completes it"
+                         % (verb, detail, _INTERRUPTED_LEAVES[verb], route))
+
+
+_INTERRUPTED_LEAVES = {
+    "render-topics": ("A render adds every line before it drops any, so the stop left at most a "
+                      "surplus line, never a fact without one."),
+    "set-topics": ("A collapse writes the line at the tree top before it drops the others and "
+                   "un-binds the body last, so the stop left each fact with a line and still "
+                   "bound where its collapse was not done."),
+}
+
+
 def _placement_heartbeat():
     """Refresh the mtime of every placement lock this process holds once it is older than
     _HEARTBEAT_AFTER_S. The long holders call it once per level they walk in each pass (render)
@@ -3240,7 +3266,9 @@ def set_fact_topics(proj, rows, dry_run=False, write=None, *,
     A real call holds the tree's placement lock (`placement_lock`) from the row checks to the
     last body write, so no render runs between a collapse's line writes and its un-bind,
     and none between its own passes while a body changes; it waits up to `lock_timeout`
-    seconds for it, then raises PlacementLockBusy. A dry run takes no lock.
+    seconds for it, then raises PlacementLockBusy. A dry run takes no lock. An OSError once it
+    holds the lock (a level it could not lock or write) is raised as PlacementInterrupted, naming
+    the cause and that the same call, run again, completes the collapse.
     Returns {'set': [slugs], 'unchanged': n, 'collapsed': [slugs]}.
     Holds `rows`, one owner entry per row and, for a collapse, the levels holding each un-bound
     row's line; a batch over MAX_TOPIC_BATCH rows is refused."""
@@ -3253,7 +3281,11 @@ def set_fact_topics(proj, rows, dry_run=False, write=None, *,
     if dry_run:
         return _set_fact_topics_held(anchor, rows, allowed, True, write)
     with placement_lock(anchor, "set-topics", lock_timeout):
-        return _set_fact_topics_held(anchor, rows, allowed, False, write)
+        try:
+            return _set_fact_topics_held(anchor, rows, allowed, False, write)
+        except OSError as exc:
+            raise PlacementInterrupted("set-topics", exc, "the same %s set-topics call"
+                                       % _ENGINE_ROUTE) from exc
 
 
 def _set_fact_topics_held(anchor, rows, allowed, dry_run, write):
@@ -3822,7 +3854,9 @@ def render_topics(proj, scope="tree", dry_run=False, write=None, *,
     were added and before any line is dropped).
     A real run holds the tree's placement lock (`placement_lock`) from the level walk to its last
     drop, so no set-topics or write to a placed fact lands between its passes; it waits up to
-    `lock_timeout` seconds for it, then raises PlacementLockBusy. The tree scope's REMOVE never
+    `lock_timeout` seconds for it, then raises PlacementLockBusy; an OSError once it holds the
+    lock is raised as PlacementInterrupted, naming the cause and the render to run again, which
+    completes it. The tree scope's REMOVE never
     drops the last line of a fact: a misplaced line whose fact has no line at any level it is
     placed at is kept and counted as `kept` (`_keep_last_lines`).
     Holds: one record per level, one per pinned pointer, the lines of the ONE level being written;
@@ -3838,7 +3872,11 @@ def render_topics(proj, scope="tree", dry_run=False, write=None, *,
     if dry_run:
         return _render_held(anchor, proj, scope, True, write)
     with placement_lock(anchor, "render-topics", lock_timeout):
-        return _render_held(anchor, proj, scope, False, write)
+        try:
+            return _render_held(anchor, proj, scope, False, write)
+        except OSError as exc:
+            raise PlacementInterrupted("render-topics", exc, "%s render-topics --proj %s --scope %s"
+                                       % (_ENGINE_ROUTE, proj, scope)) from exc
 
 
 def _render_held(anchor, proj, scope, dry_run, write):

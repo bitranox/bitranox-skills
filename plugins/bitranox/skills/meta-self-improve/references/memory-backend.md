@@ -276,6 +276,14 @@ a holder keeps its lock fresh while it works: a render refreshes the lock file's
 level it walks in each pass and `set-topics` at each row, whenever it is more than 30 s old. So
 only a holder that crashed or stopped walking has its lock reclaimed.
 
+A real `render-topics` or `set-topics` stopped part-way by a level it cannot lock or write (a
+read-only directory, a level lock held past its timeout) exits 2 with `! error: <verb> stopped
+before it finished: <cause>. <what the stop left> Fix that cause, then run <the same call> again:
+it finds what was already written and completes it`. A render adds every line before it drops
+any, so the stop leaves at most a surplus line; a collapse writes the top's line first, drops the
+others, then un-binds the body, so the stop leaves each fact with a line and still bound where
+its collapse was not done.
+
 What the other verbs do with a fact placed by topic:
 
 - `set-topics` binding a fact (`--topics`, or a batch row carrying topics) refuses the whole
