@@ -394,3 +394,129 @@ def test_a_legacy_uuid_pointer_names_the_migration_and_that_repairs_it(tmp_path,
     # the anchor; the bind must succeed with it in place.
     assert len(list(Path(anchor).glob(mig.BACKUP_PREFIX + "*"))) == 1
     assert _bind(anchor, "feedback-l") == 0
+
+
+# Every route a bind refusal names, run as written from outside the tree --------------------------
+
+# A route is a plugin-relative script, an optional verb, then flags each with an optional value: a
+# `<placeholder>` (which may hold spaces) or a bare token. A route ends at the first token that is
+# neither, so the English around it ("(or", "), then", ", which") is never taken as an argument.
+_ROUTE = re.compile(r"((?:hooks|skills)/\S+?\.py)((?: (?!--)[a-z][\w-]*)?)"
+                    r"((?: --[\w-]+(?: <[^>]*>| [^\s<(),-][^\s(),]*)?)+)")
+_ROUTE_TOKEN = re.compile(r"<[^>]*>|\S+")
+# How many routes each cause names: the test runs every one of them.
+_ROUTES_NAMED = {"title": 2, "description": 2, "differs": 2, "legacy": 1}
+
+
+def _named_routes(out):
+    """[(script, [verb and arguments, a placeholder kept as ONE token])] for every route `out`
+    names, in the order it names them."""
+    return [(m.group(1), _ROUTE_TOKEN.findall((m.group(2) + m.group(3)).strip()))
+            for m in _ROUTE.finditer(out)]
+
+
+def _filled(argv, slug, hook_file, prose_file):
+    """`argv` with each placeholder replaced by what the refusal asks the reader to supply."""
+    filled = []
+    for tok in argv:
+        if tok == "<file>":
+            tok = str(hook_file)
+        elif tok == "<that file>":
+            tok = str(prose_file)
+        elif tok.startswith("<") and "title" in tok:
+            tok = "T " + slug
+        assert not tok.startswith("<"), "an unknown placeholder %s in %s" % (tok, argv)
+        filled.append(tok)
+    return filled
+
+
+def _copy_line_to(anchor, slug, level):
+    """Give `level` the anchor's line of `slug`, word for word."""
+    ptr = [p for p in us.parse_pointer_index(
+        sig.claude_local_md_path(anchor).read_text(encoding="utf-8"))[1] if p.slug == slug][0]
+    local = sig.claude_local_md_path(level)
+    text = local.read_text(encoding="utf-8")
+    scope, pointers = us.parse_pointer_index(text)
+    pointers.append(ptr)
+    local.write_text(us.upsert_pointer_block(text, scope, pointers), encoding="utf-8")
+
+
+def _legacy_fact(anchor, levels):
+    """`feedback-l` as a pre-pivot fact: its body at the uuid path, a legacy line at each level."""
+    uuid = us.fact_uuid(anchor, "feedback-l")
+    body = us.legacy_body_path(anchor, uuid)
+    body.parent.mkdir(parents=True, exist_ok=True)
+    body.write_text("---\nname: feedback-l\ndescription: %s\ntitle: T feedback-l\nmetadata:\n"
+                    "  type: feedback\n---\n\nbody\n" % HOOK, encoding="utf-8")
+    for level in levels:
+        local = sig.claude_local_md_path(level)
+        text = local.read_text(encoding="utf-8")
+        scope, pointers = us.parse_pointer_index(text)
+        pointers.append(us.Pointer(slug="feedback-l", title="T feedback-l", hook=HOOK, uuid=uuid,
+                                   legacy=True))
+        local.write_text(us.upsert_pointer_block(text, scope, pointers), encoding="utf-8")
+    return "feedback-l"
+
+
+def _unbindable(anchor, cause, case):
+    """A fact the bind refuses for `cause`, its lines at the anchor only ("single") or at the
+    anchor and `<anchor>/a` ("two"). Returns its slug."""
+    if cause == "legacy":
+        return _legacy_fact(anchor, [anchor] + ([_level(anchor, "a")] if case == "two" else []))
+    if cause == "differs" and case == "two":
+        _second_line_edited_by_hand(anchor)       # the anchor's line matches, the lower one not
+        return "feedback-a"
+    _fact(anchor, "feedback-a")
+    if case == "two":
+        _copy_line_to(anchor, "feedback-a", _level(anchor, "a"))
+    if cause == "title":
+        _drop_frame_line(anchor, "feedback-a", "title: T feedback-a\n")
+    elif cause == "description":
+        _drop_frame_line(anchor, "feedback-a", "description: " + HOOK + "\n")
+    else:
+        _replant_pointer(anchor, "feedback-a", "When the line was edited by hand, it says this.")
+    return "feedback-a"
+
+
+def _tree_facts(anchor):
+    """(every pointer line of the tree as (level, slug), the slug-named bodies): what a repair
+    must not add to. A route that derives a new slug shows here as a second pointer and body."""
+    lines = sorted((str(level), p.slug) for level in E.curated_levels_under(anchor)
+                   for p in us.parse_pointer_index(
+                       _read_text(sig.claude_local_md_path(level)))[1])
+    return lines, sorted(p.stem for p in us.central_facts_dir(anchor).glob("*.md"))
+
+
+def _read_text(path):
+    return path.read_text(encoding="utf-8") if path.is_file() else ""
+
+
+@pytest.mark.parametrize("route", [0, 1])
+@pytest.mark.parametrize("case", ["single", "two"])
+@pytest.mark.parametrize("cause", sorted(_ROUTES_NAMED))
+def test_every_route_a_bind_refusal_names_repairs_it_from_outside_the_tree(tmp_path, capsys,
+                                                                           cause, case, route):
+    if route >= _ROUTES_NAMED[cause]:
+        pytest.skip("the %s refusal names %d route" % (cause, _ROUTES_NAMED[cause]))
+    anchor = _tree(tmp_path)
+    slug = _unbindable(anchor, cause, case)
+    routes = _named_routes(_refusal(anchor, slug, capsys))
+    assert route < len(routes), "the refusal names no route %d: %s" % (route, routes)
+    script, argv = routes[route]
+    assert (PLUGIN / script).is_file(), script
+    hook_file, prose_file = tmp_path / "hook.txt", tmp_path / "prose.md"
+    hook_file.write_text(HOOK + "\n", encoding="utf-8")   # the body's description: and the line's
+    prose_file.write_text("body of %s\n" % slug, encoding="utf-8")
+    outside = tmp_path / "outside"                       # a sibling of the tree, not inside it
+    outside.mkdir()
+    lines_before = _tree_facts(anchor)[0]
+    r = subprocess.run([sys.executable, str(PLUGIN / script),
+                        *_filled(argv, slug, hook_file, prose_file)],
+                       cwd=outside, capture_output=True, text=True, encoding="utf-8",
+                       errors="replace")
+    assert r.returncode == 0, (script, argv, r.stdout + r.stderr)
+    assert _tree_facts(anchor) == (lines_before, [slug]), "the route made a second fact"
+    # add is run without --type: the fact must keep its kind.
+    assert "  type: feedback\n" in us.body_path(anchor, slug).read_text(encoding="utf-8")
+    assert _bind(anchor, slug) == 0
+    assert len(routes) == _ROUTES_NAMED[cause], "a route this test does not run: %s" % routes

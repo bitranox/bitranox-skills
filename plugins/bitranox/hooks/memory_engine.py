@@ -2194,17 +2194,24 @@ def _line_problem(slug, anchor, lines):
                     "the slug store; run hooks/migrate_to_slug_store.py --root %s --apply (without "
                     "--apply it only reports), then tag it" % (slug, level, anchor))
     head = _read_body_head(us.body_path(anchor, slug)) or ""
+    # The body is shared, so a level holding any line of the fact is a level its repair may
+    # target. Every route names one: factedit otherwise walks up from its cwd and cannot run
+    # outside the tree, and add without --proj and --slug derives a new slug from the title,
+    # writing a second fact while this one stays as it is.
+    level = next(iter(lines.values()))[0]
     if not _body_description(head):
         return ("%s: its body has no description:, so no line can be rendered from it; write its "
                 "prose (without the --- frontmatter) to a file and run "
-                "skills/meta-dream-tree/factedit.py apply --slug %s "
-                "--body-file <that file> (or add --body-file), which rebuilds the frame from its "
-                "line, then tag it" % (slug, slug))
+                "skills/meta-dream-tree/factedit.py apply --slug %s --level %s "
+                "--body-file <that file>, which rebuilds the frame from its line (or "
+                "hooks/memory_engine.py add --proj %s --slug %s --title <the line's title> "
+                "--hook-file <file> --body-file <that file> with the line's hook in <file>), "
+                "then tag it" % (slug, slug, level, level, slug))
     if not _body_title(head):
         return ("%s: its body has no title:, so no line can be rendered from it; run "
                 "hooks/memory_engine.py heal --proj %s --backfill-titles (or "
-                "skills/meta-dream-tree/factedit.py apply --slug %s "
-                "--title <title>), then tag it" % (slug, anchor, slug))
+                "skills/meta-dream-tree/factedit.py apply --slug %s --level %s "
+                "--title <title>), then tag it" % (slug, anchor, slug, level))
     wanted = _comparable_line(_line_from_head(slug, head))
     for line, (level, _ptr) in lines.items():
         if line != wanted:
