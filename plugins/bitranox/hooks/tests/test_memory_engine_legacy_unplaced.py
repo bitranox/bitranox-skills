@@ -147,3 +147,19 @@ def test_mem_levels_and_ref_map_do_not_list_it_as_placed(tmp_path):
     assert "feedback-lg" in report.duplicates
     ref_map = _load("ref_map_r2", SKILLS / "meta-self-improve" / "ref_map.py")
     assert ref_map.read_placed(Path(L[""]), {"feedback-lg"}) == set()
+
+
+def test_an_un_bind_leaves_the_lines_of_a_fact_with_a_legacy_line_where_they_are(tmp_path):
+    """Never placed, so its lines are not copies a collapse may fold into one at the top."""
+    L = _tree(tmp_path)
+    _bound_with_a_legacy_line(L)
+    local = sig.claude_local_md_path(L["a/py"])
+    text = local.read_text(encoding="utf-8")
+    scope, pointers = us.parse_pointer_index(text)
+    local.write_text(us.upsert_pointer_block(
+        text, scope, pointers + [us.Pointer(slug="feedback-lg", title="T feedback-lg",
+                                            hook=HOOK)]), encoding="utf-8")
+    rep = E.set_fact_topics(L[""], {"feedback-lg": None})
+    assert rep["collapsed"] == [] and rep["set"] == ["feedback-lg"]
+    assert _levels_holding(L[""], "feedback-lg") == sorted([L["a/py"], L["c"]])
+    assert E.read_body_topics(us.body_path(L[""], "feedback-lg")) is None
