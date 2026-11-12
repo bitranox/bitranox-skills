@@ -73,12 +73,6 @@ __all__ = ["Entry", "Diff", "LevelCost", "NoAnchor", "Unreadable", "block_bytes"
 
 LEVEL_FILE = "CLAUDE.local.md"
 
-# Dirs a curated memory tree never keeps levels in. The PREFIX set is not decoration: a venv is
-# routinely named for its python or its project, so `.venv-win`, `.venv-3.13`, `venv-<user>` and
-# `venv_<project>` all occur, and an exact-name set matches none of them.
-PRUNE_NAMES = {".git", "node_modules", "__pycache__", "target", "site-packages"}
-PRUNE_PREFIXES = (".venv", "venv-", "venv_")
-
 
 class StoreManifestError(Exception):
     """Reported as a typed message and exit 2, never as a traceback."""
@@ -172,8 +166,10 @@ def digest(data: bytes) -> str:
 
 
 def is_pruned_dir(name: str) -> bool:
-    """Whether a directory name is one a curated memory tree never keeps levels in."""
-    return name in PRUNE_NAMES or name.startswith(PRUNE_PREFIXES)
+    """Whether a directory name is one a curated memory tree never keeps levels in: the engine's
+    rule (`uuid_store.is_non_level_dirname`, every virtualenv shape included), so a manifest covers
+    the level set the engine walks."""
+    return uuid_store.is_non_level_dirname(name)
 
 
 def anchor_dir(start: Path) -> Path:

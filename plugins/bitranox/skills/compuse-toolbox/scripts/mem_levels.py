@@ -63,12 +63,6 @@ except ImportError as _exc:
 
 LEVEL_FILE = "CLAUDE.local.md"
 STORE_DIR = ".claude-memory"
-PRUNE = {".git", "node_modules", ".venv", "__pycache__", "target"}
-# A venv is routinely named for its python or its project, so exact names cannot cover them:
-# `.venv-win`, `.venv-3.13`, `venv-<user>` and `venv_<project>` all occur on real trees. The
-# plugin vendors CLAUDE.local.md into site-packages, so an unpruned one turns a vendored copy
-# into an apparent memory level. srccount.py in this skill carries the same shapes, tested.
-PRUNE_PREFIXES = (".venv", "venv-", "venv_")
 
 __all__ = ["Report", "scan", "main"]
 
@@ -76,12 +70,13 @@ __all__ = ["Report", "scan", "main"]
 def is_pruned_dir(name: str) -> bool:
     """Whether a directory name is one a curated memory tree never keeps levels in.
 
-    On top of this tool's own venv shapes it takes the engine's rule
-    (`uuid_store.is_non_level_dirname`), which covers the store and the migration backup beside
-    it: a copied pointer file there is a snapshot, not a level. Without the engine module main()
-    already refuses, so the check here only guards a direct call."""
-    return (name in PRUNE or name.startswith(PRUNE_PREFIXES)
-            or (uuid_store is not None and uuid_store.is_non_level_dirname(name)))
+    The engine's rule alone (`uuid_store.is_non_level_dirname`: vendored and build dirs, every
+    virtualenv shape such as `.venv-win`, `venv-<user>` and `venv_<project>`, the store and the
+    migration backup beside it), so this tool and the engine report one level set. Without the
+    engine module main() already refuses; a direct call raises the import error it held."""
+    if uuid_store is None:
+        raise _IMPORT_ERROR or ImportError("uuid_store")
+    return uuid_store.is_non_level_dirname(name)
 
 
 @dataclass

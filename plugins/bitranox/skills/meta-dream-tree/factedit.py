@@ -336,7 +336,11 @@ def body_file(anchor: Path, slug: str) -> Path:
 # Dirs that hold vendored or generated trees, never a memory level. Walking them is most of the
 # cost of a tree-wide search, and a CLAUDE.local.md inside one is a copy, not an owner.
 _SKIP_DIRS = frozenset({".git", ".hg", ".svn", "node_modules", "__pycache__", STORE_DIRNAME,
-                        ".tox", ".nox", ".mypy_cache", ".pytest_cache", ".ruff_cache"})
+                        ".tox", ".nox", ".mypy_cache", ".pytest_cache", ".ruff_cache", "venv",
+                        "site-packages", "target"})
+# The virtualenv shapes of the engine's `uuid_store.VENV_DIR_PREFIXES`, copied for the reason
+# `_skip_dir` gives: `.venv-3.12`, `venv-<user>` and `venv_<project>` all occur on real trees.
+_SKIP_PREFIXES = (".venv", "venv-", "venv_", STORE_DIRNAME)
 SEARCH_BUDGET_S = 10.0
 
 
@@ -345,7 +349,7 @@ def _skip_dir(name: str) -> bool:
     slug-store migration leaves under the anchor, whose pointer files are copies, not owners. The
     engine's own rule (`uuid_store.is_non_level_dirname`) is not imported for it: this runs against
     whichever engine --engine names, which may predate that rule."""
-    return name in _SKIP_DIRS or name.startswith((".venv", STORE_DIRNAME))
+    return name in _SKIP_DIRS or name.startswith(_SKIP_PREFIXES)
 
 
 def find_pointer_owners(anchor: Path, slug: str, parse_index: Callable[[str], tuple], *,

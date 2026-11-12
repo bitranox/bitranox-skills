@@ -83,11 +83,6 @@ why do does did done doing you your yours we our us they them their he she his h
 one two so such only just also very can could should would may might must shall will
 """.split())
 
-# A dir a curated memory tree never keeps facts in. Prefixes because a venv is named for its
-# python or its project: `.venv-win`, `.venv-3.13`, `venv-<user>`, `venv_<project>`.
-PRUNE_NAMES = {".git", "node_modules", "__pycache__", "target", "site-packages"}
-PRUNE_PREFIXES = (".venv", "venv-", "venv_")
-
 
 class DedupScanError(Exception):
     """Reported as a typed message and exit 2, never as a traceback."""
@@ -338,7 +333,10 @@ def run(facts: list[Fact], *, threshold: float = 0.5, scorer=similarity,
 # ---- reading the tree ---------------------------------------------------------------------------
 
 def _is_pruned(name: str) -> bool:
-    return name in PRUNE_NAMES or name.startswith(PRUNE_PREFIXES)
+    """A dir a curated memory tree never keeps facts in: the engine's rule
+    (`uuid_store.is_non_level_dirname`, every virtualenv shape included), so the scan reads the
+    level set the engine walks."""
+    return uuid_store.is_non_level_dirname(name)
 
 
 def anchor_dir(start: Path) -> Path:
