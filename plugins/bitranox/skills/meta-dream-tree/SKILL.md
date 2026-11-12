@@ -268,11 +268,14 @@ the success line, abort-and-show on a miss).
    references/dream-core.md "Dedup semantics". When a fold sentence credits where the lesson was
    measured, copy the project and date from the DROPPED body's own text, never from the level the
    dropped fact sits at. Fold near-duplicates into one sharpened entry (engine `add`, same slug),
-   comparing
-   across ALL levels, especially SIBLING projects (the classic duplicate is the same lesson
-   captured independently in two siblings; it merges at their common parent). Cross-link related
-   entries with `[[slug]]`. Dedup runs TWICE - here, and again in step 8, because placement
-   creates new overlap.
+   comparing across ALL levels, especially SIBLING projects (the classic duplicate is the same
+   lesson captured independently in two siblings). Where the merged fact goes depends on the
+   tree. In a tree without a topic list (`topics-show` exits 1) it merges at the siblings' common
+   parent. In a tree with a topic list, fold the two into one fact at the level of the slug you
+   keep and leave it there in this step: step 5 routes it, and a rule about a stack or tool is
+   then tagged and rendered at every level that has its topic, where merging at the parent first
+   would load it in every branch below that parent. Cross-link related entries with `[[slug]]`.
+   Dedup runs TWICE - here, and again in step 8, because placement creates new overlap.
 
    **A clean scan is a clean LEXICAL scan, never a clean tree.** It scores shared words, so two
    facts teaching one lesson in different vocabulary score low and never appear: one tree measured
@@ -390,9 +393,29 @@ the success line, abort-and-show on a miss).
    its topics (`set-topics`) or its levels' topics (step 0b). A fact that fits no topic of the
    list is not forced into one: it stays where it is, and three or more such facts about one
    subject are a proposed list change in the report, never a `topics-set-list` run.
-   `set-topics` and a real `render-topics` hold the tree's placement lock. One that prints
+   A real `set-topics` and a real `render-topics` hold the tree's placement lock, and so does
+   every write that could change a placed line: an `add` to a fact that is bound to a topic, and,
+   in a tree with a topic list, every `rename`, every `retitle` and every
+   `reconcile_memory_index.py --archive`. A dry run takes none. Whichever of them prints
    `! error: <verb> waited 30 s for the placement lock` (exit 2) met another session placing
    lines: run the same verb again once that one has finished, and never delete the lock file.
+
+   **A tagged fact whose line would land at the tree top is a move to the top.** When no level
+   has any of a fact's topics, the engine places its line at the tree top instead of losing it,
+   and that costs every session of the tree as any other move to the top does. So after the
+   bind, and before step 8 renders, run
+   `memory_engine.py render-topics --proj <anchor> --scope tree --dry-run` and read the tree
+   top's own line: `<anchor>: +N added, R refreshed, -D removed` counts the lines that would
+   arrive there (no such line: none would), and `--json` names them, the first 20, under
+   `levels` -> `<anchor>` -> `examples` -> `added`. Each fact this step tagged that is among
+   them follows the mode, as a misplacement re-home to the top does (references/dream-core.md,
+   Mode). In propose mode and under `off`, take its binding back with
+   `set-topics --proj <anchor> --slug <slug> --clear` (for a fact that had topics before this
+   step, set those again instead), requiring `set topics on 1 fact(s); 0 unchanged`, so that its
+   line stays where it is, and list it in the report as a proposal with its cost (the UTF-8
+   bytes of its pointer line plus the newline) and the topics no level has; then run the dry
+   run again and require that the top's line no longer counts a fact you took back. In auto mode
+   keep the binding and print that cost in the report.
 
 6. **Voice + firing check (maintenance).** The engine lints new hooks at add-time; here, sweep the
    whole store for residue with `memory_engine.py lint --tree "<cwd>"` (reports, tree-wide, hooks over
@@ -519,9 +542,8 @@ the success line, abort-and-show on a miss).
    duplicate/orphan check the chain-only `--check` cannot make); fix integrity failures via the engine
    (re-point a downward ref, resolve an orphan, dedup a duplicate pointer; a `render drift` line
    is repaired by running `render-topics --scope tree` again, never by editing a line). Size
-   warnings are
-   advisory: a large-index warning's advice to trim long hooks is met by step 6's shortening
-   proposal, reported and never applied unasked.
+   warnings are advisory: a large-index warning's advice to trim long hooks is met by step 6's
+   shortening proposal, reported and never applied unasked.
    A `decoy anchor` line is never fixed by deleting the directory: drain it first, then move it
    out of the tree and assert one store remains, per references/dream-core.md "Verification
    contract".
@@ -570,8 +592,9 @@ the success line, abort-and-show on a miss).
     `error <message>`; one that exited 2 before asking (a missing verdicts file, a malformed line)
     logged nothing - fix the input and run it again. Exit 0 prints the receipt line. Report
     counts + one line each: merges, placements (with direction), facts tagged and levels tagged,
-    the render's per-level lines as printed, proposed changes to the tree top's topics or to the
-    topic list, voice rewrites, prunes (the
+    the render's per-level lines as printed, tagged facts that would land at the tree top (proposed
+    or applied, each with its cost), proposed changes to the tree top's topics or to the topic
+    list, voice rewrites, prunes (the
     versionrot candidates by outcome: reworded, archived, merged, kept), retired or
     proposed-retired skill-covered pointers (each with its (a) quote and (b) reason, per
     references/dream-passes.md "Point a rule at its skill or HOOK"), skill changes, toolbox

@@ -90,8 +90,8 @@ def build_questions(topics):
     A directory's question asks whether the topic holds for EVERYTHING below it, never whether
     it is used somewhere below: a level's `TOPICS:` line places rules, so a container tagged for
     one python child would render python rules at the container and load them in its rust
-    branches. A container whose two or more child levels all have a topic gets it from the
-    engine's roll-up (`topic_placement`), not from its own line."""
+    branches. A container that has two or more child levels, EVERY one of which has a topic,
+    gets that topic from the engine's roll-up (`topic_placement`), not from its own line."""
     return [{
         "id": tag,
         "type": "noul",

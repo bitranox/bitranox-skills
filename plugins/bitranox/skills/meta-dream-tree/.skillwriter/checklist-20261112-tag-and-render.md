@@ -112,3 +112,107 @@ descriptor and no `TOPICS:` line; what about `d` and about the tree top's line.
       sentence of step 8 and the pinned-fact paragraph under the routing prompt keep their
       referents.
 - [x] `tests/` of the skill: 615 passed.
+
+# A landing at the tree top follows the mode; a sibling duplicate is not merged up
+
+Scope: `SKILL.md` step 4 (where a merged sibling duplicate goes), step 5 (the placement lock's
+holders; a tagged fact whose line would land at the tree top), step 8 and step 11 (layout, one
+report item); `references/dream-core.md` (Mode, the report contract, the paragraph under the
+routing prompt reflowed). `topic_tagging.py`: one docstring sentence about the roll-up reworded,
+no code.
+
+- [x] `skill_decisions.py show meta-dream-tree --kind rejected,removed --full`: the one rejected
+      entry (d-20261106-7121104c) is unrelated. `skill_decisions.py check` prints
+      `checked 31 ledger(s), 0 finding(s)` after the edit.
+- Decisions: d-20261112-dff1ba7b, d-20261112-0a58e812, d-20261112-422c483a, d-20261112-d4d3e02c
+- [x] d-20261110-442234ef and d-20261110-a7f3f64a both reopen when placement is generated from
+      topics, which it now is for a tagged fact. Each is superseded by an entry that keeps its
+      rule and adds the tagged fact that would land at the top (dff1ba7b, 0a58e812).
+      d-20261112-cffc4b77 is superseded by 422c483a, the same rule with the roll-up worded as
+      "two or more child levels, EVERY one of which has a topic".
+
+## Verbs run on a scratch tree
+
+Topic list `python`, `rust`, `go`; levels `a/py` and `b/py` (`python`), `c` (`rust`), `a`, `b`,
+`d` (none); no level has `go`. Each line is the verb's own output, `<top>` for the tree top.
+
+- [x] A fact at `c`, `set-topics --slug go-rule --topics go`: `set topics on 1 fact(s); 0
+      unchanged`. Then `render-topics --scope tree --dry-run`:
+      `  <top>: +1 added, 0 refreshed, -0 removed`,
+      `  <top>/c: +0 added, 0 refreshed, -1 removed`,
+      `render-topics (tree): 1 managed fact(s); would change 2 level(s)`.
+- [x] The same dry run with `--json`: `"levels": {"<top>": {"added": 1, "examples": {"added":
+      ["go-rule"]}, ...}`. The list holds the first 20 per level (`_RENDER_SHOWN = 20`,
+      `hooks/memory_engine.py`).
+- [x] `set-topics --slug go-rule --clear`: `set topics on 1 fact(s); 0 unchanged`; the next dry
+      run prints no line for `<top>` or `<top>/c`, and the fact's line is still in `c`'s block.
+- [x] A fact at `a/py` tagged `python`: the dry run prints
+      `  <top>/b/py: +1 added, 0 refreshed, -0 removed` and no line for `<top>`.
+- [x] Placement lock held, `retitle` of a fact with no topics in this tree: `! error: retitle
+      waited 30 s for the placement lock of the tree <top> (...): another render-topics,
+      set-topics, or write to a fact placed by topic holds it. Run retitle again once that one
+      finishes; ...`, exit 2. `set-topics --dry-run` under the same held lock answers at once.
+- [x] Read, not run: the holders (`hooks/memory_engine.py`, the comment above
+      `placement_lock_path`, `_placement_lock_if_bound`, `placement_lock_if_listed`; the archive
+      in `skills/meta-self-improve/reconcile_memory_index.py`, which names itself
+      `reconcile_memory_index.py --archive` in the lock message).
+
+## RED / GREEN
+
+Text-only probes, the passages pasted in. Tree as above, propose mode. QA: a fact at `c` about
+Go, routed `TOPICS go`; which commands, where is its line after step 8, what does the report
+say. QB: the same lesson as two facts at `a/py` and `b/py`; what does step 4 do, where does the
+merged fact sit. QC: a stack rule at `a/py` sighted in `b/py`.
+
+- [x] RED (`opus`, pre-edit text). QA: binds, renders; "Where the pointer line ends up: NOT
+      STATED", "What the report says about it: NOT STATED", "Nothing in propose mode turns it
+      into a proposal, so it is applied". QB: "Read literally, 'it merges at their common
+      parent' means the tree top"; "step 4 can apply, or propose, a top placement that step 5
+      then undoes".
+- [x] GREEN (`opus`, new text). QA: bind, dry run, `--json`, then `set-topics --proj
+      /path/to/tree --slug go-fmt --clear`, dry run again; "it stays at `c`, unchanged";
+      "`go-fmt` is listed as a proposal ... The cost is the UTF-8 byte length of its pointer
+      line plus 1 for the newline". In auto mode: "No clear", line at the tree top, cost
+      printed. QC: `set-topics --topics python`, render; "Moves to a parent or the top: none";
+      "Proposed rather than applied: nothing".
+- [x] GREEN (`opus`, new text). QB: "At the end of step 4 the merged fact sits at `a/py` ... It
+      does not go to the tree top"; step 5 tags it, the line is read at `a/py` and `b/py`. No
+      topic list: "The merged fact goes to `py-libs`, the siblings' common parent". A place
+      fact duplicated in a topic-list tree: folded in step 4, then "It then moves to `a` by
+      the normal move procedure. `set-topics` is not used."
+- [x] GREEN (`haiku`, new text), QA and QB plus two level questions: the same commands and the
+      same proposal for QA; QB "It is not moved to a parent". A container with a python and a
+      rust child gets `--topics ''`; one with two python children gets `--topics ''` and
+      "Python reaches `b` through the engine's roll-up, not through b's line". The tree top's
+      empty line: "I do not change it".
+- Cells: QA and QB on 2 tiers; QC, the no-list control and the place control on `opus`; RED
+  on `opus`.
+
+## Gaps the probes reported
+
+- [x] Closed: whether auto mode repeats the dry run. The repeat now sits in the propose
+      sentence; quote-back (`opus`) returned "then run the dry run again and require that the
+      top's line no longer counts a fact you took back" for propose and "In auto mode keep the
+      binding and print that cost in the report" for auto.
+- [x] Closed: "rendered into the other sibling" was narrower than step 8. Now "rendered at
+      every level that has its topic"; quote-back returned it.
+- [x] Declined, needs an engine change: the binding is written before its landing can be seen
+      (`set-topics --dry-run` prints counts only; run: `would set topics on 1 fact(s); 0
+      unchanged`), so another session's real render between the bind and the take-back would
+      place the line at the top.
+- [x] Declined, not decided here: a fact tagged in an earlier run that a level-topic change
+      of this run sends to the top; more than 20 arrivals at the top in one run.
+- [x] Declined, covered elsewhere: which duplicate to drop and how
+      (`references/dream-core.md`, "Dedup semantics": "require a verbatim quote from the entry
+      being dropped for every loss it claims"); the cost measure (`references/dream-core.md`,
+      Mode: "the UTF-8 length of its pointer line plus the newline").
+- [x] Declined, left to step 5: a duplicated fact about a place is folded in step 4 and moved
+      by step 5's routing, one move later than a merge at the parent would be.
+
+## Layout
+
+- [x] Width and backtick check over the added lines of `SKILL.md` and
+      `references/dream-core.md` prints nothing; no non-ASCII byte.
+- [x] The paragraph after each insertion point read: step 6, `## Boundaries`, the report
+      contract's promotion sentence, and the `Record each sighting` sentence under the routing
+      prompt keep their referents.

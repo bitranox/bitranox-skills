@@ -90,6 +90,11 @@ Read the mode first (`dream_state.py mode`; knobs in `~/.claude/.bitranox-memory
 - **`off`**: no nudges; a manual run consolidates PRIVATE memory only, and PROPOSES a misplacement
   re-home to the tree top as propose mode does.
 
+In a tree with a topic list, a fact tagged with topics that no level has would get its line at
+the tree top. That is a move to the top too and follows the same three rules: proposed with its
+cost and left untagged in propose mode and under `off`, tagged with its cost printed in auto
+(meta-dream-tree step 5, which shows how to see it before the render).
+
 ## Boundaries (the whole family; skills point here, they do not restate it)
 
 - **Private memory + the curated stores:** back up, then apply (reversible via the backup); a
@@ -284,17 +289,16 @@ dropped trigger in all 5 drafted merges.)
 > Return: `LEVEL | CONFIDENCE high/low | WHY`, or `TOPICS a,b | CONFIDENCE high/low | WHY`.
 
 Low/UNSURE never moves and is never tagged. A pinned fact always gets a LEVEL answer, never
-TOPICS (it is never placed by topic).
-A pinned fact is placed by this SAME routing prompt, up or down, like any
-other entry - `move` carries the pin through unchanged and never refuses on it. Only a pinned
-fact's CONTENT is out of reach: the engine REFUSES an ordinary `add` on a pinned slug
-(`PinnedEntry`); `amend-pinned` is the deliberate way through and is human-only - report a pinned
-fact whose content looks wrong, never rewrite it or call `amend-pinned` on its behalf. Tree-top
-promotion additionally passes
-the corroboration gate: a user-stated concrete rule promotes eagerly; a model-INFERRED generalization
-needs >= 2 DISTINCT PROJECTS. The gate is backed by a real dwell store (out of the dreamed store, so
-counting never bumps its mtime) that counts distinct projects, not sightings - a dream re-reads
-UNCHANGED fact bodies on every run, so counting sightings let one act of judgement corroborate itself.
+TOPICS (it is never placed by topic). A pinned fact is placed by this SAME routing prompt, up or
+down, like any other entry - `move` carries the pin through unchanged and never refuses on it.
+Only a pinned fact's CONTENT is out of reach: the engine REFUSES an ordinary `add` on a pinned
+slug (`PinnedEntry`); `amend-pinned` is the deliberate way through and is human-only - report a
+pinned fact whose content looks wrong, never rewrite it or call `amend-pinned` on its behalf.
+Tree-top promotion additionally passes the corroboration gate: a user-stated concrete rule promotes
+eagerly; a model-INFERRED generalization needs >= 2 DISTINCT PROJECTS. The gate is backed by a
+real dwell store (out of the dreamed store, so counting never bumps its mtime) that counts distinct
+projects, not sightings - a dream re-reads UNCHANGED fact bodies on every run, so counting
+sightings let one act of judgement corroborate itself.
 Record each sighting with `dream_state.py saw-promotable <slug> <ABSOLUTE path of the project the
 fact came from>` (the project defaults to the cwd, which is wrong for a fan-out reading other
 projects' stores, and a bare name keys a directory that may not exist - see below), ask
@@ -402,7 +406,8 @@ proposed change to the tree top's topics), then the
 changed, top first, with bytes and pointers before and after and how many slugs arrived and left.
 Name every slug that arrived at the tree top (verify's `--json` lists them in `data.levels[]`).
 Every misplacement re-home to the tree top is listed beside them with its cost: as a proposal
-awaiting the user's approval in propose mode and under `off`, as applied in auto mode. A
+awaiting the user's approval in propose mode and under `off`, as applied in auto mode. A tagged
+fact whose line would land at the tree top is listed the same way, with the topics no level has. A
 corroborated promotion to the top is listed as applied, with its cost. When the run covered what the
 nudge asked for, run `dream_state.py done --kind nap` (a nap) or
 `dream_state.py done --kind tree --dream <dream id>` (meta-dream-tree, whose `done` refuses until
