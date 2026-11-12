@@ -136,8 +136,10 @@ placed by topic: `render-topics` gives it one line at each level that has one of
 while no level above it does, and one at the tree top when none does. `--scope tree` renders
 every level; `--scope chain` only the levels from `--proj` up to the tree top, adding no line
 below a level that holds it and dropping such a lower copy. `--dry-run` writes nothing and takes
-no lock. One level's block may hold at most 1 MiB of lines; a render, a `move` or a `relocate`
-that would pass it is refused before writing and names the route that frees the bytes. Such a
+no lock. One level's block may hold at most 1 MiB of lines; a render, `add`, `amend-pinned`,
+`retitle`, `rename`, `move` or `relocate` that would leave a block past it AND larger than it is
+now is refused before writing and names the route that frees the bytes, so a write that does
+not grow an over-full block still goes through. Such a
 fact is refused by `move`, `relocate` and `add --pin`, and by `add` from a level holding no line
 of it; `rename` and `retitle` change every line of it. `set-topics` refuses to bind a fact whose
 line cannot be rendered yet (no `title:` or `description:`, a line that differs from its body, a

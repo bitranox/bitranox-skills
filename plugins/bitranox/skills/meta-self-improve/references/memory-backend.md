@@ -219,13 +219,18 @@ description: and stay where they are: <slugs>`.
   levels to its last drop.
 - Before the first write it refuses, exit 2 and `! refused:`, the dry run too: a level whose
   `TOPICS:` line does not parse ("set-level-topics replaces it"), a tree top with no pointer block
-  ("ensure-memory-structure writes one"), and a level whose block would pass the block cap.
+  ("ensure-memory-structure writes one"), and a level whose block it would leave past the block
+  cap and larger than it is now.
 
 **The block cap.** One level's pointer block may hold at most 1048576 bytes (1 MiB) of lines,
-each line counting its line break. What counts is the lines that stay at the level (pinned,
-legacy and unplaced lines, plus, in a chain render, lines placed at another level that it does
-not drop) and every line the render places there; a line the run drops never counts. A render
-that would pass it refuses before its first write (a block that grows while it runs can still
+each line counting its line break. Every writer of a block follows one rule against it: a write
+is refused only when the block would END past the cap AND be larger than it is now. So a write
+that leaves an over-full block no larger than it is goes through (a render adding nothing there,
+a refresh to a line no longer than before, a drop), and one over-full level never stops the
+renders and writes that do not make it fuller. What a render counts is the lines that stay at
+the level (pinned, legacy and unplaced lines, plus, in a chain render, lines placed at another
+level that it does not drop) and every line the render places there; a line the run drops never
+counts. A render that would end past the cap and grow the block refuses before its first write (a block that grows while it runs can still
 stop it at that level, before any line is dropped) and names the one route that can free
 the bytes: a tree render when the lines placed elsewhere are what push it over; a `move` of the
 kept lines to another level of the altitude chain when they are the larger part; a
@@ -238,7 +243,15 @@ one level's block may hold ...", naming how many of the lines fit there, smalles
 move the rest to another level of the altitude chain that has room. When none fits, it says
 "None of the lines fits there: move them to another level of the altitude chain that has room,
 with <route>, or first free room at <level> by moving lines out of it with <route>". Exit 2,
-nothing written.
+nothing written. `add` and `amend-pinned` (every level a placed fact's line is rewritten at,
+all checked before any is written), `retitle` and `rename` (every level holding a line of the
+fact) follow the same rule: "! refused: <verb> would leave the block at <level> at N bytes, M
+bytes over the 1048576 bytes one level's block may hold and K bytes larger than it is now ...",
+naming how many bytes shorter the hook or title must make the line (characters shorter for a
+`rename`'s slug), with the command to run again - a line no longer than the one there now
+always goes through - or, for a new fact, another level of the altitude chain to add it at;
+and, second, how many bytes to free at that level by moving lines out of it. Exit 2, nothing
+written.
 
 **The placement lock.** A level's lock covers that one file, and a render, a `set-topics` and a
 write to a placed fact each read and write several levels and a body, so each of them also holds

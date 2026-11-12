@@ -726,6 +726,9 @@ def _upsert_checked(proj, anchor, slug, title, hook, body, type_, pin, scope_def
                                                      _framed_body(slug, hook, type_, body)),
                                        skill), pin=pin)
             entries.append(e)
+        # Every level this write rewrites is held to the block cap before any is written: this
+        # level, and each other level of a fact placed by topic (refreshed below).
+        _refuse_add_growth(proj, slug, e, copies, allow_pinned_overwrite)
         # The body carries the pointer's title as data (`title:`); every write through here,
         # amend-pinned and factedit's apply included, keeps the two equal.
         e.body = _with_title(e.body, e.title)
@@ -742,6 +745,35 @@ def _upsert_checked(proj, anchor, slug, title, hook, body, type_, pin, scope_def
         sig.bump_stores_generation()                  # bust the cross-tree dir-cache so recall sees it
     _warn_dangling_wikilinks(anchor, "%s\n%s" % (e.hook or "", e.body or ""), slug)
     return slug, created
+
+
+def _refuse_add_growth(proj, slug, e, copies, amend):
+    """Raise LineGrowsPastCap when the line `e` writes at `proj`, or the refreshed line at any
+    other level of `copies` (a fact placed by topic), would leave that level's block past the cap
+    and larger than it is now (`_grows_past_cap`). Called under `proj`'s level lock, before
+    anything is written; the other levels are read without theirs (a bound fact's writers hold
+    the placement lock, which this write holds too)."""
+    verb = "amend-pinned" if amend else "add"
+    line = us.Pointer(slug=slug, title=e.title, hook=e.hook, pin=e.pin)
+    changes = [(proj, slug, line)] + [
+        (level, slug, us.Pointer(slug=slug, title=e.title, hook=e.hook, pin=ptr.pin))
+        for level, ptr in copies if not _same_level(level, proj)]
+
+    def retry(shrink, old, new):
+        hook_bytes = len(e.hook.encode("utf-8"))
+        if old:
+            return ("Run %s again with a hook (or title) that makes the line at least %d bytes "
+                    "shorter: %s %s --proj %s --slug %s --title <title> --hook-file <file> (a "
+                    "line no longer than the %d bytes it takes now always goes through)"
+                    % (verb, shrink, _ENGINE_ROUTE, verb, proj, slug, old))
+        shorter = ("" if shrink >= hook_bytes else
+                   ", or here with a hook at least %d bytes shorter" % shrink)
+        return ("Add it at another level of the altitude chain that has room (%s add --proj "
+                "<level> --slug %s ...)%s" % (_ENGINE_ROUTE, slug, shorter))
+
+    text = _line_growth_refusal(verb, changes, retry)
+    if text:
+        raise LineGrowsPastCap(text)
 
 
 def add_with_advice(proj, title, hook, body="", type_=None, pin=False, scope_default="",
@@ -2119,6 +2151,18 @@ def _rename_entry(level, slug, to_slug):
                               "deliberately instead of renaming onto it" % (to_slug, other))
             return rep
 
+    # Every level holding a line of it is held to the block cap before any is written.
+    rep["refused"] = _line_growth_refusal(
+        "rename", [(level_dir, slug, us.Pointer(slug=to_slug, title=ptr.title, hook=ptr.hook,
+                                                pin=ptr.pin))
+                   for level_dir, ptr in _copies_of(anchor, slug)],
+        lambda shrink, _old, _new: (
+            "Rename it to a slug at least %d characters shorter: %s rename --level %s --slug %s "
+            "--to-slug <slug> (a slug no longer than %s always goes through)"
+            % (shrink, _ENGINE_ROUTE, level, slug, slug)))
+    if rep["refused"]:
+        return rep
+
     # COPY-THEN-DROP, the same crash-safety direction as move/relocate: a crash between the two
     # leaves a visible duplicate, never a lost fact.
     src_body, dst_body = us.body_path(anchor, slug), us.body_path(anchor, to_slug)
@@ -2245,6 +2289,18 @@ def _retitle_entry(level, slug, to_title):
     # Decided before any write: a fact placed by topic has a line at each level its topics place
     # it at, retitled there too, and none of them is a duplicate.
     placed = bool(_placed_slugs(anchor, [slug]))
+    # Every level it retitles is held to the block cap before any is written.
+    old_bytes = len(entry.title.encode("utf-8"))
+    rep["refused"] = _line_growth_refusal(
+        "retitle", [(level_dir, slug, us.Pointer(slug=slug, title=title, hook=ptr.hook,
+                                                 pin=ptr.pin))
+                    for level_dir, ptr in _copies_of(anchor, slug) if not ptr.legacy],
+        lambda shrink, _old, _new: (
+            "Retitle it with a title at least %d bytes shorter: %s retitle --level %s --slug %s "
+            "--to-title <title> (a title no longer than the %d bytes of the current one always "
+            "goes through)" % (shrink, _ENGINE_ROUTE, level, slug, old_bytes)))
+    if rep["refused"]:
+        return rep
 
     us.add_pointer(str(lvl), slug=slug, title=title, hook=entry.hook,
                    pin=entry.pin)
@@ -2442,7 +2498,8 @@ the lines it places there plus the lines that stay there (pinned, legacy, and th
 does not place). In the tree scope a managed line placed elsewhere does not count: the same run
 drops it. A chain render never drops a line for being placed elsewhere, so there it stays and
 counts. A level's lines are the one thing a render holds, and a block past this is a mistake to
-fix, not text to load."""
+fix, not text to load. Every writer of a block follows one rule against it (`_grows_past_cap`): a
+write is refused only when the block would end past this AND larger than it is now."""
 _RENDER_SHOWN = 20
 _SWEEP_ROUTE = "hooks/memory_engine.py render-topics --proj %s --scope tree"
 
@@ -2474,9 +2531,14 @@ class RenderBlockTooLarge(TopicRefusal):
     adds at least the lines the chain does), so the stale lines cannot go first; once the rest
     fits, the next refusal is the first kind and names the render that drops them."""
 
-    def __init__(self, level, kept, added, bound_to, stale=0, anchor=None):
+    def __init__(self, level, kept, added, bound_to, stale=0, anchor=None, now=None):
         self.level, self.kept, self.added, self.stale = level, kept, added, stale
         self.size = kept + stale + added
+        # The cap rule (`_grows_past_cap`): only a render that ends past the cap AND grows the
+        # block is refused, so the reader learns that no smaller step is needed than this one.
+        grows = ("" if now is None else
+                 " It would also leave the block larger than the %d bytes it holds now; a render "
+                 "that leaves a block no larger than it is now is never refused." % now)
         self.over = self.size - MAX_RENDER_BLOCK_BYTES
         self.need = kept + added - MAX_RENDER_BLOCK_BYTES
         if stale and self.need <= 0:
@@ -2489,7 +2551,7 @@ class RenderBlockTooLarge(TopicRefusal):
                 "same %d bytes and names its own route if one would pass them), then run this "
                 "render again"
             ) % (stale, level, kept, added, self.over, MAX_RENDER_BLOCK_BYTES, anchor,
-                 MAX_RENDER_BLOCK_BYTES)])
+                 MAX_RENDER_BLOCK_BYTES) + ("." + grows if grows else "")])
             return
         also = ("" if not stale else
                 " (they count here until a tree-scope render drops them, which it cannot do "
@@ -2545,7 +2607,7 @@ class RenderBlockTooLarge(TopicRefusal):
                     "and still counts), then run render-topics again"
                     % (added, level, stays, self.over, MAX_RENDER_BLOCK_BYTES, bound_to,
                        self.need, level))
-        super().__init__([text])
+        super().__init__([text + "." + grows if grows else text])
 
 
 class CollapseTooLarge(TopicRefusal):
@@ -2673,6 +2735,67 @@ class CollapseTooLarge(TopicRefusal):
     def _fullness(self):
         return ("full" if self.room <= 0 else
                 "too full for any line this call would add (%d bytes left)" % self.room)
+
+
+def _grows_past_cap(before, after):
+    """The one cap rule every writer of a level's block follows (add, amend-pinned, retitle,
+    rename, move, relocate, a set-topics collapse and render-topics): a write is refused only
+    when the block would END past MAX_RENDER_BLOCK_BYTES and GROW, ending larger than the
+    `before` bytes it holds now. A write that leaves an over-full block no larger than it is (a
+    render adding nothing, a refresh to a shorter line, a drop) goes through: refusing it would
+    wedge every writer of that level until a person freed room, though none of them made it
+    fuller."""
+    return after > MAX_RENDER_BLOCK_BYTES and after > before
+
+
+def _block_bytes(level_dir):
+    """Bytes of every line in one level's block, each counting its line break."""
+    return sum(_line_size(p) for p in
+               us.parse_pointer_index(read_store_text(sig.claude_local_md_path(str(level_dir))))[1])
+
+
+class LineGrowsPastCap(TopicRefusal):
+    """Raised by `add` and `amend-pinned` before any write when the line they write would leave a
+    level's block past MAX_RENDER_BLOCK_BYTES and larger than it is now (`_grows_past_cap`). A
+    TopicRefusal, so every caller that reports the engine's refusals reports this one."""
+
+    def __init__(self, text):
+        super().__init__([text])
+
+
+def _line_growth_refusal(verb, changes, retry):
+    """The refusal text when a write replacing one line per level (`changes`, an iterable of
+    (level dir, the slug whose line goes, the line that takes its place)) would leave any of
+    those blocks past the cap and larger than now (`_grows_past_cap`), else None. Every level is
+    judged before the caller writes any. The message names the first such level in the order
+    given, with its own numbers, and `retry(shrink, old, new)` the route that keeps the write
+    from growing every such level: `shrink` is how many bytes shorter the line must be, `old` the
+    bytes of the line it replaces at the named level (0 for none) and `new` the bytes of the new
+    line. Freeing room by moving other lines out is named as the second route. Reads one level's
+    block at a time; holds one row."""
+    named, shrink = None, 0
+    for level, slug, line in changes:
+        pointers = us.parse_pointer_index(read_store_text(sig.claude_local_md_path(str(level))))[1]
+        before = sum(_line_size(p) for p in pointers)
+        old = sum(_line_size(p) for p in pointers if p.slug == slug)
+        after = before - old + _line_size(line)
+        if not _grows_past_cap(before, after):
+            continue
+        shrink = max(shrink, after - max(MAX_RENDER_BLOCK_BYTES, before))
+        if named is None:
+            named = (level, before, after, old, _line_size(line))
+    if named is None:
+        return None
+    level, before, after, old, new = named
+    return ("%s would leave the block at %s at %d bytes, %d bytes over the %d bytes one level's "
+            "block may hold and %d bytes larger than it is now (a line counts its line break; a "
+            "write that leaves a block no larger than it is now is never refused). %s; or first "
+            "free at least %d bytes at %s by moving lines out of it with %s move --from-level %s "
+            "--to-level <level> --slug <slug> [<slug> ...] (a line placed by topic is not one to "
+            "move; the level they go to is held to the same %d bytes)"
+            % (verb, level, after, after - MAX_RENDER_BLOCK_BYTES, MAX_RENDER_BLOCK_BYTES,
+               after - before, retry(shrink, old, new), after - MAX_RENDER_BLOCK_BYTES, level,
+               _ENGINE_ROUTE, level, MAX_RENDER_BLOCK_BYTES))
 
 
 def _read_body_head(path):
@@ -3319,27 +3442,30 @@ def _render_census(anchor, pinned, place, dirs, adds):
     same tree would name a different level on another filesystem. Holds one byte count per level."""
     tally = _census_tally()
     kept = {parts: _held_bytes(anchor, pinned, dirs[parts])[0] for parts in adds}
+    now = {parts: _block_bytes(dirs[parts]) for parts in adds}
     sizes = dict(kept)
     for _slug, topics, line in _census_lines(anchor, pinned, tally):
         for parts in place(topics):     # a placement is always the top or a level with a topic
             sizes[parts] += len(line.index_line().encode("utf-8")) + 1
-    full = min((parts for parts in sizes if sizes[parts] > MAX_RENDER_BLOCK_BYTES), default=None)
+    full = min((parts for parts in sizes if _grows_past_cap(now[parts], sizes[parts])),
+               default=None)
     if full is not None:
         raise RenderBlockTooLarge(dirs[full], kept[full], sizes[full] - kept[full],
-                                  place.bound_to(full))
+                                  place.bound_to(full), now=now[full])
     tally["incomplete"].sort()
     return tally
 
 
-def _wanted_lines(anchor, place, pinned, parts, level_dir, held=(0, 0), skip=frozenset()):
+def _wanted_lines(anchor, place, pinned, parts, level_dir, held=(0, 0), skip=frozenset(),
+                  now=0):
     """{slug: Pointer} for every managed fact placed at the level `parts` and not in `skip` (the
     chain scope's slugs a level above holds), from one streaming pass over the bodies. This dict
     is what a render holds; once its lines and the `held` (kept, stale) bytes the level keeps
-    beside them pass
-    MAX_RENDER_BLOCK_BYTES it raises RenderBlockTooLarge. The census refused that case already;
-    this check holds the bound when a body or the level's block grew between the census and this
-    pass (another writer). Past the cap it stops holding lines and only counts, so the refusal
-    names the whole overflow."""
+    beside them pass both MAX_RENDER_BLOCK_BYTES and the `now` bytes the level's block holds
+    before this pass (`_grows_past_cap`) it raises RenderBlockTooLarge. The census refused that
+    case already; this check holds the bound when a body or the level's block grew between the
+    census and this pass (another writer). Past that bound it stops holding lines and only
+    counts, so the refusal names the whole overflow."""
     wanted, size = {}, sum(held)
     for slug, head in _iter_body_heads(anchor):
         topics = _managed_topics(slug, head, pinned)
@@ -3347,13 +3473,13 @@ def _wanted_lines(anchor, place, pinned, parts, level_dir, held=(0, 0), skip=fro
             continue
         line = _line_from_head(slug, head)
         size += len(line.index_line().encode("utf-8")) + 1
-        if size > MAX_RENDER_BLOCK_BYTES:
+        if _grows_past_cap(now, size):
             wanted = None
         elif wanted is not None:
             wanted[slug] = line
     if wanted is None:
         raise RenderBlockTooLarge(level_dir, held[0], size - sum(held), place.bound_to(parts),
-                                  stale=held[1], anchor=anchor)
+                                  stale=held[1], anchor=anchor, now=now)
     return wanted
 
 
@@ -3472,7 +3598,8 @@ def _render_tree(anchor, levels, adds, place, dirs, pinned, rep, dry_run, write)
     (`_keep_last_lines`)."""
     for parts in adds:
         held = _held_bytes(anchor, pinned, dirs[parts])
-        _add_lines(dirs[parts], _wanted_lines(anchor, place, pinned, parts, dirs[parts], held), rep,
+        _add_lines(dirs[parts], _wanted_lines(anchor, place, pinned, parts, dirs[parts], held,
+                                              now=_block_bytes(dirs[parts])), rep,
                    dry_run, write)
     for level in levels:
         parts = _level_parts(anchor, level)
@@ -3529,20 +3656,21 @@ def _chain_census(anchor, pinned, place, chain, adds):
     the census refuses, so no level below needs them)."""
     tally = _census_tally()
     held_at = [_block_slugs(level) for _parts, level in chain]
+    now = [_block_bytes(level) for _parts, level in chain]
     sizes, added = [0] * len(chain), [set() for _level in chain]
     for slug, topics, line in _census_lines(anchor, pinned, tally):
         i = _chain_target(slug, place(topics), chain, adds, held_at)
         if i is not None:
             sizes[i] += len(line.index_line().encode("utf-8")) + 1
-            if sizes[i] <= MAX_RENDER_BLOCK_BYTES:
+            if sizes[i] <= max(MAX_RENDER_BLOCK_BYTES, now[i]):
                 added[i].add(slug)
     above = set()
     for i, (parts, level) in enumerate(chain):
         if parts in adds:
             kept, stale = _held_bytes(anchor, pinned, level, _chain_goes(place, parts, above))
-            if kept + stale + sizes[i] > MAX_RENDER_BLOCK_BYTES:
+            if _grows_past_cap(now[i], kept + stale + sizes[i]):
                 raise RenderBlockTooLarge(level, kept, sizes[i], place.bound_to(parts),
-                                          stale=stale, anchor=anchor)
+                                          stale=stale, anchor=anchor, now=now[i])
         above |= held_at[i] | added[i]
     tally["incomplete"].sort()
     return tally
@@ -3574,7 +3702,8 @@ def _render_chain(anchor, chain, adds, place, pinned, rep, dry_run, write):
         wanted = {}
         if parts in adds:
             held = _held_bytes(anchor, pinned, level, _chain_goes(place, parts, above))
-            wanted = _wanted_lines(anchor, place, pinned, parts, level, held, skip=above)
+            wanted = _wanted_lines(anchor, place, pinned, parts, level, held, skip=above,
+                                   now=_block_bytes(level))
         now = _add_lines(level, wanted, rep, dry_run, write)
         holds.append(now)
         above |= now

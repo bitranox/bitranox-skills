@@ -39,8 +39,8 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   level above it does, and at the tree top when no level has one. Lines are added before any is
   removed, a pinned or untagged fact is never touched, and a tree without a topic list is left
   as it is. A level's block is held to `MAX_RENDER_BLOCK_BYTES` (1 MiB): a render that would
-  pass it writes nothing and names the repair (a `set-topics --batch` rebind, a `move` of the
-  lines that stay, or a tree-scope render).
+  leave a block past it and larger than it is writes nothing and names the repair (a
+  `set-topics --batch` rebind, a `move` of the lines that stay, or a tree-scope render).
 - `reconcile_memory_index.py --check-tree` reports `render drift` (a line missing, differing
   from its body, or placed elsewhere), and `--check` a `repeated line` that a level above
   already holds.
@@ -58,8 +58,14 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 - `set-topics` refuses to bind a fact whose body has no `title:` or `description:`, or whose
   pointer line differs from what its body renders. Un-binding a fact that has lines at several
   levels leaves it one line, at the tree top.
-- `move`, and a cross-tree `relocate`, refuse a set of lines that would leave the target level's
-  block past `MAX_RENDER_BLOCK_BYTES` and larger than it is, naming how many of the lines fit.
+- Every writer of a level's pointer block follows one cap rule: a write is refused, before
+  anything is written, only when a block would end past `MAX_RENDER_BLOCK_BYTES` and larger than
+  it is now. `add` (each level a placed fact's line is rewritten at), `amend-pinned`, `retitle`
+  and `rename` now follow it and name how many bytes shorter the line must be, or where else to
+  put a new fact; `move` and a cross-tree `relocate` name how many of the lines fit; a
+  `set-topics` collapse names the batch that fits. A render that adds nothing to an already
+  over-full level goes through, so one over-full level no longer stops every render on its
+  chain.
 - `add`, `move`, `relocate` and `set-scope` refuse a level inside a directory the level walk
   prunes (a virtualenv, a vendored, build or cache dir, the store), naming the call at a level
   outside it.
