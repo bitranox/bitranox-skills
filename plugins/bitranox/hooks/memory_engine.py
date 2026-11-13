@@ -192,8 +192,20 @@ def _same_level(a, b):
 _PLACED_BY_TOPIC = ("%r is placed by topic: where it is read follows its topics and the levels' "
                     "(set-topics, set-level-topics, then render-topics). To place it by hand, "
                     "un-bind it first: " + _ENGINE_ROUTE + " set-topics --proj %s --slug %s "
-                    "--clear (its lines collapse to one at the tree top, where a move or "
-                    "relocate takes it)")
+                    "--clear (%s, where a move or relocate takes it)")
+
+
+def _placed_by_topic(slug, anchor):
+    """The move/relocate refusal for `slug`, a fact placed by topic, saying where its line is
+    once the named `set-topics --clear` un-binds it: a fact with lines at several levels collapses
+    to one at the tree top (`_collapse_plan`), and a fact with one line keeps it where it is.
+    Walks the tree's levels once, on the refusal path only."""
+    holders = [level for level, _ptr in _copies_of(anchor, slug)]
+    if len(holders) == 1:
+        where = "its one line stays at %s" % holders[0]
+    else:
+        where = "its %d lines collapse to one at the tree top" % len(holders)
+    return _PLACED_BY_TOPIC % (slug, anchor, slug, where)
 
 
 # A slug that is not a plain filename (`uuid_store.is_valid_slug`). Defined by the store, whose path
@@ -1619,7 +1631,7 @@ def move_entry(from_level, to_level, slug, force=False):
     placed = _placed_slugs(a_from, slugs)
     if placed:
         s = next(s for s in slugs if s in placed)       # the first in the caller's order
-        rep["refused"] = _PLACED_BY_TOPIC % (s, a_from, s)
+        rep["refused"] = _placed_by_topic(s, a_from)
         return rep
 
     if rep["direction"] == "down":
@@ -2105,7 +2117,7 @@ def relocate_entry(from_level, to_level, slug, force=False):
         return rep
     if _placed_slugs(a_from, [slug]):
         # its other lines would stay behind in the source tree, pointing at an archived body
-        rep["refused"] = _PLACED_BY_TOPIC % (slug, a_from, slug)
+        rep["refused"] = _placed_by_topic(slug, a_from)
         return rep
 
     # Slugs are TREE-unique, so a divergent slug already in the target tree is a different fact.

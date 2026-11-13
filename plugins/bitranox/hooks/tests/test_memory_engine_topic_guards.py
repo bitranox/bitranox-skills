@@ -128,6 +128,41 @@ def test_move_refuses_a_fact_placed_by_topic_and_moves_nothing(tmp_path, capsys)
     assert _slugs(levels["a"]) == ["feedback-py-rule"]
 
 
+
+def test_move_refusal_for_a_one_line_fact_says_its_line_stays_and_the_route_works(tmp_path, capsys):
+    """A fact placed at one level only has one line: un-binding it collapses nothing, its line
+    stays where it is. The refusal said its lines collapse to one at the tree top."""
+    anchor, levels = _rendered(tmp_path)
+    rs = _level(anchor, "a/rs", ("rust",))
+    _fact(anchor, "feedback-rs-rule", ("rust",))
+    E.render_topics(anchor)
+    assert "feedback-rs-rule" in _slugs(rs) and "feedback-rs-rule" not in _slugs(anchor)
+    capsys.readouterr()
+    rc = E.main(["move", "--from-level", rs, "--to-level", levels["a"],
+                 "--slug", "feedback-rs-rule"])
+    out = capsys.readouterr().out
+    assert rc == 2 and "is placed by topic" in out, out
+    assert "collapse" not in out and "its one line stays at %s" % rs in out, out
+    route = re.search(r"(hooks/memory_engine\.py set-topics --proj \S+ --slug feedback-rs-rule "
+                      r"--clear)", out)
+    assert route is not None, out
+    rc, said = _run_route(tmp_path, route.group(1))
+    assert rc == 0, said
+    assert "feedback-rs-rule" in _slugs(rs) and "feedback-rs-rule" not in _slugs(anchor)
+    assert E.main(["move", "--from-level", rs, "--to-level", levels["a"],
+                   "--slug", "feedback-rs-rule"]) == 0
+    assert "feedback-rs-rule" in _slugs(levels["a"])
+
+
+def test_move_refusal_for_a_fact_with_several_lines_says_they_collapse_at_the_top(tmp_path,
+                                                                                 capsys):
+    anchor, levels = _rendered(tmp_path)
+    capsys.readouterr()
+    assert E.main(["move", "--from-level", levels["a/py"], "--to-level", levels["a"],
+                   "--slug", "feedback-py-rule"]) == 2
+    out = capsys.readouterr().out
+    assert "its 2 lines collapse to one at the tree top" in out, out
+
 def test_a_set_holding_one_placed_fact_is_refused_whole(tmp_path):
     _anchor, levels = _rendered(tmp_path)
     _fact(levels["a/py"], "feedback-local")

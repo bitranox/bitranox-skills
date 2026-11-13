@@ -49,6 +49,10 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   a fact's lines when no level holds the fact on both sides (a `topics:` edit that re-places it):
   it reported only the removed and added lines. Where a level holds it on both sides, the body
   change was already named there.
+- The `move` and `relocate` refusal for a fact placed by topic says where its line will be once
+  the `set-topics --clear` it names un-binds it: a fact with lines at several levels collapses to
+  one at the tree top, and a fact with one line keeps it where it is. It said the lines collapse
+  to the tree top in both cases.
 
 ## [11.4.0]
 
