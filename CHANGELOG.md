@@ -53,6 +53,9 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   the `set-topics --clear` it names un-binds it: a fact with lines at several levels collapses to
   one at the tree top, and a fact with one line keeps it where it is. It said the lines collapse
   to the tree top in both cases.
+- `meta-self-improve` step 3 describes that refusal as it is: `SlugOwnedElsewhere`, exit 2, naming
+  the owning level and the command to update the fact there, with the suggested `<slug>-2` for a
+  different fact only. It said the refusal named the slug but not the level.
 
 ## [11.4.0]
 

@@ -718,7 +718,10 @@ def upsert_entry(proj, title, hook, body="", type_=None, pin=False,
     A fact placed by topic (see `_placed_slugs`) is written only from a level holding one of its
     lines, else `PlacedElsewhere`; the write then refreshes its other lines too. Pinning one raises
     TopicRefusal. A level whose path below the anchor crosses a directory the level walk prunes
-    raises `NonLevelDir`. All three before any write. A fact whose body is bound to a topic is
+    raises `NonLevelDir`. All three before any write. A slug whose pointer another level of the
+    tree holds (a sibling, an ancestor or a child of the owner), while this level holds none,
+    raises `SlugOwnedElsewhere` naming the owning level(s), before any write; a body no level
+    points at is adopted. A fact whose body is bound to a topic is
     decided and written under the tree's placement lock (`_placement_lock_if_bound`), so its
     lines change with no render or set-topics half done; PlacementLockBusy when it stays held.
 

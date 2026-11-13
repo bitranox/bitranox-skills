@@ -202,14 +202,18 @@ then upserts an unpinned fact (a pinned one is refused, see below). New entry on
 covers it. Run this search in a tool call of its own and read the result before the engine `add`:
 bundled as `grep ... && add`, a hit does not stop the add, and the duplicate is written anyway.
 
-**Both halves of that sentence are load-bearing, and each fails silently in its own direction.**
+**Both halves of that sentence are load-bearing.**
 
-- **The level.** The upsert branch searches only the entries at `--proj`. Aim it anywhere else and
-  the engine refuses with `SlugCollision`, which names the slug but not the level, so it reads as
-  "this fact already exists" - and its suggestion, `<slug>-2`, would create the duplicate you were
-  trying to avoid. A fact an earlier dream promoted can no longer be updated from the project it
-  came from. Find the owner first, and use `find`, because a session `grep -r` skips those files
-  as gitignored:
+- **The level.** The upsert branch searches only the entries at `--proj`. Aim it at any other level
+  of the tree (a sibling, an ancestor, a child of the owner) and the engine refuses with
+  `SlugOwnedElsewhere`, exit 2, on a line that starts
+  `! refused: slug '<slug>' is owned by another level of this tree: <level>`. It writes nothing
+  and names the level that holds the fact together with the command to update it there: rerun
+  the same `add` with that level as `--proj`. The `<slug>-2` the refusal also suggests is for a
+  genuinely different fact; taking it for an update creates the duplicate you were trying to
+  avoid. A fact an earlier dream promoted can no longer be updated from the project it came from.
+  To find the owner before the add, use `find`, because a session `grep -r` skips those files as
+  gitignored:
 
       find <anchor> -name CLAUDE.local.md -not -path "*/.claude-memory/*" -exec grep -l "mem:<slug>" {} \;
 
