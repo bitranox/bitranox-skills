@@ -336,6 +336,68 @@ def test_a_moved_and_retitled_fact_is_both_moved_and_changed():
     assert [e.slug for e in d.moved] == ["s"] and [c.what for c in d.changed] == [["title"]]
 
 
+
+# ---- a body edit made together with a change in the number of a slug's lines -------------------
+# A topics: edit re-places a fact, so its body changes in the same run its line count does.
+
+TOP_LINE = "- [Top](mem:a-slug) - When top, do top. <!-- bx:pin -->\n"
+A_LINE = "- [Top](mem:a-slug) - When top, do top.\n"
+
+
+def _topics_edit(root: Path) -> None:
+    (root / ".claude-memory" / "facts" / "a-slug.md").write_text(
+        "---\nname: a-slug\ntopics: [python]\n---\n\nbody a\n", encoding="utf-8")
+
+
+def _append_line(level: Path, line: str) -> None:
+    with (level / "CLAUDE.local.md").open("a", encoding="utf-8") as fh:
+        fh.write(line)
+
+
+def test_a_body_edit_with_a_line_added_beside_a_kept_line_is_reported_as_changed(tmp_path):
+    """The level both sides hold is compared before the line count is looked at, so the body
+    change is named there; the new line is an add."""
+    make_tree(tmp_path)
+    out = outside(tmp_path)
+    assert run_cli(["backup", "--from", str(tmp_path), "--out", str(out)], tmp_path).returncode == 0
+    _topics_edit(tmp_path)
+    _append_line(tmp_path / "elsewhere", A_LINE)
+    r = run_cli(["verify", "--out", str(out)], tmp_path)
+    assert r.returncode == 1, r.stdout
+    assert "changed  a-slug  (body)" in r.stdout, r.stdout
+    assert "added    a-slug  (%s)" % (tmp_path / "elsewhere") in r.stdout, r.stdout
+
+
+def test_a_body_edit_whose_lines_all_moved_and_changed_count_is_reported_as_changed(tmp_path):
+    """No level holds the slug on both sides and the count differs: the lines are a remove and two
+    adds, and the body change was not named at all (the report differed, but only by its lines)."""
+    make_tree(tmp_path)
+    out = outside(tmp_path)
+    assert run_cli(["backup", "--from", str(tmp_path), "--out", str(out)], tmp_path).returncode == 0
+    _topics_edit(tmp_path)
+    top = tmp_path / "CLAUDE.local.md"
+    top.write_text(top.read_text(encoding="utf-8").replace(TOP_LINE, ""), encoding="utf-8")
+    for lvl in ("elsewhere", "projects/app"):
+        _append_line(tmp_path / lvl, A_LINE)
+    r = run_cli(["verify", "--out", str(out)], tmp_path)
+    assert r.returncode == 1, r.stdout
+    assert "removed  a-slug  (%s)" % tmp_path in r.stdout, r.stdout
+    assert "changed  a-slug  (body)" in r.stdout, r.stdout
+
+
+def test_lines_that_moved_and_changed_count_with_an_untouched_body_name_no_change(tmp_path):
+    """Control: the same line moves with the body untouched report no change."""
+    make_tree(tmp_path)
+    out = outside(tmp_path)
+    assert run_cli(["backup", "--from", str(tmp_path), "--out", str(out)], tmp_path).returncode == 0
+    top = tmp_path / "CLAUDE.local.md"
+    top.write_text(top.read_text(encoding="utf-8").replace(TOP_LINE, ""), encoding="utf-8")
+    for lvl in ("elsewhere", "projects/app"):
+        _append_line(tmp_path / lvl, A_LINE)
+    r = run_cli(["verify", "--out", str(out)], tmp_path)
+    assert r.returncode == 1, r.stdout
+    assert "changed  a-slug" not in r.stdout, r.stdout
+
 @pytest.mark.skipif(NO_CHMOD, reason="needs a non-root POSIX user for chmod 000")
 def test_an_unreadable_level_file_refuses_instead_of_omitting_it(tmp_path):
     make_tree(tmp_path)

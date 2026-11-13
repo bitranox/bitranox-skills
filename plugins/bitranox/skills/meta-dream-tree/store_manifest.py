@@ -343,8 +343,14 @@ def _diff_slug(slug: str, before: dict[str, Entry], after: dict[str, Entry], out
     The rest is a MOVE only when the slug has as many copies after as before; otherwise the copies
     that vanished are removed and the new ones added. Keying on the slug alone kept one copy per
     slug, so removing one of two copies of a duplicated slug verified IDENTICAL.
+
+    Every copy of a slug reads the one body file, so when no level holds the slug on both sides
+    and the count differs, the body is compared across the first copy gone and the first one new:
+    with no level to compare in place, a body edit made in the same run (a `topics:` edit that
+    re-places the fact) was reported only as the removed and added lines.
     """
-    for level in sorted(set(before) & set(after)):
+    common = sorted(set(before) & set(after))
+    for level in common:
         change = _changed(slug, before[level], after[level])
         if change:
             out.changed.append(change)
@@ -353,6 +359,11 @@ def _diff_slug(slug: str, before: dict[str, Entry], after: dict[str, Entry], out
     if len(before) != len(after):
         out.removed.extend(gone)
         out.added.extend(new)
+        if not common and gone and new:
+            body = _changed(slug, replace(gone[0], title=new[0].title, pin=new[0].pin,
+                                          hook_sha=new[0].hook_sha), new[0])
+            if body:
+                out.changed.append(body)
         return
     for b, a in zip(gone, new):
         out.moved.append(a)

@@ -45,6 +45,10 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   sub-keys (`type:`, `skill:`). It replaced the stored frame whole, so the body lost its
   description and kind and a fact placed by topic stopped being placed. Keys the frame sets keep
   their new value; `description:` still follows the hook and the stored `topics:` line still wins.
+- `store_manifest.py verify` names a body change made in the same run as a change in the number of
+  a fact's lines when no level holds the fact on both sides (a `topics:` edit that re-places it):
+  it reported only the removed and added lines. Where a level holds it on both sides, the body
+  change was already named there.
 
 ## [11.4.0]
 
