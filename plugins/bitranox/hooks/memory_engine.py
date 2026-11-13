@@ -818,6 +818,10 @@ def _upsert_checked(proj, anchor, slug, title, hook, body, type_, pin, scope_def
                 # that always lands on "project".
                 kept_skill = skill or _body_skill(body) or _body_skill(e.body)
                 framed = _framed_body(slug, e.hook, type_ or _body_type(e.body), body)
+                # A body that brings its own frame sets only the keys it names: a partial frame
+                # (`name:` and `topics:`) replaced the stored one whole and dropped `description:`
+                # and `metadata:`, so the body yielded no line and stopped being placed by topic.
+                framed = _with_stored_frame_keys(framed, e.body)
                 # The stored topics line wins over whatever the new body's frame says or lacks:
                 # topics change only through set-topics (`e.body` is still the stored body here).
                 e.body = _with_stored_topics(_with_skill(_synced_frame(slug, e.hook, type_, framed),
@@ -1171,6 +1175,76 @@ def _with_stored_topics(text, stored):
     if topics is not None:
         return _with_topics(text, topics)
     return _with_topics_line(text, _body_topics_line(stored))
+
+
+_FRAME_KEY_RX = re.compile(r"([A-Za-z_][\w-]*):")
+_FRAME_SUBKEY_RX = re.compile(r"[ \t]+([A-Za-z_][\w-]*):")
+
+
+def _frame_blocks(inner):
+    """[(key, [lines])] of a frontmatter's inner text: each top-level `key:` line with the
+    indented and blank lines below it. Lines before the first key go under key None."""
+    blocks = []
+    for line in inner.splitlines(True):
+        m = _FRAME_KEY_RX.match(line)
+        if m or not blocks:
+            blocks.append((m.group(1) if m else None, [line]))
+        else:
+            blocks[-1][1].append(line)
+    return blocks
+
+
+def _merged_metadata(new_lines, stored_lines):
+    """The `metadata:` block `new_lines` with each sub-key line of `stored_lines` it does not set
+    appended (a sub-key's own continuation lines come with it)."""
+    def indent(line):
+        return len(line) - len(line.lstrip(" \t"))
+
+    have = {m.group(1) for m in map(_FRAME_SUBKEY_RX.match, new_lines[1:]) if m}
+    subs = [line for line in stored_lines[1:] if _FRAME_SUBKEY_RX.match(line)]
+    level = min(map(indent, subs), default=0)    # a sub-key's own indent; deeper is its value
+    out, carry = list(new_lines), False
+    for line in stored_lines[1:]:
+        m = _FRAME_SUBKEY_RX.match(line)
+        if m and indent(line) == level:
+            carry = m.group(1) not in have
+        if carry:
+            out.append(line if line.endswith("\n") else line + "\n")
+    return out
+
+
+def _with_stored_frame_keys(text, stored):
+    """Return framed `text` with every frontmatter key of the `stored` body that its own frame
+    does not set: a missing top-level key (`description:`, `title:`, `topics:`, `metadata:`)
+    comes over whole, and a `metadata:` both carry gains the sub-keys (`type:`, `skill:`) only
+    the stored one has. The result follows the stored key order, then the keys only `text` has;
+    a key `text` sets keeps its value. The prose is untouched; an unframed `text` or `stored` is
+    returned unchanged.
+
+    For an UPDATE whose body brings its own frame: the frame says what it sets, never what it
+    drops. The callers then sync `name:` and `description:` to this write and re-apply the stored
+    `topics:` line, so those three stay theirs whatever either frame said."""
+    head, m = _frontmatter(text)
+    _shead, sm = _frontmatter(stored)
+    if m is None or sm is None:
+        return text
+    new_blocks = _frame_blocks(m.group(1) or "")
+    new = {key: lines for key, lines in new_blocks if key is not None}
+    merged = [line for key, lines in new_blocks if key is None for line in lines]
+    used = {None}
+    for key, lines in _frame_blocks(sm.group(1) or ""):
+        if key is None:
+            continue
+        if key == "metadata" and key in new:
+            merged.extend(_merged_metadata(new[key], lines))
+        else:
+            merged.extend(new.get(key, lines))
+        used.add(key)
+    for key, lines in new_blocks:
+        if key not in used:
+            merged.extend(lines)
+    merged = [line if line.endswith("\n") else line + "\n" for line in merged]
+    return _with_frame(head, m, "".join(merged))
 
 
 def _with_topics_line(text, line):

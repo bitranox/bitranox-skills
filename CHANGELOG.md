@@ -40,6 +40,11 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   second pointer line and overwrote that fact's body with the new one. The refusal names the
   owning level and the `add --proj <that level> --slug <slug>` that updates the fact there. A
   body no level points at is still adopted.
+- An update `add` whose body brings its own, partial frontmatter (`name:` and `topics:` only)
+  keeps every stored key that frame does not set: `description:`, `title:`, and the `metadata:`
+  sub-keys (`type:`, `skill:`). It replaced the stored frame whole, so the body lost its
+  description and kind and a fact placed by topic stopped being placed. Keys the frame sets keep
+  their new value; `description:` still follows the hook and the stored `topics:` line still wins.
 
 ## [11.4.0]
 
