@@ -97,6 +97,23 @@ class SlugCollision(ValueError):
 _ENGINE_ROUTE = "hooks/memory_engine.py"
 
 
+class SlugOwnedElsewhere(SlugCollision):
+    """Raised when `add` names a slug whose pointer another level of the same tree holds (a
+    sibling, an ancestor or a descendant). Adopting the body here would add a second line and
+    overwrite the owner's body with this one. The message names the owning level(s) and the
+    route that updates the fact there; `levels` carries them, top first. A SlugCollision, so
+    every caller that reports a collision reports this."""
+
+    def __init__(self, slug, levels, suggestion):
+        levels = sorted(levels, key=lambda level: Path(os.path.abspath(str(level))).parts)
+        ValueError.__init__(self, "slug %r is owned by another level of this tree: %s. To update "
+                                  "that fact, write it from there (%s add --proj %s --slug %s "
+                                  "...); for a new fact pick another slug (suggested: %r)"
+                            % (slug, ", ".join(str(level) for level in levels), _ENGINE_ROUTE,
+                               levels[0], slug, suggestion))
+        self.slug, self.suggestion, self.levels = slug, suggestion, levels
+
+
 class PlacedElsewhere(SlugCollision):
     """Raised when `add` names a fact that is placed by topic from a level holding none of its
     lines. Adopting it there would add a line the placement does not have; the write goes to a
@@ -766,15 +783,20 @@ def _upsert_checked(proj, anchor, slug, title, hook, body, type_, pin, scope_def
     store_existed = store_dir.exists()
     lock_target = sig.claude_local_md_path(proj)
     with sig.memory_lock(lock_target):
+        # Before the level is scaffolded, so the refusal writes nothing: a slug another level of
+        # the tree points at is that level's fact, wherever the level sits.
+        owners = _slug_owned_elsewhere(anchor, proj, slug)
+        if owners:
+            raise SlugOwnedElsewhere(slug, owners, _free_slug(anchor, slug))
         ensure_level(proj, scope_default=scope_default, _locked=True)
         scope, entries, bodies = read_store(proj)
         by_slug = {e.slug: e for e in entries}
-        if slug not in by_slug and us.body_path(anchor, slug).is_file() \
-                and not _slug_owned_elsewhere(anchor, proj, slug):
+        if slug not in by_slug and us.body_path(anchor, slug).is_file():
             # A DANGLING body (its pointer was lost - e.g. a formatter wrapped the line and a heal
-            # round-trip then dropped it) is safe to ADOPT here rather than leave the fact stuck
-            # (invisible, yet un-recreatable because the body registers the slug). Reconstruct its
-            # Entry so the update path below re-attaches a pointer at this level.
+            # round-trip then dropped it; no level points at it, checked above) is safe to ADOPT
+            # here rather than leave the fact stuck (invisible, yet un-recreatable because the
+            # body registers the slug). Reconstruct its Entry so the update path below
+            # re-attaches a pointer at this level.
             adopted = _entry_from_body(anchor, slug)
             if adopted is not None:
                 entries.append(adopted)
@@ -815,8 +837,8 @@ def _upsert_checked(proj, anchor, slug, title, hook, body, type_, pin, scope_def
                 _archive_legacy_body(anchor, e)      # moves to the slug path, the old file archives
                 e.legacy, e.uuid = False, ""
         else:
-            # Tree-unique slugs: the body file is the registry. A body that exists while ANOTHER level
-            # owns the slug (checked just above) is a real collision - refuse with a suggestion.
+            # Tree-unique slugs: the body file is the registry. A body still here was neither owned
+            # by another level (refused above) nor adoptable - refuse with a suggestion.
             if us.body_path(anchor, slug).is_file():
                 raise SlugCollision(slug, _free_slug(anchor, slug))
             e = Entry(slug=slug, title=title, hook=hook,
@@ -960,26 +982,25 @@ def amend_pinned_entry(proj, slug, hook=None, body=None, title=None, type_=None)
 
 
 def _slug_owned_elsewhere(anchor, proj, slug):
-    """True when a level OTHER than `proj` in proj's altitude chain still points at `slug` (the slug is
-    owned elsewhere, not a dangling body). Chain-scoped by design: a rare cross-sibling re-capture at
-    worst makes a duplicate the dream merges - never corruption - and this stays off the hot path."""
-    try:
-        chain = sig.altitude_chain(proj)
-    except Exception:                                # noqa: BLE001 - never block an add
-        return False
+    """The levels OTHER than `proj` anywhere in the tree under `anchor` (siblings, ancestors and
+    descendants alike) that point at `slug`, when `proj` itself does not and the slug has a body;
+    else []. A non-empty answer means an add at `proj` would take over another level's fact:
+    adopting the body here wrote a second line and overwrote that fact's body with the new one,
+    so `add` refuses instead. [] means `proj` owns the slug (the update path), the slug is free,
+    or its body is dangling (no level points at it) and safe to adopt.
+
+    Reads `proj`'s own block, and walks the tree's levels (`_copies_of`) only when the body exists
+    and `proj` holds no line of it - a new slug and an update at the owning level never walk.
+
+    A level that cannot be read raises TreeWalkError (from the walk): whether it owns the slug is
+    unknown, and "not owned" is the answer that lets add adopt a body another level points at."""
+    if not us.body_path(anchor, slug).is_file():
+        return []
+    _s, here = us.parse_pointer_index(read_store_text(sig.claude_local_md_path(proj)))
+    if any(p.slug == slug for p in here):
+        return []
     pnorm = Path(proj).resolve()
-    for lvl in chain:
-        try:
-            if Path(lvl).resolve() == pnorm:
-                continue
-        except OSError:
-            continue
-        # A level that cannot be read raises TreeWalkError: whether it owns the slug is unknown,
-        # and "not owned" is the answer that lets add adopt a body another level still points at.
-        _s, ptrs = us.parse_pointer_index(read_store_text(sig.claude_local_md_path(lvl)))
-        if any(p.slug == slug for p in ptrs):
-            return True
-    return False
+    return [level for level, _ptr in _copies_of(anchor, slug) if Path(level).resolve() != pnorm]
 
 
 def _body_description(text):

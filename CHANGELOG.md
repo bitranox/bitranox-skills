@@ -30,6 +30,17 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.4.1]
+
+### Fixed
+
+- `add` of a slug whose pointer another level of the same tree holds now refuses with
+  `SlugOwnedElsewhere` (a `SlugCollision`) and writes nothing, whether that level is a sibling, an
+  ancestor or a descendant. From a sibling or an ancestor it adopted the body instead: it wrote a
+  second pointer line and overwrote that fact's body with the new one. The refusal names the
+  owning level and the `add --proj <that level> --slug <slug>` that updates the fact there. A
+  body no level points at is still adopted.
+
 ## [11.4.0]
 
 ### Changed

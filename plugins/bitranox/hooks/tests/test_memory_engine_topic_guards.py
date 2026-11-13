@@ -326,9 +326,11 @@ def test_a_set_names_the_first_placed_member_in_the_order_given(tmp_path):
 
 
 @pytest.mark.parametrize("shape", ["pinned-elsewhere", "untitled"])
-def test_add_of_a_bound_fact_the_renderer_does_not_manage_is_written_as_before(tmp_path, shape):
+def test_add_of_a_bound_fact_the_renderer_does_not_manage_takes_the_path_any_fact_does(tmp_path,
+                                                                                       shape):
     """Not placed by topic, so an add from a level without its line is not PlacedElsewhere: it
-    takes the path any fact does (from the top, whose chain holds no line of it, an adoption)."""
+    takes the path any fact does. From the top, a level of the tree holds its line, so that add is
+    SlugOwnedElsewhere and writes nothing; from the level holding the line it is an update."""
     anchor, levels = _rendered(tmp_path)
     _fact(levels["a/py"], "feedback-odd")
     if shape == "untitled":
@@ -339,5 +341,11 @@ def test_add_of_a_bound_fact_the_renderer_does_not_manage_is_written_as_before(t
     else:
         _bind_raw(anchor, "feedback-odd", ("python",))
         us.add_pointer(levels["b"], "feedback-odd", "T feedback-odd", HOOK, pin=True)
-    E.add_or_update_entry(anchor, title="T feedback-odd", hook=HOOK, slug="feedback-odd")
-    assert "feedback-odd" in _slugs(anchor)
+    before = _snapshot(anchor)
+    with pytest.raises(E.SlugOwnedElsewhere) as exc:
+        E.add_or_update_entry(anchor, title="T feedback-odd", hook=HOOK, slug="feedback-odd")
+    assert not isinstance(exc.value, E.PlacedElsewhere)
+    assert str(levels["a/py"]) in exc.value.levels
+    assert _snapshot(anchor) == before
+    E.add_or_update_entry(levels["a/py"], title="T feedback-odd", hook=HOOK, slug="feedback-odd")
+    assert "feedback-odd" in _slugs(levels["a/py"]) and "feedback-odd" not in _slugs(anchor)
