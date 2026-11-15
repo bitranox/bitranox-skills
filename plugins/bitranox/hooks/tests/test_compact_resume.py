@@ -86,6 +86,19 @@ def test_a_checkpoint_saved_after_the_nudge_is_reinjected(tmp_path, monkeypatch,
     assert "STALE" in ctx, "the reader must be told to mark it read, or the next compaction re-feeds it"
 
 
+def test_the_next_action_is_checked_before_it_is_taken(tmp_path, monkeypatch, capsys):
+    # Work can continue past a checkpoint before the compaction lands, and a tracked repo-root
+    # handover.md can be another session's: the block must say to check the next action against
+    # the summary and git first, and to leave a checkpoint the summary never mentions alone.
+    repo = _repo(tmp_path)
+    _checkpoint(repo, "# Handover\n- MARKER-8\n")
+    ctx = _context(_run(monkeypatch, capsys, _event(repo)))
+    assert "compaction summary" in ctx
+    assert "git log" in ctx and "git status" in ctx
+    assert "another session's" in ctx
+    assert "starting with its exact next action" not in ctx
+
+
 def test_a_checkpoint_older_than_the_nudge_is_not_presented_as_current(tmp_path, monkeypatch,
                                                                          capsys):
     repo = _repo(tmp_path)

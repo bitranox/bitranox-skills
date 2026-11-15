@@ -30,6 +30,45 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.7.0]
+
+### Added
+
+- compuse-toolbox: `ci_wait --min-attempt N` waits for a re-run's new attempt instead of returning the earlier attempt's green result.
+- compuse-toolbox: `mutation_arm --test` can be repeated to run several test files or node ids in one arm.
+- meta-skill-audit: a completeness pass for skills that document a library or CLI. It lists the installed package's public callables and CLI subcommands and reports every name the skill never mentions, with a runnable snippet that prints how many names it examined.
+
+### Changed
+
+- compuse-toolbox: `gate.py` also writes its [PASS]/[FAIL] lines and closing verdict into `--log`, and starts each run in the log with the working directory and work tree it ran in.
+- compuse-toolbox: `ci_wait --ref` with an `OWNER/NAME` `--repo` is refused before polling when the current checkout's remotes all name a different repository.
+- compuse-toolbox: `mutation_arm` refuses a `--test` value or battery entry holding several paths or pytest options, reports pytest exits 4 and 5 as a run that never happened rather than a red baseline, and no longer overwrites earlier logs in a shared `--log-dir`.
+- compuse-bash: rows on globs built from width-capped listings and on `printf` float formats under a decimal-comma locale.
+- compuse-ssh: the Windows server setup enables the OpenSSH firewall rule for every network profile, and documents key-only login (both settings), restarting sshd from outside the session, and checking the offered auth methods.
+- git-worktrees: inspect a worktree you may remove from outside it, with `git -C`.
+- process-plan-writing-plans: Self-Review item 7 also bounds time (a check that refuses past a cap stops reading once it is passed, tested with a counting generator); item 8 says how to prove a task stands on its own; item 9 lists three ways running the plan's code checks the wrong thing; new item 15 requires a changelog task for any user-visible change.
+- process-agents-subagent-driven-development: the implementer report quotes the gate file's path and modification time; an action refused for a subagent goes to the human, never run on its behalf; a fix's remedy is checked against the user's recorded requirements; the final whole-branch review is split by system; a requirement from a source document is quoted verbatim; a required test names the mutant it must kill; a fix round that adds work for a later task is written into that task's plan section at once.
+- process-test-design: a leak check after a refused call binds the `pytest.raises` result and keeps it referenced past the count, or refcounting closes the leaked file and the test passes on leaking code.
+- coding-data-architecture: the key-set pin test reads the real table object; a boundary decode table is permitted; a refusal line may use the library's message for that one error; a parameter every caller passes a literal to is still a finding; findings are checked against the repo's recorded decisions before a fix brief; a tuple-to-record fixer updates every consumer; the error-surface diff needs one liveness control per entry point.
+- coding-python-data-architecture: a plain `Enum` parameter is converted with `TheEnum(value)`; a BeforeValidator over a subset name map refuses members with no wire name; a fixer changing a type on an output wire captures its before/after harness first; the `ctx` error is read with `.get` under pyright strict.
+- coding-input-sanitization: a lax-mode Pydantic field is not boundary validation for numeric or date text; an upper-case-only rule is written per character.
+- coding-python-use-modern-libraries: the MCP row names the official `mcp` SDK 2.x `MCPServer`, says when `fastmcp` still wins, and notes that `mcp.server.fastmcp` is gone.
+- coding-performance-review: CPU-second figures need the before arm inside the same interleaved run with no background job of your own running; a total gain is quoted from one A/B of the original against the final code; new Method step 13 measures one operation's peak memory by resetting the high-water mark.
+- coding-python-performance-review: a profiled wait is timed without the profiler before it is reported as a hot spot; a cached run that fails because a caller edits the result gets a copy-per-call arm; a one-slot identity cache pattern for repeated decoding of one immutable object; a declined finding whose instructions file cannot be written is kept until it can be.
+- infra-proxmox: rows for a CT's resolv.conf/hosts/hostname rewritten at every start and for a full clone showing `size=0T`; the unprivileged-CT Docker row states the divert order; the restored-guest checklist covers a dbus machine-id symlink and the mail identity; the snapshot full-clone recipe covers a running VM with TPM state, the dataset name and fresh smbios1/vmgenid.
+- infra-windows-servicing: choose a RestoreHealth image by the payload revisions it holds, checked offline; a ScanHealth probe that times out reports "could not run", never a health verdict.
+- meta-context-watcher: read the backlog header before `backlog_close`; read the path each backlog tool returns; choose `create_new` by which project owns the work; check a resumed checkpoint's next action against the compaction summary and git first, and leave a checkpoint the summary never mentions alone.
+- meta-skill-writer: run the tool and read the exact field before shipping a sentence about what it writes; copy example values from output produced in the session; build probe excerpts that include every list their passage points at.
+
+### Fixed
+
+- compact-resume: the resumed checkpoint is no longer to be acted on blind; the block says to check its next action against the compaction summary and git, and to leave another session's checkpoint alone, matching meta-context-watcher.
+- coding-python-performance-review: `find_cache_candidates.py` no longer suggests caching a function that returns a record built around a container it made.
+- user-decision-log: also logs the remark a user types while rejecting a plan.
+- ci-watch-gate: a CI watch run from another directory now clears the session's pending push.
+- block-git-semicolon-chain: refuses a precondition-acquiring command (login, lock, mount) joined to the next step by `;`.
+- toolbox-nudge: offers `claudemd_variance` only for a walk over every CLAUDE.md, not for a content search naming CLAUDE.md as one path.
+
 ## [11.6.0]
 
 ### Added
