@@ -497,6 +497,58 @@ def test_a_function_returning_a_new_mutable_container_is_not_a_candidate(tmp_pat
     assert _names(p) == {"frozen", "scalar", "inner_list_not_returned"}
 
 
+# A record (a NamedTuple, a dataclass, any class instance) built around a container the function
+# made shares that container just the same: the cached record is one object, and so is its field.
+RETURNS_RECORD_WITH_MUTABLE = textwrap.dedent('''
+    from typing import NamedTuple
+
+    class _Walk(NamedTuple):
+        props: dict
+        closed: bool
+
+    def walk_positional(n):
+        props = {}
+        for i in range(n):
+            props[i] = i
+        return _Walk(props, n > 3)
+
+    def walk_keyword(n):
+        for _ in range(n):
+            pass
+        return _Walk(props={}, closed=False)
+
+    def walk_dotted(n):
+        items = []
+        for i in range(n):
+            items.append(i)
+        return records.Result(items=items)
+
+    def record_of_tuple(n):
+        out = []
+        for i in range(n):
+            out.append(i)
+        return _Walk(tuple(out), False)
+
+    def joined(n):
+        parts = []
+        for i in range(n):
+            parts.append(str(i))
+        return ",".join(parts)
+
+    def summed(n):
+        vals = []
+        for i in range(n):
+            vals.append(i)
+        return max(vals)
+''')
+
+
+def test_a_record_built_around_a_new_mutable_container_is_not_a_candidate(tmp_path):
+    p = tmp_path / "records.py"
+    p.write_text(RETURNS_RECORD_WITH_MUTABLE, encoding="utf-8")
+    assert _names(p) == {"record_of_tuple", "joined", "summed"}
+
+
 def test_a_module_function_named_like_a_method_is_no_mutation_and_aliases_are_followed(tmp_path):
     p = tmp_path / "modfuncs.py"
     p.write_text(textwrap.dedent('''

@@ -1,8 +1,17 @@
 """Find pure, expensive functions that might benefit from caching (AST heuristic).
 
-A function that returns a mutable container it builds (a list, dict, set or ndarray, or a name
-bound to one) is not reported even when pure: lru_cache would hand every caller the same
-object, so one caller's edit would change every later result.
+A function that returns a mutable container it builds (a list, dict, set or ndarray, a name
+bound to one, or a record such as a NamedTuple or dataclass constructed around one) is not
+reported even when pure: lru_cache would hand every caller the same object, so one caller's
+edit would change every later result.
+
+Decisions:
+- A record constructor is recognised by a capitalised callee name. Why: one function's AST
+  does not say which callees are classes; lower-case consumers (tuple, join, max) return a
+  value that shares nothing. Evidence: a NamedTuple holding a dict was reported, and a bare
+  lru_cache on it broke a caller that edits the dict. Pinned by
+  test_a_record_built_around_a_new_mutable_container_is_not_a_candidate. Reopen if a
+  lower-case class factory (a dataclass ``make`` function) is seen sharing a container.
 
 Usage: python find_cache_candidates.py FILE [FILE ...]
 
@@ -348,8 +357,23 @@ def _is_new_mutable(expr, mutable_names):
     if isinstance(expr, ast.Call):
         func = expr.func
         is_copy = isinstance(func, ast.Attribute) and func.attr == 'copy' and not expr.args
-        return is_copy or _is_numpy_new_array(expr) or _call_name(func) in _NEW_MUTABLE_CALLS
+        return (is_copy or _is_numpy_new_array(expr) or _call_name(func) in _NEW_MUTABLE_CALLS
+                or _is_record_holding_new_mutable(expr, mutable_names))
     return isinstance(expr, ast.Name) and expr.id in mutable_names
+
+
+def _is_record_holding_new_mutable(call, mutable_names):
+    """True when *call* constructs a record (a NamedTuple, a dataclass, any class) around a
+    mutable container created here: the cached record is one object, so its container field is
+    shared by every caller just as a bare returned list would be.
+
+    A class is recognised by its capitalised name (``_Walk``, ``records.Result``), the only
+    evidence one function's AST holds. Lower-case callees (``tuple(x)``, ``",".join(x)``,
+    ``max(x)``) consume the container and return something else, so they stay candidates."""
+    if not _call_name(call.func).lstrip('_')[:1].isupper():
+        return False
+    values = [*call.args, *(kw.value for kw in call.keywords)]
+    return any(_is_new_mutable(v, mutable_names) for v in values)
 
 
 def _own_nodes(func_node):

@@ -274,7 +274,21 @@ runs and diffing `sys.modules`, before proposing a lazy import.
 Run `find_cache_candidates.py` from the skill directory against the project's Python files. A
 function that returns a list, dict, set or ndarray it builds is never reported: `lru_cache`
 would hand every caller that one object, so one caller's edit changes every later result.
-Return a tuple or frozenset first if such a function should be cached.
+Return a tuple or frozenset first if such a function should be cached. The same holds for a
+record (a NamedTuple, a dataclass) built around such a container, `return _Walk(props, ...)`
+with `props` a dict made here: the finder skips a constructor whose name is capitalised after
+any leading underscores (`_Walk`, `Result`) when it holds one, but a record made by a
+lower-case factory still gets through, so read what a candidate returns.
+
+**Repeated decoding of one immutable object.** When several readers in a row (a renderer, a
+shape check, an index builder) each decode the same parsed node that is unhashable or costly to
+hash, a one-slot cache keyed by object identity removes the repeats with bounded memory: keep
+the last node and its result as ONE tuple and read that tuple once into a local, so a
+free-threaded reader never pairs one node with another's result, and return the stored result
+when the stored node `is` the argument. It is correct only when the
+result depends on the node alone (no path, caller or context in it) and the node type is frozen
+all the way down; prove it as any cache (byte-identical output, interleaved timing) and mutate
+the key check to confirm a test goes RED.
 
 The purity check is a heuristic: I/O hidden behind a helper in another module is seen only through
 the helper's name (`read_capped_bytes`, `load_config`). Read each candidate's body and what it
@@ -369,6 +383,13 @@ echo "Hot spots identified"
 `ERROR reading profile ...` line into `hotspots.txt` under that profile's `---` header. Such a
 section is NOT a result: no hotspots there means the profile was never read, not that nothing
 is hot.
+
+**A wait is not work.** Cumulative time that sits in a thread join, a queue get, a lock or an
+executor shutdown (a logging runtime joining its queue worker, `shutdown_default_executor`) is
+time spent waiting for another thread, inflated by the profiler slowing that thread. Before
+reporting such a call as a hot spot, time it with `time.perf_counter()` around the call in
+fresh interpreters without cProfile, on real runs of the program, and report that figure.
+Measured: a logging shutdown charged 91 ms per CLI run under cProfile took 1-2 ms timed directly.
 
 #### 4d: Cross-Reference Candidates with Hot Spots
 
@@ -523,6 +544,10 @@ Wait for the user's response before proceeding to the next finding.
    (if only the cached run failed, the cache changes behaviour - report that instead), or the
    copy could not start: pytest is missing from that interpreter, or `MODULE_NAME` /
    `FUNCTION_NAME` do not import. The ABORT line names which; fix the copy and re-run.
+   When the cached run failed because a caller edits the returned object, report that behaviour
+   change AND measure a second cached arm that hands each caller a copy (`copy.deepcopy` of the
+   cached result in a thin wrapper) before deciding: the verdict is then about speed, and a
+   cache that does not beat the plain function with the copy included is a REJECT.
 4. On RECOMMEND: add `from functools import lru_cache` if missing
 5. Add `@lru_cache` decorator above function
 6. If mutable args (list/dict), convert to tuples or use wrapper
@@ -541,7 +566,10 @@ Append to the `# Performance` section in the project's CLAUDE.md or AGENTS.md:
 - **[Title]**: [user's reason]. [file:line, function_name]
 ```
 
-Create the section or file if it does not exist. Never duplicate entries.
+Create the section or file if it does not exist. Never duplicate entries. When you cannot write
+that file from where you work (an isolated worktree has no copy of an untracked CLAUDE.md, and
+an edit of the main checkout's copy is refused), keep the entries in a scratch file and write
+them into the file once you can reach it; a declined finding never goes unrecorded.
 
 ### Step 7: Final Verification
 
