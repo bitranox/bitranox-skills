@@ -30,6 +30,55 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.6.0]
+
+### Added
+
+- An update whose frame names a key the engine does not manage with no value (a bare `stale:`)
+  removes that stored key. Leaving a key out of the frame still keeps it. `name:`,
+  `description:`, `title:`, `topics:` and `metadata:` are never removed this way, and a key
+  stored bare survives an unedited round trip. factedit's docstring and memory-backend.md describe
+  the route.
+- SessionStart names the levels its self-heal refused (for example a legacy scope block whose
+  TOPICS line does not parse) in one context line, pointing at `memory_engine.py heal --proj
+  <level>`.
+
+### Fixed
+
+- `add` of a slug that another level of the tree points at refuses (`SlugOwnedElsewhere`, exit
+  2, nothing written) even when that fact's body file is missing. After a body was renamed away,
+  an add at another level exited 0 and wrote a new body that the old line then read as its own.
+- An update whose frame indents its `metadata:` sub-keys differently from the stored frame keeps
+  valid YAML: the carried-over sub-keys and an inserted `skill:` or `type:` follow the frame's
+  own indent.
+- `store_manifest.py verify` names a title or hook change made in the same run when all of a
+  fact's lines moved and their number changed.
+- An empty (0-byte) topics.json is an error naming its remedy, instead of silently reading as no
+  topic list and switching placement by topic off.
+- topics.json is checked for content on load: tags must pass the placement tag grammar in stored
+  form, and meanings and the topic count must pass the topics-set-list rules.
+- A topic meaning is measured after trimming, and a topics.json without a version gains
+  `"version": 1` when a level's topics are recorded.
+- `topics-set-list` holds the placement lock from its scan for users of a dropped topic to its
+  save; `set-topics` re-reads the list under that lock, and `set-level-topics` /
+  `set-top-topics` check and write under it, so a fact or level can no longer end up tagged with a
+  topic outside the list.
+- `topics-show --json` prints the JSON error envelope (exit 2) on a topics.json it cannot use or
+  read.
+- A topics-set-list spec or set-topics batch line that is not a JSON object names the expected
+  shape instead of a Python indexing error.
+- A fact whose frontmatter runs past the first 16 KiB has its `topics:` line read whole, so
+  topics-set-list can no longer drop a topic that fact still carries.
+- Setting or clearing a fact's topics removes every `topics:` line in a hand-edited frame, not
+  only the first.
+- A `TOPICS:` line ended by a CR (CRLF, or a lone CR inside an inline `set-scope --scope`) is
+  read as a TOPICS line; before, the TOPICS guard missed it and a second TOPICS line was written.
+- A topic tag can no longer end with a dash or hold two dashes in a row (`python-`, `a--b`).
+- The placement-lock busy message names `set-top-topics` among the possible holders, and
+  meta-dream-tree step 5 lists `topics-set-list`, `set-level-topics` and `set-top-topics` as lock
+  holders and names the verbs that have a dry run.
+- A plan and a test fixture use a neutral placeholder instead of a private directory name.
+
 ## [11.5.2]
 
 ### Changed
