@@ -554,6 +554,25 @@ DISM /Online /Cleanup-Image /RestoreHealth /Source:\\PEER\C$\Windows\WinSxS
 `dism /Get-WimInfo`, never by position - index 1 is Home on a retail ISO and will not repair a Pro
 install.
 
+**Before a repair run with an image as `/Source:`, choose it by the revisions it holds.** A newer
+ISO of the same family is not a superset: superseded revisions live only in the media of the
+release that shipped them, so a newer image can lack them and fail `0x800F0915`, and Windows
+Update may serve none of them (`RestoreHealth` then "succeeds" having repaired 0). Read the
+VERSIONS of the corrupt payloads from the `CSI Payload Corrupt` lines of the CBS log, then check
+each candidate image's `WinSxS` for folders of exactly those versions offline, on Linux, with the
+ISO loop-mounted read-only:
+
+```bash
+wimlib-imagex dir <install.wim> <index> --path=/Windows/WinSxS > winsxs.txt
+grep -c '_10.0.<build>.<rev>_' winsxs.txt          # anything of that revision at all
+grep -F '<folder from a CSI Payload Corrupt line>' winsxs.txt   # the exact payload
+```
+
+Measured on one guest: 3724 corrupt payloads, all of one older revision. Windows Update repaired
+0, the current release's ISO failed `0x800F0915`, and the previous release's ISO held exactly
+those folders and repaired 3724 of 3724. The offline check takes a minute; each wrong repair run
+took an hour.
+
 ### Finding the right installation media for a repair upgrade
 
 An in-place upgrade keeps applications only when the media match the install, so read the target
@@ -871,6 +890,13 @@ Quote a reference figure and you will understate the expensive path and make the
 preparatory step (survey first, repair only what is broken) look not worth running. Calibrate
 against one measured run on the target before sizing a fleet plan, or say the estimate is
 unmeasured.
+
+`DISM /ScanHealth` belongs on the same list: measured 27 and 44 minutes on two nested
+virtualisation guests with VBS and HVCI on. A probe that kills ScanHealth at a timeout has NO
+verdict: it must report "could not run (timeout)", never "health unknown" or "corrupt", or it
+refuses healthy machines (measured: a 1800 s timeout refused two healthy bases that a hand run
+then found clean). The tell is in `dism.log`: the session's start is logged with no
+`Image session has been closed` line after it.
 
 ## Red flags - stop and re-diagnose
 
