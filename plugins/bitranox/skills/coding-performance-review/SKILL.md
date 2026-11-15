@@ -39,7 +39,10 @@ in code. The language skills add their own tools on top of this one; the method 
    arm; a difference smaller than the spread within one arm is noise. On a shared or loaded host
    a wall-clock suite timing cannot resolve a few-percent change: compare user CPU
    (`/usr/bin/time -f %U`) on a serial subset that exercises the hot path, with the old arm in a
-   detached worktree proven to run its own code.
+   detached worktree proven to run its own code. CPU seconds are not immune to load either
+   (shared caches, memory bandwidth, frequency): before taking any figure, check that none of
+   your OWN background jobs (a suite profile, a gate, a build) is still running, and take the
+   before figure inside the same interleaved run as the after, never from an earlier single run.
 5. **Pin the core on a hybrid CPU.** On a CPU with performance and efficiency cores (on Linux,
    compare `cpuinfo_max_freq` across `/sys/devices/system/cpu/cpu*/cpufreq/`), identical code
    spreads widely by core placement alone. Pin each run (`taskset -c N`, `sched_setaffinity`) or
@@ -83,7 +86,20 @@ in code. The language skills add their own tools on top of this one; the method 
     alone there too, since an adopted change may already have removed the work it saves. Measured:
     one cache read went from -1.6 percent alone (noise) to -5.6 percent on the adopted tree; two
     other candidates, +0.2 and -0.5 percent alone, stayed no-gain there.
-12. **Check every speed claim in a diff.** `validate_perf_claims.py` (in this skill's directory)
+12. **Quote a total gain from one A/B of the original against the final code.** Never multiply
+    or chain the gains of staged sessions (stage 1 against base, stage 2 against stage 1): the
+    machine drifts between sessions, so the product carries every session's noise and bias.
+    Run the original and the final tree interleaved in one session and quote that. Measured:
+    two chained stages read "about a quarter less CPU"; the direct run showed a fifth.
+13. **Measure one operation's peak memory with a reset high-water mark** (Linux). A before/after
+    delta of `ru_maxrss` (`getrusage`) or `VmHWM` reads the LIFETIME peak, so growth below an
+    earlier peak (imports, setup) shows as zero. Run the operation in a child process, write `5`
+    to `/proc/self/clear_refs` right before it (this resets the peak to the current RSS), and
+    read `VmHWM` from `/proc/self/status` right after; growth is that figure minus `VmRSS` read
+    just after the reset. Interleave at least two input sizes, three runs each as in step 4, and
+    report growth as a multiple of the input size: about 1x for a 64 MiB and a 128 MiB input
+    means the whole input is held; flat growth across sizes means it streams.
+14. **Check every speed claim in a diff.** `validate_perf_claims.py` (in this skill's directory)
     extracts phrases like "40% faster", "3x speedup" or "reduced latency by 30%" from a unified
     diff's added lines and prints each with its `path:line`. It reaches no verdict: check each
     claim against a measured run and report the ones that are unproven or contradicted.
@@ -106,6 +122,7 @@ it starts to hurt.
 - **Unbounded memory (usually SEVERE).** Reading a big file, a huge query result or a huge log
   fully into memory, or accumulating an unbounded list, map or string, instead of streaming,
   iterating, chunking or paginating. Only a provably small, fixed-size input may be materialised.
+  Size a suspect with Method step 13 before and after the fix.
 - **Unbounded or unsafe input.** Input with no length bound, unvalidated types, or unhandled
   encodings and characters (non-ASCII, emoji, CJK, control characters, binary). Adversarial input
   must not blow up time or memory (catastrophic regex backtracking, quadratic blow-ups,
