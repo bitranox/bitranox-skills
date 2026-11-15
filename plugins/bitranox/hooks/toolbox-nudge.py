@@ -288,8 +288,12 @@ _RULES = [
 # RUN, so the same words inside an authored file are a script being written rather than the chore
 # itself. Unscoped, `git push` sitting in a Write body was the dominant firing of the pushcheck
 # rule. A chore that is equally real when authored belongs in `_ANY_TOOL_RULES` below.
+# Two spellings of one wait: a follow piped into grep, and a loop polling the file with `grep -q`
+# (`until grep -q M F` / `while ! grep -q M F`). The loop needs `grep` as the loop condition's own
+# command, so a readiness probe piped into grep (`until curl ... | grep -q ok`) is not claimed.
 _MARKERWATCH_RULE = (
-    re.compile(r"\btail\s+(?:-n\s*\S+\s+)?-[a-zA-Z]*[fF]\b[^\n|]*\|\s*grep\b"),
+    re.compile(r"\btail\s+(?:-n\s*\S+\s+)?-[a-zA-Z]*[fF]\b[^\n|]*\|\s*grep\b"
+               r"|\b(?:until|while\s+!)\s+grep\b[^\n;|&]*?\s-[a-zA-Z]*q"),
     "markerwatch", "waiting for a log line that says the run finished")
 
 # A Monitor command IS a wait, so the shell rules (`backstop` above all) would fire on every one;
@@ -302,9 +306,15 @@ _SHELL_ONLY_RULES = [
      "about to push - whether this repo is public, and what the push would publish"),
     (_CI_WAIT_RX, "ci_wait", "waiting on CI for the commit you just pushed"),
     # A follow that greps a log for a marker: `tail -f LOG | grep`, the shape a Monitor stream
-    # takes. grep matches a substring anywhere in the line, so a start banner, an echo of the
-    # waiter's own command or a case-folded neighbour answers early. A `until grep -q` poll loop
-    # stays with `backstop`: it is often already anchored (`grep -q '^RC='`), which is the fix.
+    # takes, or an `until grep -q` poll loop. grep matches a substring anywhere in the line, so a
+    # start banner, an echo of the waiter's own command or a case-folded neighbour answers early,
+    # and anchoring the pattern (`grep -q '^RC='`) does not save an APPEND-ONLY log: on 2026-11-13
+    # it matched an earlier run's RC line and returned in 10 s while the paid run went on. The
+    # loop carries `backstop`'s sleep too, and is placed here, before it, because only markerwatch
+    # (`--from end`) answers which run's marker counts. Priced over the transcript corpus: 417 of
+    # 215,093 Bash calls in 59 sessions change answer (410 from backstop, 7 that drew no nudge as
+    # their loop body waits with `timeout 3 tail -f /dev/null` instead of a sleep); a sample of
+    # 25 read back was 25 marker waits on a log or task output.
     _MARKERWATCH_RULE,
     # Three shapes of one chore. A long `sleep`, a detached job, and the two measured as missing:
     # a polling loop whose `sleep` sits inside its body however short (a poll sleeps 3-6 seconds a

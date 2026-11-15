@@ -626,11 +626,41 @@ def test_pushcheck_still_ignores_prose_that_names_a_push():
 
 def test_backstop_sees_a_polling_loop_with_a_short_sleep():
     """The original rule knew only `sleep` of 10 or more; a poll sleeps 3-6 seconds a turn."""
-    assert _bash("until grep -qE '^RC=' /tmp/s.log; do sleep 5; done; tail -4 /tmp/s.log") \
-        == "backstop"
     assert _bash("i=0; until [ -s out.jsonl ] || [ $i -ge 60 ]; do sleep 3; i=$((i+1)); done") \
         == "backstop"
-    assert _bash("until grep -q passed t.output\ndo\n  sleep 5\ndone") == "backstop"
+    assert _bash("until [ -f done.flag ]\ndo\n  sleep 5\ndone") == "backstop"
+
+
+@pytest.mark.parametrize("command", [
+    "until grep -qE '^RC=' /tmp/s.log; do sleep 5; done; tail -4 /tmp/s.log",
+    "until grep -q passed t.output\ndo\n  sleep 5\ndone",
+    "while ! grep -q DONE run.log; do sleep 5; done",
+    "while ! grep -qs DONE run.log; do sleep 5; done",
+    "until grep -q -E 'END|STOPPED' d.log; do sleep 10; done",
+    # The 2026-11-13 shape: an anchored marker on an append-only log, inside `timeout bash -c`.
+    'timeout 21600 bash -c "until grep -q \'^RC=\' $R/whole.log 2>/dev/null; do sleep 60; done"',
+    # No sleep in the body, so the backstop rule never saw it: nothing was nudged at all.
+    'timeout 170 bash -c "until grep -q \'^RC=\' $f; do timeout 3 tail -f /dev/null; done"',
+])
+def test_a_grep_q_wait_loop_routes_to_markerwatch(command):
+    """A loop polling a file with `grep -q` IS a marker wait, and anchoring the pattern does not
+    make it safe: on an append-only log `^RC=` matched an earlier run's line and the wait returned
+    in 10 s while the run went on. markerwatch's `--from end` is the answer, so it outranks the
+    generic backstop pointer the loop's sleep would otherwise draw. Priced over the transcript
+    corpus: 417 of 215,093 Bash calls change answer (410 from backstop, 7 from nothing)."""
+    assert _bash(command) == "markerwatch"
+
+
+@pytest.mark.parametrize("command", [
+    "until curl -s localhost:8080/health | grep -q ok; do sleep 2; done",
+    "grep -q DONE run.log && echo finished",
+    "until ! grep -q LOCK state.txt; do sleep 5; done",
+    "if grep -q '^RC=0' run.log; then echo ok; fi",
+])
+def test_a_grep_q_that_is_not_a_loop_over_a_file_is_not_markerwatch(command):
+    """A readiness probe piped into grep, a one-shot check, and a wait for ABSENCE are not a
+    marker wait on a log."""
+    assert _bash(command) != "markerwatch"
 
 
 def test_backstop_sees_process_absence_read_as_finished():
