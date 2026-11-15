@@ -180,7 +180,9 @@ Subagent (general-purpose):
     written while the gate still runs reads as a finished task. It contains:
     - What you implemented (or what you attempted, if blocked)
     - What you tested and test results, with the gate command and its closing
-      line (and any `[FAIL]` line) quoted verbatim
+      line (and any `[FAIL]` line) quoted verbatim, plus the path and the
+      modification time (`stat -c %y <file>`) of the file you read that line
+      from: a gate file left by an earlier task reads exactly like a fresh pass
     - **TDD Evidence** (if TDD was required for this task):
       - RED: command run, relevant failing output before implementation, and why the failure was expected
       - GREEN: command run and relevant passing output after implementation

@@ -379,6 +379,11 @@ Implementer subagents report one of four statuses. Handle each appropriately:
 
 **DONE:** Generate the review package (`python3 "$CLAUDE_PLUGIN_ROOT/skills/process-agents-subagent-driven-development/scripts/review_package.py" BASE HEAD`, run from the repository under review (it resolves BASE/HEAD and its output directory from the current working directory)  -  it prints the unique file path it wrote; BASE is the commit you recorded before dispatching the implementer  -  never `HEAD~1`, which silently drops all but the last commit of a multi-commit task), then dispatch the task reviewer with the printed path.
 
+Before that, check the gate evidence is this task's: the report quotes the modification time of
+the file its gate line came from, and that time must be later than the BASE commit
+(`git log -1 --format=%ci BASE`). An older file is an earlier task's gate, and it reads exactly
+like a fresh pass: re-run the gate yourself, or send the task back, before the review.
+
 **DONE_WITH_CONCERNS:** The implementer completed the work but flagged doubts. Read the concerns before proceeding. If the concerns are about correctness or scope, address them before review. If they're observations (e.g., "this file is getting large"), note them and proceed to review.
 
 **NEEDS_CONTEXT:** The implementer needs information that wasn't provided. Provide the missing context and re-dispatch.
@@ -395,6 +400,13 @@ Implementer subagents report one of four statuses. Handle each appropriately:
 item to a background implementer or fixer that has reported, check for its commit before waiting
 on it: an agent that went idle can leave a queued item unacted on. No commit and no activity means
 re-send the item in full.
+
+**An action refused for a subagent is not yours to run for it.** When a subagent reports that a
+permission check (auto mode's classifier, a hook) refused an edit, a command or a history rewrite
+outside its assigned files, and hands back a patch or the command instead, do not apply it on its
+behalf: that launders the refused action through you. Put it to your human partner as one
+question (apply it, drop it, or they apply it themselves). After a go, verify it before committing:
+read the whole diff, check it touches only the files it names, and run the full gate.
 
 **A claim in a report is the subagent's own inference.** "X is redundant", "Y is orphaned",
 "Z is the cause", "tool T deletes an empty variable": before you relay such a claim to your human
@@ -491,6 +503,11 @@ final whole-branch review. When you fill a reviewer template:
   plan text, ask which governs, and do not dispatch that fix without
   asking (in a headless run, "When No Human Can Answer" decides it
   instead). Never dismiss a finding because the plan mandates it.
+- Before dispatching any fix, check the remedy it prescribes against what your human partner
+  asked for in this feature: the request or backlog line the work came from, and
+  `USER-DECISIONS.jsonl` at the main checkout's root. A remedy that removes, suppresses or changes
+  an output the user required is the user's decision, decided as for a fix that changes the plan
+  text, even when the finding itself is real.
 - A further instance of a defect CLASS your human partner already ordered
   fixed in this pass is in scope, even when the order named only two
   instances: fix it in the same round or ask the one question. Recording it
@@ -548,8 +565,9 @@ names), and a defect BETWEEN tasks (each task correct alone, wrong together: sta
 another consumes, an input one task produces that another cannot handle). The final review exists
 for those, so it reads more than the plan.
 
-Dispatch it to a fresh `opus` agent (effort `medium`, like every review) after the last task's
-review is approved, with the review package and these inputs, each by path:
+Dispatch it to a fresh `opus` agent (or one per system, as below; effort `medium`, like every
+review) after the last task's review is approved, with the review package and these inputs, each
+by path:
 
 - the SOURCE DESIGN the plan implements: the document its header or Global Constraints names as
   its source. Read it in full. If the plan names none, say so in the dispatch.
@@ -558,6 +576,16 @@ review is approved, with the review package and these inputs, each by path:
 - `.bitranox/sdd/progress.md` (or this plan's `progress-<plan>.md`), `.bitranox/sdd/decisions.md`
   when present, and `EXECUTION-USER-REVIEW.md` when present: the decisions and amendments, and
   the Minor findings the task reviews deferred to this review.
+
+When the branch touches several external systems (a database and a printer, a network service and
+a file format), split this review by system: one reviewer per side, each with the same inputs and
+told to probe the edges the plan never named on its side, such as a different service answering on
+the expected port, non-ASCII or out-of-codepage credentials and text, CPU or time spent before a
+size cap fires, and every exception type the system's library can raise. Every task's tests replay
+the plan's own model of each system, so a defect at an edge the plan never named passes all of
+them. Every reviewer reports DEFECTS; give the PLAN CHANGES part of instruction 2 and the Minor
+triage of instruction 3 to one of them only. Merge their DEFECTS into one list before the
+confirmation step below.
 
 Its instructions, in the dispatch:
 
@@ -670,6 +698,17 @@ and is re-read on every later turn. Hand artifacts over as files:
   Constraints. The reviewer reads the same brief, so it judges against the same words. A plan's
   one-line summary of an option drops qualifiers, and code built and reviewed against the summary
   passes review while contradicting the decision.
+- **A requirement you add from a source document** (the design, a spec section) quotes its
+  sentence verbatim with the section it comes from, never your restatement: the implementer builds
+  to your wording, so a restatement that shifts one word ("the connection is marked broken"
+  restated as "that direction is broken") becomes the design. Tell the task reviewer to check each
+  requirement the dispatch adds against the text it cites, not against the dispatch.
+- **A test you require beyond the brief names the defect it must catch, never its shape.** For a
+  test of a wiring or a choice (which collaborator gets built, which branch runs), state the mutant
+  it must kill ("with the stand-in still wired, the test fails") and leave the method to the
+  implementer. A prescribed method is followed literally and can produce a test that asserts its
+  own setup and stays green with the wiring broken; the stated mutant is also what the reviewer
+  checks the test against.
 - **A requirement you add beyond the brief that names an observable** (assert a flag, a status
   bit, a field): first grep that the code under change can PRODUCE it. A requirement copied from a
   reference implementation is a premise, not a fact about this code. If the mechanism is missing,
@@ -720,6 +759,10 @@ and is re-read on every later turn. Hand artifacts over as files:
     deviation the review rated Minor gets no fix round of its own, so for it
     correct the later tasks - and record the deviation in the progress ledger
     beside the task;
+  - a fix round ADDED something a later task must consume or carry on (a new counter or field, a
+    new session rule): write it into that later task's plan section in the same turn the fix
+    lands. That task's code block in the plan does not carry it, so a brief generated later from
+    the plan drops it;
   - a decision changed how work is DONE (the gate command, a lock, the commit
     form, the test invocation), wherever it was recorded: grep the Global
     Constraints for the retired mechanism and replace it with the new one in
