@@ -2117,16 +2117,16 @@ Targets (from the review; each confirmed against the target level's PLACE-HERE d
 moving - read its `CLAUDE.local.md` head):
 
 ```text
-feedback-public-push-review-and-humanize                                   -> bitranox-systems/provmm-umbrella
+feedback-public-push-review-and-humanize                                   -> infra/vm-umbrella
 feedback-iterate-before-you-cap-datamax-dpl-builds-labels-one-by-one       -> projects/public/apps/utils/datamax-dpl
-feedback-forward-the-caller-s-identity-across-an-ssh-re-run-of-the-harness -> bitranox-systems/provmm-umbrella
-feedback-measure-a-queueing-change-never-predict-it                        -> bitranox-systems/provmm-umbrella
+feedback-forward-the-caller-s-identity-across-an-ssh-re-run-of-the-harness -> infra/vm-umbrella
+feedback-measure-a-queueing-change-never-predict-it                        -> infra/vm-umbrella
 feedback-key-a-violation-detector-on-state-at-the-instant-never-on-whether-an-event-ever-happened -> projects/public/KI
 feedback-an-unused-feature-its-users-understood-needs-a-trigger-not-more-wording -> projects/public/KI
-reference-two-concurrent-rustup-installs-of-one-toolchain-both-roll-back   -> bitranox-systems/provmm-umbrella
-project-rebasing-onto-a-new-upstream-test-module-diff-test-names-before-keeping-both -> bitranox-systems/provmm-umbrella
-reference-socket-recv-fds-ignores-its-flags-received-fds-arrive-inheritable -> bitranox-systems/provmm-umbrella
-reference-wsl-exe-prints-utf-16-over-ssh-set-wsl-utf8-1                   -> bitranox-systems/provmm-umbrella
+reference-two-concurrent-rustup-installs-of-one-toolchain-both-roll-back   -> infra/vm-umbrella
+project-rebasing-onto-a-new-upstream-test-module-diff-test-names-before-keeping-both -> infra/vm-umbrella
+reference-socket-recv-fds-ignores-its-flags-received-fds-arrive-inheritable -> infra/vm-umbrella
+reference-wsl-exe-prints-utf-16-over-ssh-set-wsl-utf8-1                   -> infra/vm-umbrella
 reference-judge-windows-domain-membership-by-partofdomain-never-by-the-domain-name -> projects  (medium confidence: ask)
 ```
 

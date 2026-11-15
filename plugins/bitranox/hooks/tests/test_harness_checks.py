@@ -97,7 +97,7 @@ def test_personal_skills_dir_is_not_shipped(tmp_path):
 
 def test_project_skills_dir_is_not_shipped(tmp_path):
     home = tmp_path / "home"
-    proj = tmp_path / "work" / "provmm-umbrella" / ".claude"
+    proj = tmp_path / "work" / "vm-umbrella" / ".claude"
     assert hc.is_shipped(_skills(proj, "provmm-build"), home=home) is False
 
 
