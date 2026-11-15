@@ -1444,3 +1444,155 @@ def test_a_battery_with_one_arm_lacking_tests_names_that_arm(tmp_path):
     proc = run(p, "--battery", str(spec))
     assert proc.returncode == 2
     assert "'bare'" in proc.stderr + proc.stdout
+
+
+# --------------------------------------------------------------------------
+# One node id per --test / per spec entry; pytest's usage error named as one; logs never clobbered
+# --------------------------------------------------------------------------
+# A space-separated list of test files given as ONE --test reached pytest as one path and failed
+# 'file or directory not found', which read like a missing file. A battery spec whose "tests" was
+# one string of paths and pytest options made the baseline exit 4 (usage error) and the tool said
+# the baseline was RED, which read as failing tests. And every separate --mutate run that shared a
+# --log-dir wrote 00-arm.log, so only the last arm's log survived.
+
+
+OTHER_TEST = '''\
+import sys
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent))
+from src import classify
+
+
+def test_positive():
+    assert classify(1) == "positive"
+'''
+
+
+def _two_test_files(tmp_path):
+    p = make_project(tmp_path)
+    (p / "test_other.py").write_text(OTHER_TEST, encoding="utf-8")
+    (p / "old.txt").write_text('return "positive"', encoding="utf-8")
+    (p / "new.txt").write_text('return "POS"', encoding="utf-8")
+    return p
+
+
+def test_two_paths_in_one_test_value_are_refused_naming_the_fix(tmp_path):
+    p = _two_test_files(tmp_path)
+    proc = run(p, "--mutate", "src.py", "old.txt", "new.txt",
+               "--test", "test_src.py test_other.py")
+    assert proc.returncode == 2, (proc.stdout, proc.stderr)
+    assert "repeat --test" in proc.stderr, proc.stderr
+    assert (p / "src.py").read_text(encoding="utf-8") == SOURCE
+
+
+def test_a_repeated_test_runs_every_named_node_as_one_arm(tmp_path):
+    """Two branches broken, one caught by each file: both must be named, not only the last
+    --test, which is all a plain store option keeps."""
+    p = _two_test_files(tmp_path)
+    (p / "old2.txt").write_text('return "zero"', encoding="utf-8")
+    (p / "new2.txt").write_text('return "ZERO"', encoding="utf-8")
+    proc = run(p, "--mutate", "src.py", "old.txt", "new.txt",
+               "--mutate", "src.py", "old2.txt", "new2.txt",
+               "--test", "test_src.py", "--test", "test_other.py", "--json")
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    data = json.loads(proc.stdout)["data"]
+    assert data["verdict"] == "killed"
+    assert sorted(data["caught_by"]) == ["test_other.py::test_positive",
+                                         "test_src.py::test_zero"]
+
+
+@pytest.mark.parametrize("nodeid", [
+    "tests/t.py::test_x[a b]",
+    "tests/t.py::TestC::test_y[x-1]",
+    "tests/dir with space/t.py",
+])
+def test_a_space_that_cannot_split_two_paths_is_one_node(nodeid):
+    """A parametrize id may hold a space; so may a directory name that exists. Neither is two
+    node ids."""
+    assert M.node_id_problem(nodeid, exists=lambda path: path == "tests/dir with space/t.py") is None
+
+
+@pytest.mark.parametrize("nodeid,needle", [
+    ("tests/a.py tests/b.py", "repeat"),
+    ("tests/a.py -q -x", "option"),
+    ("-q", "option"),
+    ("", "empty"),
+])
+def test_a_value_holding_several_ids_or_options_is_named(nodeid, needle):
+    assert needle in (M.node_id_problem(nodeid, exists=lambda path: False) or ""), nodeid
+
+
+@pytest.mark.parametrize("tests", [
+    "test_src.py test_other.py",
+    ["test_src.py", "-q", "-x"],
+    "test_src.py -q -x -p no:randomly",
+])
+def test_a_battery_spec_with_paths_and_options_in_tests_is_refused(tmp_path, tests):
+    p = _two_test_files(tmp_path)
+    spec = p / "battery.json"
+    spec.write_text(json.dumps({"tests": tests, "arms": [
+        {"label": "zero", "file": "src.py", "old": 'return "zero"', "new": 'return "ZERO"'}]}),
+        encoding="utf-8", newline="")
+    proc = run(p, "--battery", str(spec))
+    assert proc.returncode == 2, (proc.stdout, proc.stderr)
+    assert "refused, nothing written" in proc.stderr and "tests" in proc.stderr, proc.stderr
+    assert "baseline is RED" not in proc.stderr
+
+
+def test_a_baseline_pytest_usage_error_is_named_as_one(tmp_path):
+    """exit 4 is pytest refusing its arguments, not tests failing."""
+    p = make_project(tmp_path)
+    spec = _battery(p, [{"label": "zero", "file": "src.py", "old": 'return "zero"',
+                         "new": 'return "ZERO"'}], tests=("no_such_test_file.py",))
+    proc = run(p, "--battery", str(spec), "--json")
+    assert proc.returncode == 2, (proc.stdout, proc.stderr)
+    assert "usage error" in proc.stderr and "baseline is RED" not in proc.stderr, proc.stderr
+    baseline = json.loads(proc.stdout)["data"]["baseline"]
+    assert baseline["pytest_returncode"] == 4 and "usage error" in baseline["failure"]
+
+
+def test_a_single_arm_pytest_usage_error_is_named_as_one(tmp_path):
+    p = make_project(tmp_path)
+    (p / "old.txt").write_text('return "zero"', encoding="utf-8")
+    (p / "new.txt").write_text('return "ZERO"', encoding="utf-8")
+    proc = run(p, "--mutate", "src.py", "old.txt", "new.txt", "--test", "no_such_test_file.py")
+    assert proc.returncode == 2, (proc.stdout, proc.stderr)
+    assert "usage error" in proc.stderr, proc.stderr
+
+
+def test_separate_runs_sharing_a_log_dir_keep_every_log(tmp_path):
+    p = make_project(tmp_path)
+    (p / "old.txt").write_text('return "zero"', encoding="utf-8")
+    (p / "new.txt").write_text('return "ZERO"', encoding="utf-8")
+    logs = tmp_path / "logs"
+    written = []
+    for test in ("test_src.py::test_zero", "test_src.py::test_negative"):
+        proc = run(p, "--mutate", "src.py", "old.txt", "new.txt", "--test", test,
+                   "--log-dir", str(logs), "--json")
+        assert proc.returncode in (0, 1), (proc.stdout, proc.stderr)
+        written.append(Path(json.loads(proc.stdout)["data"]["log"]))
+    assert written[0] != written[1]
+    assert all(path.exists() for path in written)
+    assert "test_zero" in written[0].read_text(encoding="utf-8")
+    assert "test_negative" in written[1].read_text(encoding="utf-8")
+
+
+def test_the_same_arm_twice_into_one_log_dir_does_not_overwrite(tmp_path):
+    p = make_project(tmp_path)
+    (p / "old.txt").write_text('return "zero"', encoding="utf-8")
+    (p / "new.txt").write_text('return "ZERO"', encoding="utf-8")
+    logs = tmp_path / "logs"
+    argv = ("--mutate", "src.py", "old.txt", "new.txt", "--test", "test_src.py::test_zero",
+            "--log-dir", str(logs), "--json")
+    first = Path(json.loads(run(p, *argv).stdout)["data"]["log"])
+    second = Path(json.loads(run(p, *argv).stdout)["data"]["log"])
+    assert first != second and first.exists() and second.exists()
+
+
+def test_the_text_report_names_the_log_it_wrote(tmp_path):
+    p = make_project(tmp_path)
+    (p / "old.txt").write_text('return "zero"', encoding="utf-8")
+    (p / "new.txt").write_text('return "ZERO"', encoding="utf-8")
+    logs = tmp_path / "logs"
+    proc = run(p, "--mutate", "src.py", "old.txt", "new.txt", "--test", "test_src.py::test_zero",
+               "--log-dir", str(logs))
+    assert f"log: {logs}" in proc.stdout, proc.stdout

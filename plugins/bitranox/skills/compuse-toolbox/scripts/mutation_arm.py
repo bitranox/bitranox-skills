@@ -95,6 +95,19 @@ the tree), `cd DIR`, and start the tool there with `--python PATH` naming an int
 the project's dependencies. The mutation and its restore happen in the copy; the real tree is
 never written, which also lets several arms run in parallel copies without racing on one file.
 
+ONE node id per `--test` (repeat it for several; they run together as one arm) and per entry of a
+spec's `tests` list. pytest reads a value as ONE path, so `--test "tests/a.py tests/b.py"` failed
+`file or directory not found`, which read like a missing file, and a spec whose `tests` was one
+string of paths and pytest options made the baseline exit 4. A value holding several
+space-separated paths, or a pytest option, is refused before anything is written, unless it names
+a path that exists (a directory with a space in its name) or the space sits inside a parametrize
+id's brackets. A pytest that exits 4 (a usage error: a missing path, a bad option) is reported as
+that, never as a red baseline or a failing test, and exit 5 as having collected nothing.
+
+`--log-dir` never overwrites a log: each arm's file is named after its index and its label (the
+node ids for a single arm), and a name already taken gets a `-2`, `-3` suffix, so separate runs
+sharing one directory keep every arm's log. The text report prints the path it wrote.
+
 Sources and anchor files are UTF-8 (an anchor file's BOM is ignored); a CRLF source keeps its
 CRLF while mutated, and an LF anchor file matches it.
 
@@ -391,6 +404,58 @@ def _reason_after_balanced_id(rest: str) -> str | None:
     return None
 
 
+def node_id_problem(nodeid: str, *, exists=os.path.exists) -> str | None:
+    """Why ``nodeid`` is not ONE pytest node id, or None when it is. Never raises.
+
+    A space alone is no evidence: a parametrize id may hold one inside its brackets, and a
+    directory may carry one in its name, so a value whose path part exists is always accepted.
+    """
+    if not nodeid.strip():
+        return "an empty node id"
+    if nodeid.lstrip().startswith("-"):
+        return (f"{nodeid!r} is a pytest option, not a node id: this tool runs pytest with its own "
+                f"flags, so drop it")
+    if exists(nodeid.split("::", 1)[0]):
+        return None
+    tokens = re.sub(r"\[[^\]]*\]", "", nodeid).split()
+    if len(tokens) < 2:
+        return None
+    if any(token.startswith("-") for token in tokens[1:]):
+        return (f"{nodeid!r} carries pytest options: give node ids only, since this tool runs "
+                f"pytest with its own flags")
+    return (f"{nodeid!r} holds {len(tokens)} space-separated paths, which pytest reads as ONE "
+            f"path ('file or directory not found'): repeat --test once per node id, or list each "
+            f"as its own entry of the spec's tests")
+
+
+def check_node_ids(nodeids, what: str) -> list[str]:
+    """``nodeids`` unchanged when every one is a single node id; ValueError naming the first that
+    is not."""
+    for nodeid in nodeids:
+        problem = node_id_problem(nodeid)
+        if problem is not None:
+            raise ValueError(f"{what}: {problem}")
+    return list(nodeids)
+
+
+#: pytest's own exit codes for "did not run the tests asked for", as distinct from tests failing.
+_PYTEST_DID_NOT_RUN = {4: "pytest usage error (exit 4): it refused its arguments - check the "
+                          "tests list (a missing path, an option given as a node id)",
+                       5: "pytest collected nothing (exit 5): no test matched the tests list"}
+
+
+def did_not_run_reason(returncode: int | None, output: str) -> str | None:
+    """The reason for a pytest exit that means the tests never ran (4, 5), else None. PURE.
+
+    pytest's own ``ERROR:`` line is appended, since it names the path or option it refused.
+    """
+    reason = _PYTEST_DID_NOT_RUN.get(returncode)
+    if reason is None:
+        return None
+    said = next((line.strip() for line in output.splitlines() if line.startswith("ERROR:")), "")
+    return f"{reason}; pytest: {said}" if said else reason
+
+
 def verdict_for(returncode: int | None, output: str | None = None) -> str:
     """What a pytest exit code means for a mutation arm.
 
@@ -650,7 +715,7 @@ def run_arm(planned, nodeid, *, runner=None, timeout=None, command=False, log_pa
         verdict, reason = command_verdict(returncode, output)
     else:
         verdict = verdict_for(returncode, output)
-        reason = failure_reason(output) or (
+        reason = did_not_run_reason(returncode, output or "") or failure_reason(output) or (
             runner_hint(output, runner) if verdict == "inconclusive" else None)
     return {
         "mutations": [{"path": str(p)} for p, _, _ in planned],
@@ -778,9 +843,10 @@ def _parse(argv):
     ap.add_argument("--revert", nargs=2, action="append", metavar=("FILE", "REV"),
                     help="repeatable; replace FILE with its text at REV for the arm (applied "
                          "before any --mutate), restored like a mutation")
-    ap.add_argument("--test", default=None, metavar="NODEID",
-                    help="the pytest node id to run (required with --mutate; with --battery it "
-                         "replaces the spec's tests)")
+    ap.add_argument("--test", action="append", default=None, metavar="NODEID",
+                    help="ONE pytest node id to run (repeatable: every one runs in the same arm; "
+                         "required with --mutate; with --battery it replaces the spec's tests). "
+                         "A value holding several space-separated paths is refused")
     ap.add_argument("--battery", default=None, metavar="SPEC.json",
                     help="run every labelled arm in this JSON spec, baseline green first and last")
     ap.add_argument("--timeout", type=float, default=None, metavar="SECONDS",
@@ -838,6 +904,11 @@ def _main_single(args, runner, source) -> int:
                        as_json=args.json)
     if not args.test and not command:
         return _refuse("--test is required with --mutate or --revert", as_json=args.json)
+    try:
+        tests = None if command else check_node_ids(args.test, "--test")
+    except ValueError as exc:
+        return _refuse(f"refused, nothing written - {exc}", as_json=args.json)
+    shown = args.cmd if command else " ".join(tests)
 
     try:
         reverted, reverts = plan_reverts(args.revert or [])
@@ -850,9 +921,10 @@ def _main_single(args, runner, source) -> int:
         return _refuse(f"refused, nothing written - {exc}", as_json=args.json)
 
     try:
-        report = run_arm(planned, args.cmd if command else args.test, runner=runner,
+        report = run_arm(planned, args.cmd if command else
+                         (tests[0] if len(tests) == 1 else tests), runner=runner,
                          timeout=args.timeout, command=command,
-                         log_path=_arm_log_path(args.log_dir, 0, "arm"))
+                         log_path=_arm_log_path(args.log_dir, 0, "cmd" if command else shown))
     except (AnchorError, OSError) as exc:
         return _refuse(f"refused before mutating - {exc}", as_json=args.json)
     report["runner"], report["runner_source"] = runner, source
@@ -864,9 +936,11 @@ def _main_single(args, runner, source) -> int:
     else:
         for item in reverts:
             print(f"reverted {item['path']} to {item['rev']} ({item['sha']})")
-        print(f"{report['verdict'].upper()}: {args.cmd if command else args.test}")
+        print(f"{report['verdict'].upper()}: {shown}")
         if report["failure"]:
             print(f"  reason: {report['failure']}")
+        if report["log"]:
+            print(f"  log: {report['log']}")
         _print_output_tail(report)
         _explain_unfinished(report, runner)
     return outcome_code(report)
@@ -875,12 +949,22 @@ def _main_single(args, runner, source) -> int:
 def _arm_log_path(log_dir, index, label):
     """Where this arm's output goes, the directory created; None without --log-dir.
 
-    Index-prefixed: two labels can differ only in characters the slug replaces.
+    Index-prefixed: two labels can differ only in characters the slug replaces. A name already
+    taken gets the first free ``-N`` suffix and is claimed with an exclusive create, so separate
+    runs sharing one directory - each starting at index 0 - never overwrite each other's log.
     """
     if log_dir is None:
         return None
     Path(log_dir).mkdir(parents=True, exist_ok=True)
-    return Path(log_dir) / f"{index:02d}-{re.sub(r'[^A-Za-z0-9._-]', '_', label)}.log"
+    stem = f"{index:02d}-{re.sub(r'[^A-Za-z0-9._-]', '_', label)[:80]}"
+    for suffix in ("", *(f"-{n}" for n in range(2, 10_000))):
+        candidate = Path(log_dir) / f"{stem}{suffix}.log"
+        try:
+            with candidate.open("x", encoding="utf-8"):
+                return candidate
+        except FileExistsError:
+            continue
+    raise OSError(f"no free log name for {stem!r} in {log_dir}")
 
 
 def _print_output_tail(arm, indent="  ") -> None:
@@ -907,6 +991,8 @@ def _explain_unfinished(report, runner) -> None:
     if report["verdict"] == "inconclusive":
         print(f"  pytest exit {report['pytest_returncode']} - the arm did not run",
               file=sys.stderr)
+        if report["pytest_returncode"] in _PYTEST_DID_NOT_RUN:
+            print(f"  {_PYTEST_DID_NOT_RUN[report['pytest_returncode']]}", file=sys.stderr)
         if report["pytest_returncode"] == 1:
             print("  no FAILED/ERROR line in pytest's summary: does "
                   f"{runner[0]} have pytest and the project? Name the project's interpreter "
@@ -956,7 +1042,10 @@ def _str_list(value, what: str) -> list[str]:
     if not isinstance(items, list) or not items or not all(
             isinstance(item, str) and item.strip() for item in items):
         raise BatteryError(f"{what} must be a node id or a non-empty list of them")
-    return list(items)
+    try:
+        return check_node_ids(items, what)
+    except ValueError as exc:
+        raise BatteryError(str(exc)) from None
 
 
 def _arm_mutations(arm: dict, label: str) -> list[tuple[str, str, str]]:
@@ -1031,8 +1120,8 @@ def _baseline(runner, tests, timeout, command=False) -> dict:
     elif command:
         failure = command_verdict(returncode, output)[1] or f"exit {returncode}"
     else:
-        failure = (failure_reason(output) or runner_hint(output, runner)
-                   or f"pytest exit {returncode}")
+        failure = (did_not_run_reason(returncode, output) or failure_reason(output)
+                   or runner_hint(output, runner) or f"pytest exit {returncode}")
     return {"green": returncode == 0, "pytest_returncode": returncode, "failure": failure}
 
 
@@ -1081,7 +1170,7 @@ def _main_battery(args, runner, source) -> int:
         command = args.cmd is not None
         if command and args.test:
             raise BatteryError("--test names a pytest node; with --cmd the command itself is the arm: drop --test")
-        tests, arms_spec = load_battery(args.battery, [args.test] if args.test else None,
+        tests, arms_spec = load_battery(args.battery, args.test or None,
                                         need_tests=not command)
         arms = []
         for label, mutations, arm_tests in arms_spec:
@@ -1101,7 +1190,11 @@ def _main_battery(args, runner, source) -> int:
     code = battery_code(result)
     for arm in result["arms"]:
         _warn_restore(arm)
-    if not result["baseline"]["green"]:
+    if not result["baseline"]["green"] and not command and \
+            result["baseline"]["pytest_returncode"] in _PYTEST_DID_NOT_RUN:
+        print(f"mutation_arm: the baseline did not run ({result['baseline']['failure']}); no arm "
+              f"was run - this is not a red baseline", file=sys.stderr)
+    elif not result["baseline"]["green"]:
         print(f"mutation_arm: the baseline is RED before any mutation "
               f"({result['baseline']['failure']}); no arm was run", file=sys.stderr)
     elif not (result["final_baseline"] or {}).get("green"):

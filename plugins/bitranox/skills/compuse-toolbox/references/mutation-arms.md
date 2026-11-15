@@ -24,8 +24,13 @@ Each of these has produced a verdict that looked right and meant nothing.
 - **A whole-suite arm must hand pytest the source tree too.** Under `--doctest-modules`, doctests are
   collected only from the paths pytest is given, so `tests` alone never runs them and an invariant
   held only by a doctest reads as SURVIVED. Name both as the arm's tests (`"tests": ["tests",
-  "src"]` in a `--battery` spec; `--test` takes a single node id) and check the collected count
+  "src"]` in a `--battery` spec, or `--test tests --test src`) and check the collected count
   includes the doctest items before reading a survivor as a gap.
+- **Name the FAST nodes in a battery's `tests` when the module also holds slow tests.** pytest
+  does not stop at the first failure, so every arm, and the baseline before and after, pays for
+  the whole module: a module with slow real-data tests ran 29 arms past a 580-second command
+  limit, while the same arms on named fast node ids took seconds. List the node ids that exercise
+  the mutated code (`tests/t.py::test_a`), not the file.
 - **A NON-pytest suite runs through `--cmd "<command>"`** (`cargo test -p crate`, `make check`),
   split without a shell. Its exit decides the arm: 0 survived, a failure killed, and a mutant that
   does not BUILD (or a command that cannot run) INCONCLUSIVE, because a compile error is not a test
