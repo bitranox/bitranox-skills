@@ -168,10 +168,34 @@ If the host has no SSH server yet, walk the user through enabling one (ask the O
 Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
 Start-Service sshd
 Set-Service -Name sshd -StartupType Automatic
-# open the firewall if the rule is missing:
-New-NetFirewallRule -Name sshd -DisplayName 'OpenSSH Server (sshd)' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22
+# the install's rule may EXIST but cover only the Private profile; enable it for every profile:
+if (Get-NetFirewallRule -Name OpenSSH-Server-In-TCP -ErrorAction SilentlyContinue) {
+    Set-NetFirewallRule -Name OpenSSH-Server-In-TCP -Enabled True -Profile Any
+} else {
+    New-NetFirewallRule -Name OpenSSH-Server-In-TCP -DisplayName 'OpenSSH Server (sshd)' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22 -Profile Any
+}
 ```
 The default ssh shell on Windows is `cmd.exe`; to make it PowerShell set the `DefaultShell` value under `HKLM:\SOFTWARE\OpenSSH`.
+
+**Port 22 times out (filtered) while `sshd` is running: check the rule's PROFILE before anything
+else.** Observed on Windows Server 2025: `OpenSSH-Server-In-TCP` already existed but was scoped to
+the Private profile, and a fresh NIC outside a domain is Public, so a "create the rule if it is
+missing" step found it and changed nothing. Compare
+`Get-NetFirewallRule -Name OpenSSH-Server-In-TCP | Select-Object Enabled, Profile` with
+`Get-NetConnectionProfile`, and enable it with `-Profile Any` as above.
+
+**Key-only login needs two settings, and a restart from outside the session.** In
+`C:\ProgramData\ssh\sshd_config` set `PasswordAuthentication no` AND
+`KbdInteractiveAuthentication no`: with only the first, sshd was observed still offering
+keyboard-interactive, which prompts for the same password. Confirm a key login works first: for a
+member of Administrators the stock config reads the key from
+`C:\ProgramData\ssh\administrators_authorized_keys`, not the profile's `.ssh`. Then restart sshd
+from the console, WinRM (`Invoke-Command`) or a one-shot SYSTEM scheduled task (registered with no
+trigger, as in `bitranox:coding-python-pwshpy`), never from inside an ssh session:
+`Restart-Service sshd` run there ends with the session it runs in, even as a detached
+`Start-Process`, and the restart never completes. Verify from the client with
+`ssh -o PreferredAuthentications=none user@host`: its refusal lists the methods still offered, and
+`Permission denied (publickey)` means keys only.
 
 **In `cmd.exe`, a digit right before `>` is taken as part of the redirection.** Recording an exit
 code with `echo RC=%ERRORLEVEL%>> rc.txt` expands to `echo RC=0>> rc.txt`, which cmd reads as a
