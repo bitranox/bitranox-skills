@@ -191,9 +191,36 @@ After writing the complete plan, look at the spec with fresh eyes and check the 
 
 **7. Memory bound:** For every input whose size the caller controls, the plan states what the code holds per item, what grows with the count, and the peak, and the task that builds that path prescribes a test measuring peak memory at two input sizes, the larger not scaling with the input (Python's tracemalloc sees only Python objects, so measure the child's maximum RSS where a driver or native code allocates). A step that collects every item before acting, or bounds memory only with a count limit, is a defect: rewrite it to iterate (a check pass that discards each result, then an action pass, still checks everything before acting), give each item a byte limit, and keep anything that grows with the input (errors, findings, caches) to the first N plus a total. The one exception is an output that must be built in memory as one piece (a complete file that can be streamed does not qualify): there the plan holds it behind a byte limit with a typed refusal. Where items move to a temp-file spool, the test measures the spool's bytes per item too, since a `/tmp` on tmpfs is memory and a flat peak RSS hides it. If the design never answered the question, answer it now with bitranox:process-plan-brainstorming's data-flow rule before tasks build on the structure.
 
+Bound TIME the same way. A check that refuses past a cap (a size, a count) stops reading the input
+as soon as the cap is passed; one that walks the whole caller-sized input before it compares is
+unbounded CPU while its memory stays flat, so a memory test passes it. Prescribe a test that feeds
+a counting generator far longer than the cap and asserts the items read stop at the cap plus one,
+not a wall-clock budget.
+
 **8. Each task stands on its own:** Every task's code imports, collects and lints with only that task and the ones before it applied. A task adds only the imports its own code uses: an import block written in Task 1 for modules later tasks create needs placeholder modules, draws unused-import lint findings, and fails test collection. A new helper module under `tests/` is made importable in the task that creates it, the way the repo's pytest configuration needs (under `--import-mode=importlib` the `tests/` directory is not on `sys.path`, so a `conftest.py` that inserts it).
 
+Prove it by rebuilding each task's state alone, above all where one file's code is split across
+two tasks: in a scratch copy apply that task and the ones before it, remove every later task's
+additions, and run the lint, format check, type check and that task's tests there. A whole-tree
+gate with every task applied cannot see a defect only the earlier state has, such as a format
+error at the point where a later task's code would have continued the file.
+
 **9. Run the plan's code:** When the plan carries complete code and tests, extract each task's blocks into a scratch copy of the repo in task order and run that task's prescribed tests and lint, instead of only reading them. Where a task prescribes a mutation battery, run it against the extracted code too (bitranox:compuse-toolbox `mutation_arm.py --battery`): every arm must turn a test RED, and a surviving arm is either an equivalent mutant (drop the arm and the redundant line it mutated) or a test whose input passes under both the right and the wrong code (fix the input). Green tests on the extracted code tell neither apart. A test that asserts a substring of the output (a flag name, a word) must fail with the code it guards deleted: check that no other path in the same scenario prints that substring, and prescribe the exact message where one does. Measured: running extracted code found a wrong assertion that reading had missed; a plan whose battery was never run shipped an equivalent mutant and a length test that could not fail, two extra fix rounds; two substring tests passed with their guarded code deleted because another path always warned with the same flag name.
+
+Three ways the run can check the wrong thing:
+
+- A mutation battery split per task names only the test files and test functions that exist once
+  that task is applied. An arm that relies on a later task's test rests its RED on a test the
+  implementer of this task has not written yet.
+- A scratch copy run on the main checkout's virtualenv, where the package is installed editable,
+  imports the MAIN checkout's source: import-linter (and pytest, unless its configuration puts the
+  scratch `src` on the path) checks the wrong tree and passes. Run them with
+  `PYTHONPATH=<scratch>/src`, and confirm with `python -c 'import <pkg>; print(<pkg>.__file__)'`
+  in the same environment that the path is the scratch copy's.
+- Where the repo's gate formats Markdown code blocks (ruff format over `.md` files, for one), run
+  the formatter check over the plan FILE too. Extracting the code leaves the plan's own fenced
+  blocks unchecked, and the formatter rewrites a fragment block (methods meant for a class body,
+  indented) the first time the real gate runs on the committed plan.
 
 **10. Platforms:** Read the repo's CI OS matrix (the workflow file, or the config it is generated from) and make every platform claim in Global Constraints agree with it: each prescribed test passes on every OS there or skips with a stated reason. A test that isolates `HOME` also sets `USERPROFILE`, which `Path.home()` reads on Windows. Measured: a plan said "Linux only" while CI ran Windows and macOS, and a test that set only `HOME` passed locally and failed on Windows after the release.
 
@@ -214,6 +241,12 @@ guard (a generic refusal of the same verb or input), so give it an input only th
 Measured: a plan's body loop checked `is_file()` before each read, so an unsearchable directory
 printed every body as missing and exited 0 against the task's STOP condition, and its refusal test
 passed before any implementation because an earlier verb guard already refused the command.
+
+**15. A changelog task:** A plan for a user-visible change (a new command, option, output or public
+API) ends with a task that writes its changelog entry under the repo's unreleased heading, checked
+against what the finished feature really prints (run the command and quote it). Each other task's
+brief covers its own code, so without a task of its own the entry is nobody's step and the feature
+ships undocumented.
 
 If you find issues, fix them inline. No need to re-review, just fix and move on. If you find a spec requirement with no task, add the task - except for a milestone past the next decision checkpoint of a three-altitude plan: there the file's note that its tasks come once that checkpoint is decided is the intended state, not a gap or a placeholder.
 
