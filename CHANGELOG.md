@@ -30,6 +30,12 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.5.1]
+
+### Fixed
+
+- meta-skill-ab-test: `context_files` no longer records a directory named CLAUDE.md as an unreadable context file on Windows, where reading a directory raises PermissionError instead of IsADirectoryError.
+
 ## [11.5.0]
 
 ### Added

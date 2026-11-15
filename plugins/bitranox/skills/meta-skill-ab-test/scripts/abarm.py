@@ -870,7 +870,18 @@ def _context_digest(path: Path) -> str | None:
     except (FileNotFoundError, NotADirectoryError, IsADirectoryError):
         return None
     except OSError:
-        return UNREADABLE
+        # Windows reports reading a DIRECTORY as PermissionError, not IsADirectoryError, so the
+        # error alone cannot tell a directory named CLAUDE.md (no context file) from an unreadable
+        # file. Read first, classify after: the read decides, the type check only names the case.
+        return None if _is_dir(path) else UNREADABLE
+
+
+def _is_dir(path: Path) -> bool:
+    """True when path is a directory; False when it is not or cannot be checked."""
+    try:
+        return path.is_dir()
+    except OSError:
+        return False
 
 
 def _link_one(repo: Path, ws: Path, entry: str) -> Path:
