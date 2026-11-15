@@ -190,6 +190,37 @@ empty is the claim a WRONG candidate, and then say which you checked.
 Rank by what a reader DOES with the defect. A wrong command outranks every missing cross-reference,
 because the reader runs the one and merely fails to follow the other.
 
+## Audit completeness, not only correctness
+
+A reviewer asks whether each statement is right. Nobody asks whether every public name is there,
+so a skill that documents a library or a CLI can pass the whole sweep while a reader asks about a
+name it never mentions and gets a confident wrong answer. Make that a deterministic pass of its own:
+
+1. List the public surface of the INSTALLED package: the names in its `__all__` whose objects are
+   callable (functions, classes, enums and exceptions all are), plus every CLI subcommand from
+   `<tool> --help` and the `--help` of each command group.
+2. Require each name to appear in the skill or its references, or to carry a stated exemption
+   (internal, deprecated, covered by a parent name) recorded where the next audit will read it.
+3. Report each missing name as a finding, ranked by what a reader will ask about it: an exception
+   a caller must catch outranks a helper nobody calls directly.
+
+```bash
+python3 - <package> <skill dir> <<'EOF'
+import importlib, pathlib, re, sys
+pkg, skill = importlib.import_module(sys.argv[1]), pathlib.Path(sys.argv[2])
+text = "\n".join(p.read_text(encoding="utf-8", errors="ignore") for p in skill.rglob("*") if p.is_file())
+names = [n for n in getattr(pkg, "__all__", []) if callable(getattr(pkg, n, None))]
+missing = [n for n in names if not re.search(r"\b%s\b" % re.escape(n), text)]
+print("%d public names, %d missing" % (len(names), len(missing)))
+for n in missing: print("MISSING", n)
+EOF
+```
+
+A count of 0 public names means the package defines no `__all__`, never that the skill is
+complete: list its surface another way before you call the pass clean. Measured: a full
+correctness audit passed a library skill whose package exported nine exception classes the skill
+never named, and a probe then answered two questions about them with the wrong class.
+
 ## Audit attribution debt too
 
 A skill derived from someone else's skill must carry a `> Adapted from` credit line, and the
