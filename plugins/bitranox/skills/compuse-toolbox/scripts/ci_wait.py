@@ -91,7 +91,8 @@ neither OWNER/NAME nor a directory is refused, exit 2), and named on every poll:
 otherwise turn every later poll into a gh failure.
 
 `--ref REF` (HEAD, origin/master, a tag) asks this tool to resolve the sha itself, with
-`git rev-parse --verify` in the cwd's repository, and prints what it resolved to. Prefer it to
+`git rev-parse --verify` in the `--repo` directory when one is given (a linked worktree's HEAD is
+not the main checkout's), else in the cwd's repository, and prints what it resolved to. Prefer it to
 `--sha`: a sha the caller types is one it can pad from a short display or splice onto a guessed
 prefix, and both are 40 hex characters that pass every format check here. It also works where the
 caller's own `$(git rev-parse ...)` is refused, as in a worktree-isolated Claude Code session.
@@ -340,8 +341,9 @@ def require_full_sha(sha: str) -> str:
     return candidate
 
 
-def resolve_ref(ref: str, *, run: Callable[..., object] = subprocess.run) -> str:
-    """The full sha the cwd's repository holds for ``ref``, or a refusal.
+def resolve_ref(ref: str, *, cwd: str | None = None,
+                run: Callable[..., object] = subprocess.run) -> str:
+    """The full sha the repository at ``cwd`` (default: the cwd's) holds for ``ref``, or a refusal.
 
     The point of ``--ref``: a caller that names a ref never types a sha, so it cannot pad a short
     one or splice a guessed prefix onto a derived tail - the invented-identifier mistake that
@@ -351,6 +353,9 @@ def resolve_ref(ref: str, *, run: Callable[..., object] = subprocess.run) -> str
     Args:
         ref: Anything ``git rev-parse`` accepts that names a commit (``HEAD``, ``origin/master``,
             a tag, ``HEAD~1``).
+        cwd: The checkout to ask, or ``None`` for the process cwd. A ``--repo`` directory goes
+            here: a linked worktree's HEAD is not the main checkout's, and asking the cwd instead
+            reported the main checkout's verdict as the worktree's.
         run: Injected process runner, so the no-git path is testable.
 
     Returns:
@@ -365,7 +370,7 @@ def resolve_ref(ref: str, *, run: Callable[..., object] = subprocess.run) -> str
         raise BadRef(f"{ref!r} is not a ref: it is empty or starts with '-', which git reads as an option")
     try:
         proc = run(["git", "rev-parse", "--verify", "-q", f"{ref}^{{commit}}"], capture_output=True,
-                   text=True, encoding="utf-8", errors="replace", check=False)
+                   text=True, encoding="utf-8", errors="replace", check=False, cwd=cwd)
     except OSError as exc:
         raise BadRef(f"could not run git to resolve {ref!r}: {exc}") from exc
     out = (getattr(proc, "stdout", "") or "").strip().lower()
@@ -1376,7 +1381,7 @@ def _target_sha(args: argparse.Namespace) -> str:
         BadSha: ``--sha`` is not a full sha.
     """
     if args.ref is not None:
-        sha = resolve_ref(args.ref)
+        sha = resolve_ref(args.ref, cwd=_local_repo_dir(args.repo))
         print(f"resolved {args.ref} to {sha}", file=sys.stderr, flush=True)
         return sha
     sha = require_full_sha(args.sha)
@@ -1490,6 +1495,14 @@ class _Deadline:
         return min(GH_CALL_TIMEOUT_S, window) if window > 0 else None
 
 
+def _local_repo_dir(value: str | None) -> str | None:
+    """The checkout a ``--repo`` value names, or ``None`` (absent, or OWNER/NAME: no local tree)."""
+    if value is None:
+        return None
+    expanded = os.path.expanduser(value)
+    return expanded if os.path.isdir(expanded) else None
+
+
 def _repo_target(value: str | None, timeout_s: float) -> tuple[str | None, str | None]:
     """(the OWNER/NAME every poll names, the local directory it came from or None).
 
@@ -1504,8 +1517,8 @@ def _repo_target(value: str | None, timeout_s: float) -> tuple[str | None, str |
     """
     if value is None:
         return _resolve_repo_once(timeout_s), None
-    expanded = os.path.expanduser(value)
-    if os.path.isdir(expanded):
+    expanded = _local_repo_dir(value)
+    if expanded is not None:
         bound = max(GH_CALL_FLOOR_S, min(GH_CALL_TIMEOUT_S, timeout_s))
         name = resolve_repo(timeout_s=bound, cwd=expanded)
         print(f"resolved --repo {value} to {name}", file=sys.stderr, flush=True)

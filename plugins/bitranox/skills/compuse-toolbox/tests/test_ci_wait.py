@@ -1381,6 +1381,11 @@ class TestResolveRef:
         with pytest.raises(ci_wait.BadRef, match="git"):
             ci_wait.resolve_ref("HEAD", run=no_git)
 
+    def test_it_resolves_in_the_directory_it_is_given(self, repo, tmp_path, monkeypatch):
+        """``cwd=`` answers for that checkout, not for wherever the process happens to stand."""
+        monkeypatch.chdir(tmp_path)
+        assert ci_wait.resolve_ref("HEAD", cwd=str(repo)) == _git(repo, "rev-parse", "HEAD")
+
     def test_output_that_is_not_a_full_sha_is_refused(self):
         """Never pass on whatever git printed: the format guard still decides."""
         def short(argv, **kw):
@@ -1419,6 +1424,38 @@ class TestRefOnTheCommandLine:
         envelope = json.loads(capsys.readouterr().out)
         assert envelope["ok"] is False and envelope["data"]["state"] == "error"
         assert "nope" in envelope["error"]
+
+    def test_a_ref_is_resolved_inside_a_directory_repo_not_the_cwd(self, repo, monkeypatch, capsys):
+        """Run from the main checkout with --repo naming a linked worktree, --ref HEAD resolved in
+        the cwd and reported the MAIN checkout's verdict as the worktree's: a green for the wrong
+        sha. The worktree here holds a commit the cwd's HEAD does not."""
+        worktree = repo.parent / "wt"
+        _git(repo, "worktree", "add", "-q", "-b", "side", str(worktree))
+        (worktree / "g.txt").write_text("y\n", encoding="utf-8")
+        _git(worktree, "add", "g.txt")
+        _git(worktree, "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+             "commit", "-q", "-m", "c2")
+        cwd_head = _git(repo, "rev-parse", "HEAD")
+        worktree_head = _git(worktree, "rev-parse", "HEAD")
+        assert cwd_head != worktree_head
+        asked: list[str] = []
+
+        def fake_runs(sha, **kw):
+            asked.append(sha)
+            return [run("CI", "completed", "success", sha=sha)]
+
+        monkeypatch.setattr(ci_wait, "gh_runs", fake_runs)
+        assert ci_wait.main(["--ref", "HEAD", "--repo", str(worktree), "--settle", "0"]) == 0
+        assert set(asked) == {worktree_head}
+        assert f"resolved HEAD to {worktree_head}" in capsys.readouterr().err
+
+    def test_a_ref_with_an_owner_name_repo_still_resolves_in_the_cwd(self, repo, monkeypatch):
+        """OWNER/NAME names no local checkout, so the cwd's repository is the only place to ask."""
+        asked: list[str] = []
+        monkeypatch.setattr(ci_wait, "gh_runs", lambda sha, **kw: asked.append(sha)
+                            or [run("CI", "completed", "success", sha=sha)])
+        assert ci_wait.main(["--ref", "HEAD", "--repo", "o/r", "--settle", "0"]) == 0
+        assert set(asked) == {_git(repo, "rev-parse", "HEAD")}
 
     @pytest.mark.parametrize("argv,message", [
         (["--sha", "a" * 40, "--ref", "HEAD"], "not allowed with argument"),
