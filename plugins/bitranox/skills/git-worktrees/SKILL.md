@@ -251,6 +251,12 @@ Ready to implement <feature-name>
 
 ## Step 4: Finishing - First Check the Work Landed (landed)
 
+**Inspect a worktree you may remove from OUTSIDE it.** Use `git -C <worktree> ...` and absolute
+paths (or a `( cd <worktree> && ... )` subshell), never a bare `cd <worktree>`: in an agent
+harness a successful `cd` persists as the session's working directory, so the removal later runs
+from inside the directory it deletes. Windows refuses that removal; elsewhere it succeeds and
+leaves the session in a deleted directory, where its next git call fails (exit 128).
+
 Ask this BEFORE `--discard-uncommitted` or `git branch -D`, never after. `git cherry` and
 `git merge-base --is-ancestor` answer it badly: work that landed SQUASHED, rebased, or copied
 into a master commit by hand reads as unlanded, and a worktree's uncommitted files are not
@@ -277,7 +283,7 @@ uv run scripts/landed.py x3 --also-into backup/integration  # x3 was rewritten b
   refuses over an untracked file, never over an ignored one - so copy out any you need first.
   Not every ignored file is regenerable: a decision log, a handover or a backlog kept out of git
   on purpose is work, and `landed.py` exits 0 over it. Before removing the worktree, list its
-  ignored files (`git status --ignored --short` inside it) and diff each one that is not build
+  ignored files (`git -C <worktree> status --ignored --short`) and diff each one that is not build
   output (anything a build, install or tool run recreates: a venv, caches, compiled output)
   against the main checkout's copy (`diff <worktree>/<file> <main>/<file>`). A same-named
   copy there proves nothing on its own: measured, the main copy was a condensed version holding 83
