@@ -203,6 +203,18 @@ After writing the complete plan, look at the spec with fresh eyes and check the 
 
 **13. Text replaced by a pointer:** When a task replaces a passage with a pointer to another file or skill, diff the removed text against the pointed-to text and keep or move every rule, remedy and threshold the target does not carry.
 
+**14. Refusals that must fire:** When a task's code must refuse to report done over input it could
+not fully read, its code reads first and classifies the error (missing versus unreadable); it never
+gates the read on `Path.exists()` or `is_file()`. From Python 3.14 both return False on a
+permission error (3.13 and older raise), so an unreadable directory reads as absent and the run
+exits 0. Prescribe a RED test over a mode-000 directory (skipped under root, which reads through
+it). Then run each prescribed refusal test against the scratch copy with the earlier tasks applied
+and this task's code absent: it must fail there. A test that passes there is answered by an earlier
+guard (a generic refusal of the same verb or input), so give it an input only the new refusal stops.
+Measured: a plan's body loop checked `is_file()` before each read, so an unsearchable directory
+printed every body as missing and exited 0 against the task's STOP condition, and its refusal test
+passed before any implementation because an earlier verb guard already refused the command.
+
 If you find issues, fix them inline. No need to re-review, just fix and move on. If you find a spec requirement with no task, add the task - except for a milestone past the next decision checkpoint of a three-altitude plan: there the file's note that its tasks come once that checkpoint is decided is the intended state, not a gap or a placeholder.
 
 ## Execution Handoff
