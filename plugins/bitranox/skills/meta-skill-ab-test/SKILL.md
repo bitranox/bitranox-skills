@@ -113,9 +113,27 @@ them. The paid arm is started by the user in their own terminal, never from a to
 - **Size `deadline_s` from the longest expected arm, not the skeleton's 14400.** `run` will not
   start an arm whose deadline outlasts the real login (it pauses before the arm); the CLI login
   lasts about 8 h and refreshes only near its expiry, so a 4 h deadline pauses a run for hours.
+  When `run` pauses with "expires within the arm's deadline", the user types `/login`, which
+  renews the login at once, then runs the same `run` command again to resume; a cheap `claude -p`
+  call does not renew it, so otherwise the run waits until the last minutes before expiry.
   Measured arms took 12 to 42 minutes; 7200 (2 h) is ample. Set it before `seal`: `abtest.toml`
   is frozen there, `run` refuses a committed change to it after the seal as well as an
   uncommitted one, and `seal` does not run twice, so a wrong value then means a new run dir.
+- **`max_tokens` is frozen at the seal too.** An arm that ended with stop reason `token_cap`
+  reruns under a higher cap only in a new run dir: `init`, copy in every variant, the task files
+  and `PREREG.md`, then the old `abtest.toml` with only `max_tokens` raised, `seal`, and `run`
+  with `--only` and the arm's name (`--only V2`, not `r1-V2`). An arm of the old run that ended
+  `finished` never reached the old cap, so its diff can still be judged beside the new run's
+  arms; its cost was measured in another run, so say so beside it.
+- **Keep the memory store quiet for the whole run.** Each arm loads the `CLAUDE.md` and
+  `CLAUDE.local.md` of its worktree and of every ancestor directory at its start, so a session
+  that places a memory fact or dreams between two arms gives the later arms another memory
+  index. `BITRANOX_MEMORY_WRITES=off` stops only the arm's own writes, and the store guard compares
+  only an arm's own start and end. `run` records the sha256 of each such file in the arm's
+  `result.json` (`context_files`), and `score` flags an arm whose files differ from the first
+  arm's (`context differs from r1-C: 1 file (<path>)`; `context_drift` in `--json`, `null` for an
+  arm recorded without it). The flag never voids the arm: judge whether the changed file could
+  have mattered to its task.
 - **Commit a `PREREG.md` amendment the moment you write it.** `run` refuses any uncommitted or
   untracked change under the sealed inputs; an amendment left uncommitted stops every later
   `run` call until it is committed.
