@@ -1133,7 +1133,9 @@ repo (one sentence added to two of them) needs a checklist in EACH skill's `.ski
 recording its own probe; one checklist covering the set is refused for every
 other skill. The gate reports that only after its test run has finished (minutes on a push), so
 before committing, list the skill directories the change touches and confirm each has a new
-checklist of its own.
+checklist of its own. A rename or removal touches the OLD directory too: the gate counts its
+deleted SKILL.md as a change and wants a new checklist at the old path (its `Decisions:` line may
+read `none - <reason>`), and checklists moved away with the directory do not count there.
 
 **A passing gate is not evidence the procedure ran for THIS change.** Such a gate proves only that
 some checklist file was co-changed and holds no open box (or that the change was a pure table

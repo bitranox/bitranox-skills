@@ -79,6 +79,10 @@ Keep the registry in sync, or the local pre-commit gate and CI (`hooks/repo-gate
   (fix a stale entry after a rename/removal); an unlisted skill is fine.
 - **Update cross-links.** A rename changes the invocation name (`bitranox:<name>`); fix every
   reference in other skills, hooks, and the README (`grep -rn '<old-name>'`).
+- **Leave a receipt at the old path on a rename or removal.** The gate counts the deleted
+  `SKILL.md` as a change, so the commit needs a new `.skillwriter/checklist-*.md` in the OLD skill
+  directory (`Decisions: none - <reason>` is enough); checklists moved with the directory do not
+  count there.
 - **Bump the version** per semver above (a rename is MAJOR; a new skill is MINOR).
 - **Ship tests** for any script the skill bundles (a `tests/` dir with passing pytest) - also gated.
   Run them with CI's dependency set (`pytest PyYAML lxml defusedxml ruamel.yaml httpx2`, per
