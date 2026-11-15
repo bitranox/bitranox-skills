@@ -399,12 +399,16 @@ the success line, abort-and-show on a miss).
    its topics (`set-topics`) or its levels' topics (step 0b). A fact that fits no topic of the
    list is not forced into one: it stays where it is, and three or more such facts about one
    subject are a proposed list change in the report, never a `topics-set-list` run.
-   A real `set-topics` and a real `render-topics` hold the tree's placement lock, and so does
-   every write that could change a placed line: an `add` to a fact that is bound to a topic, and,
-   in a tree with a topic list, every `rename`, every `retitle` and every
-   `reconcile_memory_index.py --archive`. A dry run takes none. Whichever of them prints
+   A real `set-topics`, `render-topics`, `topics-set-list`, `set-level-topics` and
+   `set-top-topics` hold the tree's placement lock, and so does every write that could change a
+   placed line: an `add` to a fact that is bound to a topic, and, in a tree with a topic list,
+   every `rename`, every `retitle` and every `reconcile_memory_index.py --archive`. Of these,
+   only `set-topics`, `render-topics` and `--archive` have a dry run (`--dry-run`), and a dry run
+   takes no lock. Whichever of them prints
    `! error: <verb> waited 30 s for the placement lock` (exit 2) met another session placing
    lines: run the same verb again once that one has finished, and never delete the lock file.
+   The error names the lock file and the age at which a lock left by a crashed session is
+   reclaimed on its own.
 
    **A tagged fact whose line would land at the tree top is a move to the top.** When no level
    has any of a fact's topics, the engine places its line at the tree top instead of losing it,

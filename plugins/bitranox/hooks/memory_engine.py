@@ -451,9 +451,9 @@ class PlacementLockBusy(TimeoutError):
     def __init__(self, anchor, verb, waited):
         super().__init__(
             "%s waited %g s for the placement lock of the tree %s (%s): another render-topics, "
-            "set-topics, topics-set-list, set-level-topics, or write to a fact placed by topic "
-            "holds it. Run %s again once that one "
-            "finishes; a lock left by a holder that crashed is reclaimed once it is %d s old"
+            "set-topics, topics-set-list, set-level-topics, set-top-topics, or write to a fact "
+            "placed by topic holds it. Run %s again once that one finishes; a lock left by a "
+            "holder that crashed is reclaimed once it is %d s old"
             % (verb, waited, anchor, placement_lock_path(anchor), verb, int(sig._LOCK_STALE_S)))
 
 

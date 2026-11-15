@@ -285,9 +285,9 @@ without a topic list, dry runs and checks take none. It is taken
 before any level lock and never while one is held, so the two kinds cannot deadlock. A verb waits
 up to 30 s for it, then exits 2 with `! error: <verb> waited 30 s for the placement lock of the
 tree <anchor> (<lock file>): another render-topics, set-topics, topics-set-list, set-level-topics,
-or write to a fact placed by topic holds it. Run <verb> again once that one finishes; a lock left
-by a holder that crashed is reclaimed once it is 120 s old`. Reclaiming is the level locks' rule (the lock file's mtime), and
-a holder keeps its lock fresh while it works: a render refreshes the lock file's mtime at each
+set-top-topics, or write to a fact placed by topic holds it. Run <verb> again once that one
+finishes; a lock left by a holder that crashed is reclaimed once it is 120 s old`. Reclaiming is
+the level locks' rule (the lock file's mtime), and a holder keeps its lock fresh while it works: a render refreshes the lock file's mtime at each
 level it walks in each pass and `set-topics` at each row, whenever it is more than 30 s old. So
 only a holder that crashed or stopped walking has its lock reclaimed.
 
