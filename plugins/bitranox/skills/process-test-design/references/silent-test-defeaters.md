@@ -785,6 +785,26 @@ the open returned (wrap the real `os.open` in the test so it records and passes 
 require the test RED before trusting it - a leak test whose only RED came from an unrelated assert
 is coverage it is not.
 
+### A leak check after a refused call must hold the exception while it counts
+
+When the call under test raises (a refusal, a parse error) and the test then counts open
+descriptors or any other resource, the leaked object usually lives only in a local of a frame the
+exception's traceback holds. Let go of the exception and CPython frees those frames, the
+refcount drop closes the leaked file, and the count is back to its baseline: the test passes on
+leaking code. A bare `with pytest.raises(ValueError): call()` lets go at the end of the block.
+Bind it and keep it referenced past the count:
+
+```python
+with pytest.raises(ValueError) as refused:
+    open_backup(path)
+assert open_fds() == before
+assert refused.traceback  # keeps the exception, and its frames, alive until here
+```
+
+Measured: with a function that opens a file and raises without closing it, the unbound form passed
+and the bound form failed on the leak. Then RED it as above: delete the `close` on the refusal
+path and require the test to fail.
+
 ### A plain `mmap` keeps a descriptor, so it cannot prove a maps-only holder
 
 `mmap.mmap(f.fileno(), ...)` duplicates the descriptor and keeps the duplicate open for the life
