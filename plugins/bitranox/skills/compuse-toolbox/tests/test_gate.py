@@ -1189,3 +1189,77 @@ def test_the_help_says_the_verdict_lines_are_indented(capsys):
         gate.main(["--help"])
     out = " ".join(capsys.readouterr().out.split())
     assert "INDENTED" in out and "ALL GATES PASSED" in out, out
+
+
+class TestTheLogCarriesTheVerdictAndWhereItRan:
+    """A watcher polling ``--log`` for ``ALL GATES PASSED`` ran to its deadline while the gate had
+    passed in seconds: the verdict went to stdout only, so the log of a finished run read like an
+    unfinished one. And with several sessions gating the same command at once, a log whose header
+    named only the time and the command could not be matched to the checkout it ran in."""
+
+    def test_a_passing_run_writes_its_verdict_lines_into_the_log(self, tmp_path, capsys):
+        log = tmp_path / "g.log"
+        assert gate.main(["--log", str(log), "--gate", OK]) == 0
+        text = log.read_text(encoding="utf-8")
+        assert re.search(r"^  \[PASS\] .*\(rc=0\)$", text, re.M), text
+        assert re.search(r"^ALL GATES PASSED$", text, re.M), text
+        # The log holds the same closing line stdout printed, not a paraphrase of it.
+        assert "ALL GATES PASSED" in capsys.readouterr().out
+
+    def test_a_red_run_writes_gate_red_into_the_log(self, tmp_path):
+        log = tmp_path / "g.log"
+        assert gate.main(["--log", str(log), "--gate", FAIL]) != 0
+        text = log.read_text(encoding="utf-8")
+        assert re.search(r"^  \[FAIL\] .*\(rc=1\)$", text, re.M), text
+        assert re.search(r"^GATE RED - follow-up NOT run$", text, re.M), text
+        assert "ALL GATES PASSED" not in text
+
+    def test_the_verdict_comes_after_the_gate_output(self, tmp_path):
+        log = tmp_path / "g.log"
+        gate.main(["--log", str(log), "--gate", quoted(sys.executable, "-c", "print('OUT-LINE')")])
+        text = log.read_text(encoding="utf-8")
+        assert text.index("OUT-LINE") < text.index("ALL GATES PASSED")
+
+    def test_the_run_header_names_the_working_directory(self, tmp_path, monkeypatch):
+        here = tmp_path / "checkout"
+        here.mkdir()
+        monkeypatch.chdir(here)
+        log = tmp_path / "g.log"
+        gate.main(["--log", str(log), "--gate", OK])
+        text = log.read_text(encoding="utf-8")
+        header = text[text.index(gate.RUN_MARKER):].splitlines()
+        assert f"cwd: {here.resolve()}" in header[:4], header[:4]
+
+    def test_the_run_header_names_the_git_toplevel_of_that_directory(self, tmp_path, monkeypatch):
+        repo = tmp_path / "repo"
+        sub = repo / "sub"
+        sub.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        monkeypatch.chdir(sub)
+        log = tmp_path / "g.log"
+        gate.main(["--log", str(log), "--gate", OK])
+        header = log.read_text(encoding="utf-8").splitlines()
+        assert f"repo: {repo.resolve()}" in header, header[:6]
+
+    def test_outside_a_repository_the_header_says_so(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))
+        log = tmp_path / "g.log"
+        gate.main(["--log", str(log), "--gate", OK])
+        assert "repo: (not a git work tree)" in log.read_text(encoding="utf-8")
+
+    def test_a_cwd_option_is_the_directory_the_header_names(self, tmp_path):
+        target = tmp_path / "elsewhere"
+        target.mkdir()
+        log = tmp_path / "g.log"
+        gate.main(["--log", str(log), "--cwd", str(target), "--gate", OK])
+        assert f"cwd: {target.resolve()}" in log.read_text(encoding="utf-8").splitlines()
+
+    def test_a_gate_cwd_is_named_under_that_gates_own_header(self, tmp_path):
+        target = tmp_path / "own"
+        target.mkdir()
+        log = tmp_path / "g.log"
+        gate.main(["--log", str(log), "--gate", OK, "--gate-cwd", str(target)])
+        lines = log.read_text(encoding="utf-8").splitlines()
+        at = next(i for i, ln in enumerate(lines) if ln.startswith("=== gate:"))
+        assert lines[at + 1] == f"cwd: {target.resolve()}", lines[at:at + 3]

@@ -71,7 +71,12 @@ turned a missing quote into a green that never ran the suite.
 
 The report on stdout prints each gate's line INDENTED by two spaces (`  [PASS] <cmd> (rc=0)`), so a
 caller must match it unanchored; the closing `ALL GATES PASSED` / `GATE RED - follow-up NOT run`
-line is not indented.
+line is not indented. The same report is then appended to the log, after the gates' output, so a
+watcher polling the log sees the verdict too: a log ending at a gate's last output line read
+exactly like a run still going. Each run in the log starts with `##### gate run <time> #####`
+followed by `cwd: <dir>` and `repo: <work tree top level>` (a gate with its own --gate-cwd names
+it under its `=== gate:` line), because several sessions gating the same command left logs that
+differed in nothing else.
 
 Exit codes: 0 every gate passed (or, with --then, the follow-up's own code); a red run exits the
 single failing gate's OWN code where that is unambiguous (a taxonomy code such as 2 survives),
@@ -587,15 +592,35 @@ def _spawn(argv: list[str], settings: GateSettings = GateSettings()
 
 
 RUN_MARKER = "##### gate run"
+NOT_A_REPO = "(not a git work tree)"
 
 
-def run_gates(gates, log_path, summary: str = "") -> GateReport:
+def git_toplevel(directory: str) -> str:
+    """The git work tree `directory` belongs to, or NOT_A_REPO. Never raises.
+
+    Every GIT_ variable is dropped for the question: a push from a linked worktree exports
+    GIT_DIR to its hooks, and git would then answer for that repository, not for `directory`.
+    """
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith("GIT_") or k == "GIT_CEILING_DIRECTORIES"}
+    try:
+        proc = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=directory, env=env,
+                              capture_output=True, text=True, encoding="utf-8", errors="replace",
+                              timeout=10, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return NOT_A_REPO
+    top = proc.stdout.strip()
+    return str(Path(top).resolve()) if proc.returncode == 0 and top else NOT_A_REPO
+
+
+def run_gates(gates, log_path, summary: str = "", run_cwd: str | None = None) -> GateReport:
     """Run `gates` in order, appending all output to `log_path`; return the real statuses.
 
     `gates` is [(name, argv_list)] or [(name, argv_list, GateSettings)]. argv is a LIST, never a
     shell string, so no quoting or globbing surprises and no shell to swallow the status.
     `summary` is an optional regex; matching lines from that gate's own output are kept for a
-    compact report.
+    compact report. `run_cwd` is the directory the run header names (`--cwd`, else the process
+    cwd): several sessions gating the same command at once leave logs that differ only there.
     """
     log_path = Path(log_path)
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -606,9 +631,13 @@ def run_gates(gates, log_path, summary: str = "") -> GateReport:
 
     with log_path.open("a", encoding="utf-8") as log:
         log.write(f"\n{RUN_MARKER} {datetime.now(timezone.utc).isoformat(timespec='seconds')} #####\n")
+        where = str(Path(run_cwd or os.getcwd()).resolve())
+        log.write(f"cwd: {where}\nrepo: {git_toplevel(where)}\n")
         for name, argv, *rest in gates:
             settings = rest[0] if rest else GateSettings()
             log.write(f"\n=== gate: {name} :: {' '.join(argv)} ===\n")
+            if settings.cwd is not None:
+                log.write(f"cwd: {Path(settings.cwd).resolve()}\n")
             log.flush()
             started = True
             try:
@@ -651,8 +680,23 @@ def format_report(report: GateReport, log_path) -> str:
     out.append(f"log: {log_path}")
     if report.appended_to_earlier_run:
         out.append(f"  holds earlier runs too: this run starts at the last '{RUN_MARKER}' line, "
-                   "and the verdict is the line above, not a grep of the log")
+                   "and its verdict is the line above, or the LAST closing line in the log - "
+                   "never the first one a grep finds")
     return "\n".join(out)
+
+
+def append_verdict(log_path, text: str) -> None:
+    """Write the report stdout printed into the log too, after the gate output.
+
+    A watcher polling the log for `ALL GATES PASSED` otherwise never matches: the log of a passed
+    run ended at the gate's last output line and read exactly like a run still going. Stdout stays
+    the authoritative copy, so a failed write here is a warning, never a changed verdict.
+    """
+    try:
+        with Path(log_path).open("a", encoding="utf-8") as log:
+            log.write(f"\n{text}\n")
+    except OSError as exc:
+        print(f"gate: warning: could not append the verdict to {log_path}: {exc}", file=sys.stderr)
 
 
 def red_status(report: GateReport) -> int:
@@ -840,7 +884,8 @@ def _main(argv=None) -> int:
         epilog="The report goes to stdout: one line per gate, each INDENTED by two spaces "
                "before '[PASS] <cmd> (rc=0)' or '[FAIL] <cmd> (rc=N)', so match it unanchored "
                "(grep -E '\\[(PASS|FAIL)\\]'), then the unindented closing line 'ALL GATES PASSED' "
-               "or 'GATE RED - follow-up NOT run'. One command per --gate: a gate has no shell, so "
+               "or 'GATE RED - follow-up NOT run'. The same report is appended to --log after "
+               "the gates' output. One command per --gate: a gate has no shell, so "
                "'&&', '||', '|' and ';' as bare words are refused. "
                "Per-gate options follow the --gate they apply to: gate.py --gate \"make push\" "
                "--gate-cwd DIR --gate-env MSG=@msgfile --then \"echo done\".")
@@ -956,13 +1001,15 @@ def _main(argv=None) -> int:
     # and reintroduce the sharing this fixes one scope further in.
     try:
         log_path = args.log or default_log_path()
-        report = run_gates(gates, log_path, args.summary)
+        report = run_gates(gates, log_path, args.summary, run_cwd=args.cwd)
     except OSError as exc:
         # The LOG, not a gate: run_gates turns a gate that cannot start into a red result, so an
         # OSError reaching here is the runner unable to write where it was told to.
         print(f"gate: cannot write the log {args.log or '(temp dir)'}: {exc}", file=sys.stderr)
         return 2
-    print(format_report(report, log_path))
+    text = format_report(report, log_path)
+    print(text)
+    append_verdict(log_path, text)
     if not report.ok:
         return red_status(report)
     if args.then:
