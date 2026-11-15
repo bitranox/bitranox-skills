@@ -347,6 +347,16 @@ Test the round trip from a domain object, not only the parse from JSON. Measured
 `Record(level=Level.INFO)`; with the member pass-through both directions held and the dump read
 `{"level":"INFO"}`.
 
+**When the wire names cover only a SUBSET of the Enum, pass through only the members that have
+one.** An `Annotated[TheEnum, BeforeValidator(name_to_member), PlainSerializer(member_to_name)]`
+type used for dict keys or fields whose name map leaves some members out must refuse those
+members in the validator. A blanket member pass-through lets `Model(field=[TheEnum.OUTSIDER])` or
+`model_validate({TheEnum.OUTSIDER: ...})` build, and the later `model_dump_json()` raises
+`PydanticSerializationError` (the serializer's `KeyError`), far from the input. Test construction
+from an outside member, not only parsing of an unknown name. Measured (pydantic 2.14.3): the
+blanket pass-through built the model and the dump raised; with the subset check the validation
+refused it, at a dict-key loc ending in `'[key]'`.
+
 ### Converting a `str` parameter to an Enum changes its contract: scope it with its tests
 
 A proper conversion of `release(part: str)` to `release(part: ReleasePart)` moves validation to
@@ -401,6 +411,11 @@ supervisory path an instrument must not take down the run it observes. Keep `is`
 string (`cast("Mode", "quiet")`) and asserts the branch it reached by something only that branch
 produces (a test that accepts either branch's output stays green on the wrong one), and grep the
 diff for `is <Enum>.` on anything reached from a parameter.
+
+**A plain `Enum` (no `str`, `int` or `bytes` mixin) never equals its raw value,** so for one the
+switch from `is` to `==` changes nothing: a caller passing `"xor"` still misses every branch.
+Coerce at the function's start with `mode = CombineMode(mode)` (it takes a member or a raw value
+and raises `ValueError` for an unknown one) and test the raw-value and the unknown-value paths.
 
 **Where the Enum lives decides where the helper can live.** Read `[tool.importlinter]` (or
 `.importlinter`) before choosing the parameter type: when the Enum sits in a HIGHER layer than the
@@ -575,6 +590,13 @@ What each step of the Workflow in bitranox:coding-data-architecture runs on a Py
   `NamedTuple` replacing a plain tuple is the same trap: it compares equal to the tuple it
   replaced, so tests still passing plain tuples into the newly typed parameter stay green and only
   the type checker lists them.
+- **STEP B, a fixer that changes a type on an OUTPUT wire** (an output model field from `str` to a
+  `StrEnum`, a record replacing a dict in a `--json` envelope): brief it to build a before/after
+  output harness BEFORE its first edit. It dumps every output format (text and JSON) over a fixed
+  input set from the unmodified tree, runs again after the edit, compares with `diff -r`, and
+  plants one deliberate text change as the liveness control. The before state cannot be fetched
+  later while sibling fixers share the checkout: `git stash` or a checkout of HEAD removes their
+  uncommitted work mid-run, so capture first.
 - **STEP C, the gate:**
 
   1. First, check if Makefile exists with test target:
@@ -610,7 +632,8 @@ What each step of the Workflow in bitranox:coding-data-architecture runs on a Py
   control exposed it; the harness against the last release found a request model still
   accepting `times=True` and `timeout="1"` after five analysis passes. To keep an old refusal,
   re-raise the model's refusal as the old exception type carrying the validator's own text
-  (`item["msg"]`, or `str(item["ctx"]["error"])` for a `value_error` entry; never `str(exc)`;
+  (`item["msg"]`, or `str(item.get("ctx", {}).get("error"))` for a `value_error` entry, the
+  form pyright strict accepts; never `str(exc)`;
   one line per entry when there are several - see `references/validation-error-messages.md`).
 - **STEP D, the candidate greps:** `-> dict`, `: dict`, `-> tuple[` in signatures. `: dict` also
   matches the permitted small local dicts and Enum-keyed lookup tables and annotations that are

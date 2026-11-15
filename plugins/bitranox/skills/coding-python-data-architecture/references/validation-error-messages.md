@@ -58,7 +58,9 @@ for the same reason.
 **A validator's message carries a prefix.** A `ValueError` raised in a validator arrives as
 `msg == "Value error, <message>"`. When `item["type"] == "value_error"`, show
 `str(item["ctx"]["error"])`, which is the message exactly as the validator wrote it, instead of
-string-stripping the prefix.
+string-stripping the prefix. Under pyright strict write it as
+`str(item.get("ctx", {}).get("error"))`: `ctx` is `NotRequired` in `ErrorDetails`, so the plain
+subscript is reported as an access to a key that may be absent.
 
 **A validator that replaces a built-in type check changes the error type.** Raising `ValueError`
 for a wrong type turns `string_type` into `value_error` and adds the `Value error, ` prefix, so
