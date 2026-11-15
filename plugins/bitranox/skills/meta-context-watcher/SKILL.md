@@ -316,9 +316,10 @@ after it; a handover the user asked for takes steps 7 and 8 instead.
    `handover.md` for lines that point INTO `handover.prev.md` ("see handover.prev.md", "carried,
    not re-typed here"): the copy overwrites the text they point at, so carry the content they
    point at into the new handover (or into `OPEN-WORK.md`, per step 2) before you copy.
-4. **Write `handover.md` at the repo root, OVERWRITING whatever is there.** If the handover will
-   quote a gate result, run that gate now, after steps 2 and 3 have written their files (see "How to
-   verify"), and say the handover was written after it. A stale handover from an earlier session is
+4. **Write `handover.md` at the repo root, OVERWRITING whatever is there, unless it is another
+   live session's (see the end of this step).** If the handover will quote a gate result, run that
+   gate now, after steps 2 and 3 have written their files (see "How to verify"), and say the
+   handover was written after it. A stale handover from an earlier session is
    superseded the moment you write yours - replace it wholesale, never append to it and never keep
    both. There is exactly one `handover.md`, and it describes one moment; two of them, or one with
    two moments in it, leaves the reader deciding which half is true. Commit it along with
@@ -332,6 +333,16 @@ after it; a handover the user asked for takes steps 7 and 8 instead.
    step, whether it succeeded or not. Committed now or later, check that
    neither carries a secret, an internal hostname or a private address, because a tracked file
    in a public repo publishes all three permanently.
+   **A live peer's `handover.md` is not yours to replace.** In a checkout other sessions share,
+   read the first lines of an existing `handover.md` before step 2. When it holds the state of
+   another session that is still working (not an earlier session that ended, whose file this step
+   supersedes), it is not the outgoing file of steps 2 and 3: leave it untouched, and write a
+   watcher checkpoint as `handover.md` in the session scratchpad instead, with the Write tool. The
+   compaction resume hands back a `handover.md` this session wrote with Write or Edit, but finds
+   one written through Bash only at the repo root. Where `handover.md` is tracked, a linked
+   worktree's copy is the same shared record, and your next commit ships yours over the other.
+   The scratchpad does not survive a host reboot, so it never holds the only copy: put what runs,
+   what is decided and the exact next action in the work's own `OPEN-WORK.md` line as well.
 5. **End the file with its own expiry instruction:**
 
    > Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not
