@@ -254,3 +254,112 @@ def test_hooks_json_registers_it_for_posttooluse_askuserquestion():
     matchers = [g["matcher"] for g in groups
                 for h in g["hooks"] if h["command"].endswith('/hooks/user-decision-log.py"')]
     assert matchers == ["AskUserQuestion"]
+
+
+# ---- A remark typed while REJECTING a plan (ExitPlanMode) -------------------------------------
+#
+# Measured in CLI 2.1.325: a user rejection runs no hook that receives the typed text
+# (PostToolUseFailure fires only when a tool EXECUTES and fails; PermissionDenied only for an
+# auto-mode classifier denial). The text reaches only the transcript, as a user record carrying
+# `toolDenialKind: "user-rejected"` and `userFeedback`, so the hook reads it there on Stop.
+
+_PLAN = "# Ship the widget\n\n## Context\n\nTwo steps.\n"
+_REMARK = "group the features by area, and ask me about the URL first"
+_REJECTION = ("The user doesn't want to proceed with this tool use. The tool use was rejected (eg. "
+              "if it was a file edit, the new_string was NOT written to the file). To tell you how "
+              "to proceed, the user said:\n" + _REMARK + "\n\nNote: The user's next message may "
+              "contain a correction or preference.")
+
+
+def _tool_use(tid, name="ExitPlanMode", tool_input=None):
+    return {"type": "assistant", "message": {"role": "assistant", "content": [
+        {"type": "tool_use", "id": tid, "name": name,
+         "input": tool_input if tool_input is not None else {"plan": _PLAN}}]}}
+
+
+def _rejection(tid, *, feedback=_REMARK, with_fields=True):
+    text = _REJECTION.replace(_REMARK, feedback)
+    rec = {"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": tid, "is_error": True, "content": text}]}}
+    if with_fields:
+        rec.update({"toolDenialKind": "user-rejected", "userFeedback": feedback})
+    return rec
+
+
+def _write_transcript(path, cwd, rows):
+    lines = [json.dumps({"type": "system", "cwd": str(cwd)})] + [json.dumps(r) for r in rows]
+    with open(path, "a", encoding="utf-8", newline="\n") as handle:
+        handle.write("\n".join(lines) + "\n")
+
+
+def _stop(cwd, transcript):
+    return {"hook_event_name": "Stop", "session_id": "sess-plan", "cwd": str(cwd),
+            "transcript_path": str(transcript)}
+
+
+def _run_isolated(event, home):
+    env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home),
+           "CLAUDE_CONFIG_DIR": str(home / ".claude")}
+    return subprocess.run([sys.executable, str(_HOOK)], input=json.dumps(event),
+                          capture_output=True, text=True, encoding="utf-8", check=False, env=env)
+
+
+def test_a_remark_typed_while_rejecting_a_plan_is_logged_on_stop(repo, tmp_path):
+    transcript = tmp_path / "t.jsonl"
+    _write_transcript(transcript, repo, [_tool_use("toolu_1"), _rejection("toolu_1")])
+    r = _run_isolated(_stop(repo, transcript), tmp_path / "home")
+    assert r.returncode == 0 and r.stdout.strip() == ""
+    [rec] = _records(repo / U.LOG_NAME)
+    assert rec["kind"] == "plan-rejection"
+    assert rec["chosen"] == _REMARK
+    assert rec["options"] == [] and rec["chosen_options"] == []
+    assert rec["question"] == "Plan rejected: Ship the widget"
+    assert rec["tool_use_id"] == "toolu_1"
+    assert rec["session_id"] == "sess-plan"
+
+
+def test_an_older_record_without_the_feedback_field_is_parsed_from_the_result_text(repo, tmp_path):
+    transcript = tmp_path / "t.jsonl"
+    _write_transcript(transcript, repo,
+                      [_tool_use("toolu_2"), _rejection("toolu_2", with_fields=False)])
+    _run_isolated(_stop(repo, transcript), tmp_path / "home")
+    [rec] = _records(repo / U.LOG_NAME)
+    assert rec["chosen"] == _REMARK
+
+
+def test_a_second_stop_logs_each_rejection_once_and_picks_up_a_new_one(repo, tmp_path):
+    home = tmp_path / "home"
+    transcript = tmp_path / "t.jsonl"
+    _write_transcript(transcript, repo, [_tool_use("toolu_1"), _rejection("toolu_1")])
+    _run_isolated(_stop(repo, transcript), home)
+    _run_isolated(_stop(repo, transcript), home)
+    assert len(_records(repo / U.LOG_NAME)) == 1
+    _write_transcript(transcript, repo, [_tool_use("toolu_3"),
+                                         _rejection("toolu_3", feedback="use the test database")])
+    _run_isolated(_stop(repo, transcript), home)
+    assert [r["chosen"] for r in _records(repo / U.LOG_NAME)] == [_REMARK, "use the test database"]
+
+
+def test_a_lost_offset_does_not_log_a_rejection_twice(repo, tmp_path):
+    transcript = tmp_path / "t.jsonl"
+    _write_transcript(transcript, repo, [_tool_use("toolu_1"), _rejection("toolu_1")])
+    _run_isolated(_stop(repo, transcript), tmp_path / "home")
+    _run_isolated(_stop(repo, transcript), tmp_path / "other-home")   # no stored offset there
+    assert len(_records(repo / U.LOG_NAME)) == 1
+
+
+def test_a_rejected_non_plan_tool_or_a_bare_rejection_is_not_logged(repo, tmp_path):
+    transcript = tmp_path / "t.jsonl"
+    _write_transcript(transcript, repo, [
+        _tool_use("toolu_b", name="Bash", tool_input={"command": "ls"}), _rejection("toolu_b"),
+        _tool_use("toolu_e"), _rejection("toolu_e", feedback=""),
+    ])
+    _run_isolated(_stop(repo, transcript), tmp_path / "home")
+    assert not (repo / U.LOG_NAME).exists()
+
+
+def test_hooks_json_registers_it_on_stop():
+    groups = json.loads((_HOOK.parent / "hooks.json").read_text(encoding="utf-8"))["hooks"]["Stop"]
+    hits = [h for g in groups for h in g["hooks"]
+            if h["command"].endswith('/hooks/user-decision-log.py"')]
+    assert len(hits) == 1
