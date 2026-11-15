@@ -133,3 +133,35 @@ def test_the_route_the_dangling_refusal_names_restores_the_body(tree, capsys):
 
     assert "BODY WRITTEN BACK" in body.read_text(encoding="utf-8")
     assert _levels_pointing(tree) == ["a"]
+
+
+def test_an_unreadable_level_elsewhere_does_not_block_a_new_slug(tree, capsys):
+    """A new slug has no body, so the walk for a dangling line is best effort: a level whose
+    CLAUDE.local.md cannot be read is skipped. Refusing would stop every new add in the tree
+    over one damaged level that has nothing to do with the slug (a migration of a healthy
+    level failed that way)."""
+    (tree / "a" / "CLAUDE.local.md").write_bytes(b"\xff\xfe not utf-8\n")
+    capsys.readouterr()
+
+    rc = _add(tree / "b", "BODY FROM B")
+
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "BODY FROM B" in us.body_path(str(tree), SLUG).read_text(encoding="utf-8")
+
+
+def test_an_unreadable_level_still_stops_an_add_of_a_slug_whose_body_exists(tree, capsys):
+    """With a body on disk another level may well own the slug, so a level that cannot be
+    read still stops the add (exit 2) rather than letting it adopt the body."""
+    assert _add(tree / "b", "BODY FROM B") == 0
+    (tree / "a" / "CLAUDE.local.md").write_bytes(b"\xff\xfe not utf-8\n")
+    before = _snapshot(tree)
+    capsys.readouterr()
+
+    rc = _add(tree / "a" / "sub", "BODY FROM SUB")
+
+    cap = capsys.readouterr()
+    out = cap.out + cap.err
+    assert rc == 2, out
+    assert "CLAUDE.local.md" in out, out
+    assert _snapshot(tree) == before

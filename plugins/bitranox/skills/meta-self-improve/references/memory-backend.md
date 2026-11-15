@@ -472,7 +472,8 @@ body, enforces tree-unique slugs, refuses a pinned target (`PinnedEntry` - `amen
 deliberate way through). A slug another level of the tree points at is that level's fact even when
 its body file is missing (renamed away): `add` at any other level refuses it (`SlugOwnedElsewhere`,
 exit 2, nothing written) and names the owning level, whose own `add --slug <slug>` writes the body
-back. An update whose body brings its own frontmatter sets only the keys that frame names: a key
+back. That search skips a level whose `CLAUDE.local.md` cannot be read, so one damaged level never
+blocks a new slug; a slug whose body exists still exits 2 on such a level. An update whose body brings its own frontmatter sets only the keys that frame names: a key
 it leaves out keeps its stored value (the `metadata:` sub-keys `type:` and `skill:` included), so
 deleting a line from the frame never removes the key. To remove a key the engine does not write
 itself (anything but `name:`, `description:`, `title:`, `topics:` and `metadata:`), name it with

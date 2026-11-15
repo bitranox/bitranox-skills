@@ -48,6 +48,8 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 - `add` of a slug that another level of the tree points at refuses (`SlugOwnedElsewhere`, exit
   2, nothing written) even when that fact's body file is missing. After a body was renamed away,
   an add at another level exited 0 and wrote a new body that the old line then read as its own.
+  The search for such a line skips a level whose `CLAUDE.local.md` cannot be read, so one damaged
+  level never blocks the add of a new slug.
 - An update whose frame indents its `metadata:` sub-keys differently from the stored frame keeps
   valid YAML: the carried-over sub-keys and an inserted `skill:` or `type:` follow the frame's
   own indent.

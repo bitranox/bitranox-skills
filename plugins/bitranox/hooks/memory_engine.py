@@ -1014,17 +1014,40 @@ def _slug_owned_elsewhere(anchor, proj, slug):
     write a new body under that slug, which the old line then read as its own (exit 0, two lines,
     one body). The owning level's add writes the body back.
 
-    Reads `proj`'s own block, and walks the tree's levels (`_copies_of`) whenever `proj` holds no
-    line of the slug - a new slug included, since a dangling line can sit at any level; an update
-    at the owning level never walks.
+    Reads `proj`'s own block, and walks the tree's levels whenever `proj` holds no line of the
+    slug - a new slug included, since a dangling line can sit at any level; an update at the
+    owning level never walks.
 
-    A level that cannot be read raises TreeWalkError (from the walk): whether it owns the slug is
-    unknown, and "not owned" is the answer that lets add adopt a body another level points at."""
+    When the body exists, a level that cannot be read raises TreeWalkError (from `_copies_of`):
+    whether it owns the slug is unknown, and "not owned" is the answer that lets add adopt a body
+    another level points at. When no body exists the walk is best effort (`_readable_copies_of`):
+    an unreadable level is skipped, because refusing there would stop every new add in the tree
+    over one damaged level unrelated to the slug, and a new slug was never refused that way."""
     _s, here = us.parse_pointer_index(read_store_text(sig.claude_local_md_path(proj)))
     if any(p.slug == slug for p in here):
         return []
     pnorm = Path(proj).resolve()
-    return [level for level, _ptr in _copies_of(anchor, slug) if Path(level).resolve() != pnorm]
+    walk = _copies_of if us.body_path(anchor, slug).is_file() else _readable_copies_of
+    return [level for level, _ptr in walk(anchor, slug) if Path(level).resolve() != pnorm]
+
+
+def _readable_copies_of(anchor, slug):
+    """`_copies_of` over the levels that can be read: a level whose `CLAUDE.local.md` cannot be
+    read, or a tree whose level walk fails, contributes no line instead of raising TreeWalkError.
+    Only for a question where a missed line costs less than a refused write (see
+    `_slug_owned_elsewhere`)."""
+    try:
+        levels = list(curated_levels_under(anchor))
+    except TreeWalkError:
+        return []
+    out = []
+    for level in levels:
+        try:
+            text = read_store_text(sig.claude_local_md_path(level))
+        except TreeWalkError:
+            continue
+        out.extend((level, ptr) for ptr in us.parse_pointer_index(text)[1] if ptr.slug == slug)
+    return out
 
 
 def _body_description(text):
