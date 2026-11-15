@@ -95,7 +95,9 @@ record type, not a bare tuple.
 - A refusal that interpolates the validation library's error text. It hands the caller the
   library's internal tags, versioned docs URLs and a slice of their own input. Emit your own
   sentence plus one `<dotted location>: <reason>` line per validation error, and keep the original
-  exception as the cause
+  exception as the cause. The `<reason>` may be the library's own message for that one error
+  (without any prefix it adds and without the input); what is banned is its whole error text and
+  slices of the input
 
 ### Declare what the consumer must DISTINGUISH, not only what the old code read
 
@@ -186,7 +188,13 @@ The language skill has the checker's exact spellings and worked examples.
      is immutable so the type checker refuses a write through it, and nothing writes to it after it
      is built. Missing any one of the four, it is a violation: add the missing property or convert
      the table. A table keyed by string spellings of an enum's values is not this exception - key
-     it by the enum
+     it by the enum. The pin test reads the table object the code reads (through its reader, or a
+     check at import time), never a copy of the table in the test module or a list of literals:
+     a test comparing its own copy with the enum passes whatever the real table holds
+   - [ ] A boundary DECODE table may remain: a read-only table keyed by a code someone else
+     defines on the wire (often an integer) and mapping it to the word it is rendered as, whose
+     reader refuses an unknown code and takes no decision on it. No enum is needed for it; a
+     branch taken on the code is a decision, and that takes the closed enum of Core Principle 4
 
    **Verification:**
    - [ ] Run the project's full gate (the language skill names it) - fix all errors until passing
@@ -291,8 +299,13 @@ INITIALIZATION:
          gather closure and a variable-length sequence; at the boundary, an open type for a
          value someone else defines (Core Principle 4), a wire record plus its one conversion
          into the domain type (Principle 5) and a versioned wire record for a format still read
-         (Principle 7), plus the language skill's own list. Without this an analyser reports every
-         string-keyed map it sees, and you spend the loop re-judging its false positives.
+         (Principle 7); a boundary decode table (under Exceptions); a refusal line whose
+         `<reason>` is the validation library's message for that one error (the anti-pattern
+         bans its whole error text, not that); a string literal inside a user-facing message,
+         though a PARAMETER every caller passes a literal to stays a call-site-sweep finding even
+         when its value only ends up in a message; plus the language skill's own list. Without
+         this an analyser reports every string-keyed map it sees, and you spend the loop
+         re-judging its false positives.
          Parameter ORDER is not a data-structure finding either: two positional parameters of
          the same type are a keyword-only style question, so keep the brief to records and
          values, or an analyser asked for "same-type pairs" reports function signatures.
@@ -343,6 +356,10 @@ INITIALIZATION:
        payload surfaced as an uncaught `OSError`; the call raised nothing and instead reported a
        live host as unreachable, so a fixer briefed from the claim would have added `OSError`
        handling and left the misreport.
+     - CHECK every finding against the repo's recorded decisions (a decisions log, the project's
+       CLAUDE.md or ADRs: grep for the function, the file and the rule) before it goes into a
+       brief. A finding that contradicts a recorded ruling goes to the user, not to a fixer: a
+       brief overrides a ruling silently, and only a fixer that happens to read the log stops.
      - PARTITION the work into NON-OVERLAPPING file sets, one per subagent, BEFORE launching
        anything. This refactor is not per-file independent: an enum lives in one module and a
        model in another, so several agents will reach for the SAME shared file. Give each
@@ -371,6 +388,11 @@ INITIALIZATION:
          a test each way: a skipped row holding an unrepresentable value stays skipped, a kept
          one is refused. Validating every row first turns a row the old code skipped into an
          aborted load, and a live run on clean data cannot show it.
+       * When it turns a bare tuple into a record, instruction to change every consumer to read
+         the fields by name (or to unpack into variables named for the fields), and to name each
+         field for what it holds, never reusing a name another field or a neighbouring record
+         already gives something else. A record every consumer still unpacks by position has
+         changed nothing a reader sees.
        * Instruction to fix ALL violations
        * Instruction NOT to read or write `.data_arch_violations.json`: the coordinator owns it
          and writes it from the returned JSON (below)
@@ -450,8 +472,12 @@ STEP C - RUN TESTS:
         before comparing (the language skill says how; an arm that silently imports the working
         tree reads "same" for every input). Feed wrong-TYPE values beside out-of-range ones (a
         boolean for a count, a string for a timeout, a float for an integer): a lenient parser
-        accepts them silently. Mark one input whose result you changed on purpose as the LIVENESS
-        CONTROL: if it does not show up as different, the harness is broken, not the code.
+        accepts them silently. For EACH entry point the diff drives (the library call and the CLI
+        are two), mark one input whose result you changed on purpose as that entry point's
+        LIVENESS CONTROL: if it does not show up as different, that harness is broken, not the
+        code. Print every case's result in both arms before counting any as "same": cases that
+        all raise one identical error in both arms (a harness crash, a missing fixture) read as
+        "same" and tested nothing.
         Measured: a harness whose arms both imported the working tree reported 20 of 20 inputs
         "same", and only the control exposed it; the harness against the last release found a
         request model still accepting a boolean count and a string timeout after five analysis
