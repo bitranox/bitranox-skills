@@ -337,6 +337,26 @@ def _changed(slug: str, b: Entry, a: Entry) -> Change | None:
     return Change(slug, what, b, a) if what else None
 
 
+def _changed_across(slug: str, gone: list[Entry], new: list[Entry]) -> Change | None:
+    """What changed between a slug's lines that all left their levels and the lines it has now,
+    when their number differs too, so no line pairs with another.
+
+    The body is one file every line reads, so the first line on each side answers for it. The
+    title and the hook are compared as the SET each side carries: comparing the first line on
+    each side would pair two arbitrary lines, and copying the new line's title and hook into the
+    comparison would hide a retitle or a new hook made in the same run. The pin is left out: it
+    belongs to one line, and every line here is already listed as removed or added. A hook digest
+    is compared only when every line on both sides recorded one, as in `_changed`."""
+    what = ["title"] if {e.title for e in gone} != {e.title for e in new} else []
+    hooks_before, hooks_after = {e.hook_sha for e in gone}, {e.hook_sha for e in new}
+    if "" not in hooks_before | hooks_after and hooks_before != hooks_after:
+        what.append("hook")
+    body = _changed(slug, replace(gone[0], title=new[0].title, pin=new[0].pin,
+                                  hook_sha=new[0].hook_sha), new[0])
+    what += body.what if body else []
+    return Change(slug, what, gone[0], new[0]) if what else None
+
+
 def _diff_slug(slug: str, before: dict[str, Entry], after: dict[str, Entry], out: Diff) -> None:
     """Fold one slug's copies into `out`. Levels present on both sides are compared in place.
 
@@ -344,10 +364,10 @@ def _diff_slug(slug: str, before: dict[str, Entry], after: dict[str, Entry], out
     that vanished are removed and the new ones added. Keying on the slug alone kept one copy per
     slug, so removing one of two copies of a duplicated slug verified IDENTICAL.
 
-    Every copy of a slug reads the one body file, so when no level holds the slug on both sides
-    and the count differs, the body is compared across the first copy gone and the first one new:
-    with no level to compare in place, a body edit made in the same run (a `topics:` edit that
-    re-places the fact) was reported only as the removed and added lines.
+    When no level holds the slug on both sides and the count differs, there is no level to compare
+    in place, so the copies gone are compared with the copies new as a whole (`_changed_across`):
+    a body, title or hook edit made in the same run (a `topics:` edit that re-places the fact) is
+    a change, not only the removed and added lines.
     """
     common = sorted(set(before) & set(after))
     for level in common:
@@ -360,10 +380,9 @@ def _diff_slug(slug: str, before: dict[str, Entry], after: dict[str, Entry], out
         out.removed.extend(gone)
         out.added.extend(new)
         if not common and gone and new:
-            body = _changed(slug, replace(gone[0], title=new[0].title, pin=new[0].pin,
-                                          hook_sha=new[0].hook_sha), new[0])
-            if body:
-                out.changed.append(body)
+            change = _changed_across(slug, gone, new)
+            if change:
+                out.changed.append(change)
         return
     for b, a in zip(gone, new):
         out.moved.append(a)

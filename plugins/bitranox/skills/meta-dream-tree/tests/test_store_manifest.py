@@ -398,6 +398,27 @@ def test_lines_that_moved_and_changed_count_with_an_untouched_body_name_no_chang
     assert r.returncode == 1, r.stdout
     assert "changed  a-slug" not in r.stdout, r.stdout
 
+
+@pytest.mark.parametrize("line,what", [
+    ("- [Top renamed](mem:a-slug) - When top, do top.\n", "title"),
+    ("- [Top](mem:a-slug) - When top, do something else.\n", "hook"),
+])
+def test_a_title_or_hook_change_whose_lines_all_moved_and_changed_count_is_reported(
+        tmp_path, line, what):
+    """No level holds the slug on both sides and the count differs: a retitle or a new hook made in
+    the same run was hidden, because the comparison took the title and hook from the new line."""
+    make_tree(tmp_path)
+    out = outside(tmp_path)
+    assert run_cli(["backup", "--from", str(tmp_path), "--out", str(out)], tmp_path).returncode == 0
+    top = tmp_path / "CLAUDE.local.md"
+    top.write_text(top.read_text(encoding="utf-8").replace(TOP_LINE, ""), encoding="utf-8")
+    for lvl in ("elsewhere", "projects/app"):
+        _append_line(tmp_path / lvl, line)
+    r = run_cli(["verify", "--out", str(out)], tmp_path)
+    assert r.returncode == 1, r.stdout
+    assert "changed  a-slug  (%s)" % what in r.stdout, r.stdout
+
+
 @pytest.mark.skipif(NO_CHMOD, reason="needs a non-root POSIX user for chmod 000")
 def test_an_unreadable_level_file_refuses_instead_of_omitting_it(tmp_path):
     make_tree(tmp_path)
