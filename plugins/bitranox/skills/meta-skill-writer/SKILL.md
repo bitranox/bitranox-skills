@@ -1544,6 +1544,10 @@ copy the next edit misses becomes a contradiction. Only a gap absent from the wh
 finding, with one exception: an excerpt a reader really meets on its own (a reference file loaded
 on demand, the description, a section a hook injects). Text elsewhere never reaches that reader,
 so the gap stands; close it with a pointer to the covering text rather than a copy.
+Build the excerpt so it cannot cause such a gap: when a passage points at a list or definition
+outside it ("the roots above", "all six"), include that list, or ask no question that depends on
+it. Otherwise every tier answers NOT ANSWERED and the round spends a question on the excerpt
+instead of the skill.
 
 **A probe stops at the first gap it trips on,** so nothing past that point was exercised, and
 closing the gap can expose the next one. A gap marked closed in the review artifact is a claim
@@ -1626,7 +1630,12 @@ or returns. Measured: a skill said a capture call refuses a loopback interface b
 checks the name (it refuses by the link type the device reports), and two tiers quoted the false
 sentence back correctly. Nor can it see the text disagree with the skill's own tool: when an edit
 changes what the skill says is right, run or grep the tool the skill ships for the old advice and
-fix it in the same release.
+fix it in the same release. The same holds for what a tool WRITES and for example values. When the
+text tells the reader to check a field a tool writes (a marker line, a log field, an output
+column), run the tool and read that exact field before shipping the sentence: a recipe that runs
+green says nothing about the prose beside it. Copy every concrete example value (an identifier,
+an object name, a sample output line) from output produced in this session, never from recall: a
+probe answers its question whether or not the example exists in the data.
 
 **Before you ship, list every case the edit decides beyond the reported defect.** A fix for one
 defect usually settles neighbouring cases too: a new exception, a "the user's own X stays as is"
