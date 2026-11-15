@@ -469,7 +469,10 @@ that is not a level yet leaves nothing behind.
 `add` semantics: upserts by slug (title-derived unless `--slug` targets an existing identity),
 leaves an unpinned entry unpinned, keeps the existing body when `--body` is empty, frames a bare
 body, enforces tree-unique slugs, refuses a pinned target (`PinnedEntry` - `amend-pinned` is the
-deliberate way through). A slug names the body FILE, so `add`, `amend-pinned`, `rename --to-slug`
+deliberate way through). A slug another level of the tree points at is that level's fact even when
+its body file is missing (renamed away): `add` at any other level refuses it (`SlugOwnedElsewhere`,
+exit 2, nothing written) and names the owning level, whose own `add --slug <slug>` writes the body
+back. A slug names the body FILE, so `add`, `amend-pinned`, `rename --to-slug`
 and `relocate` refuse one that is not a plain filename (lowercase letters, digits, hyphens and
 dots, starting and ending with a letter or digit) before anything is written. On an update,
 `--type` with no body re-types the stored body in place; an unknown `--type` is refused.

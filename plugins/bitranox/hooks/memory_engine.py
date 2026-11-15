@@ -1003,19 +1003,23 @@ def amend_pinned_entry(proj, slug, hook=None, body=None, title=None, type_=None)
 
 def _slug_owned_elsewhere(anchor, proj, slug):
     """The levels OTHER than `proj` anywhere in the tree under `anchor` (siblings, ancestors and
-    descendants alike) that point at `slug`, when `proj` itself does not and the slug has a body;
-    else []. A non-empty answer means an add at `proj` would take over another level's fact:
-    adopting the body here wrote a second line and overwrote that fact's body with the new one,
-    so `add` refuses instead. [] means `proj` owns the slug (the update path), the slug is free,
-    or its body is dangling (no level points at it) and safe to adopt.
+    descendants alike) that point at `slug`, when `proj` itself does not; else []. A non-empty
+    answer means an add at `proj` would take over another level's fact: adopting the body here
+    wrote a second line and overwrote that fact's body with the new one, so `add` refuses
+    instead. [] means `proj` owns the slug (the update path), the slug is free, or its body is
+    dangling (no level points at it) and safe to adopt.
 
-    Reads `proj`'s own block, and walks the tree's levels (`_copies_of`) only when the body exists
-    and `proj` holds no line of it - a new slug and an update at the owning level never walk.
+    A line counts whether or not its body file exists: a line whose body was renamed away is a
+    broken fact, not a free slug. Asking only when a body existed let an add at another level
+    write a new body under that slug, which the old line then read as its own (exit 0, two lines,
+    one body). The owning level's add writes the body back.
+
+    Reads `proj`'s own block, and walks the tree's levels (`_copies_of`) whenever `proj` holds no
+    line of the slug - a new slug included, since a dangling line can sit at any level; an update
+    at the owning level never walks.
 
     A level that cannot be read raises TreeWalkError (from the walk): whether it owns the slug is
     unknown, and "not owned" is the answer that lets add adopt a body another level points at."""
-    if not us.body_path(anchor, slug).is_file():
-        return []
     _s, here = us.parse_pointer_index(read_store_text(sig.claude_local_md_path(proj)))
     if any(p.slug == slug for p in here):
         return []
@@ -1078,14 +1082,26 @@ def _with_skill(text, skill):
     new_inner, n = re.subn(r"(?m)^([ \t]+skill:)[ \t]*[^\s]*[ \t]*(?=\r?$)",
                            lambda s: "%s %s" % (s.group(1), skill), inner, count=1)
     if n == 0:
-        new_inner, n = re.subn(r"(?m)^([ \t]+type:[^\r\n]*)(?=\r?$)",
-                               lambda s: "%s%s  skill: %s" % (s.group(1), nl, skill), inner, count=1)
+        # At the `type:` line's own indent: a frame handed in may indent its sub-keys by four.
+        new_inner, n = re.subn(r"(?m)^(([ \t]+)type:[^\r\n]*)(?=\r?$)",
+                               lambda s: "%s%s%sskill: %s" % (s.group(1), nl, s.group(2), skill),
+                               inner, count=1)
     if n == 0:
+        indent = _metadata_indent(inner)
         new_inner, n = re.subn(r"(?m)^(metadata:)[ \t]*(?=\r?$)",
-                               lambda s: "%s%s  skill: %s" % (s.group(1), nl, skill), inner, count=1)
+                               lambda s: "%s%s%sskill: %s" % (s.group(1), nl, indent, skill),
+                               inner, count=1)
     if n == 0:
         new_inner = inner + "metadata:%s  skill: %s%s" % (nl, skill, nl)
     return _with_frame(head, m, new_inner)
+
+
+def _metadata_indent(inner):
+    """The indent of the first sub-key under `metadata:` in frontmatter `inner`, or two spaces
+    when it has none. A sub-key inserted at any other indent than its siblings' makes the frame
+    invalid YAML, and a frame handed in by a writer may indent them by four."""
+    m = re.search(r"(?m)^metadata:[ \t]*\r?\n([ \t]+)[A-Za-z_]", inner)
+    return m.group(1) if m else "  "
 
 
 def _with_frame(head, m, inner):
@@ -1212,19 +1228,25 @@ def _frame_blocks(inner):
 
 def _merged_metadata(new_lines, stored_lines):
     """The `metadata:` block `new_lines` with each sub-key line of `stored_lines` it does not set
-    appended (a sub-key's own continuation lines come with it)."""
+    appended (a sub-key's own continuation lines come with it), re-indented to the new block's
+    sub-key indent: the two frames may indent differently (a stored two against a handed-in
+    four), and a carried line at the stored indent made the frame invalid YAML."""
     def indent(line):
         return len(line) - len(line.lstrip(" \t"))
 
     have = {m.group(1) for m in map(_FRAME_SUBKEY_RX.match, new_lines[1:]) if m}
     subs = [line for line in stored_lines[1:] if _FRAME_SUBKEY_RX.match(line)]
     level = min(map(indent, subs), default=0)    # a sub-key's own indent; deeper is its value
+    new_subs = [line for line in new_lines[1:] if _FRAME_SUBKEY_RX.match(line)]
+    to = min((line[:indent(line)] for line in new_subs), key=len, default=None)
     out, carry = list(new_lines), False
     for line in stored_lines[1:]:
         m = _FRAME_SUBKEY_RX.match(line)
         if m and indent(line) == level:
             carry = m.group(1) not in have
         if carry:
+            if to is not None and line.strip() and indent(line) >= level:
+                line = to + line[level:]
             out.append(line if line.endswith("\n") else line + "\n")
     return out
 
@@ -1304,8 +1326,10 @@ def _retype_body(slug, hook, type_, text):
     new_inner, n = re.subn(r"(?m)^([ \t]+type:)[ \t]*[^\s]*[ \t]*(?=\r?$)",
                            lambda t: "%s %s" % (t.group(1), type_), inner, count=1)
     if n == 0:
+        indent = _metadata_indent(inner)
         new_inner, n = re.subn(r"(?m)^(metadata:)[ \t]*(?=\r?$)",
-                               lambda t: "%s%s  type: %s" % (t.group(1), nl, type_), inner, count=1)
+                               lambda t: "%s%s%stype: %s" % (t.group(1), nl, indent, type_),
+                               inner, count=1)
     if n == 0:
         new_inner = inner + "metadata:%s  type: %s%s" % (nl, type_, nl)
     return _with_frame(head, m, new_inner)

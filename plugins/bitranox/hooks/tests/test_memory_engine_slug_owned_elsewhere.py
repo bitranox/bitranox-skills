@@ -101,3 +101,35 @@ def test_a_body_no_level_points_at_is_still_adopted_at_a_sibling(tree):
     assert _add(tree / "b", "", hook="When x, do y sharpened.") == 0
     assert _levels_pointing(tree) == ["b"]
     assert "BODY FROM A" in us.body_path(str(tree), SLUG).read_text(encoding="utf-8")
+
+
+def test_a_pointer_whose_body_is_gone_still_owns_its_slug(tree, capsys):
+    """A line whose body file was renamed away is dangling, not free: an add of its slug at a
+    sibling wrote a new body that the old line then read as its own, and exited 0."""
+    assert _add(tree / "a", "BODY FROM A") == 0
+    body = us.body_path(str(tree), SLUG)
+    body.rename(body.with_name("renamed-away.md"))
+    before = _snapshot(tree)
+    capsys.readouterr()
+
+    rc = _add(tree / "b", "BODY FROM B", hook="When x, do z.")
+
+    out = capsys.readouterr().out
+    assert rc == 2, out
+    assert out.startswith("! refused:"), out
+    assert "--proj %s" % (tree / "a") in out, out
+    assert _snapshot(tree) == before                    # no body and no line at b
+    assert _levels_pointing(tree) == ["a"]
+
+
+def test_the_route_the_dangling_refusal_names_restores_the_body(tree, capsys):
+    """The refusal sends the writer to the owning level; an add there writes the body back under
+    the line that was waiting for it."""
+    assert _add(tree / "a", "BODY FROM A") == 0
+    body = us.body_path(str(tree), SLUG)
+    body.rename(body.with_name("renamed-away.md"))
+
+    assert _add(tree / "a", "BODY WRITTEN BACK") == 0
+
+    assert "BODY WRITTEN BACK" in body.read_text(encoding="utf-8")
+    assert _levels_pointing(tree) == ["a"]

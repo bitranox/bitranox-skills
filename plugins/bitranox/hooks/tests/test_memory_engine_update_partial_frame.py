@@ -6,6 +6,7 @@ follows the hook, and the stored `topics:` line still wins over the frame's. All
 """
 
 import pytest
+import yaml
 
 import memory_engine as E
 import uuid_store as us
@@ -83,3 +84,49 @@ def test_a_full_frame_update_is_unchanged_by_the_merge(fact):
     full = _stored(anchor, slug).replace("first prose", "rewritten prose")
     E.add_or_update_entry(proj, title="T", hook=HOOK, body=full, slug=slug)
     assert _stored(anchor, slug) == full
+
+
+# ---- a frame whose `metadata:` sub-keys are indented differently from the stored frame ---------
+# A stored frame indents its sub-keys by two spaces; a body handed in may use four. Lines carried
+# over, or inserted, at the other indent made the frontmatter invalid YAML.
+
+FOUR_SPACE = "---\nname: x\nmetadata:\n    type: reference\n---\n\nnew prose\n"
+
+
+def _yaml_frame(text):
+    return yaml.safe_load(_frame(text))
+
+
+def test_a_four_space_metadata_frame_merged_with_a_two_space_stored_one_stays_valid_yaml(fact):
+    anchor, proj, slug = fact
+    E.add_or_update_entry(proj, title="T", hook=HOOK, body=FOUR_SPACE, slug=slug)
+    meta = _yaml_frame(_stored(anchor, slug))["metadata"]
+    assert meta == {"type": "reference", "skill": "bitranox:compuse-git"}
+
+
+def test_a_skill_added_under_a_four_space_metadata_frame_stays_valid_yaml(tmp_path):
+    anchor = tmp_path / "tree2"
+    proj = anchor / "proj"
+    proj.mkdir(parents=True)
+    for d in (anchor, proj):
+        (d / "CLAUDE.md").write_text("x\n", encoding="utf-8")
+    slug = E.add_or_update_entry(str(proj), title="T", hook=HOOK, body="first prose",
+                                 type_="feedback")
+    E.add_or_update_entry(str(proj), title="T", hook=HOOK, body=FOUR_SPACE, slug=slug,
+                          skill="bitranox:compuse-git")
+    meta = _yaml_frame(_stored(anchor, slug))["metadata"]
+    assert meta == {"type": "reference", "skill": "bitranox:compuse-git"}
+
+
+@pytest.mark.parametrize("sub", ["other: kept", "skill: bitranox:compuse-git"])
+def test_a_type_inserted_under_a_four_space_metadata_follows_its_indent(sub):
+    frame = "---\nname: x\nmetadata:\n    %s\n---\n\nprose\n" % sub
+    assert _yaml_frame(E._retype_body("x", HOOK, "reference", frame))["metadata"]["type"] \
+        == "reference"
+
+
+@pytest.mark.parametrize("sub", ["other: kept", "type: reference"])
+def test_a_skill_inserted_under_a_four_space_metadata_follows_its_indent(sub):
+    frame = "---\nname: x\nmetadata:\n    %s\n---\n\nprose\n" % sub
+    assert _yaml_frame(E._with_skill(frame, "bitranox:compuse-git"))["metadata"]["skill"] \
+        == "bitranox:compuse-git"
