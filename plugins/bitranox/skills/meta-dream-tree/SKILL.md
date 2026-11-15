@@ -124,8 +124,9 @@ the success line, abort-and-show on a miss).
     rather than proposing a dream move. Judge on BOTH signals together: pointers but no
     descriptor is a real level that needs one; a descriptor but no pointers is usually a real level
     not used yet. Of the rest, only synthesize levels whose descriptor is EMPTY,
-    INCOMPLETE (missing template keys), or whose CHILDREN list is stale vs the actual
-    subdirectories, or whose MEANING is inherited. Those first three test STRUCTURE only: a level
+    INCOMPLETE (missing template keys), or whose CHILDREN list or STACK (named tool and event
+    lists included) disagrees with disk (below), or whose MEANING is inherited. Those first three
+    test STRUCTURE and disk facts only: a level
     whose repo was copied from a project template inherits the template's descriptor with only the
     NAME swapped by the rename step, so it carries every key and a fresh CHILDREN list while its
     WHAT, STACK and PLACE-HERE still describe the template. That is worse than an empty descriptor:
@@ -133,7 +134,12 @@ the success line, abort-and-show on a miss).
     For any level that came from a template, read its WHAT line against the first sentence of the
     repo's own README and require them to agree, and grep every `CLAUDE.local.md` (enumerated with
     `find`: Claude Code's `grep` skips gitignored files, and pointer files often are) for the
-    template's giveaway phrasing. Treat a mismatch as stale. Dispatch one `opus` subagent per stale
+    template's giveaway phrasing. Treat a mismatch as stale. For EVERY level, template or not, check
+    STACK and CHILDREN against disk too: a Python floor against the repo's `requires-python` and
+    classifiers, each CHILDREN entry against an `ls` (a listed `notebooks/` or docs subdir that does
+    not exist is stale), and a named event or tool list against the source file that wires it; a
+    mismatch is stale. (Measured: the commonest stale descriptors claimed a `Python 3.10+` the repo
+    had raised and a `notebooks/` it never had.) Dispatch one `opus` subagent per stale
     level, in parallel (bottom-up in two waves when a leaf and its parent are both stale, so the
     parent can read fresh child descriptors). An upper level's subagent reads each child dir's
     README/CLAUDE.md/docs headings + child descriptors; the project level's subagent reads the

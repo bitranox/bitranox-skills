@@ -244,7 +244,7 @@ telling this run's changes from a peer's then means rebuilding it from the backu
 ## Dedup semantics
 
 Fold near-duplicates into ONE sharpened entry (engine `add`, same slug); the surviving entry
-cross-link related entries with `[[slug]]` (UPWARD only). Dedup compares
+cross-links related entries with `[[slug]]` (UPWARD only). Dedup compares
 across the WHOLE scope of the running skill, and runs AGAIN after any placement (placement
 creates new overlap).
 
@@ -273,6 +273,16 @@ lesson survived, and low word overlap is normal for a well-curated fact, so a sc
 clear a pair either. (Measured: skeptics overturned 18 of 27 "safe to drop" verdicts, a 2-to-1
 majority was wrong where the lone dissent carried a quote, and a trigger-coverage skeptic found a
 dropped trigger in all 5 drafted merges.)
+
+**Check a merged hook against each member's LIVE pointer hook.** Read every member's current hook
+(`factedit.py show --slug <slug>`), never a review draft or an earlier copy, and keep every trigger
+each live hook names, in other words where needed: the merged hook may run up to the engine's hard
+cap rather than drop a trigger to reach the soft cap. A claim on which the members disagree (two
+accounts of one behaviour) is settled with an instrument, a probe or the source, before the merged
+body is written. A loss check reads each body with `factedit.py show --prose-only`: the frame
+`show --body` prints first repeats the current hook, so a search of the whole output finds every
+dropped clause there. (Measured: drafted from a day-old review, 7 of 26 merged hooks dropped a
+trigger and 2 carried a false statement; a pass against the live hooks caught all 9.)
 
 ## The placement routing prompt (verbatim - lives only here)
 
