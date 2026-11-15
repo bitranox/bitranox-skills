@@ -30,6 +30,13 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.5.2]
+
+### Changed
+
+- ai-llm-jev-judge: names sparse multi-label tagging (rare labels with abstract meanings) as a weak spot to check against a reference of 50+ items with several positives per label before relying on Jev, with the measured pilot figures; step 5 says to count a FLAT question's positives in the sample before rewording it.
+- ai-llm-jev-judge: the uvx floor is btx-skill-jev-judge>=0.3.9, and jev_shadow's JEV_JUDGE_FLOOR moves with it.
+
 ## [11.5.1]
 
 ### Fixed
