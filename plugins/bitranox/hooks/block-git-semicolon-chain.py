@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""PreToolUse(Bash|PowerShell) guard: two or more state-changing git verbs joined by `;` instead of `&&`.
+"""PreToolUse(Bash|PowerShell) guard: state-changing steps joined by `;` instead of `&&`.
+
+Two or more state-changing git verbs, a heredoc script before a recording git verb, or an acquire
+(lease, lock, login) before a further step.
 
 `;` means "run the next one regardless". Chain `git commit ; git merge ; git push` and a commit
 that refused still lets the merge and the push run - and those two answer a no-op with git's
@@ -14,6 +17,22 @@ A SECOND RULE shares this walk and its exemptions: a heredoc fed to a script run
 is usually an edit with an assertion in it, so a failed edit gets its unedited files staged and
 committed. See `git_after_script` for its scope and the replay that priced it. When both rules
 apply, the pair rule's message is the one shown.
+
+A THIRD RULE, same walk and exemptions: a statement that ACQUIRES something the next step needs
+(`<tool> lease take`, `lock acquire`, `flock -n 9`, a registry or `gh auth` login), then `;` or a
+line break, then any further program that is not a pure print, filter or status report. Prose
+had failed ten times on it: a lease take refused on a wrong option, and the deploy after it ran
+without the host lease. See `acquire_then_act`; it is checked only when neither git rule fires.
+
+Decisions:
+
+- The acquire set is the named shapes only, not "any statement before any statement": priced
+  by replaying `acquire_then_act` over 206,830 recorded Bash commands (30 days to 2026-11-15),
+  it fired 5 times - the incident, two read-only `ssh` checks after a take, and two hook probes
+  in a test harness - after exempting `--help` acquires, followers that only print or filter, and
+  followers whose first words report state (`lease status`). Reopen if a replay shows a recurring
+  wrong refusal or an acquire spelling the set misses. Pinned by
+  `test_block_git_semicolon_chain_acquire.py`.
 
 WHAT THIS GUARD REFUSES TO JUDGE
 --------------------------------
@@ -608,6 +627,84 @@ def git_after_script(command: str, tool_name: str = "Bash") -> tuple[str, str] |
     return None
 
 
+# The third rule's ends (see `acquire_then_act`). An ACQUIRE statement takes something the next
+# step needs - a lease on a shared host, a lock, a login - and fails without it. Matched on the
+# masked statement's words, so a quoted "lease take" inside an echo is not one.
+ACQUIRE_PAIRS = frozenset({("lease", "take"), ("lease", "acquire"), ("lock", "take"),
+                           ("lock", "acquire")})
+LOGIN_PROGRAMS = frozenset({"docker", "podman", "helm", "npm", "az", "oras", "skopeo", "buildah"})
+# Followers whose running anyway does no harm: they only print, filter, wait or test.
+HARMLESS_FOLLOWERS = frozenset({"echo", "printf", "true", ":", "sleep", "date", "cat", "ls",
+                                "test", "[", "exit", "return", "wait", "head", "tail", "grep",
+                                "wc", "sort", "uniq", "jq"})
+# A follower that only reports (`e2e lease status`, `systemctl status x`) reads state, so running
+# it after a failed acquire is what the author wants to see, not damage.
+REPORTING_WORDS = frozenset({"status", "show", "list", "help", "--help", "-h", "--version"})
+
+
+def _acquire_name(segment: str) -> str | None:
+    """A short name for what this masked statement acquires, or None when it acquires nothing."""
+    tokens = segment.split()
+    index = _skip_wrappers(tokens, 0)
+    if index >= len(tokens):
+        return None
+    program = tokens[index].rsplit("/", 1)[-1]
+    words = tokens[index + 1:]
+    if INERT_FLAGS.intersection(words):
+        return None                                    # `lease take --help` takes nothing
+    for first, second in zip(words, words[1:], strict=False):
+        if (first, second) in ACQUIRE_PAIRS:
+            return f"{first} {second}"
+    if program == "flock" and words and words[-1].isdigit() and all(
+            w.startswith("-") or w.isdigit() for w in words):
+        return "flock"
+    if program == "gh" and words[:2] == ["auth", "login"]:
+        return "gh auth login"
+    if program in LOGIN_PROGRAMS and "login" in words[:3]:
+        return f"{program} login"
+    return None
+
+
+def _follower(segment: str) -> str | None:
+    """The program this masked statement runs, unless it is a harmless follower or empty."""
+    tokens = segment.split()
+    index = _skip_wrappers(tokens, 0)
+    if index >= len(tokens):
+        return None
+    program = tokens[index].rsplit("/", 1)[-1]
+    if program in HARMLESS_FOLLOWERS or program in OPENERS or program in CLOSERS:
+        return None
+    if REPORTING_WORDS.intersection(tokens[index + 1:index + 4]):
+        return None
+    return program
+
+
+def acquire_then_act(command: str, tool_name: str = "Bash") -> tuple[str, str] | None:
+    """(what was acquired, the next program) when an acquire reaches it across `;`, or None.
+
+    The third rule. A lease take that fails on a wrong option, then `;` and a deploy: the deploy
+    runs without the lease it was meant to hold, on a host another session may be using, and its
+    own output reads like success. Same exemptions as the other two: errexit active, or a `||`
+    handler right after the acquire.
+    """
+    walked = _walk(command, tool_name)
+    if walked is None:
+        return None
+    parts, _raw_parts, active_before = walked
+    statements = list(range(0, len(parts), 2))
+    for index_a in statements:
+        acquired = _acquire_name(parts[index_a])
+        if not acquired or active_before[index_a] or _failure_handled_after(parts, index_a):
+            continue
+        for index_b in statements:
+            if index_b <= index_a:
+                continue
+            follower = _follower(parts[index_b])
+            if follower and _gap_continues_after_failure(parts, index_a + 1, index_b):
+                return acquired, follower
+    return None
+
+
 def chained_state_changes(command: str, tool_name: str = "Bash") -> list[str] | None:
     """The first pair of state-changing git verbs joined across an unguarded `;`, or None.
 
@@ -655,7 +752,20 @@ def main() -> int:
     if not verbs:
         after_script = git_after_script(command, tool_name)
         if not after_script:
-            return 0
+            acquired = acquire_then_act(command, tool_name)
+            if not acquired:
+                return 0
+            what, follower = acquired
+            return shell_text.refuse(
+                f"`{what}` reaches `{follower}` across `;` or a line break, so `{follower}` runs "
+                f"even when the {what} FAILED.\n"
+                "It then works without the lease, lock or login it was meant to hold - on a host "
+                "or resource another session may be using - and its own output reads like "
+                "success.\n"
+                "Fix: join them with `&&` so nothing runs past a failed acquire. If the next "
+                "step is allowed to run without it, write the failure path (`|| exit 1` to stop, "
+                "`|| true` to go on deliberately); `set -e` first also works.\n"
+            )
         runner, verb = after_script
         return shell_text.refuse(
             f"A `{runner}` heredoc script reaches `git {verb}` across a line break or `;`, so the "
