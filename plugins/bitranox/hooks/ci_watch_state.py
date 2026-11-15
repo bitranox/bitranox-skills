@@ -157,11 +157,15 @@ def _update(project_dir: str, change, default=None):
     it back when the file still holds the old one is how a caller comes to act on a count that
     was never stored.
     """
+    return _update_path(state_path(project_dir), change, default)
+
+
+def _update_path(path: Path, change, default=None):
+    """`_update` for a state file named by its path rather than by its project."""
     # Imported here, not at the top: the nudge runs after EVERY shell call and almost never
     # writes, so the lock's module is loaded only on the rare call that does.
     import self_improve_signals  # noqa: PLC0415 - kept off the per-shell-call import path
 
-    path = state_path(project_dir)
     try:
         with self_improve_signals.memory_lock(path, timeout=_LOCK_TIMEOUT):
             entries, result = change(_load(path))
@@ -248,8 +252,28 @@ def clear_sha(project_dir: str, sha: str, session: str | None = None) -> None:
 
 
 def clear_session(project_dir: str, session: str) -> None:
-    """Drop every pending sha for this session - CI was watched without naming a sha."""
-    _update(project_dir, lambda entries: ([e for e in entries if e.get("session") != session], None))
+    """Drop every pending sha for this session - CI was watched without naming a sha.
+
+    The session's entries are dropped from EVERY state file, not only `project_dir`'s. A file is
+    keyed by the event's cwd, which is wherever the shell sits: a push from a linked worktree and
+    a watch run after a `cd` to the main checkout land in two files, and clearing only the
+    watcher's file left the push pending, so the Stop gate blocked a turn whose CI was watched.
+    An empty session id names no session, so it clears its own file only.
+    """
+    def change(entries):
+        return [e for e in entries if e.get("session") != session], None
+
+    own = state_path(project_dir)
+    _update_path(own, change)
+    if not session:
+        return
+    try:
+        others = [p for p in own.parent.glob("claude-ci-watch-*.json") if p != own]
+    except OSError:
+        return
+    for other in others:
+        if any(e.get("session") == session for e in _load(other)):
+            _update_path(other, change)
 
 
 def bump_session_blocks(project_dir: str, session: str) -> list[dict]:

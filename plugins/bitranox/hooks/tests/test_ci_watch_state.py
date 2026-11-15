@@ -281,3 +281,25 @@ def test_a_stale_file_another_writer_has_locked_is_left_alone(tmp_path, temp_dir
     with self_improve_signals.memory_lock(held, timeout=1.0):
         state.record_push(str(tmp_path / "proj"), "sess-a", "a" * 40)
     assert held.exists()
+
+
+# ---- a watch run from another directory clears the push --------------------------------------
+# The state file is keyed by the event's cwd, which is wherever the shell sits. Measured in a real
+# session: the push ran in a linked worktree, `cd` to the main checkout put the ci_wait run there,
+# and the Stop back in the worktree still found the watched push pending and blocked the turn.
+
+def test_clearing_a_session_reaches_its_push_recorded_under_another_directory(tmp_path, temp_dir):
+    pushed_from = str(tmp_path / "worktree")
+    watched_from = str(tmp_path / "main-checkout")
+    state.record_push(pushed_from, "sess-a", "a" * 40)
+    state.record_push(pushed_from, "sess-b", "b" * 40)
+    state.clear_session(watched_from, "sess-a")
+    assert state.pending_for(pushed_from, "sess-a") == []
+    assert [e["sha"] for e in state.pending_for(pushed_from, "sess-b")] == ["b" * 40]
+
+
+def test_clearing_an_empty_session_id_leaves_other_directories_alone(tmp_path, temp_dir):
+    pushed_from = str(tmp_path / "elsewhere")
+    state.record_push(pushed_from, "", "a" * 40)
+    state.clear_session(str(tmp_path / "here"), "")
+    assert [e["sha"] for e in state.pending_for(pushed_from, "")] == ["a" * 40]
