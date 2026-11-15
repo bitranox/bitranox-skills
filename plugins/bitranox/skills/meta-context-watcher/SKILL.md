@@ -81,6 +81,12 @@ sit in the deferred-tool list: load the schema first with ToolSearch
 (`select:mcp__bitranox__backlog_add`). They take no path, so an item that belongs in ANOTHER
 repo's backlog (see below) is a hand edit there. A session without them (the plugin's mod needs
 Claude Code 2.1.259 or newer) edits the file by hand under the same rules.
+`backlog_add` refuses with "a new file here would split the backlog" when the cwd's repository
+has no `OPEN-WORK.md` but a directory above it has one. That ancestor file sits in whatever
+repository encloses yours, so decide by ownership, not by the refusal: when the cwd is a project
+of its own (a separate repository nested in an umbrella checkout, with work the umbrella does not
+track), pass `create_new: true`; when it is part of the project that owns the ancestor file, add
+the item to that file instead.
 Neither route commits. In a checkout other sessions share, the file can hold a peer's uncommitted
 lines beside yours, and a pathspec commit takes the whole working-tree file under your message.
 Run `git diff OPEN-WORK.md` first; when it shows a line that is not yours, stage only your own:
@@ -96,17 +102,26 @@ or closed, bring the commit to the main checkout (a fast-forward there, when its
 and yours to touch), or tell the user which file holds it - the only option for a backlog that
 is not tracked, since no commit carries it.
 
+**Read the returned `path` before anything else.** The tools act on the session's cwd at the
+moment of the call, and that is not always the tree you are editing: the harness can reset it to
+the launch directory, so a worktree session's close can land in the main checkout's file, beside a
+peer's uncommitted lines. When `path` is not the copy you meant, put the line back in that file
+from the text the tool returned, at its old place and leaving every other line alone, then make
+the change in the right copy by hand.
+
 The date is when it was FIRST raised and never changes. `ORIGIN` is `USER:` (their own words where
 they gave any) or `FOUND:`. `size` is how much is left; it is the field that disappears first when
 a list is retyped, and it breaks ties within an origin, so it is not optional. It is NOT the first
 ranking key - see below, where reading it as one is a named failure. A SOLVED item's line is
 DELETED, in the commit that records the solving work, and the reason goes in that commit message,
 where git history keeps the old line (the `backlog_close` tool deletes it the same way and returns
-the line and reason for that message; it neither commits nor checks whether the file is
-tracked). When you close several items in one pass, tag each reason
-`measured:` or `argued:`, because afterwards a closure settled by evidence and one settled by
-reasoning look identical, and only the second is open to reopening. A SessionStart hook prints the
-top ranks with their age.
+the line and reason for that message; it neither commits, nor checks whether the file is
+tracked, nor reads the file's header). So read the header before you close: when it names a step
+that comes first (append the line to an archive file, say), do that step with the line, then
+close; the next paragraph overrides only a header that keeps closed lines in place. When you
+close several items in one pass, tag each reason `measured:` or `argued:`, because afterwards a
+closure settled by evidence and one settled by reasoning look identical, and only the second is
+open to reopening. A SessionStart hook prints the top ranks with their age.
 
 That closing rule holds in every backlog, including one whose own header says closed lines stay
 as `- [x]` plus `| closed: <reason>`: rewrite that header rule to the delete rule in the same
@@ -423,22 +438,26 @@ first line back with the Edit tool (`git show HEAD:handover.md | head -1` has it
 refuse a `git restore`, and `git stash` is shared with every worktree), fast-forward, then read the
 handover origin brought, which is the current one.
 
-**A checkpoint handed back after a compaction is your own work in progress.** After an automatic
-compaction, a `<BITRANOX-COMPACT-RESUME>` block carries the checkpoint THIS session
-wrote shortly before, mid-task. Take its exact next action at once and mark it STALE as the block
-says. The paragraphs after this one, from "A gate result in the handover" on, are for a handover
-from an EARLIER session and do not apply to it: nothing was cleared, and the task in flight was
-already chosen against the backlog when the checkpoint was written. So do not read `OPEN-WORK.md`
-first, do not classify its lines, do not swap the task for a higher-ranked item, and do not hunt
-for survivors of a `/clear`. The task in flight is the whole piece of work the checkpoint's "In
-flight" names, every remaining step of it, not only the next action. A question you have not yet
-put to the user about a blocked item goes in your reply without stopping the work. All of those
-rules apply again when the task in flight is finished and you choose what comes next. A block
-saying NO checkpoint was saved means the compaction summary is all that carried over: when the next
-step needs detail it lacks, read the transcript the block names before continuing. The checkpoint's
-lessons need
-nothing from you: after a compaction the Stop gate asks for `bitranox:meta-dream-nap`, which
-captures them.
+**A checkpoint handed back after a compaction is your own work in progress, as of when it was
+written.** After an automatic compaction, a `<BITRANOX-COMPACT-RESUME>` block carries the checkpoint
+THIS session wrote shortly before, mid-task. Before acting on it, check its next action against what
+happened since: work can continue past a checkpoint before the compaction lands. Compare it with the
+compaction summary's current work and with `git log` and `git status` in the tree it names. When
+they show that action already done, mark it STALE and continue from the summary's step instead. When
+the checkpoint names work the summary never mentions (a tracked repo-root `handover.md` another
+session wrote), it is not yours: continue from the summary and leave that file alone. Otherwise mark
+it STALE as the block says and take its exact next action at once. The paragraphs after this one,
+from "A gate result in the handover" on, are for a handover from an EARLIER session and do not apply
+to it: nothing was cleared, and the task in flight was already chosen against the backlog when the
+checkpoint was written. So do not read `OPEN-WORK.md` first, do not classify its lines, do not swap
+the task for a higher-ranked item, and do not hunt for survivors of a `/clear`. The task in flight
+is the whole piece of work the checkpoint's "In flight" names, every remaining step of it, not only
+the next action. A question you have not yet put to the user about a blocked item goes in your reply
+without stopping the work. All of those rules apply again when the task in flight is finished and
+you choose what comes next. A block saying NO checkpoint was saved means the compaction summary is
+all that carried over: when the next step needs detail it lacks, read the transcript the block names
+before continuing. The checkpoint's lessons need nothing from you: after a compaction the Stop gate
+asks for `bitranox:meta-dream-nap`, which captures them.
 
 Never amend a stale handover to update it - write a NEW one and replace the file. An edited handover
 holds two moments with no way to tell them apart.
