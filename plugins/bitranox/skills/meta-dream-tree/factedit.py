@@ -58,7 +58,16 @@ names the level that owns it when the tree has one (`--level <it>` is the retry)
 
 `show --body` prints the stored body alone on stdout (its header goes to stderr), so
 `show --body > f`, an edit of `f`, then `apply --body-file f` stores exactly the edited text: the
-engine re-syncs the frame's `description:` to the hook it is given.
+engine re-syncs the frame's `description:` to the hook it is given. That frame repeats the
+CURRENT hook verbatim, so a loss check (did a shortened hook drop something the body still
+holds?) reads `show --prose-only`, the body without its frame; searching the whole `--body`
+output finds every dropped clause in the frame and passes every cut.
+
+`check`, `show` and `apply` report typographic tells (em/en dash, curly quote, ellipsis, NBSP,
+zero-width) in the hook and the body as advisories, from the plugin's own `tell_chars` scanner:
+a body stored through the engine comes from a file, so the tell-sweep hook that watches Write and
+Edit never sees it. They are advisories because the engine stores such text; the exit code still
+answers only whether it would.
 
 `apply --batch <file>` edits several facts in one call, for a change that spans them (a re-point
 across N facts) and would otherwise be hand-rolled as a script writing the store directly. The
@@ -201,6 +210,11 @@ class EngineRules:
     # cannot honour it either.
     writes_off: Callable[[], bool] = field(default=_writes_never_off)
     writes_off_line: str = ""
+    # The plugin's one tell scanner (hooks/tell_chars.find_tell_codepoints), bound from the same
+    # engine dir. A body reaches the store through the engine from a FILE, so the tell-sweep hook,
+    # which watches Write and Edit, never sees it: this scan is the only one it gets. None when
+    # the engine dir has no tell_chars, and `check` then lists the scan as skipped.
+    find_tells: Callable[[str], list] | None = None
 
 
 @dataclass(frozen=True)
@@ -269,6 +283,35 @@ def body_type(text: str) -> str:
     return m.group(1) if m else ""
 
 
+#: How many tell-bearing body lines one advisory names before it only counts the rest.
+_TELL_LINES_SHOWN = 5
+
+
+def _tell_advisories(hook: str, body: str, rules: EngineRules) -> list[str]:
+    """Advisories for typographic tells in the hook and the body. PURE given `rules`.
+
+    Advisories, not refusals: the engine stores text with tells, and `check`'s exit code answers
+    only whether it would. Each hit names its line and codepoints, never the line itself.
+    """
+    if rules.find_tells is None:
+        return []
+    out: list[str] = []
+    hook_hits = rules.find_tells(hook)
+    if hook_hits:
+        codepoints = " ".join(hit.split(": ", 1)[-1] for hit in hook_hits)
+        out.append(f"hook carries typographic tells ({codepoints}); write them in ASCII")
+    body_hits = rules.find_tells(body)
+    if body_hits:
+        shown = "; ".join(body_hits[:_TELL_LINES_SHOWN])
+        more = len(body_hits) - _TELL_LINES_SHOWN
+        out.append(
+            f"body carries typographic tells on {len(body_hits)} line(s) ({shown}"
+            + (f"; and {more} more" if more > 0 else "") + "); a body stored through the engine "
+            "never passes the tell-sweep hook, so replace them in the file "
+            "(hooks/strip_typographic_tells.py) before apply")
+    return out
+
+
 def judge_hook(hook: str, body: str, rules: EngineRules) -> Verdict:
     """What the engine would make of this hook. PURE given `rules`.
 
@@ -291,6 +334,7 @@ def judge_hook(hook: str, body: str, rules: EngineRules) -> Verdict:
             "hook has no trigger phrase - lead with WHEN it applies ('When <situation>, "
             "<directive>'), or it will not fire during reasoning")
     advisories.extend(str(a) for a in rules.advise(text, body or ""))
+    advisories.extend(_tell_advisories(text, body or "", rules))
     seen = rules.recurrence(body or "")
     if seen is not None and seen >= rules.escalate_at:
         advisories.append(
@@ -324,7 +368,9 @@ def anchor_dir(start: Path, resolve: Callable[[str], object] | None) -> Path:
     anchor = store_anchor(start, resolve)
     if anchor is None:
         raise NoAnchor(f"no {STORE_DIRNAME}/ store at the memory anchor of "
-                       f"{Path(start).resolve()} (the topmost dir holding a CLAUDE.md and a store)")
+                       f"{Path(start).resolve()} (the topmost dir holding a CLAUDE.md and a store); "
+                       "the walk starts at --from, which defaults to the current directory, so "
+                       "pass --from <a dir inside the tree> when running from outside it")
     return anchor
 
 
@@ -462,7 +508,7 @@ def load_rules(engine: Path) -> EngineRules:
     # eviction; those keep the module objects they bound, and this load binds fresh copies beside
     # them. The anchor resolver and the memory-writes switch live in self_improve_signals
     # (uuid_store re-exports the resolver), so that goes too.
-    for name in ("uuid_store", "capture_constraints", "self_improve_signals"):
+    for name in ("uuid_store", "capture_constraints", "self_improve_signals", "tell_chars"):
         sys.modules.pop(name, None)
     importlib.invalidate_caches()
     try:
@@ -471,10 +517,14 @@ def load_rules(engine: Path) -> EngineRules:
         sis = importlib.import_module("self_improve_signals")
     except ImportError as exc:
         raise EngineNotFound(f"engine at {engine} is not importable: {exc}") from exc
-    switch = {}
+    extra = {}
     if hasattr(sis, "memory_writes_off"):
-        switch = {"writes_off": sis.memory_writes_off,
+        extra = {"writes_off": sis.memory_writes_off,
                   "writes_off_line": sis.MEMORY_WRITES_OFF_LINE}
+    try:
+        extra["find_tells"] = importlib.import_module("tell_chars").find_tell_codepoints
+    except (ImportError, AttributeError):
+        pass  # the tell scan is skipped and `check` says so; the engine caps still bind
     return EngineRules(
         soft_max=us.HOOK_SOFT_MAX,
         hard_max=us.HOOK_HARD_MAX,
@@ -488,7 +538,7 @@ def load_rules(engine: Path) -> EngineRules:
         types=tuple(us.TYPE_PREFIXES),
         engine_path=Path(engine).resolve(),
         resolve_anchor=getattr(us, "resolve_anchor", None),
-        **switch,
+        **extra,
     )
 
 
@@ -790,17 +840,20 @@ def cmd_show(args, rules: EngineRules) -> int:
                      level=Path(args.level) if args.level else None)
     verdict = judge_hook(fact.hook, fact.body, rules)
     data = _fact_data(fact, verdict, rules)
-    if args.body:
-        data["body"] = fact.body
-    if args.body and not args.as_json:
+    show_body = args.body or args.prose_only
+    # --prose-only drops the frame: its description: is the current hook, so a loss check reading
+    # the whole body would find every clause a shortened hook dropped right there.
+    body = _prose(fact.body) if args.prose_only else fact.body
+    if show_body:
+        data["body"] = body
+    if show_body and not args.as_json:
         # The body alone goes to stdout, so `show --body > f` captures exactly the text `apply
         # --body-file f` takes back; the header is for the person reading, so it goes to stderr.
-        print(_render_fact(data, fact.body, True), file=sys.stderr)
-        sys.stdout.write(fact.body if fact.body.endswith("\n") or not fact.body
-                         else fact.body + "\n")
+        print(_render_fact(data, body, True), file=sys.stderr)
+        sys.stdout.write(body if body.endswith("\n") or not body else body + "\n")
         return 0
     _emit(args.as_json, "show", True, data, [],
-          _render_fact(data, fact.body, args.body))
+          _render_fact(data, fact.body, show_body))
     return 0
 
 
@@ -810,6 +863,8 @@ def cmd_check(args, rules: EngineRules) -> int:
         raise BadInput("give a hook with --hook or --hook-file")
     body = _resolve_text(None, args.body_file, "--body") or ""
     skipped = [] if args.body_file else ["body advisories (no --body-file given)"]
+    if rules.find_tells is None:
+        skipped.append("tell scan (the engine dir has no tell_chars)")
     verdict = judge_hook(hook, body, rules)
     data = {"hook_chars": verdict.length, "soft_max": rules.soft_max,
             "hard_max": rules.hard_max, "accepted": verdict.accepted,
@@ -1261,7 +1316,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     sh = sub.add_parser("show", help="read a fact: its hook, its body, and how the engine reads it")
     _add_target(sh)
-    sh.add_argument("--body", action="store_true", help="also print the body")
+    sh.add_argument("--body", action="store_true",
+                    help="also print the body; it starts with its frame, whose description: "
+                         "repeats the CURRENT hook, so a search of this output for what a "
+                         "shortened hook dropped finds it there - use --prose-only for that")
+    sh.add_argument("--prose-only", action="store_true",
+                    help="print the body without its frame (implies --body), for a loss check")
     _add_common(sh)
 
     ck = sub.add_parser("check", help="would the engine accept this hook?")
