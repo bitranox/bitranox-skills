@@ -51,6 +51,22 @@ DOES NOT APPLY - internal seams between trusted code:
   when `value.isascii() and value.isprintable()` (below 0x80 the unsafe set is the C0 controls plus
   DEL, which is what `isprintable` refuses); pair it with a test comparing the shortcut to the walk
   on all 128 ASCII chars, so a char later added to the unsafe set cannot survive the shortcut.
+- **A lax-mode model field is not a check on numeric or date TEXT.** Fed a query or form string, a
+  Pydantic `int` field accepts `"1_0"` (as 10), `"+2"`, `" 7 "` and any run of leading zeros; a
+  `Decimal` field also accepts `"1e3"` and Arabic-Indic digits, and its `max_digits` counts
+  significant digits, not the text's length; a `date` field accepts a midnight datetime string
+  with or without a UTC offset, and a `time` field an offset. Check the RAW string first (a
+  `field_validator(mode="before")` with a length bound and `re.fullmatch(r"[0-9]{1,N}", s)`), or
+  declare a constrained `str` field and convert after it, and pin those inputs as refusal tests.
+  Two boundaries that read the same value must agree: a form parser checking `[0-9]` beside a
+  link parser leaning on the model's lax coercion refuses and accepts different strings.
+  Measured on pydantic 2.14.3.
+- **Write a case rule per character.** "Upper case only" written as `s == s.upper()` refuses every
+  character whose upper case is longer than one character: `chr(0xDF)` (German sharp s) becomes
+  `"SS"`, and the ligatures U+FB00-U+FB06 to two or three letters, so such a value can
+  never pass although the target system stores it unchanged. Refuse a character only when
+  `len(c.upper()) == 1 and c != c.upper()`, and put `chr(0xDF)` and `chr(0xFB01)` on the ACCEPT
+  side of the test, a lower-case ASCII letter on the refuse side.
 - **Parse CSV strictly.** `csv.reader(f, strict=True)` plus `except csv.Error` at the boundary:
   without `strict`, one stray quote merges every following row into a single field and the loader
   exits 0.
@@ -109,7 +125,7 @@ once at the edge.
 | Deserialization       | a safe format (JSON) parsed into a typed model                                                                                                  | `pickle` / `yaml.load` / `eval` on untrusted data                                                                      |
 | Outbound URL (SSRF)   | allowlist host + scheme; block internal/link-local ranges and redirects to them                                                                 | fetch a user-supplied URL unrestricted                                                                                 |
 | Log / response header | strip CR/LF + control chars before writing                                                                                                      | write user data into a header/log line raw (injection/forging)                                                         |
-| Device command stream | refuse control bytes (SOH, STX, ESC) in every field of a print or label job, or allowlist printable characters                                 | put a CSV or form value into a printer or device command raw (one value can reset it or clear its modules)            |
+| Device command stream | refuse control bytes (SOH, STX, ESC) in every field of a print or label job, or allowlist printable characters                                  | put a CSV or form value into a printer or device command raw (one value can reset it or clear its modules)             |
 
 **HTML built by hand: pick the escape mode per location.** Python's `html.escape(s)` defaults to
 `quote=True`, which also turns `"` and `'` into `&quot;` and `&#x27;`. Inside a quoted attribute
@@ -144,6 +160,8 @@ numeric, IDNA, trailing-dot and backslash/userinfo spellings of a forbidden host
 - [ ] Length / size / range bounded; large data streamed, not fully materialized
 - [ ] Allowed charset decided explicitly; arbitrary bytes/chars rejected, normalized (NFC), or escaped
 - [ ] Whole-value regex uses `fullmatch` with `[0-9]` or `re.ASCII`; no `isdigit()` before `int()`
+- [ ] Numeric and date text from a query or form is checked on the raw string, not left to a
+      lax-mode model field; a case rule is written per character
 - [ ] SQL via bound parameters only; no string-built queries
 - [ ] HTML autoescape ON; only trusted rich-text opts out, never a global disable
 - [ ] Hand-built HTML: `html.escape(s, quote=False)` in element text, `html.escape(s)` in attributes
