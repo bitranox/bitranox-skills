@@ -6,6 +6,8 @@ descriptor can neither drop nor change a level's topics. All content ASCII.
 """
 
 import json
+import subprocess
+import sys
 import tracemalloc
 
 import pytest
@@ -746,3 +748,150 @@ def test_a_deeply_nested_batch_line_is_a_usage_error_naming_the_line(tmp_path):
     # (or, on an unlimited stack, a list where an object belongs) names the line, never a traceback.
     rows, err = E._read_topic_batch(_batch(tmp_path, ["[" * 2000 + "]" * 2000]))
     assert rows is None and "line 1" in err
+
+
+# ---- input of the wrong JSON type ----------------------------------------------------------------
+
+@pytest.mark.parametrize("spec", ["[]", '"python"', "7", "null"])
+def test_a_list_spec_that_is_no_json_object_names_the_shape_it_needs(tmp_path, capsys, spec):
+    anchor, proj = _tree(tmp_path, with_list=False)
+    bad = tmp_path / "bad.json"
+    bad.write_text(spec, encoding="utf-8")
+    assert E.main(["topics-set-list", "--proj", proj, "--from-file", str(bad)]) == 2
+    err = capsys.readouterr().err
+    assert '{"tagger": ..., "topics": {...}}' in err and "list indices" not in err, err
+    assert topic_store.load(anchor) is None
+
+
+@pytest.mark.parametrize("line", ["[]", '"feedback-a"', "7", "null"])
+def test_a_batch_line_that_is_no_json_object_names_the_shape_it_needs(tmp_path, capsys, line):
+    anchor, proj = _tree(tmp_path)
+    _fact(proj, "feedback-a")
+    assert E.main(["set-topics", "--proj", proj, "--batch", _batch(tmp_path, [line])]) == 2
+    err = capsys.readouterr().err
+    assert "line 1" in err and '{"slug": ..., "topics": [...]}' in err and "list indices" not in err
+    assert _topics(anchor, "feedback-a") is None
+
+
+# ---- topics-show --json on a topic file it cannot use ---------------------------------------------
+
+@pytest.mark.parametrize("damage, said", [(b"{broken", "not valid JSON"), (b"", "empty"),
+                                          (b"\xff\xfe", "not UTF-8")])
+def test_topics_show_json_reports_an_unusable_file_as_a_json_error(tmp_path, capsys, damage, said):
+    anchor, proj = _tree(tmp_path)
+    topic_store.store_path(anchor).write_bytes(damage)
+    assert E.main(["topics-show", "--proj", proj, "--json"]) == 2
+    out = capsys.readouterr().out
+    env = json.loads(out)
+    assert env["ok"] is False and env["command"] == "topics-show" and said in env["error"], out
+
+
+def test_topics_show_without_json_still_reports_a_damaged_file_as_plain_text(tmp_path, capsys):
+    anchor, proj = _tree(tmp_path)
+    topic_store.store_path(anchor).write_bytes(b"{broken")
+    assert E.main(["topics-show", "--proj", proj]) == 2
+    captured = capsys.readouterr()
+    assert captured.out == "" and captured.err.startswith("! error: ")
+
+
+# ---- the in-use check reads a frame whole ----------------------------------------------------------
+
+def _push_topics_past_the_head(anchor, slug):
+    """Plant hand-written frame keys ahead of `slug`'s topics: line until it starts past
+    FRONTMATTER_HEAD_BYTES. Returns the body path."""
+    path = us.body_path(anchor, slug)
+    text = path.read_text(encoding="utf-8")
+    pad = "".join("k%05d: %s\n" % (i, "v" * 40) for i in range(E.FRONTMATTER_HEAD_BYTES // 40))
+    path.write_text(text.replace("\ntopics:", "\n" + pad + "topics:", 1), encoding="utf-8")
+    assert path.read_text(encoding="utf-8").index("\ntopics:") > E.FRONTMATTER_HEAD_BYTES
+    return path
+
+
+def test_a_topics_line_past_the_head_still_blocks_dropping_its_topic(tmp_path, capsys):
+    anchor, proj = _tree(tmp_path)
+    _fact(proj, "feedback-a")
+    E.set_fact_topics(proj, {"feedback-a": ("rust",)})
+    path = _push_topics_past_the_head(anchor, "feedback-a")
+    assert E.read_body_topics(path) == ("rust",)
+    spec = _list_file(tmp_path, {k: v for k, v in LIST.items() if k != "rust"})
+    rc = E.main(["topics-set-list", "--proj", proj, "--from-file", spec])
+    assert rc == 2 and "feedback-a carries rust" in capsys.readouterr().out
+    assert "rust" in topic_store.load(anchor)["topics"]
+
+
+def test_a_long_body_opening_with_a_rule_and_no_frame_reads_as_untagged(tmp_path):
+    # Reading on past the head is for a frame that is still open there; a body whose first line
+    # is a horizontal rule and that never closes a frame stays a body without one.
+    anchor, _proj = _tree(tmp_path)
+    path = us.body_path(anchor, "feedback-rule")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("---\n" + "topics: [rust]\n" + "prose\n" * (E.FRONTMATTER_HEAD_BYTES // 3),
+                    encoding="utf-8")
+    assert E.read_body_topics(path) is None
+
+
+# ---- the list and a fact's topics change one at a time ----------------------------------------------
+
+ENGINE = E.__file__
+
+
+def _start_engine(*args):
+    return subprocess.Popen([sys.executable, ENGINE, *args], stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
+
+
+def _wait_briefly(child, seconds=3.0):
+    """Give `child` `seconds` to finish; a child blocked on a lock is still running after it."""
+    try:
+        child.wait(timeout=seconds)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+def test_a_list_change_cannot_scan_between_a_set_topics_check_and_its_write(tmp_path):
+    # Two real processes. This one holds the placement lock and binds a fact to rust, as a
+    # set-topics call does from its row checks to its last write; a topics-set-list dropping rust
+    # runs meanwhile in a child. Scanning for users before the lock is free, the child found none
+    # and saved a list the fact then carried a topic outside of.
+    anchor, proj = _tree(tmp_path)
+    _fact(proj, "feedback-a")
+    spec = _list_file(tmp_path, {k: v for k, v in LIST.items() if k != "rust"})
+    with E.placement_lock(anchor, "test"):
+        child = _start_engine("topics-set-list", "--proj", proj, "--from-file", spec)
+        _wait_briefly(child)
+        E._set_fact_topics_held(anchor, {"feedback-a": ("rust",)}, LIST, False, None)
+    out, err = child.communicate(timeout=120)
+    listed = set(topic_store.load(anchor)["topics"])
+    assert set(_topics(anchor, "feedback-a")) <= listed, (child.returncode, out, err)
+    assert child.returncode == 2 and "feedback-a carries rust" in out, (out, err)
+
+
+def test_a_set_topics_waiting_on_a_list_change_checks_the_new_list(tmp_path):
+    # The other order: a set-topics child reads the list, then waits while this process holds the
+    # lock and drops rust (no fact carries it yet). Checking its rows against the list it read
+    # before waiting, the child then tagged the fact with the topic just dropped.
+    anchor, proj = _tree(tmp_path)
+    _fact(proj, "feedback-a")
+    with E.placement_lock(anchor, "test"):
+        child = _start_engine("set-topics", "--proj", proj, "--slug", "feedback-a",
+                              "--topics", "rust")
+        _wait_briefly(child)
+        assert child.poll() is None
+        E._set_topic_list_held(anchor, {k: v for k, v in LIST.items() if k != "rust"}, "jev")
+    out, err = child.communicate(timeout=120)
+    assert child.returncode == 2 and "rust not in the topic list" in out, (out, err)
+    assert _topics(anchor, "feedback-a") is None
+
+
+def test_a_level_tagging_waits_for_the_placement_lock(tmp_path):
+    # The same race through a level: set-level-topics checks the list and writes a TOPICS line,
+    # so it holds the placement lock too, and a list change can never run between the two.
+    anchor, proj = _tree(tmp_path)
+    E.main(["set-scope", "--proj", proj, "--scope", SCOPE])
+    with E.placement_lock(anchor, "test"):
+        child = _start_engine("set-level-topics", "--proj", proj, "--topics", "rust")
+        _wait_briefly(child)
+        assert child.poll() is None and tp.descriptor_topics(_scope(proj)) is None
+    out, err = child.communicate(timeout=120)
+    assert child.returncode == 0, (out, err)
+    assert tp.descriptor_topics(_scope(proj)) == ("rust",)

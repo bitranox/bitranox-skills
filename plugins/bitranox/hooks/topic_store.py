@@ -57,20 +57,68 @@ def level_key(anchor, level) -> str:
     return "" if rel == os.curdir else Path(rel).as_posix()
 
 
+_REMEDY = ("repair it by hand, or delete it and write the list again with memory_engine.py "
+           "topics-set-list (every level then reads as stale until its topics are chosen again)")
+
+
+def _unusable(anchor, why) -> TopicStoreError:
+    return TopicStoreError("%s %s - %s" % (store_path(anchor), why, _REMEDY))
+
+
+def _meaning_problem(name, meaning) -> str | None:
+    """Why `meaning` cannot be the meaning of `name`, or None. One line, as given (a trailing
+    line break is a second line), of 1 to MAX_MEANING characters once trimmed: the trimmed text
+    is what is stored, so it is what is measured."""
+    if not isinstance(meaning, str) or meaning.splitlines() != [meaning] \
+            or not 0 < len(meaning.strip()) <= MAX_MEANING:
+        return "the meaning of %r must be one line of 1 to %d characters" % (name, MAX_MEANING)
+    return None
+
+
+def _content_problem(topics) -> str | None:
+    """Why a stored `topics` object is not a list `save_list` could have written, or None. Each
+    tag is judged by topic_placement's own grammar and must be stored in the form it normalises
+    to, so the file follows that grammar whatever it becomes."""
+    if len(topics) > MAX_LIST:
+        return "holds %d topics, over the limit of %d" % (len(topics), MAX_LIST)
+    for name, meaning in topics.items():
+        try:
+            if tp.normalise_topics([name]) != (name,):
+                return "holds the tag %r, which is not in its stored form" % (name,)
+        except tp.InvalidTopic as exc:
+            return "holds a tag that is not one: %s" % exc
+        why = _meaning_problem(name, meaning)
+        if why:
+            return "holds a bad meaning: %s" % why
+    return None
+
+
 def load(anchor) -> dict | None:
     """The topic file's content, or None when the tree has none. Raises TopicStoreError for a
-    file that is not the JSON object this module writes, and TreeWalkError for one that cannot
-    be read: a list read as absent would switch placement by topic off without a word."""
-    text = us.read_store_text(store_path(anchor))
+    file that is there but empty, that is not the JSON object this module writes, or whose list
+    `save_list` would refuse (a tag outside topic_placement's grammar, a bad meaning, more than
+    MAX_LIST topics), and TreeWalkError for one that cannot be read: a list read as absent would
+    switch placement by topic off without a word, and one read as fine would be written back by
+    `record_level` as if it were. A file without `version` reads as version 1."""
+    path = store_path(anchor)
+    text = us.read_store_text(path)
     if text == "":
+        # read_store_text answers "" for a file that is absent AND for one that is empty; only
+        # the first means "no list". A truncated write leaves the second.
+        if path.is_file():
+            raise _unusable(anchor, "is empty (0 bytes)")
         return None
     try:
         data = json.loads(text)
     except ValueError as exc:
-        raise TopicStoreError("%s is not valid JSON (%s)" % (store_path(anchor), exc)) from exc
+        raise _unusable(anchor, "is not valid JSON (%s)" % exc) from exc
     if not (isinstance(data, dict) and isinstance(data.get("topics"), dict)
             and isinstance(data.get("levels", {}), dict)):
-        raise TopicStoreError("%s is not a topic file (no 'topics' object)" % store_path(anchor))
+        raise _unusable(anchor, "is not a topic file (no 'topics' object)")
+    why = _content_problem(data["topics"])
+    if why:
+        raise _unusable(anchor, why)
+    data.setdefault("version", 1)
     data.setdefault("levels", {})
     data.setdefault("tagger", "opus")
     return data
@@ -102,10 +150,9 @@ def save_list(anchor, topics: Mapping[str, str], tagger: str) -> bool:
         (name,) = tp.normalise_topics([raw])
         if name in clean:
             raise TopicStoreError("the topic %r is named twice" % (name,))
-        if not isinstance(meaning, str) or not meaning.strip() or len(meaning) > MAX_MEANING \
-                or meaning.splitlines() != [meaning]:
-            raise TopicStoreError("the meaning of %r must be one line of 1 to %d characters"
-                                  % (name, MAX_MEANING))
+        why = _meaning_problem(name, meaning)
+        if why:
+            raise TopicStoreError(why)
         clean[name] = meaning.strip()
     with sig.memory_lock(store_path(anchor)):
         data = load(anchor) or dict(_EMPTY)

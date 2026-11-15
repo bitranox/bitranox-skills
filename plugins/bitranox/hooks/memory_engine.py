@@ -451,7 +451,8 @@ class PlacementLockBusy(TimeoutError):
     def __init__(self, anchor, verb, waited):
         super().__init__(
             "%s waited %g s for the placement lock of the tree %s (%s): another render-topics, "
-            "set-topics, or write to a fact placed by topic holds it. Run %s again once that one "
+            "set-topics, topics-set-list, set-level-topics, or write to a fact placed by topic "
+            "holds it. Run %s again once that one "
             "finishes; a lock left by a holder that crashed is reclaimed once it is %d s old"
             % (verb, waited, anchor, placement_lock_path(anchor), verb, int(sig._LOCK_STALE_S)))
 
@@ -1263,16 +1264,23 @@ def _with_stored_frame_keys(text, stored):
 
 
 def _with_topics_line(text, line):
-    """`_with_topics` for a whole `topics:` line given as it should be written (None removes it)."""
+    """`_with_topics` for a whole `topics:` line given as it should be written (None removes it).
+
+    A hand-edited frame can hold several `topics:` lines. Readers take the first, so a set
+    replaces that one and removes the rest, and None removes them all: a later line left behind
+    became the first once the first was gone, and the fact's topics changed with nobody tagging."""
     head, m = _frontmatter(text)
     if m is None:
         return text
     inner = m.group(1)
     nl = "\r\n" if inner.endswith("\r\n") else "\n"
+    every_line = r"(?m)^topics:[^\r\n]*\r?\n"         # inner ends in a line break, so each has one
     if line is None:
-        new_inner = re.sub(r"(?m)^topics:[^\r\n]*\r?\n", "", inner, count=1)
-        return _with_frame(head, m, new_inner)
-    new_inner, n = re.subn(r"(?m)^topics:[^\r\n]*", lambda _t: line, inner, count=1)
+        return _with_frame(head, m, re.sub(every_line, "", inner))
+    first = re.search(r"(?m)^topics:[^\r\n]*", inner)
+    n = first is not None
+    if n:
+        new_inner = inner[:first.start()] + line + re.sub(every_line, "", inner[first.end():])
     for key in ("title", "description", "name"):
         if n:
             break
@@ -2675,7 +2683,8 @@ def lint_tree(anchor):
 
 FRONTMATTER_HEAD_BYTES = 16384
 """How much of a body a topic scan reads: the frontmatter sits at the head, and a scan over every
-body of a tree must not read every body whole."""
+body of a tree must not read every body whole. A body whose frame is still open at this point is
+read whole (`_read_body_head`)."""
 MAX_TOPIC_BATCH = 5000
 """Most rows one `set-topics --batch` takes: the batch is held as one dict while it is applied."""
 MAX_TOPIC_BATCH_LINE_BYTES = 4096
@@ -3006,12 +3015,38 @@ def _line_growth_refusal(verb, changes, retry):
                _ENGINE_ROUTE, level, MAX_RENDER_BLOCK_BYTES))
 
 
+_FRAME_OPEN_RX = re.compile(r"---[ \t]*\r?\n")
+
+
+def _head_cuts_the_frame(head):
+    """True when `head`, a body's first FRONTMATTER_HEAD_BYTES, may end before the body's frame
+    does: it is nothing but leading whitespace, or it opens a frame whose closing line it does not
+    hold (or holds only as its last bytes, which the next byte could still extend)."""
+    lead = head.lstrip()
+    if not lead:
+        return True
+    if not _FRAME_OPEN_RX.match(lead):
+        return False
+    closed = _FRONTMATTER_BLOCK_RX.match(lead)
+    return closed is None or closed.end() == len(lead)
+
+
 def _read_body_head(path):
-    """The first FRONTMATTER_HEAD_BYTES of the body at `path` as text, None when the file is
-    missing. Raises TreeWalkError when it exists and cannot be read."""
+    """The head of the body at `path` as text: its first FRONTMATTER_HEAD_BYTES, or the whole
+    body when its frame is still open there. None when the file is missing. Raises TreeWalkError
+    when it exists and cannot be read.
+
+    Reading on is what makes a topic scan see every `topics:` line: a frame with hand-written keys
+    past the head read as no frame, so `set_topic_list` found no user of a topic such a fact
+    carries and dropped it. Only a body whose frame the head cuts is read whole, so a scan over
+    every body of a tree still holds one head at a time, and at most the one body being read, as
+    any write of that body does."""
     try:
         with open(path, "rb") as fh:
             head = fh.read(FRONTMATTER_HEAD_BYTES)
+            if len(head) == FRONTMATTER_HEAD_BYTES \
+                    and _head_cuts_the_frame(head.decode("utf-8", errors="replace")):
+                head += fh.read()
     except (FileNotFoundError, NotADirectoryError):
         return None
     except OSError as exc:
@@ -3149,7 +3184,7 @@ def _line_problem(slug, anchor, lines):
 
 
 def read_body_topics(path):
-    """`_body_topics` of the body at `path`, reading only its first FRONTMATTER_HEAD_BYTES.
+    """`_body_topics` of the body at `path`, reading only its head (`_read_body_head`).
     None too when the file is missing. Raises TreeWalkError when it exists and cannot be read."""
     head = _read_body_head(path)
     return None if head is None else _body_topics(head)
@@ -3181,11 +3216,23 @@ def set_topic_list(proj, topics, tagger):
     list (every set-topics would then be refused) and when a topic the new list drops is still
     carried by a fact or declared by a level, naming the first users. A level whose `TOPICS:` line
     or a fact whose `topics:` line does not parse declares nothing it could lose, and does not
-    block the list."""
+    block the list.
+
+    Holds the tree's placement lock from reading the old list to saving the new one, waiting up
+    to `PLACEMENT_LOCK_TIMEOUT_S` (PlacementLockBusy past it). `set-topics` and
+    `set-level-topics` check a tag against the list and write it under the same lock, so a tag
+    can never land between this call's scan for users and its save: the scan found no user, the
+    save dropped the topic, and the fact tagged in between carried a topic outside the list."""
     sig.refuse_if_memory_writes_off()
     if not topics:
         raise TopicRefusal(["an empty topic list: a tree's list names at least one topic"])
     anchor = _anchor(proj)
+    with placement_lock(anchor, "topics-set-list"):
+        return _set_topic_list_held(anchor, topics, tagger)
+
+
+def _set_topic_list_held(anchor, topics, tagger):
+    """`set_topic_list` from reading the old list on; the caller holds the placement lock."""
     old = topic_store.load(anchor)
     # By the name the list will store (trimmed), one name at a time: the list is capped by
     # topic_store.MAX_LIST, not by the per-fact tp.MAX_TOPICS a whole-list normalise applies.
@@ -3391,6 +3438,9 @@ def set_fact_topics(proj, rows, dry_run=False, write=None, *,
     if dry_run:
         return _set_fact_topics_held(anchor, rows, allowed, True, write)
     with placement_lock(anchor, "set-topics", lock_timeout):
+        # Read again under the lock: a list change holds it from its scan for users to its save,
+        # so a list read before waiting can name a topic that change has since dropped.
+        allowed = _topic_list(anchor)
         try:
             return _set_fact_topics_held(anchor, rows, allowed, False, write)
         except OSError as exc:
@@ -3446,7 +3496,11 @@ def set_level_topics(level, topics, top=False):
     The level is named LEXICALLY, as `resolve_anchor` names its anchor: a level reached through a
     symlink is the level its path names, keyed and judged top-or-not by that path. The topic file
     is checked (list present, level keyable) before the descriptor is written, and recorded right
-    after it under both locks, so a refusal there writes neither; TopicStoreError is raised for it."""
+    after it under both locks, so a refusal there writes neither; TopicStoreError is raised for it.
+
+    The list check and the write happen under the tree's placement lock (waiting up to
+    `PLACEMENT_LOCK_TIMEOUT_S`, PlacementLockBusy past it), the lock a list change holds from its
+    scan for users to its save, so a TOPICS line can never name a topic that change dropped."""
     sig.refuse_if_memory_writes_off()
     level = os.path.abspath(str(level))
     anchor = _anchor(level)
@@ -3458,9 +3512,21 @@ def set_level_topics(level, topics, top=False):
     if top and not is_top:
         raise TopicRefusal(["%s is not the tree top (%s); use set-level-topics" % (level, anchor)])
     topics = tp.normalise_topics(topics)
+    _refuse_outside_list(anchor, topics)              # before the lock, whose file it would create
+    with placement_lock(anchor, "set-top-topics" if top else "set-level-topics"):
+        _refuse_outside_list(anchor, topics)          # again: the list may have changed meanwhile
+        return _write_level_topics(anchor, level, topics)
+
+
+def _refuse_outside_list(anchor, topics):
+    """Raise TopicRefusal when the tree has no list or `topics` names a tag outside it."""
     bad = _outside_list(topics, _topic_list(anchor))
     if bad:
         raise TopicRefusal(["%s not in the topic list" % ", ".join(bad)])
+
+
+def _write_level_topics(anchor, level, topics):
+    """`set_level_topics` from the descriptor write on; the caller holds the placement lock."""
     local = sig.claude_local_md_path(level)
     with sig.memory_lock(local):
         text = read_store_text(local)
@@ -4077,6 +4143,9 @@ def _read_topic_batch(path):
                 continue
             try:
                 obj = json.loads(line)
+                if not isinstance(obj, dict):
+                    raise TypeError('expected a JSON object {"slug": ..., "topics": [...]}, got %s'
+                                    % _json_kind(obj))
                 slug, raw = obj["slug"], obj["topics"]
                 if not isinstance(slug, str) or not (raw is None or isinstance(raw, list)):
                     raise TypeError("'slug' must be a string and 'topics' a list or null")
@@ -4234,6 +4303,16 @@ def _topics_arg(value):
         return None, "! error: --topics %r: %s" % (value, exc)
 
 
+def _json_kind(value):
+    """What a decoded JSON value is, in JSON's own words, for a message naming a wrong type."""
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "a boolean"
+    return {list: "an array", str: "a string", int: "a number", float: "a number"}.get(
+        type(value), "a %s" % type(value).__name__)
+
+
 def _topic_write(args):
     """The topic write verbs; refusals are raised and mapped by the caller."""
     if args.cmd == "render-topics":
@@ -4245,6 +4324,9 @@ def _topic_write(args):
             return _input_error(err)
         try:
             spec = json.loads(text)
+            if not isinstance(spec, dict):
+                raise TypeError('expected a JSON object {"tagger": ..., "topics": {...}}, got %s'
+                                % _json_kind(spec))
             topics, tagger = spec["topics"], spec["tagger"]
             if not isinstance(topics, dict):
                 raise TypeError("'topics' must be an object of tag: meaning")
@@ -4496,9 +4578,15 @@ def _main(argv=None):
     if args.cmd in ("topics-show", "topics-stale"):
         try:
             return _topic_read(args)
-        except topic_store.TopicStoreError as exc:
-            # a damaged topic file: the check could not run, which is not its "no"
-            print("! error: %s" % exc, file=sys.stderr)
+        except (topic_store.TopicStoreError, TreeWalkError) as exc:
+            # a damaged or unreadable topic file: the check could not run, which is not its "no"
+            message = str(exc) if isinstance(exc, topic_store.TopicStoreError) \
+                else "cannot read the memory store - %s" % exc
+            if getattr(args, "as_json", False):
+                # the plugin's JSON envelope: a caller that asked for JSON gets JSON on every exit
+                print(json.dumps({"ok": False, "command": args.cmd, "data": {}, "skipped": [],
+                                  "error": message}, sort_keys=True))
+            print("! error: %s" % message, file=sys.stderr)
             return 2
 
     if args.cmd in TOPIC_WRITE_VERBS:

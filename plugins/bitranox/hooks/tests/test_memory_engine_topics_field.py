@@ -94,6 +94,9 @@ def test_an_update_whose_framed_body_carries_other_topics_keeps_the_stored_ones(
 
 
 def test_an_update_of_a_fact_never_tagged_does_not_gain_a_topics_line(tmp_path):
+    # Regression guard: "no line" (never tagged) and "topics: []" (bound to no topic) are two
+    # different states. An update that re-applied the stored topics as an empty list would turn
+    # every never-tagged fact into a universal one, read everywhere, without anyone tagging it.
     anchor, proj = _tree(tmp_path)
     slug = E.add_or_update_entry(proj, title="T", hook=HOOK, body="first", type_="feedback")
     E.add_or_update_entry(proj, title="T", hook=HOOK, body="second", slug=slug)
@@ -153,6 +156,80 @@ def test_the_library_create_raises_and_a_topics_line_in_the_prose_is_no_frame(tm
     slug = E.add_or_update_entry(proj, title="T", hook=HOOK, slug="s",
                                  body=FRAME + "topics: [python]\n")
     assert E._body_topics(_stored(anchor, slug)) is None
+
+
+# ---- every write that is not set-topics keeps the stored line --------------------------------------
+
+def _tagged(tmp_path, topics=("python",), pin=False):
+    anchor, proj = _tree(tmp_path)
+    slug = E.add_or_update_entry(proj, title="T", hook=HOOK, body="first", type_="feedback",
+                                 pin=pin)
+    us.put_body(anchor, slug, E._with_topics(_stored(anchor, slug), topics))
+    return anchor, proj, slug
+
+
+def test_amend_pinned_keeps_the_stored_topics_line(tmp_path):
+    anchor, proj, slug = _tagged(tmp_path, pin=True)
+    E.amend_pinned_entry(proj, slug, hook="When amended, keep the topics.", body="amended prose",
+                         title="T2")
+    stored = _stored(anchor, slug)
+    assert "amended prose" in stored and "title: T2" in stored
+    assert E._body_topics(stored) == ("python",) and stored.count("topics:") == 1
+
+
+def test_an_update_with_no_prose_keeps_the_stored_topics_line(tmp_path):
+    # A hook-only or kind-only update (no body) rewrites the frame in place: description:, the
+    # kind, the skill. None of those writers may drop or move the topics line.
+    anchor, proj, slug = _tagged(tmp_path)
+    E.add_or_update_entry(proj, title="T", hook="When only the hook changes, keep the topics.",
+                          body="", slug=slug, type_="project", skill="bitranox:compuse-git")
+    stored = _stored(anchor, slug)
+    assert "description: When only the hook changes" in stored and "first" in stored
+    assert E._body_topics(stored) == ("python",) and stored.count("topics:") == 1
+
+
+def test_backfill_titles_keeps_the_stored_topics_line(tmp_path):
+    anchor, proj, slug = _tagged(tmp_path, topics=())
+    untitled = _stored(anchor, slug).replace("title: T\n", "")
+    us.put_body(anchor, slug, untitled)
+    assert not E._body_title(untitled)
+    assert E.backfill_titles(proj)["filled"] == [slug]
+    stored = _stored(anchor, slug)
+    assert E._body_title(stored) == "T"
+    assert E._body_topics(stored) == () and stored.count("topics:") == 1
+
+
+# ---- a hand-edited frame with two topics: lines ---------------------------------------------------
+
+TWO = FRAME.replace("title: T\n", "title: T\ntopics: [rust]\ntopics: [python]\n")
+
+
+def test_a_frame_with_two_topics_lines_reads_as_its_first():
+    assert E._body_topics(TWO) == ("rust",) and E._body_topics_line(TWO) == "topics: [rust]"
+
+
+def test_setting_or_clearing_topics_leaves_one_line_or_none_never_the_second():
+    # Readers take the first line; a writer that replaced only the first left the second behind,
+    # where the next write made it the first one and the topics changed with nobody tagging them.
+    tagged = E._with_topics(TWO, ("uv",))
+    assert tagged == E._with_topics(FRAME, ("uv",))
+    assert E._with_topics(TWO, None) == FRAME
+
+
+def test_set_topics_and_an_update_collapse_two_lines_to_one(tmp_path):
+    anchor, proj, slug = _tagged(tmp_path)
+    (Path(anchor) / us.STORE_DIRNAME / "topics.json").write_text(
+        '{"version": 1, "tagger": "jev", "topics": {"python": "P", "rust": "R"}, "levels": {}}\n',
+        encoding="utf-8")
+    two = _stored(anchor, slug).replace("topics: [python]\n", "topics: [rust]\ntopics: [python]\n")
+    us.put_body(anchor, slug, two)
+    E.add_or_update_entry(proj, title="T", hook=HOOK, body="second", slug=slug)
+    stored = _stored(anchor, slug)
+    assert stored.count("topics:") == 1 and E._body_topics(stored) == ("rust",)
+    us.put_body(anchor, slug, two)
+    E.set_fact_topics(proj, {slug: ("python",)})
+    stored = _stored(anchor, slug)
+    assert stored.count("topics:") == 1 and E._body_topics(stored) == ("python",)
 
 
 # ---- a topics: line in the prose is no data ----------------------------------------------------

@@ -117,3 +117,91 @@ def test_recording_a_level_keeps_the_list_and_the_tagger(tmp_path):
     data = topic_store.load(anchor)
     assert data["topics"] == {"python": "Python code", "rust": "Rust code"}
     assert data["tagger"] == "jev" and data["levels"] == {"": "d0"}
+
+
+# ---- a file that is there must be usable, whatever it holds ---------------------------------------
+
+def _raw(anchor, data):
+    topic_store.store_path(anchor).write_text(json.dumps(data), encoding="utf-8")
+
+
+def test_an_empty_file_is_an_error_never_an_absent_list(tmp_path):
+    # A truncated write leaves 0 bytes: read as "no list" it switched placement by topic off
+    # without a word, the very thing load() exists to prevent.
+    anchor = _anchor(tmp_path)
+    topic_store.store_path(anchor).write_bytes(b"")
+    with pytest.raises(topic_store.TopicStoreError, match="empty"):
+        topic_store.load(anchor)
+
+
+def test_the_remedy_an_unusable_file_names_works(tmp_path):
+    anchor = _anchor(tmp_path)
+    topic_store.store_path(anchor).write_bytes(b"")
+    with pytest.raises(topic_store.TopicStoreError, match="delete it") as err:
+        topic_store.load(anchor)
+    assert "topics-set-list" in str(err.value)
+    topic_store.store_path(anchor).unlink()
+    assert topic_store.save_list(anchor, {"python": "Python code"}, "jev") is True
+    assert topic_store.load(anchor)["topics"] == {"python": "Python code"}
+
+
+@pytest.mark.parametrize("topics", [
+    {"Bad Tag": "m"},
+    {" python ": "m"},
+    {"python": 5},
+    {"python": ""},
+    {"python": "two\nlines"},
+    {"python": "x" * (topic_store.MAX_MEANING + 1)},
+    {"t%d" % i: "m" for i in range(topic_store.MAX_LIST + 1)},
+])
+def test_a_file_whose_list_save_list_would_refuse_does_not_load(tmp_path, topics):
+    # The file is checked for its content, not only its shape: a list no write could have made
+    # is refused on the way in, so record_level never writes it back as if it were fine.
+    anchor = _anchor(tmp_path)
+    _raw(anchor, {"version": 1, "tagger": "jev", "topics": topics, "levels": {}})
+    with pytest.raises(topic_store.TopicStoreError):
+        topic_store.load(anchor)
+    before = topic_store.store_path(anchor).read_bytes()
+    with pytest.raises(topic_store.TopicStoreError):
+        topic_store.record_level(anchor, anchor, "d")
+    assert topic_store.store_path(anchor).read_bytes() == before
+
+
+@pytest.mark.parametrize("tag", ["python", "a-b", "python-", "a--b", "9x", "-x", "Python",
+                                 "x" * 32, "x" * 33, "a_b"])
+def test_a_tag_in_the_file_is_judged_by_the_placement_grammar(tmp_path, tag):
+    # load asks topic_placement, never a copy of its grammar: whatever that grammar accepts as a
+    # stored tag loads, and whatever it refuses does not, so tightening it reaches the file too.
+    anchor = _anchor(tmp_path)
+    _raw(anchor, {"topics": {tag: "a meaning"}})
+    try:
+        accepted = tp.normalise_topics([tag]) == (tag,)
+    except tp.InvalidTopic:
+        accepted = False
+    if accepted:
+        assert topic_store.load(anchor)["topics"] == {tag: "a meaning"}
+    else:
+        with pytest.raises(topic_store.TopicStoreError):
+            topic_store.load(anchor)
+
+
+def test_a_meaning_is_measured_after_it_is_trimmed(tmp_path):
+    anchor = _anchor(tmp_path)
+    meaning = "x" * topic_store.MAX_MEANING
+    assert topic_store.save_list(anchor, {"python": " " + meaning + " "}, "jev") is True
+    assert topic_store.load(anchor)["topics"] == {"python": meaning}
+
+
+def test_a_meaning_with_a_line_break_is_still_refused_after_trimming(tmp_path):
+    # Trimming is for the length only: a meaning ending in a line break was refused as two lines
+    # before, and still is.
+    with pytest.raises(topic_store.TopicStoreError):
+        topic_store.save_list(_anchor(tmp_path), {"python": "Python code\n"}, "jev")
+
+
+def test_a_file_without_a_version_gains_one_when_a_level_is_recorded(tmp_path):
+    anchor = _anchor(tmp_path)
+    _raw(anchor, {"topics": {"python": "Python code"}})
+    topic_store.record_level(anchor, anchor, "d0")
+    data = json.loads(topic_store.store_path(anchor).read_text(encoding="utf-8"))
+    assert data["version"] == 1 and data["levels"] == {"": "d0"}
