@@ -1191,3 +1191,35 @@ def test_prune_removes_the_link_and_keeps_its_target(scratch_repo):
     A.link_paths(scratch_repo, ws, (".packages",))
     A.prune(ws, scratch_repo, (".packages",))
     assert not ws.exists() and (scratch_repo / ".packages" / "bin" / "protoc").is_file()
+
+
+# --- the memory index an arm starts with: every CLAUDE*.md of its worktree and its ancestors ------
+
+def test_context_files_hashes_every_claude_md_of_the_worktree_and_its_ancestors(tmp_path):
+    top, mid, ws = tmp_path / "top", tmp_path / "top" / "mid", tmp_path / "top" / "mid" / "ws"
+    ws.mkdir(parents=True)
+    (top / "CLAUDE.md").write_text("rules\n", encoding="utf-8")
+    (mid / "CLAUDE.local.md").write_text("index\n", encoding="utf-8")
+    (ws / "CLAUDE.md").write_text("copy\n", encoding="utf-8")
+    (mid / "CLAUDE.md").mkdir()  # a directory of that name is no context file
+    got = A.context_files(ws)
+    assert got[str(top / "CLAUDE.md")] == L.sha256_file(top / "CLAUDE.md")
+    assert got[str(mid / "CLAUDE.local.md")] == L.sha256_file(mid / "CLAUDE.local.md")
+    # The worktree's own copy is keyed by name, not path: every arm's worktree has another path.
+    assert got["<worktree>/CLAUDE.md"] == L.sha256_file(ws / "CLAUDE.md")
+    assert str(ws / "CLAUDE.md") not in got and str(mid / "CLAUDE.md") not in got
+
+
+@POSIX_ONLY
+def test_context_files_marks_an_unreadable_file_instead_of_skipping_it(tmp_path):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    index = tmp_path / "CLAUDE.local.md"
+    index.write_text("index\n", encoding="utf-8")
+    index.chmod(0)
+    try:
+        if os.access(index, os.R_OK):
+            pytest.skip("running as root: a mode-000 file is still readable")
+        assert A.context_files(ws)[str(index)] == "unreadable"
+    finally:
+        index.chmod(0o600)

@@ -6,6 +6,7 @@ ended by signalling its process group, and the refusing pre-push hook is a /bin/
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -37,6 +38,7 @@ __all__ = [
     "bundle",
     "bwrap_problem",
     "claude_argv",
+    "context_files",
     "delete_cfg",
     "dispatch",
     "ensure_worktrees_ignored",
@@ -833,6 +835,42 @@ def link_paths(repo: Path, ws: Path, links: tuple[str, ...]) -> list[str]:
             link.unlink(missing_ok=True)
         raise ArmError(f"workpiece.link: {exc}") from exc
     return list(links)
+
+
+CONTEXT_NAMES = ("CLAUDE.md", "CLAUDE.local.md")
+WORKTREE_KEY = "<worktree>"
+UNREADABLE = "unreadable"
+
+
+def context_files(ws: Path) -> dict[str, str]:
+    """{file: sha256} of every CLAUDE.md and CLAUDE.local.md the session in ws loads at its start.
+
+    The session walks ws and every ancestor, so a peer session that edits one of those files
+    between two arms (a memory placement, a dream) gives the later arm another memory index, and
+    BITRANOX_MEMORY_WRITES=off stops only the arm's own writes. Recording the hashes per arm lets
+    score name the arms that started on other text. The worktree's own files are keyed
+    `<worktree>/<name>`, since each arm's worktree has another path; an ancestor's by its absolute
+    path. A file that exists but cannot be read is "unreadable", never left out: the session may
+    still have read it, and a missing key would read as a file that was not there.
+    """
+    out: dict[str, str] = {}
+    for folder in (ws, *ws.parents):
+        for name in CONTEXT_NAMES:
+            key = f"{WORKTREE_KEY}/{name}" if folder == ws else str(folder / name)
+            digest = _context_digest(folder / name)
+            if digest is not None:
+                out[key] = digest
+    return out
+
+
+def _context_digest(path: Path) -> str | None:
+    """sha256 of path's bytes; None when no such file; UNREADABLE when it exists but will not open."""
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except (FileNotFoundError, NotADirectoryError, IsADirectoryError):
+        return None
+    except OSError:
+        return UNREADABLE
 
 
 def _link_one(repo: Path, ws: Path, entry: str) -> Path:

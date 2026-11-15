@@ -136,8 +136,10 @@ AUTH_FAILED = "authentication_failed"
 PAUSE_LOGIN, PAUSE_SYNTHETIC_ONLY, PAUSE_LIMIT = ("a login-looking failure", "only CLI synthetic messages",
                                                   "a usage-limit notice")
 # The pause before an arm starts: the login the arm copies would expire before the arm's
-# deadline. Refreshing is the user's step (a normal Claude session refreshes the real file); the
-# run pauses rather than starting an arm that may lose its login mid-way (design S4: pause, not void).
+# deadline. Refreshing is the user's step: /login renews it at once, while an ordinary call renews it
+# only in its last few minutes (measured 2026-11-05: calls with 105 and 28 minutes left did not move
+# the expiry); the run pauses rather than starting an arm that may lose its login mid-way (design S4:
+# pause, not void).
 PAUSE_EXPIRY = "a login that expires before the arm's deadline"
 # A seal refuses a PREREG.md still holding a skeleton placeholder; a bare "<" ("cost < 0.10") is prose.
 PLACEHOLDER_RE = re.compile(r"<[^>\n]+>")
@@ -160,6 +162,8 @@ session's last text ends with "?" (it stopped to ask); a flag, never a void.
 --json prints one pretty-printed envelope: parse the whole stdout as one JSON document."""
 # How much of an arm's last text the question flag shows: its end, where the question is.
 QUESTION_SHOWN = 200
+# How many differing CLAUDE*.md paths the context flag names before it shortens the list to "...".
+CONTEXT_SHOWN = 3
 # Printed under every human score table: readers of the table took a low suite count for bad code.
 SUITE_LEGEND = ("suite= and gate= show how far an arm got before it stopped (completeness), "
                 "not code quality; rate quality from the diff")
@@ -570,6 +574,8 @@ def _arm_steps(ctx: RunContext, result: dict[str, Any], frozen: abarm.Frozen, la
     _ignore_worktrees(ctx)
     result["worktree"] = abarm.make_worktree(p.workpiece.repo, p.workpiece.base, branch, ws, copy_untracked_claude_md=True)
     result["linked"] = abarm.link_paths(p.workpiece.repo, ws, p.workpiece.link)
+    # Hashed at the arm's start, the moment its session loads them: score compares the arms.
+    result["context_files"] = abarm.context_files(ws)
     result["guard"] = abguard.snapshot(ws, arm_dir / "guard")
     if not ctx.dry_run:
         result.update(abarm.dispatch(arm_dir, ws, env, _session_argv(ctx, result["name"], frozen, ws, home, cfg),
@@ -894,8 +900,8 @@ def _pause_before(ctx: RunContext, round_no: int, name: str) -> str:
     record(ctx.run_dir, step="arm", round=round_no, arm=name, status="paused", pause_trigger=PAUSE_EXPIRY,
            set_aside=None)
     return (f"paused before {label}: the login in {ctx.credentials} expires within the arm's deadline "
-            f"({ctx.profile.run.deadline_s} s); the login must be refreshed first (use Claude normally once so it "
-            "refreshes), then run the same command again to resume")
+            f"({ctx.profile.run.deadline_s} s); the login must be refreshed first (type /login in Claude: an "
+            "ordinary call refreshes it only in its last few minutes), then run the same command again to resume")
 
 
 def _cleanup_warnings(result: dict[str, Any]) -> None:
@@ -1148,6 +1154,40 @@ def _store_flag(label: str, score: dict[str, Any]) -> str | None:
     return f"store changed: {len(changes)} entries, adjudicate against arms/{label}/{TRANSCRIPTS}/"
 
 
+def _add_context_drift(results: dict[str, dict[str, Any]], scores: dict[str, dict[str, Any]]) -> None:
+    """Set context_reference and context_drift on each score: the CLAUDE*.md files that differ from the first arm's.
+
+    The reference is the first arm in journal order that recorded its context files. context_drift
+    lists the files whose hash differs or that exist on one side only, [] when none does, and None
+    for an arm that recorded nothing (an arm from an older harness): no record is not a match.
+    """
+    recorded = {label: res["context_files"] for label, res in results.items()
+                if isinstance(res.get("context_files"), dict)}
+    reference = next(iter(recorded), None)
+    for label, score in scores.items():
+        files = recorded.get(label)
+        score["context_reference"] = reference
+        if files is None or reference is None:
+            score["context_drift"] = None
+            continue
+        base = recorded[reference]
+        score["context_drift"] = sorted(k for k in base.keys() | files.keys() if base.get(k) != files.get(k))
+
+
+def _context_flag(score: dict[str, Any]) -> str | None:
+    """The line that names an arm whose session started on other CLAUDE*.md text; a flag, never a void.
+
+    A peer session can place a memory fact between two arms, and the store guard compares only
+    each arm's own start and end, so this is where such a difference shows.
+    """
+    drift = score.get("context_drift") or []
+    if not drift:
+        return None
+    shown = ", ".join(drift[:CONTEXT_SHOWN]) + (", ..." if len(drift) > CONTEXT_SHOWN else "")
+    noun = "file" if len(drift) == 1 else "files"
+    return f"context differs from {score.get('context_reference')}: {len(drift)} {noun} ({shown})"
+
+
 def _question_flag(score: dict[str, Any]) -> str | None:
     """The line that names an arm whose session ended by asking (nobody answers); a flag, never a void."""
     if score.get("ended_with_question") is not True:
@@ -1158,7 +1198,7 @@ def _question_flag(score: dict[str, Any]) -> str | None:
 
 def _arm_flag(label: str, score: dict[str, Any]) -> str | None:
     """Every flag of the arm on one line, "; "-joined; None when it has none."""
-    flags = [f for f in (_store_flag(label, score), _question_flag(score)) if f is not None]
+    flags = [f for f in (_store_flag(label, score), _context_flag(score), _question_flag(score)) if f is not None]
     return "; ".join(flags) or None
 
 
@@ -1187,6 +1227,7 @@ def cmd_score(args: argparse.Namespace) -> int:
         _emit(args.json, "score", {"arms": {}, "flags": {}}, False, "no finished arm to score")
         return EXIT_NO
     scores = _score_all(run_dir, profile, results)
+    _add_context_drift(results, scores)
     for res in results.values():
         record(run_dir, step="score", round=res.get("round", 0), arm=res.get("name", ""), status="scored")
     flags = {label: flag for label, score in scores.items() if (flag := _arm_flag(label, score)) is not None}

@@ -337,15 +337,62 @@ def test_ctrl_c_still_writes_result_and_journal_then_reraises(tmp_path, scratch_
     assert _lock_is_free(run_dir), "a Ctrl-C left the run dir locked"
 
 
-def _fabricate_arm(run_dir, round_no, *, cache_read, stop_reason="finished", guard_changes=()):
+def _fabricate_arm(run_dir, round_no, *, cache_read, stop_reason="finished", guard_changes=(), context_files=None):
     arm = run_dir / "arms" / f"r{round_no}-C"
     arm.mkdir(parents=True)
     res = {"arm": f"r{round_no}-C", "round": round_no, "name": "C", "dry_run": False, "has_result": True,
            "stop_reason": stop_reason, "first_cache_read": cache_read, "void_reasons": [],
            "guard": {"taken": True, "entries": 3, "skipped": None}, "guard_changes": list(guard_changes),
            "floor": {"passed": True, "steps": []}, "bundle_commits": 1, "total_cost_usd": 0.25}
+    if context_files is not None:
+        res["context_files"] = context_files
     (arm / "result.json").write_text(json.dumps(res), encoding="utf-8")
     T.record(run_dir, step="arm", round=round_no, arm="C", status="ran")
+
+
+def test_score_flags_an_arm_that_started_on_other_claude_md_text_than_the_first(tmp_path, scratch_repo, skills_repo,
+                                                                                capsys):
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo, n=4)
+    assert T.main(["seal", str(run_dir)]) == 0
+    first = {"/t/CLAUDE.md": "a" * 64, "/t/p/CLAUDE.local.md": "b" * 64}
+    _fabricate_arm(run_dir, 1, cache_read=11000, context_files=first)
+    _fabricate_arm(run_dir, 2, cache_read=11000, context_files=dict(first))
+    _fabricate_arm(run_dir, 3, cache_read=11000, context_files=dict(first, **{"/t/p/CLAUDE.local.md": "c" * 64}))
+    _fabricate_arm(run_dir, 4, cache_read=11000)  # an arm recorded before the harness kept these hashes
+    capsys.readouterr()
+    assert T.main(["score", str(run_dir), "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)["data"]
+    arms = data["arms"]
+    assert arms["r1-C"]["context_drift"] == [] and arms["r2-C"]["context_drift"] == []
+    assert arms["r3-C"]["context_drift"] == ["/t/p/CLAUDE.local.md"] and arms["r3-C"]["void"] == []
+    assert arms["r3-C"]["context_reference"] == "r1-C"
+    assert arms["r4-C"]["context_drift"] is None, "no record is not the same as no difference"
+    flag = "context differs from r1-C: 1 file (/t/p/CLAUDE.local.md)"
+    assert data["flags"] == {"r3-C": flag}
+    assert T.main(["score", str(run_dir)]) == 0
+    r3 = [ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("r3-C:")]
+    assert len(r3) == 1 and f"FLAG {flag}" in r3[0]
+
+
+def test_an_ancestor_claude_local_md_edited_between_arms_flags_the_later_arm(tmp_path, scratch_repo, skills_repo,
+                                                                            fake_claude_path, monkeypatch, capsys):
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    env, creds = _env(fake_claude_path, tmp_path)
+    _use_env(monkeypatch, env)
+    index = scratch_repo / "CLAUDE.local.md"
+    index.write_text("# Memory index\n- one\n", encoding="utf-8")
+    assert T.main(["seal", str(run_dir)]) == 0
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--only", "C"), login_check=_Probe("ok")) == 0
+    index.write_text("# Memory index\n- one\n- two, placed by another session\n", encoding="utf-8")
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--only", "V1"), login_check=_Probe("ok")) == 0
+    res = json.loads((run_dir / "arms" / "r1-C" / "result.json").read_text(encoding="utf-8"))
+    assert str(index) in res["context_files"]
+    capsys.readouterr()
+    assert T.main(["score", str(run_dir), "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)["data"]
+    assert data["arms"]["r1-V1"]["context_drift"] == [str(index)]
+    assert data["flags"]["r1-V1"].startswith("context differs from r1-C: 1 file")
+    assert "r1-C" not in data["flags"]
 
 
 def test_score_never_lets_a_void_arm_set_the_warmth_median(tmp_path, scratch_repo, skills_repo, capsys):
@@ -949,6 +996,9 @@ def test_an_arm_is_not_started_on_a_login_that_lapses_before_its_deadline(tmp_pa
     assert rc == 1 and _arm_rows(run_dir) == [(1, "C", "paused")]
     assert not (run_dir / "arms" / "r1-C").exists(), "the arm was never started, nothing was copied"
     assert "refreshed first" in out["data"]["message"] and out["data"]["paused_at"] == "r1-C"
+    # An ordinary call refreshes the login only in its last minutes (measured 2026-11-05), so the
+    # remedy the message names must be the one that works at once: /login.
+    assert "/login" in out["data"]["message"] and "use Claude normally" not in out["data"]["message"]
     assert str(at) not in json.dumps(out), "no value of the credentials file is reported"
 
 
