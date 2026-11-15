@@ -38,6 +38,14 @@ no sibling-owned capture, so the only thing that can move those hashes is a cons
 it that way: if the fixture ever gains one, narrow the assertion to the consolidation steps rather
 than deleting it.
 
+On a live tree other sessions write too, so a sibling pointer file that changed during the nap is
+not yet a scope violation. Attribute it before calling the nap clean: compare the file's mtime with
+the nap's window (from its start to its step 6 verify), then look for any session whose transcript
+ran a `memory_engine.py` write (`add`, or a render without `--dry-run`) at that minute. A dry run
+writes nothing, so never attribute a change to one. A change that neither a peer write nor the
+nap's own capture carve-out (step 1) accounts for is the nap's, and the report names it as a scope
+violation.
+
 ## When to run
 
 - Around a context compaction: the PreCompact hook salvaged candidate learnings; nap them into
@@ -58,6 +66,10 @@ than deleting it.
 - Owed while plan mode is active: plan mode blocks the engine writes a nap needs, so it cannot run
   there. Write "run the owed nap" as step 0 of the plan, naming the specific learnings, and run it
   right after ExitPlanMode.
+- Owed while another backed-up store run of this session is in flight (a dream or a store
+  compaction that has taken its own `store_manifest.py` backup and not yet run its verify and
+  store commit): finish that run's verify and store commit first, then nap. A nap's writes in
+  between show up as unplanned rows in that run's verify and get mixed into its commit.
 - The session accumulated several learning signals and a full dream is not worth its cost now.
 - Manual: "nap", "dream nap", "/dream-nap", "quick tidy".
 - NOT a replacement for the full dream: the SessionStart consolidation-due nudge still means
@@ -115,6 +127,8 @@ than deleting it.
 2. **Back up + manifest** the CHAIN's levels only (per the core), widened to a descendant level
    step 1 wrote at (see step 1): `store_manifest.py backup --from <cwd> --scope chain --out <dir>`
    (home: `<plugin>/skills/meta-dream-tree/`), with `<dir>` a new directory in the scratchpad.
+   Only that command's backup counts: a hand-copied backup, or a manifest in any other layout,
+   leaves step 6 nothing to verify, because `verify` and a rollback read only its `manifest.json`.
 2b. **Read the toolbox inventory** - `uv run ~/.claude/skills/toolbox/tools/toolbox.py list`, the
    READ half of the toolbox pass (per the core); skip only if that path does not exist. It runs
    HERE, before steps 3-5, because those are the passes whose scans a shipped tool has often
@@ -212,7 +226,8 @@ than deleting it.
 ## Deliverables (a completed nap has ALL of these)
 
 - [ ] Capture ran (or a verified "nothing durable" line).
-- [ ] Backup + manifest of the chain's levels recorded.
+- [ ] Backup + manifest of the chain's levels written by `store_manifest.py backup` (its
+      `<dir>/manifest.json` exists).
 - [ ] Toolbox inventory read BEFORE the dedup/placement/prune passes (or the path confirmed absent).
 - [ ] Chain-internal dedup/placement/prune applied via the engine (fail-loud success lines).
 - [ ] In a tree with a topic list: the cwd's level is `fresh` (or is the tree top, left alone),
