@@ -601,18 +601,39 @@ def _nudges_on():
         return True
 
 
+_REFUSED_HEAL_SHOWN = 3
+"""How many refused levels the SessionStart line names; the rest are counted. `heal` prints each
+one with its reason and fix, so the line only has to say that there are some and where."""
+
+
+def _refused_heal_line(refused):
+    """One context line naming the levels heal refused, or "" when it refused none."""
+    if not refused:
+        return ""
+    shown = ", ".join(str(level) for level, _why in refused[:_REFUSED_HEAL_SHOWN])
+    more = len(refused) - _REFUSED_HEAL_SHOWN
+    rest = " and %d more" % more if more > 0 else ""
+    return ("MEMORY STORE: the self-heal refused %d level(s) and left them untouched: %s%s. "
+            "`memory_engine.py heal --proj <level>` names each refusal and its fix."
+            % (len(refused), shown, rest))
+
+
 def _self_heal(proj):
     """Best-effort repair of the project's memory chain every session (missing/malformed stores,
-    markers, index files). Fail-open: any error is swallowed so a broken store never wedges a start.
+    markers, index files). Returns one context line naming the levels heal REFUSED (left untouched
+    with a reason, such as a legacy scope block whose TOPICS line does not parse), else "": a
+    refused level is not scaffolded, and dropping the report hid that until heal was run by hand.
+    Fail-open: any error is swallowed and reads as "" so a broken store never wedges a start.
     Skipped under BITRANOX_MEMORY_WRITES=off (heal itself is a no-op there too; this also spares the
     engine import)."""
     if memory_writes_off():
-        return
+        return ""
     try:
         import memory_engine
-        memory_engine.heal(proj)
+        report = memory_engine.heal(proj)
+        return _refused_heal_line(report.get("refused") or [])
     except Exception:  # noqa: BLE001 - a hook must never block a session
-        pass
+        return ""
 
 
 _DECOY_CHECK_INTERVAL_S = 86400
@@ -691,7 +712,7 @@ def main():
     # Only the scaffolding steps move out of an ignored dir; the audit, backlog and retrieval
     # blocks stay keyed on the real cwd, where the hooks that wrote them looked.
     home = level_home(proj)
-    _self_heal(home)
+    healed = _self_heal(home)
     # Everything else is assembled FIRST so the two listings can be given what is actually left.
     # Sized against a fixture instead, the backlog overran the ceiling on the real repo while its
     # test stayed green. The backlog is ranked work someone is waiting on, so it is sized before the
@@ -699,11 +720,11 @@ def main():
     # line's size is held back first, so the backlog cannot spend it.
     retrieval, audit, decoy = retrieval_context(proj), audit_context(proj), decoy_context(proj)
     tail = [dream_nudge(home), newproject_nudge(home)] if _nudges_on() else []
-    left = _ESSENTIALS_CEILING_BYTES - _joined_bytes([retrieval, audit, decoy] + tail)
+    left = _ESSENTIALS_CEILING_BYTES - _joined_bytes([retrieval, audit, decoy, healed] + tail)
     contrib_floor = _joined_bytes([contrib_pointer(proj)])
     open_work = open_work_context(proj, budget=left - contrib_floor)
     contrib = contrib_context(proj, budget=left - _joined_bytes([open_work]))
-    ctx = [p for p in [retrieval, audit, open_work, contrib, decoy] + tail if p]
+    ctx = [p for p in [retrieval, audit, open_work, contrib, decoy, healed] + tail if p]
     nudge = autoupdate_nudge(proj)
     if not ctx and not nudge:
         return 0

@@ -1331,3 +1331,49 @@ def test_a_cwd_in_a_tracked_subdir_still_scaffolds_its_levels(tmp_path, monkeypa
     run_with_stdin(monkeypatch, capsys, make_plugin_root(tmp_path), str(repo / "src" / "pkg"))
     assert (repo / "src" / "pkg" / "CLAUDE.md").is_file()
     assert (repo / "src" / "CLAUDE.local.md").is_file()
+
+
+# ---- a level the self-heal refused is named, not dropped ----------------------------------------
+# heal() leaves a level whose legacy CLAUDE.md scope block has a TOPICS line that does not parse
+# untouched and lists it under 'refused'. The SessionStart call once discarded that report, so the
+# level stayed unscaffolded with nothing saying why until someone ran heal by hand.
+
+def _tree_with_a_refused_level(tmp_path, topics_line):
+    anchor = tmp_path / "tree"
+    proj = anchor / "proj"
+    proj.mkdir(parents=True)
+    (anchor / "CLAUDE.md").write_text("x\n", encoding="utf-8")
+    (anchor / US.STORE_DIRNAME).mkdir()
+    (proj / "CLAUDE.md").write_text(
+        "# Proj\n\n%s\nWHAT: a level\n%s\n%s\n\nuser text\n"
+        % (SIG.SCOPE_MARK_BEGIN, topics_line, SIG.SCOPE_MARK_END), encoding="utf-8")
+    return anchor, proj
+
+
+def test_a_level_the_self_heal_refused_is_named_in_the_session_start_context(tmp_path, monkeypatch,
+                                                                             capsys):
+    _anchor, proj = _tree_with_a_refused_level(tmp_path, "TOPICS: Not A Tag!")
+    rc, out = run_with_stdin(monkeypatch, capsys, make_plugin_root(tmp_path), str(proj))
+    assert rc == 0
+    ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    lines = [ln for ln in ctx.split("\n") if "self-heal refused" in ln]
+    assert len(lines) == 1, ctx
+    assert str(proj) in lines[0] and "memory_engine.py heal" in lines[0]
+
+
+def test_a_healthy_level_adds_no_self_heal_line(tmp_path, monkeypatch, capsys):
+    """Control: the same tree with a TOPICS line that parses heals cleanly and says nothing."""
+    _anchor, proj = _tree_with_a_refused_level(tmp_path, "TOPICS: python")
+    rc, out = run_with_stdin(monkeypatch, capsys, make_plugin_root(tmp_path), str(proj))
+    assert rc == 0
+    assert "self-heal refused" not in out
+    assert S._self_heal(str(proj)) == ""
+
+
+def test_self_heal_names_at_most_three_levels_and_counts_the_rest():
+    refused = [("/t/l%d" % i, "why %d" % i) for i in range(5)]
+    line = S._refused_heal_line(refused)
+    assert line.count("\n") == 0
+    assert "5 level(s)" in line and "/t/l0" in line and "/t/l2" in line and "/t/l3" not in line
+    assert "2 more" in line
+    assert S._refused_heal_line([]) == ""
