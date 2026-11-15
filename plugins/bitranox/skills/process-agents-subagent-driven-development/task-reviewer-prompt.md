@@ -57,7 +57,13 @@ Subagent (general-purpose):
     in a `finally`), never a hand edit restored from a scratch copy -
     subagents share the session's scratchpad, so a `.orig` you find there
     can be an earlier agent's stale file - and confirm afterwards that
-    `git diff --quiet HEAD` still exits 0.
+    `git diff HEAD` prints what it printed before you started (in a clean
+    checkout: `git diff --quiet HEAD` still exits 0).
+    Untracked files count too, and that check cannot see them: write any
+    scratch output (probe trees, `.out` files, logs) into a directory you
+    created with `mktemp -d` outside the worktree, and remove it by that exact
+    path when you finish. Run `git status --porcelain` when you start and again
+    at the end: the second run must show no line the first did not.
 
     ## Do Not Trust the Report
 

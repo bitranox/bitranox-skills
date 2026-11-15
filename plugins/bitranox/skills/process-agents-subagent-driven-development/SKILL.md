@@ -505,6 +505,13 @@ final whole-branch review. When you fill a reviewer template:
   there; a conflict or a failure means it does not stand alone. A report that
   commit 1 alone passes says nothing about commit 2, which ran only on top of
   commit 1. Put the check in the brief and in the reviewer's named risks.
+- When a dispatch asks an agent to work on a scratch copy of the repo or of a run or work
+  directory (to replay, simulate or review on a copy), name the copy method in the brief:
+  `git clone --no-local` of the repo plus only the journals or score files the check reads, one
+  copy (two at most), each deleted by its exact path when done. Forbid `cp -a` and `cp -r` of the
+  whole directory: a run directory can hold gigabytes of streams, and the session scratchpad
+  often sits on a size-limited `/tmp` that every session on the host shares, so a few whole
+  copies fill it and fail other sessions' writes.
 - A regression test that comes with a fix is only a restatement until it
   FAILS against the defect. Require the fix report to show it failing with
   the exact defect the fix removes put back: compuse-toolbox's
@@ -521,7 +528,8 @@ final whole-branch review. When you fill a reviewer template:
 - Every fix dispatch carries the implementer contract: the fix subagent
   re-runs the tests covering its change and reports the results, and commits under the same
   attribution policy line the implementer got (see File Handoffs). Copy implementer-prompt.md's
-  gate.py paragraph and its "Committing" section into the dispatch: a fixer committing beside
+  gate.py paragraph, the scratch-output paragraph after it, and its "Committing" section into
+  the dispatch: a fixer committing beside
   other writers needs the same no-amend rule and the same way to wait for a gate. Name the
   covering test files in the dispatch and put them in the gate.py command as its suite  -  a
   one-line fix does not need the whole suite. Before re-dispatching the reviewer, confirm the fix
@@ -556,7 +564,14 @@ Its instructions, in the dispatch:
 1. Hunt defects across the whole branch, design first: where does the delivered behaviour differ
    from what the design requires, and where do two tasks' pieces fail together? Every finding
    names the code lines and a CONCRETE failing input or event sequence (values, keystrokes, sizes);
-   a suspicion without one is not a finding.
+   a suspicion without one is not a finding. When the branch adds or changes a writer of shared
+   state (a store, a file tree, a database), run a concurrency check with two REAL processes
+   writing that state at once against one real instance, for each pairing: the changed writer
+   against itself and against every other writer of the same state, existing ones included.
+   Compare what the state holds afterwards with what the same writes leave when run one after the
+   other, from the same starting state, in either order; a state neither order gives is a DEFECT.
+   Per-task reviews run a single process and cannot see a race between one writer's plan and
+   another's writes, and such a race leaves every command at rc 0.
 2. Report in two parts. DEFECTS: each with severity (Critical, Important, Minor), the failing input,
    the lines, and whether the plan's own text caused it. PLAN CHANGES: every way the branch extends
    or departs from the plan as it stood at MERGE_BASE - what changed, where it is recorded (plan

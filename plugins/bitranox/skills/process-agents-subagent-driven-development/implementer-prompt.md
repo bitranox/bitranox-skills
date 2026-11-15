@@ -56,6 +56,11 @@ Subagent (general-purpose):
     minute or two, then read its last lines), until that closing line appears.
     Never end your turn to wait for it: nothing wakes you.
 
+    Write every scratch output (probe trees, `.out` files, logs, copies) into a
+    directory you created with `mktemp -d` outside this worktree, never into the
+    worktree itself: other agents commit from it, and a stray file there can ride
+    into their commit. Remove that directory by its exact path when you finish.
+
     ## Committing
 
     Commit only the paths you changed, by pathspec. Never run `git commit --amend`,
@@ -170,9 +175,12 @@ Subagent (general-purpose):
 
     ## Report Format
 
-    Write your full report to [REPORT_FILE]:
+    Write your full report to [REPORT_FILE] only after the full gate's closing
+    line has appeared: the controller may be waiting for this file, so a report
+    written while the gate still runs reads as a finished task. It contains:
     - What you implemented (or what you attempted, if blocked)
-    - What you tested and test results
+    - What you tested and test results, with the gate command and its closing
+      line (and any `[FAIL]` line) quoted verbatim
     - **TDD Evidence** (if TDD was required for this task):
       - RED: command run, relevant failing output before implementation, and why the failure was expected
       - GREEN: command run and relevant passing output after implementation
