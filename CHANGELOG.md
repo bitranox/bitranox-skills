@@ -30,6 +30,37 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.5.0]
+
+### Added
+
+- meta-skill-ab-test: `run` records each arm's CLAUDE.md and CLAUDE.local.md hashes (`context_files`), and `score` flags an arm that started on different text from the first arm (`context_drift`; a flag, never a void).
+- factedit: `show --prose-only` prints a fact's body without its frame, whose `description:` repeats the current hook, for loss checks.
+
+### Changed
+
+- git-worktrees: before removing a dirty worktree or calling it stale, back the /proc cwd check with the dirty files' mtimes and a search of the session transcripts for its path, because a session editing by absolute path from another directory leaves no cwd hit. A behind count or last-commit date says nothing about uncommitted files.
+- process-agents-subagent-driven-development: implementers and task reviewers write scratch output to a `mktemp -d` directory outside the worktree; the implementer writes its report file only after the full gate's closing line and quotes it; the reviewer compares `git diff HEAD` and `git status --porcelain` before and after.
+- process-agents-subagent-driven-development: the final whole-branch review runs a two-process concurrency check for each writer of shared state the branch adds or changes.
+- process-agents-subagent-driven-development: a brief asking for a scratch copy names the copy method (`git clone --no-local` plus the needed files) and forbids `cp -a` / `cp -r` of a whole run directory.
+- meta-dream-nap: step 2's backup counts only when `store_manifest.py backup` wrote it (its `manifest.json`); an owed nap waits for an in-flight store run's verify and store commit; a sibling pointer change on a live tree is attributed before the nap is called clean.
+- meta-context-watcher: a live peer's `handover.md` is left alone and the watcher checkpoint goes to the scratchpad (Write tool); the scratchpad is never the only copy, so the state also goes in the `OPEN-WORK.md` line.
+- meta-skill-ab-test: the skill documents the `/login` resume, that `max_tokens` is sealed (how to rerun a `token_cap` arm, and when old finished arms stay judgeable), and keeping the memory store quiet during a run.
+- factedit: `check`, `show` and `apply` list typographic tells in the hook and body as advisories; a body stored through the engine never passes the tell-sweep hook.
+- meta-dream-tree: a merged hook is checked against each member's live pointer hook, keeps every trigger up to the hard cap, and a member contradiction is settled with an instrument first.
+- meta-dream-tree: descriptor freshness checks every level's STACK floor, CHILDREN entries and named tool or event lists against disk.
+- process-plan-brainstorming: when the user explains a rule with a concrete example, restate and confirm the general rule before measuring the example; run the elephants-in-the-room review over the whole draft before asking for the first section's approval.
+- process-plan-writing-plans: self-review item 14 - code that must refuse over unreadable input reads first and classifies the error instead of gating on `Path.exists()`/`is_file()` (False on a permission error from Python 3.14), and each prescribed refusal test must fail before its task's code is applied.
+- meta-skill-writer: a skill rename or removal needs a new review checklist at the old skill path; checklists moved with the directory do not count there.
+
+### Fixed
+
+- git-worktrees: the cwd check greps for the resolved path (a cwd link never holds a symlinked path), and its comment no longer says an empty result means "clear".
+- meta-skill-ab-test: the pause before an arm whose login expires within its deadline tells the user to type `/login`; an ordinary call does not renew the login until its last minutes.
+- factedit: `show` from outside any tree says the walk starts at `--from` (default: the current directory).
+- ci_wait: `--ref` resolves inside a `--repo` checkout directory, not the process cwd. Run from the main checkout with `--repo` naming a linked worktree, it reported the main checkout's verdict as the worktree's.
+- toolbox-nudge: a log wait written as `until grep -q MARKER FILE` or `while ! grep -q ...` points at markerwatch; before, it got only the generic backstop pointer, or no nudge when the loop had no sleep.
+
 ## [11.4.1]
 
 ### Fixed
