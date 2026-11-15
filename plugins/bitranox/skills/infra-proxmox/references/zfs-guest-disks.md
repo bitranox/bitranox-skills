@@ -35,14 +35,22 @@ still need one, clone it out first (next section).
 plugin offers no `copy` from a snapshot (`volume_has_feature` lists `copy` without `snap`), so the
 clone refuses with `Full clone feature is not supported for a snapshot of '<volid>' (<disk>)`
 before copying anything. A full clone WITHOUT `--snapname` copies the current state, never a
-snapshot. Do it by hand:
+snapshot, and it refuses a RUNNING VM that has a `tpmstate0`
+(`cannot clone TPM state while VM is running`, exit 255), so a live Windows 11 guest can be
+copied only by this route (snapshot it first). Do it by hand:
 
 1. `qm config <vmid> --snapshot <snap>` lists the disks that snapshot references, including
    `efidisk0` and `tpmstate0`.
 2. For each one: `zfs send <pool>/vm-<vmid>-disk-<N>@<snap> | zfs recv <pool>/vm-<newid>-disk-<N>`.
+   `<pool>` is the dataset from the storage's `pool` line (or `pvesm path`), not the storage id:
+   see "A storage ID is not the dataset prefix" above.
 3. `qm create <newid>` and `qm set` the snapshot's settings with the new volume ids, and a NEW MAC
    on every NIC (leave `macaddr=` out and PVE generates one), so the clone does not collide with
    the source on the network. `qm rescan --vmid <newid>` picks up anything you did not attach.
+   Leave `smbios1` and `vmgenid` out too: `qm create` generates a fresh SMBIOS uuid and VM
+   generation id when they are absent, and copying the source's makes the clone the same
+   machine to the guest OS. Starting the clone beside the running source needs its memory free
+   on the node: check `free -g` (the `available` column) before `qm start`.
 4. Remove it later with `qm destroy <newid> --purge`, then confirm with `zfs list` that no
    `vm-<newid>-` volume is left.
 

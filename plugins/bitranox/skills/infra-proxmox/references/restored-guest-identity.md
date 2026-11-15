@@ -26,8 +26,12 @@ volume lives depends on the storage, so take it from `pct config <id>` if you ne
    L2 breaks DHCP for both guests, and a duplicate static ip breaks the source; both surface only
    once the copy first starts.
 2. **machine-id.** Blank `<rootfs>/etc/machine-id` (an empty file; systemd generates a new id at
-   boot) and delete `<rootfs>/var/lib/dbus/machine-id`. For the other identities a clone shares,
-   see `bitranox:net-tailscale` (node key) and `bitranox:infra-chrome-remote-desktop` (CRD host id).
+   boot). Then `ls -l <rootfs>/var/lib/dbus/machine-id`: on many images (Ubuntu, Debian) it is a
+   symlink to `/etc/machine-id`, already covered by the blanking, so leave the link alone. Never
+   write through it from the host: its absolute target resolves to the HOST's own
+   `/etc/machine-id` there. Delete it only when it is a regular file. For the other identities a
+   clone shares, see `bitranox:net-tailscale` (node key) and
+   `bitranox:infra-chrome-remote-desktop` (CRD host id).
 3. **SSH host keys.** Delete `<rootfs>/etc/ssh/ssh_host_*` and regenerate with
    `ssh-keygen -A -f <rootfs>`. On an unprivileged CT, chown the new files to the idmap base
    (`100000:100000` by default) afterwards, because they were created as host root. Inherited keys
@@ -35,7 +39,10 @@ volume lives depends on the storage, so take it from `pct config <id>` if you ne
 4. **Hostname, DNS and description.** `pct set <id> --hostname <name>` (and check
    `<rootfs>/etc/hostname`), `--nameserver`/`--searchdomain` if the CT is to resolve differently
    from the source, and `--description`: the description is inherited verbatim and describes the
-   SOURCE, so it actively misleads the next reader.
+   SOURCE, so it actively misleads the next reader. The mail identity is separate from the
+   hostname and is not rewritten by it: `<rootfs>/etc/mailname` and a `myhostname =` line in
+   `<rootfs>/etc/postfix/main.cf` still name the source, so the copy's mail goes out as the
+   source machine. Rewrite both (or drop `myhostname` so postfix uses the hostname).
 5. **The deploy checkout and every unit naming it.** A service may RUN from the source machine's
    checkout: a unit whose `WorkingDirectory=` or `ExecStart=` points there makes the copy run the
    other machine's code, and possibly push to its repo. Grep the units for the source's name and
