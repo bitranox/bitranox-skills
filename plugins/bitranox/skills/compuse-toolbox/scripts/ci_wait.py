@@ -92,11 +92,22 @@ otherwise turn every later poll into a gh failure.
 
 `--ref REF` (HEAD, origin/master, a tag) asks this tool to resolve the sha itself, with
 `git rev-parse --verify` in the `--repo` directory when one is given (a linked worktree's HEAD is
-not the main checkout's), else in the cwd's repository, and prints what it resolved to. Prefer it to
+not the main checkout's), else in the cwd's repository, and prints what it resolved to. With an
+OWNER/NAME `--repo` the cwd must be a checkout of that repository: when the cwd's remotes all
+name another one, the wait is refused (exit 2) before any poll, since a sha resolved there would
+be polled against a repository that never built it and end as `no-runs` after the appear grace -
+measured three times, each read as CI never triggering. A cwd with no remote at all is not
+evidence either way and is allowed. Prefer it to
 `--sha`: a sha the caller types is one it can pad from a short display or splice onto a guessed
 prefix, and both are 40 hex characters that pass every format check here. It also works where the
 caller's own `$(git rev-parse ...)` is refused, as in a worktree-isolated Claude Code session.
 Exactly one of `--sha` and `--ref` is required.
+
+`--min-attempt N` waits for attempt N of each run. `gh run rerun` re-runs a run under the SAME id
+and sha, so right after it the listing can still show the previous attempt completed and green,
+and the wait read that as success on its first poll while the new attempt's jobs were running. A
+row whose `attempt` is below N (or missing) is held as pending, named with its attempt. Pass the
+old attempt plus one after a re-run; the default 1 changes nothing.
 
 Run: `uv run scripts/ci_wait.py --ref HEAD`
      `uv run scripts/ci_wait.py --ref origin/master --repo OWNER/REPO --json`
@@ -130,7 +141,7 @@ from _cli_envelope import EnvelopeArgumentParser, emit
 
 FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
-_FIELDS = "headSha,workflowName,status,conclusion,databaseId,event"
+_FIELDS = "headSha,workflowName,status,conclusion,databaseId,event,attempt"
 _TERMINAL = "completed"
 #: Conclusions that do not fail a push. `skipped` is a workflow whose jobs were all if:-gated off.
 _PASSING = frozenset({"success", "skipped"})
@@ -378,6 +389,70 @@ def resolve_ref(ref: str, *, cwd: str | None = None,
         raise BadRef(f"{ref!r} does not name a commit in this repository "
                      f"(git rev-parse --verify {ref}^{{commit}} gave no full sha)")
     return out
+
+
+def url_names_repository(url: str, repo: str) -> bool:
+    """Does the remote URL ``url`` point at ``repo`` (OWNER/NAME, or HOST/OWNER/NAME)?
+
+    Matched on whole path segments, case-insensitively, with a trailing ``.git`` and ``/`` ignored:
+    ``acme/widget`` matches ``git@github.com:acme/widget.git``, an ssh alias
+    ``gh-alias:acme/widget`` and ``https://github.com/acme/widget``, never ``xacme/widget``. A HOST/OWNER/NAME value also
+    needs the host in the URL, so an enterprise name is not matched by a github.com remote.
+    """
+    text = url.strip().lower().rstrip("/")
+    text = text.removesuffix(".git").rstrip("/")
+    parts = repo.lower().split("/")
+    owner, name = parts[-2], parts[-1]
+    segments = [seg for seg in re.split(r"[/:]", text) if seg]
+    if segments[-2:] != [owner, name]:
+        return False
+    if len(parts) == 3:
+        host = parts[0]
+        return any(seg == host or seg.endswith("@" + host) for seg in segments[:-2])
+    return True
+
+
+def cwd_remotes_name(repo: str, *, cwd: str | None = None,
+                     run: Callable[..., object] = subprocess.run) -> bool | None:
+    """Does any remote of the cwd's repository point at ``repo``? ``None``: no remote, no answer.
+
+    ``None`` too when git cannot be asked: only a definite ``False`` - remotes that all name
+    something else - is evidence the cwd is the wrong checkout.
+    """
+    try:
+        proc = run(["git", "config", "--get-regexp", r"^remote\..*\.url$"], capture_output=True,
+                   text=True, encoding="utf-8", errors="replace", check=False, cwd=cwd)
+    except OSError:
+        return None
+    if getattr(proc, "returncode", 1) != 0:
+        return None
+    urls = [line.split(None, 1)[1] for line in (getattr(proc, "stdout", "") or "").splitlines()
+            if len(line.split(None, 1)) == 2]
+    if not urls:
+        return None
+    return any(url_names_repository(url, repo) for url in urls)
+
+
+def hold_older_attempts(rows: Sequence[dict[str, object]],
+                        min_attempt: int) -> list[dict[str, object]]:
+    """``rows`` with every run below attempt ``min_attempt`` turned into a pending one. PURE.
+
+    A copy is changed, never the caller's row. A row with no readable attempt is held too: after a
+    re-run the attempt is the only field that tells the old green from the new run, so a row
+    without it cannot be trusted to be the new one.
+    """
+    if min_attempt <= 1:
+        return list(rows)
+    held = []
+    for row in rows:
+        attempt = row.get("attempt")
+        if isinstance(attempt, int) and not isinstance(attempt, bool) and attempt >= min_attempt:
+            held.append(row)
+            continue
+        seen = attempt if isinstance(attempt, int) else "unknown"
+        held.append({**row, "status": f"attempt {seen}, waiting for attempt {min_attempt}",
+                     "conclusion": None})
+    return held
 
 
 def sha_is_known_locally(sha: str, *, run: Callable[..., object] = subprocess.run) -> bool | None:
@@ -1266,6 +1341,16 @@ def _interval(text: str) -> float:
     return value
 
 
+def _attempt(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a whole number of at least 1") from None
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"{value} is not a whole number of at least 1")
+    return value
+
+
 def _positive_int(text: str) -> int:
     try:
         value = int(text)
@@ -1341,6 +1426,12 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
              "Default: every event except schedule - a nightly run GitHub queues on the same "
              "head sha otherwise holds a push's verdict open or fails it",
     )
+    parser.add_argument(
+        "--min-attempt", type=_attempt, default=1,
+        help="count a run only once it reaches this attempt (default 1). After `gh run rerun` the "
+             "run keeps its id and sha, and the listing can still show the old attempt's green: "
+             "pass the old attempt plus one",
+    )
     parser.add_argument("--json", action="store_true", help="emit a JSON envelope instead of text")
     return parser.parse_args(argv)
 
@@ -1381,8 +1472,16 @@ def _target_sha(args: argparse.Namespace) -> str:
         BadSha: ``--sha`` is not a full sha.
     """
     if args.ref is not None:
-        sha = resolve_ref(args.ref, cwd=_local_repo_dir(args.repo))
+        local = _local_repo_dir(args.repo)
+        sha = resolve_ref(args.ref, cwd=local)
         print(f"resolved {args.ref} to {sha}", file=sys.stderr, flush=True)
+        if (args.repo is not None and local is None and _REPO_NAME_RE.fullmatch(args.repo)
+                and cwd_remotes_name(args.repo) is False):
+            raise BadRef(f"--ref {args.ref} resolved in the current directory, whose git remotes "
+                         f"do not name {args.repo}, so {sha} would be polled against a repository "
+                         f"that never built it and end as 'no-runs'. Pass that checkout as "
+                         f"--repo DIR (the ref then resolves there), run from inside it, or pass "
+                         f"--sha for a sha you already have")
         return sha
     sha = require_full_sha(args.sha)
     # WARN, never refuse. git not holding the sha is strong evidence of a caller bug, but it is not
@@ -1436,6 +1535,11 @@ def _run(args: argparse.Namespace) -> int:
 
     fetch = keep_seen_runs(
         fetch_listing, fetch_one, report=lambda line: print(line, file=sys.stderr, flush=True))
+    if args.min_attempt > 1:
+        seen_fetch = fetch
+
+        def fetch() -> list[dict[str, object]]:
+            return hold_older_attempts(seen_fetch(), args.min_attempt)
     try:
         result = wait_for(
             fetch,

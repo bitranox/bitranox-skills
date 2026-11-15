@@ -2346,3 +2346,161 @@ class TestGhRunBillingBlocked:
         payload = json.loads(capsys.readouterr().out)
         assert rc == 2
         assert payload["data"]["state"] == "billing-blocked"
+
+
+# --- --ref with an OWNER/NAME --repo: the cwd must be a checkout of that repository ---------------
+# Run from one checkout with --repo naming ANOTHER repository by name, --ref HEAD resolved the
+# cwd's HEAD and polled the other repository for that foreign sha: 'no runs' after the appear
+# grace, which read as CI never triggering. The cwd's remotes are the local evidence of which
+# repository it is; one whose remotes all name something else cannot hold the sha that was meant.
+
+
+def _with_remote(repo: Path, url: str, name: str = "origin") -> None:
+    _git(repo, "remote", "add", name, url)
+
+
+class TestRefAgainstAnOwnerNameRepo:
+    def _never_polls(self, monkeypatch):
+        def must_not_poll(sha, **kw):
+            raise AssertionError("FAKE-POLL-REACHED")
+        monkeypatch.setattr(ci_wait, "gh_runs", must_not_poll)
+
+    def _refused(self, argv, capsys):
+        """Exit 2 alone proves nothing here: a poll the fake refuses also ends in exit 2."""
+        assert ci_wait.main([*argv, "--json"]) == 2
+        error = json.loads(capsys.readouterr().out)["error"]
+        assert "remote" in error and "FAKE-POLL-REACHED" not in error, error
+        return error
+
+    def _polls(self, monkeypatch, asked):
+        monkeypatch.setattr(ci_wait, "gh_runs", lambda sha, **kw: asked.append(sha)
+                            or [run("CI", "completed", "success", sha=sha)])
+
+    def test_a_cwd_whose_remotes_name_another_repository_is_refused(self, repo, monkeypatch, capsys):
+        _with_remote(repo, "git@github.com:acme/widget.git")
+        self._never_polls(monkeypatch)
+        error = self._refused(["--ref", "HEAD", "--repo", "acme/other"], capsys)
+        assert "acme/other" in error and "--repo" in error
+
+    @pytest.mark.parametrize("url,value", [
+        ("git@github.com:acme/widget.git", "acme/widget"),
+        ("https://github.com/acme/widget.git", "acme/widget"),
+        ("https://github.com/acme/widget", "ACME/Widget"),
+        ("ssh://git@github.com/acme/widget.git/", "acme/widget"),
+        ("https://ghe.example.com/acme/widget.git", "ghe.example.com/acme/widget"),
+    ])
+    def test_a_cwd_with_a_remote_naming_that_repository_polls(self, repo, monkeypatch, url, value):
+        _with_remote(repo, url)
+        asked: list[str] = []
+        self._polls(monkeypatch, asked)
+        assert ci_wait.main(["--ref", "HEAD", "--repo", value, "--settle", "0"]) == 0
+        assert set(asked) == {_git(repo, "rev-parse", "HEAD")}
+
+    def test_any_remote_naming_it_is_enough_a_fork_has_two(self, repo, monkeypatch):
+        _with_remote(repo, "git@github.com:me/widget.git")
+        _with_remote(repo, "https://github.com/acme/widget.git", name="upstream")
+        asked: list[str] = []
+        self._polls(monkeypatch, asked)
+        assert ci_wait.main(["--ref", "HEAD", "--repo", "acme/widget", "--settle", "0"]) == 0
+        assert asked
+
+    def test_a_suffix_of_another_name_does_not_count(self, repo, monkeypatch, capsys):
+        """`acme/widget` must not be read as naming `cme/widget` or `widget` of another owner."""
+        _with_remote(repo, "git@github.com:acme/widget.git")
+        self._never_polls(monkeypatch)
+        self._refused(["--ref", "HEAD", "--repo", "cme/widget"], capsys)
+
+    def test_an_enterprise_host_must_match_too(self, repo, monkeypatch, capsys):
+        _with_remote(repo, "https://github.com/acme/widget.git")
+        self._never_polls(monkeypatch)
+        self._refused(["--ref", "HEAD", "--repo", "ghe.example.com/acme/widget"], capsys)
+
+    def test_a_sha_with_an_owner_name_repo_is_never_checked_against_the_cwd(self, repo, monkeypatch):
+        """--sha is the route for a sha from elsewhere; the cwd is not its source."""
+        _with_remote(repo, "git@github.com:acme/widget.git")
+        asked: list[str] = []
+        self._polls(monkeypatch, asked)
+        assert ci_wait.main(["--sha", "b" * 40, "--repo", "acme/other", "--settle", "0"]) == 0
+        assert asked == ["b" * 40]
+
+
+class TestNamesRepository:
+    @pytest.mark.parametrize("url,value,expected", [
+        ("git@github.com:acme/widget.git", "acme/widget", True),
+        ("git@github.com:acme/widget.git", "acme/widgets", False),
+        ("git@github.com:acme/widget.git", "xacme/widget", False),
+        ("gh-alias:acme/widget", "acme/widget", True),
+        ("/opt/mirrors/acme/widget.git", "acme/widget", True),
+        ("https://ghe.example.com/acme/widget", "ghe.example.com/acme/widget", True),
+        ("https://github.com/acme/widget", "ghe.example.com/acme/widget", False),
+    ])
+    def test_url_matching(self, url, value, expected):
+        assert ci_wait.url_names_repository(url, value) is expected
+
+
+# --- --min-attempt: a re-run reuses the run id, so its OLD attempt's green must not count ---------
+# After `gh run rerun` of a completed run (same sha, same id, attempt 2), the wait read the run as
+# success on its first poll while attempt 2's jobs were still going. Nothing in a stale row tells
+# the old attempt from the new one except the attempt number, so the caller names it.
+
+
+def attempt_row(attempt, status="completed", conclusion="success"):
+    row = run("CI", status, conclusion)
+    row["attempt"] = attempt
+    return row
+
+
+class TestMinAttempt:
+    def test_an_older_attempt_is_held_as_pending(self):
+        rows = ci_wait.hold_older_attempts([attempt_row(1)], 2)
+        assert rows[0]["status"] != "completed" and rows[0]["conclusion"] is None
+        assert ci_wait.verdict(rows).state == "pending"
+        assert "attempt 1" in ci_wait.verdict(rows).summary
+
+    def test_the_wanted_attempt_passes_through_unchanged(self):
+        row = attempt_row(2)
+        assert ci_wait.hold_older_attempts([row], 2) == [row]
+
+    def test_a_later_attempt_passes_through_too(self):
+        row = attempt_row(3)
+        assert ci_wait.hold_older_attempts([row], 2) == [row]
+
+    def test_a_row_without_an_attempt_is_held_never_trusted(self):
+        rows = ci_wait.hold_older_attempts([run("CI", "completed", "success")], 2)
+        assert ci_wait.verdict(rows).state == "pending"
+
+    def test_the_default_of_one_changes_nothing(self):
+        row = run("CI", "completed", "success")
+        assert ci_wait.hold_older_attempts([row], 1) == [row]
+
+    def test_the_input_rows_are_not_mutated(self):
+        row = attempt_row(1)
+        ci_wait.hold_older_attempts([row], 2)
+        assert row["status"] == "completed" and row["conclusion"] == "success"
+
+    def test_through_the_command_line_the_wait_ends_on_the_new_attempt(self, monkeypatch, capsys):
+        polls = iter([[attempt_row(1)], [attempt_row(2, "in_progress", None)],
+                      [attempt_row(2)], [attempt_row(2)]])
+        monkeypatch.setattr(ci_wait, "gh_runs", lambda sha, **kw: next(polls))
+        monkeypatch.setattr(ci_wait, "gh_run_jobs", lambda rid, **kw: None)
+        monkeypatch.setattr(ci_wait.time, "sleep", lambda _s: None)
+        rc = ci_wait.main(["--sha", "a" * 40, "--repo", "o/r", "--min-attempt", "2",
+                           "--settle", "0", "--interval", "5"])
+        assert rc == 0
+        assert "attempt 1" in capsys.readouterr().err
+
+    def test_without_it_the_stale_attempt_reads_green_at_once(self, monkeypatch):
+        """The control: the same first poll, no --min-attempt, ends the wait as success."""
+        monkeypatch.setattr(ci_wait, "gh_runs", lambda sha, **kw: [attempt_row(1)])
+        monkeypatch.setattr(ci_wait, "gh_run_jobs", lambda rid, **kw: None)
+        assert ci_wait.main(["--sha", "a" * 40, "--repo", "o/r", "--settle", "0"]) == 0
+
+    def test_the_fields_asked_for_include_the_attempt(self):
+        assert "attempt" in ci_wait._FIELDS.split(",")
+
+    @pytest.mark.parametrize("value", ["0", "-1", "x"])
+    def test_a_bad_value_is_a_usage_error(self, value, capsys):
+        with pytest.raises(SystemExit) as info:
+            ci_wait.main(["--sha", "a" * 40, "--min-attempt", value])
+        assert info.value.code == 2
+        assert "at least 1" in capsys.readouterr().err
