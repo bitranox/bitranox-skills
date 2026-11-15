@@ -398,11 +398,33 @@ process has its cwd there:
 
 ```bash
 cd /path/to/main-checkout                       # not the worktree
-ls -l /proc/[0-9]*/cwd 2>/dev/null | grep -E ' -> /path/to/worktree(/|$)'   # Linux; none = clear
+ls -l /proc/[0-9]*/cwd 2>/dev/null | grep -E ' -> /path/to/worktree(/|$)'   # Linux; none = no process there
 lsof +D /path/to/worktree                                                   # macOS, or with lsof
 ```
 
-The anchored pattern keeps a sibling such as `/path/to/worktree-2` from matching.
+The anchored pattern keeps a sibling such as `/path/to/worktree-2` from matching. Give it the
+resolved path (`realpath /path/to/worktree`): a cwd link always holds the resolved path, so a path
+that runs through a symlink never matches.
+
+**A clean cwd check does not mean nobody is working there.** It sees a process whose working
+directory is inside the worktree and nothing else. An agent session edits files by absolute path
+from the directory it was launched in (often the main checkout or another repo), so a session
+editing this worktree right now leaves no hit. Before removing a worktree that holds uncommitted
+changes, or calling one stale or abandoned, also read when its dirty files last changed and which
+session transcripts name its path:
+
+```bash
+(cd /path/to/worktree && git ls-files -m -o --exclude-standard -z |
+  xargs -0 -r stat -c '%y %n' | sort -r)    # GNU stat; a deleted dirty file prints an error
+grep -rlF --include='*.jsonl' /path/to/worktree ~/.claude/projects | xargs -r ls -lt
+```
+
+A dirty file or a transcript written in the last hours, either one, means a session may still be
+working there: find that session and ask it, or the user, before removing anything. An empty
+transcript search does not clear a recent dirty file (a session may have named the path another
+way, a symlink or a relative path): with no transcript to name the session, ask the user. A behind
+count or the last commit's date says nothing about uncommitted files: a worktree hundreds of
+commits behind can hold edits made this morning.
 
 `scripts/wtclean.py` removes the worktree AND those caches together, and shows what it will take
 before it takes anything:
