@@ -267,6 +267,25 @@ def test_set_scope_refuses_a_text_that_changes_the_topics_line(tmp_path, capsys)
     assert E.main(["set-scope", "--proj", proj, "--scope", SCOPE + "\nTOPICS: python"]) == 0
 
 
+@pytest.mark.parametrize("sep", ["\r\n", "\r"])
+def test_set_scope_refuses_a_cr_ended_topics_line_that_changes_the_topics(tmp_path, capsys, sep):
+    # A CR inside an inline --scope becomes a line break once written (the store is read in text
+    # mode), so the gate must see the TOPICS line it ends; it once read none and wrote a second.
+    anchor, proj = _tree(tmp_path)
+    E.main(["set-scope", "--proj", proj, "--scope", SCOPE])
+    E.main(["set-level-topics", "--proj", proj, "--topics", "python"])
+    before = _scope(proj)
+    capsys.readouterr()
+    text = "WHAT: x" + sep + "TOPICS: rust" + sep + "STACK: y"
+    assert E.main(["set-scope", "--proj", proj, "--scope", text]) == 2
+    assert "changes only through set-level-topics" in capsys.readouterr().out
+    assert _scope(proj) == before
+    same = "WHAT: x" + sep + "TOPICS: python" + sep + "STACK: y"
+    assert E.main(["set-scope", "--proj", proj, "--scope", same]) == 0
+    assert _scope(proj).count("TOPICS:") == 1
+    assert tp.descriptor_topics(_scope(proj)) == ("python",)
+
+
 def test_topics_stale_is_fresh_in_a_tree_without_a_list(tmp_path, capsys):
     anchor, proj = _tree(tmp_path, with_list=False)
     E.main(["set-scope", "--proj", proj, "--scope", SCOPE])

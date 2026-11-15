@@ -183,9 +183,9 @@ that does not parse (<reason>); fix or remove that line there by hand, then run 
 
 The tree's closed topic list, with a one-line meaning per topic, is
 `<anchor>/.claude-memory/topics.json`, written by `topics-set-list`: 1 to 64 topics, each name
-lower case letters, digits and dashes (at most 32 characters, starting with a letter or digit),
-each meaning one line of at most 200 characters once trimmed (it is stored trimmed). A tree
-without that file has no topics:
+lower case letters, digits and dashes (at most 32 characters, starting and ending with a letter
+or digit, never two dashes in a row), each meaning one line of at most 200 characters once
+trimmed (it is stored trimmed). A tree without that file has no topics:
 `set-topics`, `set-level-topics` and `set-top-topics` refuse there, `topics-show` exits 1 and
 `topics-stale` prints `fresh`. With a list, `topics-stale` reports a level as stale when it has
 no descriptor, no `TOPICS:` line, a `TOPICS:` line that does not parse, or a descriptor whose

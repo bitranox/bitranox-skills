@@ -167,3 +167,82 @@ def test_placed_at_normalises_its_topics_and_refuses_a_string_level():
         tree.placed_at(("a",), "python")
     with pytest.raises(TypeError):
         tree.placed_at("a", ["python"])
+
+
+# ---- a CR is a line ending: the text mode the store is read in turns "\r" and "\r\n" into "\n" ----
+
+@pytest.mark.parametrize("scope", ["WHAT: x\r\nTOPICS: rust\r\nSTACK: y", "WHAT: x\rTOPICS: rust\rSTACK: y",
+                                   "WHAT: x\nTOPICS: rust\r"])
+def test_a_topics_line_ended_or_started_by_a_cr_is_read(scope):
+    assert tp.descriptor_topics(scope) == ("rust",)
+
+
+def test_a_cr_ended_topics_line_is_replaced_not_duplicated():
+    again = tp.with_descriptor_topics("WHAT: x\r\nTOPICS: rust\r\nSTACK: y", ["python"])
+    assert again.count("TOPICS:") == 1 and "TOPICS: python" in again
+    lone = tp.with_descriptor_topics("WHAT: x\rTOPICS: rust\rSTACK: y", ["python"])
+    assert lone.count("TOPICS:") == 1 and "TOPICS: python" in lone
+
+
+def test_the_digest_leaves_out_a_cr_ended_topics_line():
+    plain = tp.descriptor_digest("WHAT: x\nSTACK: y")
+    assert tp.descriptor_digest("WHAT: x\r\nTOPICS: rust\r\nSTACK: y") == plain
+    assert tp.descriptor_digest("WHAT: x\rTOPICS: rust\rSTACK: y") == plain
+
+
+def test_a_bad_cr_ended_topics_line_is_refused_not_read_as_absent():
+    with pytest.raises(tp.InvalidTopic):
+        tp.descriptor_topics("WHAT: x\r\nTOPICS: Rust\r\nSTACK: y")
+
+
+# ---- the tag grammar: dashes only BETWEEN letters or digits ------------------------------------
+
+@pytest.mark.parametrize("bad", ["python-", "a--b", "a-", "x" * 31 + "-"])
+def test_a_tag_with_a_trailing_or_doubled_dash_is_refused(bad):
+    with pytest.raises(tp.InvalidTopic):
+        tp.normalise_topics([bad])
+
+
+def test_a_dashed_tag_is_accepted():
+    assert tp.normalise_topics(["ci-cd", "a-b-c", "x1-2y"]) == ("a-b-c", "ci-cd", "x1-2y")
+
+
+# ---- the accepting side of each bound: removing a bound or an off-by-one fails one of these ------
+
+def test_a_tag_of_exactly_32_characters_is_accepted_and_33_is_not():
+    assert tp.normalise_topics(["x" * 32]) == ("x" * 32,)
+    assert tp.normalise_topics(["a" + "-b" * 15 + "c"]) == ("a" + "-b" * 15 + "c",)
+    with pytest.raises(tp.InvalidTopic):
+        tp.normalise_topics(["x" * 33])
+    with pytest.raises(tp.InvalidTopic):
+        tp.normalise_topics(["a" + "-b" * 15 + "cd"])
+
+
+def test_exactly_max_topics_tags_are_accepted_and_one_more_is_not():
+    assert tp.MAX_TOPICS == 12
+    tags = ["t%02d" % i for i in range(tp.MAX_TOPICS)]
+    assert tp.normalise_topics(tags) == tuple(tags)
+    with pytest.raises(tp.InvalidTopic):
+        tp.normalise_topics(tags + ["t99"])
+
+
+# ---- LevelMap.topics refuses a bare string level -----------------------------------------------
+
+def test_level_map_topics_refuses_a_string_level():
+    tree = _small_tree()
+    assert tree.topics(("a",)) == frozenset({"python"})
+    with pytest.raises(TypeError):
+        tree.topics("a")
+
+
+# ---- the Decisions block: placements normalises its topics -------------------------------------
+
+def test_placements_normalises_and_refuses_as_the_decisions_block_records():
+    """Pins the Decisions entry on placements(): an unnormalised tag places like its normalised
+    form, and a tag the grammar refuses raises InvalidTopic instead of placing nothing."""
+    tree = _small_tree()
+    assert tree.placements([" python "]) == tree.placements(["python"]) == (("a",),)
+    with pytest.raises(tp.InvalidTopic):
+        tree.placements(["Python"])
+    doc = tp.__doc__
+    assert "test_placements_normalises_and_refuses_as_the_decisions_block_records" in doc

@@ -32,6 +32,13 @@ Decisions:
       a level is no topic, so it gets TypeError. Reopen if: never - the silent split is the bug.
       Pinned by: tests/test_topic_placement.py::test_normalise_refuses_a_bare_string_for_a_topic_list
       and tests/test_topic_placement.py::test_a_level_map_refuses_a_string_level_key
+    - placements() (and placed_at(), which calls it) normalises its topics before matching them:
+      a tag is stripped and deduplicated, and a tag the grammar refuses raises InvalidTopic. Why:
+      the levels' topics are normalised when the map is built, so an unnormalised " python "
+      would match no level and the fact would fall back to the top without a word, and an
+      invalid tag would place nothing it names. Evidence: argued (one grammar for every topic the
+      map compares). Reopen if: a caller needs to place by raw, unvalidated tags.
+      Pinned by: tests/test_topic_placement.py::test_placements_normalises_and_refuses_as_the_decisions_block_records
 """
 
 from __future__ import annotations
@@ -62,8 +69,12 @@ MAX_TOPICS = 12
 """Most topics one fact or one descriptor may carry: a bound on a field, so one item cannot make
 a pointer line or a descriptor arbitrarily long."""
 
-_TOPIC_RX = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")
-_TOPICS_LINE_RX = re.compile(r"(?m)^TOPICS:[ \t]*([^\r\n]*)$")
+_TOPIC_RX = re.compile(r"(?=[a-z0-9-]{1,32}\Z)[a-z0-9]+(?:-[a-z0-9]+)*")
+# A CR ends a line here as LF does: the store is read in text mode, which turns "\r" and "\r\n"
+# into "\n", so a CR an inline --scope carries is a line break once written. Ending the match at
+# LF only made such a line invisible, and the TOPICS gate then let a second line through.
+_TOPICS_LINE_RX = re.compile(r"(?m)(?:^|(?<=\r))TOPICS:[ \t]*([^\r\n]*)(?=\r|$)")
+_LINE_END_RX = re.compile(r"\r\n|\r|\n")
 
 
 class InvalidTopic(ValueError):
@@ -72,16 +83,17 @@ class InvalidTopic(ValueError):
 
 def normalise_topics(raw: Iterable[str]) -> tuple[str, ...]:
     """`raw` as a sorted tuple without repeats. Raises InvalidTopic for a tag that is not lower
-    case letters, digits and dashes (at most 32 characters, starting with a letter or digit), and
-    for more than MAX_TOPICS tags, and for a bare string given where the list belongs."""
+    case letters, digits and dashes (at most 32 characters, starting and ending with a letter or
+    digit, never two dashes in a row), and for more than MAX_TOPICS tags, and for a bare string
+    given where the list belongs."""
     if isinstance(raw, str):
         raise InvalidTopic("a topic list must be a list of tags, not the string %r" % (raw,))
     seen: set[str] = set()
     for item in raw:
         tag = item.strip() if isinstance(item, str) else item
         if not isinstance(tag, str) or not _TOPIC_RX.fullmatch(tag):
-            raise InvalidTopic("invalid topic %r - use lower case letters, digits and dashes, "
-                               "at most 32 characters" % (item,))
+            raise InvalidTopic("invalid topic %r - use lower case letters, digits and single dashes "
+                               "between them, at most 32 characters" % (item,))
         seen.add(tag)
         if len(seen) > MAX_TOPICS:
             raise InvalidTopic("more than %d topics" % MAX_TOPICS)
@@ -103,7 +115,9 @@ def format_topics(topics: Iterable[str]) -> str:
 
 def descriptor_topics(scope: str) -> tuple[str, ...] | None:
     """The topics a level's descriptor declares on its `TOPICS:` line; None when it has no such
-    line (the level was never tagged), an empty tuple when the line is there and empty."""
+    line (the level was never tagged), an empty tuple when the line is there and empty. A CR ends
+    a line as LF does. Raises InvalidTopic when the line is there but does not parse: a tag the
+    grammar refuses, or more than MAX_TOPICS tags."""
     m = _TOPICS_LINE_RX.search(scope or "")
     return None if m is None else parse_topics(m.group(1))
 
@@ -129,7 +143,7 @@ def with_descriptor_topics(scope: str, topics: Iterable[str]) -> str:
 def descriptor_digest(scope: str) -> str:
     """A digest of what a descriptor SAYS, its `TOPICS:` line left out and blank lines and line
     ends ignored: equal digests mean the text the topics were chosen from has not changed."""
-    rows = [row.strip() for row in _TOPICS_LINE_RX.sub("", scope or "").split("\n")]
+    rows = [row.strip() for row in _LINE_END_RX.split(_TOPICS_LINE_RX.sub("", scope or ""))]
     return hashlib.sha256("\n".join(row for row in rows if row).encode("utf-8")).hexdigest()
 
 
