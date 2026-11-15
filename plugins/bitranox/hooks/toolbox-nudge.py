@@ -406,8 +406,12 @@ _ANY_TOOL_RULES = [
                 r"(?=.*\blen\([^)\n]*\)\s*>=?\s*(?:[A-Z_]*WIDTH|width)\b))"),
      "mdwrap",
      "reflowing one markdown paragraph without touching the rest of the file"),
-    (re.compile(r"\bfind\b[^\n]*-name\s+['\"]?CLAUDE\.md"
-                r"|\bgrep\s+-[A-Za-z]*r[A-Za-z]*\b[^\n]*CLAUDE\.md"), "claudemd_variance",
+    # A walk over EVERY CLAUDE.md in a tree (find -name, grep --include), the first step of a
+    # hand-rolled section comparison. A recursive grep that merely names CLAUDE.md as one of its
+    # paths is a content search in a few files, not a walk, and the tool has nothing to offer it.
+    (re.compile(r"\bfind\b[^\n]*-i?name\s+CLAUDE(?:\.md\b|\*)"
+                r"|\bgrep\b[^\n]*--include=CLAUDE(?:\.md\b|\*)"),
+     "claudemd_variance",
      "finding duplicated CLAUDE.md sections by hand"),
     # A hand-rolled MUTATE-THEN-PYTEST ARM: a throwaway `arms.py` / `mutate.py` holding a table of
     # exact-text mutations that writes each into a source, runs pytest and puts the file back from

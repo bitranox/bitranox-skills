@@ -1738,3 +1738,27 @@ def test_main_is_silent_on_a_distribution_script_without_the_jig(home, monkeypat
                         "tool_input": {"file_path": "/tmp/dist_batch.py", "content": _DIST_SCRIPT}})
     assert N.main() == 0
     assert "template_sweep" not in capsys.readouterr().out
+
+
+# claudemd_variance compares sections across EVERY CLAUDE.md in a tree. A recursive grep that
+# merely names CLAUDE.md as one of its paths is a content search in a few files (the reported
+# false positive: a grep for a retired path over `CLAUDE.md docs README.md`), and the tool has
+# nothing to offer it. Quoted arguments are masked before the rules run, so only an unquoted name
+# is visible either way.
+@pytest.mark.parametrize("command", [
+    "find . -name CLAUDE.md -not -path './.git/*' -exec awk '/^## /' {} +",
+    "grep -rh '^## ' --include=CLAUDE.md . | sort | uniq -c | sort -rn",
+    "find /path/to/tree -name CLAUDE.md -print | sort",
+    "find . -iname CLAUDE.md -exec md5sum {} +",
+])
+def test_claudemd_variance_fires_on_a_walk_over_every_claude_md(command):
+    assert _bash(command) == "claudemd_variance"
+
+
+@pytest.mark.parametrize("command", [
+    "grep -rn 'old/retired/path' CLAUDE.md docs README.md",
+    "grep -rln 'EXECUTION-USER-REVIEW' plugins CLAUDE.md docs",
+    "grep -rn pattern CLAUDE.local.md CLAUDE.md",
+])
+def test_claudemd_variance_stays_quiet_on_a_grep_naming_claude_md_as_a_path(command):
+    assert _bash(command) != "claudemd_variance"
