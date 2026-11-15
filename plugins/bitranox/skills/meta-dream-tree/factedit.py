@@ -63,6 +63,12 @@ CURRENT hook verbatim, so a loss check (did a shortened hook drop something the 
 holds?) reads `show --prose-only`, the body without its frame; searching the whole `--body`
 output finds every dropped clause in the frame and passes every cut.
 
+The one exception to "exactly the edited text" is a frame line you DELETE: the engine keeps every
+stored frame key the handed-back frame leaves out, so the key comes back. To remove a key the
+engine does not write itself (anything but `name:`, `description:`, `title:`, `topics:` and
+`metadata:`), leave it in `f` with no value - `stale: old` edited to a bare `stale:` - and `apply`
+removes it. Topics change only through the engine's `set-topics`.
+
 `check`, `show` and `apply` report typographic tells (em/en dash, curly quote, ellipsis, NBSP,
 zero-width) in the hook and the body as advisories, from the plugin's own `tell_chars` scanner:
 a body stored through the engine comes from a file, so the tell-sweep hook that watches Write and

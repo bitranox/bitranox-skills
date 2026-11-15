@@ -1251,6 +1251,24 @@ def _merged_metadata(new_lines, stored_lines):
     return out
 
 
+# The frame keys the engine writes itself on every update (`_synced_frame`, `_with_title`, the
+# stored topics line) or merges key by key (`metadata:`): a bare line never removes one of them.
+_MANAGED_FRAME_KEYS = frozenset({"name", "description", "title", "topics", "metadata"})
+
+
+def _bare_frame_key(lines):
+    """True when a frame block (`_frame_blocks`) is its key with no value and nothing below it."""
+    return (not lines[0].split(":", 1)[1].strip()
+            and all(not line.strip() for line in lines[1:]))
+
+
+def _clears_frame_key(key, new_lines, stored_lines):
+    """True when the new frame's block for `key` asks to remove the stored one: an unmanaged key,
+    bare in the new frame and carrying a value in the stored one (see `_with_stored_frame_keys`)."""
+    return (key not in _MANAGED_FRAME_KEYS and _bare_frame_key(new_lines)
+            and not _bare_frame_key(stored_lines))
+
+
 def _with_stored_frame_keys(text, stored):
     """Return framed `text` with every frontmatter key of the `stored` body that its own frame
     does not set: a missing top-level key (`description:`, `title:`, `topics:`, `metadata:`)
@@ -1261,7 +1279,13 @@ def _with_stored_frame_keys(text, stored):
 
     For an UPDATE whose body brings its own frame: the frame says what it sets, never what it
     drops. The callers then sync `name:` and `description:` to this write and re-apply the stored
-    `topics:` line, so those three stay theirs whatever either frame said."""
+    `topics:` line, so those three stay theirs whatever either frame said.
+
+    So leaving a key out never removes it. A key the engine does not manage (any but
+    `_MANAGED_FRAME_KEYS`) is removed by naming it with no value: a bare `stale:` line, nothing
+    below it, against a stored `stale:` that has a value. It is the only route, since the
+    store-edit-guard denies a hand edit of the body. A stored bare key handed back bare stays, so an
+    unedited round trip (`factedit.py show --body`, then `apply --body-file`) changes nothing."""
     head, m = _frontmatter(text)
     _shead, sm = _frontmatter(stored)
     if m is None or sm is None:
@@ -1273,11 +1297,13 @@ def _with_stored_frame_keys(text, stored):
     for key, lines in _frame_blocks(sm.group(1) or ""):
         if key is None:
             continue
+        used.add(key)
         if key == "metadata" and key in new:
             merged.extend(_merged_metadata(new[key], lines))
+        elif key in new and _clears_frame_key(key, new[key], lines):
+            continue
         else:
             merged.extend(new.get(key, lines))
-        used.add(key)
     for key, lines in new_blocks:
         if key not in used:
             merged.extend(lines)

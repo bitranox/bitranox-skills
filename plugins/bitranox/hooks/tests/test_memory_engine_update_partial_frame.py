@@ -86,6 +86,60 @@ def test_a_full_frame_update_is_unchanged_by_the_merge(fact):
     assert _stored(anchor, slug) == full
 
 
+# ---- removing a frame key the engine does not manage -------------------------------------------
+# A frame says what it sets, never what it drops, so leaving a key out keeps the stored one. The
+# one way to remove a key is to name it with no value; the store-edit-guard denies a hand edit.
+
+def _with_extra_key(anchor, slug, line):
+    stored = _stored(anchor, slug)
+    us.put_body(str(anchor), slug, stored.replace("\n---\n", "\n%s\n---\n" % line, 1))
+    return _stored(anchor, slug)
+
+
+def test_a_frame_that_leaves_out_an_unknown_key_keeps_it(fact):
+    anchor, proj, slug = fact
+    full = _stored(anchor, slug).replace("first prose", "second prose")
+    _with_extra_key(anchor, slug, "stale: old")
+    E.add_or_update_entry(proj, title="T", hook=HOOK, body=full, slug=slug)
+    assert _yaml_frame(_stored(anchor, slug))["stale"] == "old"
+
+
+def test_a_frame_that_names_an_unknown_key_with_no_value_removes_it(fact):
+    anchor, proj, slug = fact
+    stored = _with_extra_key(anchor, slug, "stale: old\nkept: here")
+    emptied = stored.replace("stale: old", "stale:").replace("first prose", "second prose")
+    E.add_or_update_entry(proj, title="T", hook=HOOK, body=emptied, slug=slug)
+    frame = _yaml_frame(_stored(anchor, slug))
+    assert "stale" not in frame
+    assert frame["kept"] == "here"
+    assert frame["metadata"] == {"type": "feedback", "skill": "bitranox:compuse-git"}
+    assert _stored(anchor, slug).endswith("second prose\n")
+
+
+def test_a_stored_key_with_no_value_survives_an_unedited_round_trip(fact):
+    anchor, proj, slug = fact
+    stored = _with_extra_key(anchor, slug, "marker:")
+    E.add_or_update_entry(proj, title="T", hook=HOOK, body=stored, slug=slug)
+    assert _stored(anchor, slug) == stored
+
+
+def test_a_bare_metadata_line_still_keeps_the_stored_sub_keys(fact):
+    anchor, proj, slug = fact
+    body = "---\nname: x\nmetadata:\n---\n\nnew prose\n"
+    E.add_or_update_entry(proj, title="T", hook=HOOK, body=body, slug=slug)
+    assert _yaml_frame(_stored(anchor, slug))["metadata"] == {
+        "type": "feedback", "skill": "bitranox:compuse-git"}
+
+
+def test_a_bare_managed_key_is_not_removed(fact):
+    """`description:` and `title:` are the engine's: a bare one keeps them, set from this write."""
+    anchor, proj, slug = fact
+    body = "---\nname: x\ndescription:\ntitle:\n---\n\nnew prose\n"
+    E.add_or_update_entry(proj, title="T", hook=HOOK, body=body, slug=slug)
+    frame = _yaml_frame(_stored(anchor, slug))
+    assert (frame["description"], frame["title"]) == (HOOK, "T")
+
+
 # ---- a frame whose `metadata:` sub-keys are indented differently from the stored frame ---------
 # A stored frame indents its sub-keys by two spaces; a body handed in may use four. Lines carried
 # over, or inserted, at the other indent made the frontmatter invalid YAML.

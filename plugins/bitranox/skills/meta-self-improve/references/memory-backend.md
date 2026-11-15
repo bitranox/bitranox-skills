@@ -472,7 +472,12 @@ body, enforces tree-unique slugs, refuses a pinned target (`PinnedEntry` - `amen
 deliberate way through). A slug another level of the tree points at is that level's fact even when
 its body file is missing (renamed away): `add` at any other level refuses it (`SlugOwnedElsewhere`,
 exit 2, nothing written) and names the owning level, whose own `add --slug <slug>` writes the body
-back. A slug names the body FILE, so `add`, `amend-pinned`, `rename --to-slug`
+back. An update whose body brings its own frontmatter sets only the keys that frame names: a key
+it leaves out keeps its stored value (the `metadata:` sub-keys `type:` and `skill:` included), so
+deleting a line from the frame never removes the key. To remove a key the engine does not write
+itself (anything but `name:`, `description:`, `title:`, `topics:` and `metadata:`), name it with
+no value: a bare `stale:` line with nothing below it removes a stored `stale: old`. A key that is
+stored bare and handed back bare stays, so an unedited round trip changes nothing. A slug names the body FILE, so `add`, `amend-pinned`, `rename --to-slug`
 and `relocate` refuse one that is not a plain filename (lowercase letters, digits, hyphens and
 dots, starting and ending with a letter or digit) before anything is written. On an update,
 `--type` with no body re-types the stored body in place; an unknown `--type` is refused.
