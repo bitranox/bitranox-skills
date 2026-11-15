@@ -40,6 +40,10 @@ Start by understanding the current project context, then ask questions one at a 
 - When the user answers an option question with a free-text counter-idea, turn it into a concrete
   scheme (quote the hard limit it must meet) and ask once more with that scheme as option 1:
   building from the raw idea guesses details they would have chosen
+- When the user explains a rule with a concrete example ("`/a/python` and `/b/python` both get
+  the python rule"), restate the general rule you take the example to stand for and confirm it
+  before measuring anything: measuring the example's literal attributes (which marker files those
+  directories hold) answers a question nobody asked, and its numbers leak into the next options
 - Focus on understanding: purpose, constraints, success criteria
 
 **Exploring approaches:**
@@ -55,6 +59,10 @@ switch-model-or-continue (the main agent cannot self-switch its model). See
 
 **Presenting the design:**
 - Once you believe you understand what you're building, present the design
+- **Before asking the user to approve the first section, run the elephants-in-the-room review**
+  (the questions in bitranox:process-plan-writing-plans, "Plans Over a Day's Work", step 2) over
+  the whole draft, or an equivalent independent pass: a finding that reverses a section the user
+  already approved has to be asked again, and the approval round is spent twice
 - Break it into sections of 200-300 words
 - Ask after each section whether it looks right so far
 - Cover: architecture, components, data flow, error handling, testing
