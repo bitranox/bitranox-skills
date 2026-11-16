@@ -50,8 +50,10 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 - coding-data-architecture: when a typed boundary model replaces a hand-rolled `.get()` walk, the Definition of Done now requires keeping what the walk did with each malformed input shape (kept, skipped, defaulted, aborted), pinned by tests against the old code.
 - coding-data-architecture: a check the live input path applies must also run when a stored copy comes back in (a cache hit, an HTTP 304 served from an ETag cache, state read from disk), by living in the boundary model's validation. coding-input-sanitization lists such a read-back as a boundary and points there.
 - process-debug-systematic: a fault seen once is checked against the same system's earlier runs (previous boots, earlier CI runs, older logs) before a lasting fix is proposed.
-- process-agents-dispatching-parallel: a brief that lets an agent dispatch its own probes tells it to wait for them before ending its turn, and a NAMED agent's brief tells it to report through SendMessage, since its final text never reaches the dispatcher.
+- process-agents-dispatching-parallel: a brief that lets an agent dispatch its own probes tells it to wait for them before ending its turn; a report that reaches the dispatcher instead is forwarded to that agent by name.
 - git-worktrees: an isolation worktree always belongs to the dispatching session's repository. For work in another repository, omit isolation and create the worktree in that repository.
+- compuse-ssh: checking whether a host key is recorded uses `ssh-keygen -F` for both the name and the address, in the file `ssh -G` names, since Debian and Ubuntu hash known_hosts entries and `grep` finds nothing.
+- infra-chrome-remote-desktop: a host whose unit exits 1 after a hostname change is diagnosed by the config file's hostname hash and repaired by moving the config to the new hash, with no re-registration and no new OAuth code.
 
 ## [11.7.3]
 

@@ -353,8 +353,8 @@ after it; a handover the user asked for takes steps 7 and 8 instead.
    another session that is still working (not an earlier session that ended, whose file this step
    supersedes), it is not the outgoing file of steps 2 and 3: leave it untouched, and write a
    watcher checkpoint as `handover.md` in the session scratchpad instead, with the Write tool. The
-   compaction resume hands back a `handover.md` this session wrote with Write or Edit, but finds
-   one written through Bash only at the repo root. Where `handover.md` is tracked, a linked
+   compaction resume hands back a `handover.md` this session wrote with Write or Edit; one written
+   through Bash it only lists, never as this session's. Where `handover.md` is tracked, a linked
    worktree's copy is the same shared record, and your next commit ships yours over the other.
    The scratchpad does not survive a host reboot, so it never holds the only copy: put what runs,
    what is decided and the exact next action in the work's own `OPEN-WORK.md` line as well.

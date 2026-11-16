@@ -25,6 +25,10 @@ APPLIES - an untrusted boundary, data from outside your control:
 - any value a security check vouches for before a DIFFERENT component parses it (a URL, path or
   header handed to a driver, an HTTP client or a service in another language), the app's own
   configuration included - see "When a different parser reads the value"
+- a stored copy of an outside value coming back in: a cache hit, an HTTP 304 served from an ETag
+  cache, state or a next-page URL read back from disk. It skipped every check the live path runs
+  unless the read-back is parsed through the same boundary model, so put the check in that model
+  (bitranox:coding-data-architecture, Definition of Done)
 
 DOES NOT APPLY - internal seams between trusted code:
 - a domain/application function called by your own validated code
@@ -174,6 +178,8 @@ numeric, IDNA, trailing-dot and backslash/userinfo spellings of a forbidden host
 - [ ] A check gating what a different parser reads also runs on that parser's own parse, fails
       closed, and is proven by a differential table (by a replica for a consumer in another
       language)
+- [ ] Every read-back of a stored outside value (cache hit, 304, state on disk) passes the same
+      checks as the live input
 - [ ] CR/LF + control chars stripped before writing user data to a log line or response header
 - [ ] Internal library calls NOT re-sanitized (type contract trusted)
 
