@@ -191,6 +191,38 @@ aware datetimes, dump each through the old call and through `model_dump_json()`,
 AND exception types (an `except TypeError` around the old call does not catch the `ValueError` the
 new one raises). Switch only if they match.
 
+### A new key in a file that earlier releases read with `extra="forbid"`
+
+A release that adds a field to a model persisted on disk (a state or cache JSON file) makes every
+earlier release whose model has `extra="forbid"` refuse the WHOLE file (`extra_forbidden` at the
+new key), so a user who downgrades loses everything the file held. Write the key only while it
+holds data:
+
+```python
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class State(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    history: list[str] = []
+    pending: list[str] = Field(default_factory=list)  # the field this release adds
+
+    def to_disk(self) -> str:
+        if self.pending:
+            return self.model_dump_json()
+        return self.model_dump_json(exclude={"pending"})
+```
+
+- Name the key in `exclude`. `exclude_unset=True` still writes a key that was loaded from the file
+  and then emptied (`"pending":[]`), and `exclude_defaults=True` also drops every OTHER field at
+  its default, changing keys earlier releases always wrote (measured on pydantic 2.14.3).
+- Pin the key's absence in a test: dump a state whose new field is empty, assert the key is not in
+  the output, and validate that output against a copy of the earlier release's model
+  (`extra="forbid"`, without the field). Prove the test can fail by dumping without the `exclude`.
+- This covers the common case only: once the field holds data the file carries the key again and
+  an earlier release refuses it. Name that remaining downgrade window in the CHANGELOG.
+
 ### A wire name that differs from the field name needs three settings
 
 When a field's wire name differs from its Python name (a reserved word such as `not` becoming
