@@ -38,6 +38,9 @@ do not tell you.
 | Live `/Capture-Image` fails `0x80070020`        | exclude that file and retry       | **a live volume** - each exclusion surfaces the next locked file; capture from a VSS shadow                 |
 | Inventory after an upgrade finds tasks gone     | the upgrade lost them             | **the box has not settled** - minutes after the apply reboot the task API can return 0; require a control   |
 | CU sweep on one error code calls a guest fine   | that guest is healthy             | **one defect, several codes** - an orphaned language pack fails `0x800736B3` or `0x80071A2D` by phase       |
+| Repair upgrade finished cleanly                 | the machine is as it was          | **activation can be lost silently** - read `LicenseStatus` and `PartialProductKey` before and after         |
+| Setup log: `KB<n>` changed to `Staged`          | that CU is installed, or pending  | **Staged is neither**, and the KB can be the servicing stack update - read its CBS identity                 |
+| `DISM /Add-Package` hit the driver's ceiling    | the install failed                | **a slow guest class** - VBS+HVCI took 2.8x as long; read the exit code file and `UBR` first                |
 
 ## A clean health check does not mean an update will install
 
@@ -148,6 +151,34 @@ disconnect. Log it with ONE writer and an explicit encoding (`Add-Content -Encod
 PowerShell 5.1's `Tee-Object` appends UTF-16, and the mixed file defeats a completion-marker match
 on a run that succeeded (the `winlog` jig in `bitranox:compuse-toolbox` reads such a file). Done
 means the `UBR` reached the target build.
+
+**Record DISM's exit code with the redirect FIRST.** In the `.cmd` the task runs, put
+`>C:\temp\rc.txt echo RC=%ERRORLEVEL%` on its own line after the DISM call. The natural
+`echo RC=%ERRORLEVEL%> C:\temp\rc.txt` expands to `echo RC=2> C:\temp\rc.txt` for exit 2, cmd reads
+`2>` as a stderr redirect, and the file is created EMPTY, for any exit code 1-9. Measured: a DISM
+failure with exit 2 left `rc.txt` empty, and a driver polling it for `RC=` waited out its whole
+ceiling. The redirect-first form has no digit before `>`, so it holds for every exit code. The
+separate line matters too: inside one `cmd /c "dism ... & echo %ERRORLEVEL%"` the variable expands
+before DISM runs.
+
+### A KB the Setup log calls Staged is not installed, and may not be the cumulative update
+
+The `Setup` event log reports each package transition as
+`Package KB<n> was successfully changed to the <state> state`. Read the TARGET state on every such
+line before reporting what a KB did: `Staged` is not `Installed`. Measured: a servicing stack
+update logged `Staged`, and `Installed` only six hours later, inside the next Windows Update install
+run. Nor is the KB on such a line necessarily the cumulative update: a `Staged` line from the update
+agent's `UpdateAgentLCU` client named the servicing stack update, while the pending cumulative
+update was a different KB. Before calling a KB the pending cumulative update, read its package
+identity:
+
+```powershell
+Select-String C:\Windows\Logs\CBS\CBS.log -Pattern 'Identifier: KB<n>'   # live log; older: the cabs
+```
+
+A `Package_for_ServicingStack_<rev>` there is the servicing stack update; the update's title in a
+Windows Update search tells you the same. Whether the cumulative update itself is in is answered by
+the `UBR`, as above.
 
 ### One defect, several codes: an orphaned language pack blocks every cumulative update
 
@@ -677,6 +708,46 @@ setup.exe /auto upgrade /quiet /eula accept /noreboot /compat ignorewarning /dyn
 `0xC190010E`; the code points nowhere, while the log says "User did not accept EULA at downlevel
 OS". `/dynamicupdate disable` keeps the run reproducible.
 
+### Activation: read it before and after a repair upgrade
+
+An in-place repair upgrade can leave the machine NOT ACTIVATED, and nothing in the upgrade's own
+result says so. Measured on two volume-licensed (MAK) guests: both came back `LicenseStatus = 5`,
+and the loss surfaced only after both had been re-baked. Read the state before `setup.exe` and
+again after the apply reboot, and treat a loss as a finding of the repair:
+
+```powershell
+Get-CimInstance SoftwareLicensingProduct -Filter "Name LIKE 'Windows%'" |
+    Where-Object PartialProductKey |
+    Select-Object Name, LicenseStatus, PartialProductKey, ProductKeyChannel
+```
+
+`LicenseStatus` 1 is Licensed and 5 is Notification (not activated). Compare `PartialProductKey`,
+the last five characters of the INSTALLED key, before and after. Never take the key from the
+registry value `SoftwareProtectionPlatform\BackupProductKeyDefault`: it can hold a different key
+from the installed one (measured on an activated guest), so a before-and-after check of that slot
+compares the leftover with itself, and re-installing "the key it had" from it can install the wrong
+key. An unchanged `PartialProductKey` means the key is still installed and only needs `/ato`; a
+changed one is re-installed from wherever the organisation keeps its keys, matched by those last
+five characters.
+
+To reactivate, run `cscript //nologo C:\Windows\System32\slmgr.vbs /ato` for the error: the CIM
+method `SoftwareLicensingProduct.Activate` surfaces only a generic `-2146233088` (`0x80131500`)
+whatever went wrong, while `slmgr /ato` prints the real HRESULT, which the Application log also
+records (`Security-SPP` event 8198). `0x803F7001` on a MAK is not proof the key is bad: measured, a
+key that failed `/ato` twice ten minutes apart showed `LicenseStatus = 1` after a later boot 35
+minutes on. Retry later before swapping keys or spending another MAK activation.
+
+**`slmgr /ipk` prints the FULL product key in its success line**, in the display language ("Der
+Product Key ... wurde erfolgreich installiert"). A script that captures its output must mask the
+key before printing or saving anything; reading the key inside the guest keeps it off the ssh
+command line, not out of that output. Mask case-insensitively, since slmgr prints the key in upper
+case and `String.Replace` misses a key held in lower case (PowerShell's `-replace` ignores case):
+
+```powershell
+$out = & cscript //nologo "$env:SystemRoot\System32\slmgr.vbs" /ipk $key 2>&1 | Out-String
+$out -replace [regex]::Escape($key), '<product key>'      # print or save only this
+```
+
 ### `0xC1900200` is a LIST of blocks, and the waiver does not cover an ABSENT TPM
 
 When `0xC1900200` survives the waiver, the order is: read CompatData for the blocks that are
@@ -898,6 +969,18 @@ refuses healthy machines (measured: a 1800 s timeout refused two healthy bases t
 then found clean). The tell is in `dism.log`: the session's start is logged with no
 `Image session has been closed` line after it.
 
+`DISM /Add-Package` of a cumulative update too: the same 4.7 GB `.msu` took 47 minutes on a plain
+QEMU guest and 2 h 11 min on one with VBS and HVCI on. Size a driver's ceiling from the SLOWEST
+guest class it will meet, and when the ceiling hits, read the completion marker (the task's exit
+code file, then the `UBR`) before calling the install failed: a driver with a 2 h ceiling declared
+the VBS+HVCI guest not fixed while DISM went on to write exit 3010. A ceiling is not a verdict:
+while no exit code file exists, the install may still be running, so keep reading the marker and
+never stop the guest under it (see "Common mistakes"). A file that exists but is EMPTY is the
+other case: the redirect sits on the echo line AFTER the DISM call, so the file appears only once
+DISM has ended, and an empty one is the broken redirect described under the cumulative update
+install; read the `UBR` and `dism.log` instead. Delete the file before each run, so a leftover from
+an earlier one is never read as this run's result.
+
 ## Red flags - stop and re-diagnose
 
 - A permission command reported success and the operation still fails
@@ -936,6 +1019,13 @@ then found clean). The tell is in `dism.log`: the session's start is logged with
   idle and a total-count control
 - You are sorting a fleet's failed cumulative updates by status code instead of by the failing
   operation in the `Setup` log
+- You finished a repair upgrade without comparing `LicenseStatus` and `PartialProductKey` with
+  the values read before it, or are re-installing a key read from `BackupProductKeyDefault`
+- You are swapping a MAK after `0x803F7001` without retrying the activation later
+- You are reporting a KB's state from a `Setup` log line without reading its target state and
+  its package identity
+- A driver's ceiling cut off its wait on `DISM /Add-Package` and you called the install failed
+  without reading the exit code file and the `UBR`
 
 ## Common mistakes
 
