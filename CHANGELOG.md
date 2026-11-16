@@ -30,6 +30,12 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.9.0]
+
+### Changed
+
+- net-firewall-pfsense: `doctor` warns about a DHCP reservation whose address lies inside its interface's dynamic pool (main range or an additional pool of an enabled DHCP server), naming the reservation, interface, address and pool, since ISC dhcpd can lease that address to another client. `dhcp add`, `dhcp rename` and `dhcp rm` with `--apply` reconfigure unbound when the DNS Resolver registers DHCP static mappings, then restart it and check it answers, so the reservation's name follows. The skill documents that `dhcpleases` keeps a freed dynamic lease's entry until dhcpd restarts.
+
 ## [11.8.0]
 
 ### Added
