@@ -154,12 +154,11 @@ this: once unbound is down, its own name does not resolve either.
 **A reservation's DNS name moves only when unbound is rewritten.** With "Register DHCP static
 mappings" on in the DNS Resolver (`unbound/regdhcpstatic`), unbound answers each reservation's
 hostname from `/var/unbound/host_entries.conf`, which only `services_unbound_configure()` rewrites;
-a reservation removed or moved without it keeps answering with its old address. `dhcp add` and
-`dhcp rm` with `--apply` run that reconfigure when the option is on, then restart unbound and
-resolve `localhost.` as above; resolve the reservation's own name yourself
-(`host <hostname>.<domain> 127.0.0.1`). `dhcp rename` does not, so after a rename run the
-reconfigure and the restart yourself. Dynamic leases take another path: with "Register DHCP
-leases" (`unbound/regdhcp`), the `dhcpleases` daemon writes them to
+a reservation removed, renamed or moved without it keeps answering with its old name and address.
+`dhcp add`, `dhcp rename` and `dhcp rm` with `--apply` run that reconfigure when the option is on,
+then restart unbound and resolve `localhost.` as above; resolve the reservation's own name
+yourself (`host <hostname>.<domain> 127.0.0.1`). Dynamic leases take another path: with
+"Register DHCP leases" (`unbound/regdhcp`), the `dhcpleases` daemon writes them to
 `/var/unbound/dhcpleases_entries.conf`, and it keeps a freed dynamic entry there until dhcpd
 restarts. So a name can still resolve to a dynamic address its host no longer holds (a host that
 moved to a reservation, or was retired): read that file for the old address, and if it is still

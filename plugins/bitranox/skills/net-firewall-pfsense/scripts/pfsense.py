@@ -50,9 +50,9 @@ A removal that removed nothing is a failed action, exit 2: `dhcp rm`, `dhcp rm-s
 `snort unblock` that leaves every requested address present (one address asked for included).
 Only some of several addresses left present is a partial outcome, exit 1, naming them.
 `dns add` and `dns rm` with --apply restart unbound after the write and resolve a name through
-127.0.0.1; when it does not answer they exit 2 saying the change was written. `dhcp add` and
-`dhcp rm` with --apply do the same (reconfigure, restart, resolve `localhost.`) when the resolver
-registers DHCP static mappings, so a reservation's hostname follows the change.
+127.0.0.1; when it does not answer they exit 2 saying the change was written. `dhcp add`,
+`dhcp rename` and `dhcp rm` with --apply do the same (reconfigure, restart, resolve `localhost.`)
+when the resolver registers DHCP static mappings, so a reservation's hostname follows the change.
 """
 
 import argparse
@@ -977,6 +977,7 @@ def php_rename_reservation(mac: str, hostname: str) -> str:
     return f"""
 $renamed = array();
 $plan = array();
+$unbound_follows = false;
 foreach (config_get_path("dhcpd", array()) as $if => $conf) {{
     $maps = $conf["staticmap"] ?? array();
     $touched = false;
@@ -993,10 +994,11 @@ if (count($renamed) == 1) {{
     foreach ($plan as $if => $maps) {{ config_set_path("dhcpd/{{$if}}/staticmap", $maps); }}
     write_config({reason});
     {_php_reconfigure_dhcp()}
+    {_php_unbound_follows_static_maps()}
 }} else {{
     $renamed = array();
 }}
-echo json_encode(array("renamed" => $renamed));
+echo json_encode(array("renamed" => $renamed, "unbound_follows" => $unbound_follows));
 """
 
 
@@ -1305,8 +1307,10 @@ def cmd_dhcp_rename(args) -> int:
     result = run_php(target, php_rename_reservation(mac, hostname), run=args.run)
     if len(result.get("renamed") or []) != 1:
         raise PfsenseError(f"the reservation for {mac} was not renamed (it changed since it was listed)")
+    note = _restart_unbound_after_dhcp(target, result, run=args.run,
+                                       change=f"the rename of the reservation for {mac} to {hostname}")
     _emit(envelope(command="dhcp rename", data=result, ok=True), args.json,
-          f"  renamed {entry['ip']} {mac} to {hostname}")
+          f"  renamed {entry['ip']} {mac} to {hostname}{note}")
     return 0
 
 

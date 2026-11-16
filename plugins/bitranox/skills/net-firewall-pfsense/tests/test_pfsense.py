@@ -1841,6 +1841,7 @@ def test_the_pool_read_skips_a_disabled_dhcp_server_by_testing_the_key_not_its_v
 @pytest.mark.parametrize("builder", [
     lambda: P.php_add_reservation("lan", "00:11:22:33:44:50", "192.0.2.50", "printer", ""),
     lambda: P.php_rm_reservation("00:11:22:33:44:30"),
+    lambda: P.php_rename_reservation("00:11:22:33:44:31", "storage"),
 ])
 def test_the_dhcp_write_reconfigures_unbound_only_when_it_registers_static_mappings(builder):
     body = builder()
@@ -1859,6 +1860,7 @@ def _dhcp_unbound_fake(follows, *, probe=None):
         ("$removed", (0, '{"removed":[{"interface":"lan","ip":"192.0.2.30"}],"unbound_follows":' + flag + "}", "")),
         ("$added", (0, '{"added":{"interface":"lan","mac":"00:11:22:33:44:50","ip":"192.0.2.50"},'
                        '"unbound_follows":' + flag + "}", "")),
+        ("$renamed", (0, '{"renamed":[{"interface":"lan","ip":"192.0.2.31"}],"unbound_follows":' + flag + "}", "")),
         ('"dhcp_backend"', (0, INFO_JSON, BANNER)),
         ('config_get_path("dhcpd"', (0, RESERVATIONS_JSON, BANNER)),
         ("cat /conf/config.xml", (0, CONFIG_XML, BANNER)),
@@ -1868,6 +1870,7 @@ def _dhcp_unbound_fake(follows, *, probe=None):
 DHCP_WRITES = [
     ["dhcp", "add", "--mac", "00:11:22:33:44:50", "--ip", "192.0.2.50", "--hostname", "printer"],
     ["dhcp", "rm", "--mac", "00:11:22:33:44:30"],
+    ["dhcp", "rename", "--mac", "00:11:22:33:44:31", "--hostname", "storage"],
 ]
 
 
