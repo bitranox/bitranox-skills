@@ -41,6 +41,10 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 ### Fixed
 
+- `git-wrong-repo-nudge` and `git-path-not-here-nudge` find a work tree the way git does: a `.git`
+  directory counts only when it holds HEAD, a `.git` file only when it starts with `gitdir: `. An
+  empty `.git` directory left in a parent (seen in `/tmp`) made everything under it read as one
+  repository, and both nudges fired on calls git saw as outside any repository.
 - hooks tests: `test_make_push_args_nudge.py` wrote `\;` in plain string literals, an invalid
   escape that raises a SyntaxWarning on every parse; the backslash is now escaped (same strings).
 - net-firewall-pfsense: `snort verify` counts a `suppress gen_id G, sig_id 0` line as covering

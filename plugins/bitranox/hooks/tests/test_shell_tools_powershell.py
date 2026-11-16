@@ -61,6 +61,7 @@ TRIGGERS = {
 def _repo(root: Path, name: str) -> Path:
     """A directory that looks like a git work tree to the cwd-reading nudges."""
     (root / name / ".git").mkdir(parents=True)
+    (root / name / ".git" / "HEAD").write_text("ref: refs/heads/main\n")  # git needs HEAD to call it a repo
     return root / name
 
 

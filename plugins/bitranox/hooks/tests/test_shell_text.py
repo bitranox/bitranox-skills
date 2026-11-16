@@ -1268,3 +1268,23 @@ def test_the_edge_of_a_substitution_before_an_and_does_not_end_the_list():
 ])
 def test_list_gap_reads_the_operator_between_two_statements(gap, joined):
     assert S._list_gap(gap) == joined
+
+
+def test_is_work_tree_root_takes_only_a_marker_git_would_accept(tmp_path):
+    # An empty `.git` directory left in /tmp made every tmp_path read as one repository at /tmp,
+    # and two guards fired on calls git saw as outside any repository. git needs HEAD in a `.git`
+    # directory and a `gitdir: ` line in a `.git` file; nothing else is a work tree marker.
+    repo, empty, linked, junk, none = (tmp_path / n for n in ("repo", "empty", "linked", "junk", "none"))
+    (repo / ".git").mkdir(parents=True)
+    (repo / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+    (empty / ".git").mkdir(parents=True)
+    linked.mkdir()
+    (linked / ".git").write_text("gitdir: /elsewhere/.git/worktrees/x\n")
+    junk.mkdir()
+    (junk / ".git").write_text("not a pointer\n")
+    none.mkdir()
+    assert S.is_work_tree_root(str(repo)) is True
+    assert S.is_work_tree_root(str(linked)) is True
+    assert S.is_work_tree_root(str(empty)) is False
+    assert S.is_work_tree_root(str(junk)) is False
+    assert S.is_work_tree_root(str(none)) is False

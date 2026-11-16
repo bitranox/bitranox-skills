@@ -12,6 +12,7 @@ def _repo(tmp_path, name):
     """A directory that looks like a git work tree to the detector."""
     root = tmp_path / name
     (root / ".git").mkdir(parents=True)
+    (root / ".git" / "HEAD").write_text("ref: refs/heads/main\n")  # git needs HEAD to call it a repo
     return root
 
 
@@ -334,3 +335,11 @@ def test_pushd_and_popd_move_the_directory_too(tmp_path):
                     str(here)) is not None
     # popd returns somewhere this hook does not track, so the call stops being judged
     assert G.notice(f"pushd {_sh(one)} && git log && popd && git log", str(here)) is None
+
+
+def test_an_empty_git_directory_above_is_not_a_repository(tmp_path):
+    # The measured failure: an empty /tmp/.git made `gone` (and every other path under /tmp) read
+    # as part of a repository rooted there, so a cd into it compared as a second work tree.
+    (tmp_path / ".git").mkdir()
+    here, other = _repo(tmp_path, "here"), _repo(tmp_path, "other")
+    assert G.notice(f"cd {_sh(other)} && git log && cd {_sh(tmp_path / 'gone')} && git log", str(here)) is None

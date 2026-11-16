@@ -14,6 +14,7 @@ def _repo(tmp_path, name):
     """A directory that looks like a git work tree to the detector."""
     root = tmp_path / name
     (root / ".git").mkdir(parents=True)
+    (root / ".git" / "HEAD").write_text("ref: refs/heads/main\n")  # git needs HEAD to call it a repo
     return root
 
 
@@ -324,3 +325,12 @@ def test_control_a_real_path_after_a_redirection_still_fires(tmp_path):
     (outer / "handover.md").write_text("x")
     inner = _repo(outer, "inner")
     assert G.notice("git check-ignore -q 2>/dev/null handover.md", str(inner)) is not None
+
+
+def test_an_empty_git_directory_above_is_not_an_enclosing_project(tmp_path):
+    # The measured failure: an empty /tmp/.git made /tmp the "project you think you are in", so a
+    # same-named file above the cwd's own repository was attributed to the call.
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "README.md").write_text("x")
+    here = _repo(tmp_path, "here")
+    assert G.notice("git ls-files --error-unmatch README.md", str(here)) is None

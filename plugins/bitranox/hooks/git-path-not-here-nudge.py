@@ -62,6 +62,7 @@ from shell_text import (
     drop_redirections,
     is_rooted,
     is_shell_tool,
+    is_work_tree_root,
     iter_segments,
 )
 
@@ -144,7 +145,7 @@ def _work_tree_root(start):
     """The work tree `start` belongs to, or None. A linked worktree carries a `.git` FILE."""
     current = os.path.abspath(start)
     while True:
-        if os.path.exists(os.path.join(current, ".git")):
+        if is_work_tree_root(current):
             return current
         parent = os.path.dirname(current)
         if parent == current:
@@ -179,7 +180,7 @@ def _search_ceiling(cwd):
         parent = os.path.dirname(current)
         if parent == current:
             return None
-        if os.path.exists(os.path.join(parent, ".git")):
+        if is_work_tree_root(parent):
             return parent
         current = parent
 

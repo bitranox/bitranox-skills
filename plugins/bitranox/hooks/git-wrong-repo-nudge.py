@@ -62,6 +62,7 @@ from shell_text import (
     commands_only_aligned,
     directory_change,
     is_shell_tool,
+    is_work_tree_root,
     iter_segments,
 )
 
@@ -99,17 +100,17 @@ _SUBSHELL_OPENERS = frozenset({"(", "$(", "<(", ">("})
 
 
 def _repo_root(path):
-    """The work tree `path` belongs to, or None. Walks up looking for a `.git` entry.
+    """The work tree `path` belongs to, or None. Walks up looking for a `.git` git would accept.
 
-    A linked worktree carries a `.git` FILE rather than a directory, so `exists` is the right test:
-    two worktrees of one repository are two work trees here, which is what the caller is asking.
+    A linked worktree carries a `.git` FILE rather than a directory, and both count: two worktrees
+    of one repository are two work trees here, which is what the caller is asking.
     """
     try:
         current = os.path.abspath(path)
     except (TypeError, ValueError):
         return None
     while True:
-        if os.path.exists(os.path.join(current, ".git")):
+        if is_work_tree_root(current):
             return current
         parent = os.path.dirname(current)
         if parent == current:

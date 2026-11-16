@@ -530,6 +530,25 @@ def is_rooted(path):
     return os.path.isabs(path) or (os.sep == "\\" and path[:1] in ("/", "\\"))
 
 
+def is_work_tree_root(directory):
+    """True when `directory` holds a `.git` that git itself would accept as a repository marker.
+
+    git takes a `.git` DIRECTORY only when it holds HEAD, and a `.git` FILE (a linked worktree, a
+    submodule) only when it starts with `gitdir: `. A bare existence test also takes an empty
+    `.git` directory, which a tool or a test leaves behind: one in `/tmp` made every path under it,
+    pytest's tmp_path included, read as a single repository rooted at `/tmp`, so the two guards
+    walking up for a work tree fired on calls git itself saw as outside any repository.
+    """
+    marker = os.path.join(directory, ".git")
+    try:
+        if os.path.isdir(marker):
+            return os.path.isfile(os.path.join(marker, "HEAD"))
+        with open(marker, encoding="utf-8", errors="ignore") as handle:
+            return handle.read(8) == "gitdir: "
+    except OSError:
+        return False
+
+
 def _cd_target(args):
     """The destination operand of a cd-like command, its own options skipped.
 
