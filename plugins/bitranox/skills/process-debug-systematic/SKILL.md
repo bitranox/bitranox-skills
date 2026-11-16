@@ -142,6 +142,14 @@ You MUST complete each phase before proceeding to the next.
    - What works that's similar to what's broken?
    - For a service or host fault: is there a comparable host where it works? Diff them
      (see "Diff a working peer" below)
+   - For a fault seen ONCE (a race lost at one boot, one red CI run, one bad night of a job),
+     the same system's earlier runs are a working peer in time. Before proposing a lasting fix,
+     read them: the previous boots (`journalctl -b -1`, `-b -2`, ...), the earlier runs of the
+     same CI job, the older log files. Compare the ordering or timing your fix would change. If
+     the good runs show the race normally won by its usual margin, the bad run had a separate
+     cause: find it, and do not present the ordering change as its fix. If no earlier run was
+     kept, say the cause is unproven. Measured: three earlier boots showed the race won by
+     0.5 to 2 s, so the one bad boot needed another explanation.
 
 2. **Compare Against References**
    - If implementing pattern, read reference implementation COMPLETELY
@@ -342,7 +350,8 @@ telling anyone to wait it out: the peer holds everything outside the box constan
 beats every inference drawn from the broken box alone. "Nothing changed locally" is no
 evidence of an external fault (a long-installed component can break when the far end
 changes), and "no error was logged" is NOT "it succeeded": get the positive signal (the
-status code, the success line) or state the conclusion as an unproven inference.
+status code, the success line) or state the conclusion as an unproven inference. With no
+comparable host, the same host's earlier good runs are the peer (Phase 2, step 1).
 
 ## Supporting Techniques
 
