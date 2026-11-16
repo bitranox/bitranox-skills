@@ -310,12 +310,13 @@ PLACE-HERE line) before calling the placement wrong.
   that still covers everywhere the lesson applies. Concrete knowledge useful tree-wide belongs at
   the tree's top KEPT CONCRETE. The per-level scope descriptors (the `bitranox:self-learning`
   block) are the routing key; when genuinely unclear, ask the user.
-- **SUBAGENT learnings are yours to capture.** A subagent's discovery lives only in ITS transcript -
-  it is not in yours, and a named/background agent's report is not returned to you at all. The
-  `SubagentStop` hook detects those signals and the Stop-gate nudge surfaces them to you verbatim
-  (labelled SUBAGENT LEARNINGS); you are the only one who can route + write them. Judge each: capture
-  the durable ones (routing `--proj` by SUBJECT, same rule), drop the task-local noise. They are
-  surfaced ONCE - if you skip them they are gone.
+- **SUBAGENT learnings are yours to capture.** A subagent's mid-task discovery (a correction, a
+  miss) lives only in ITS transcript: only its final text can reach you, and that holds the
+  discovery only if the subagent wrote it there. The `SubagentStop` hook scans that transcript for
+  such discoveries and the Stop-gate nudge surfaces them to you verbatim (labelled SUBAGENT
+  LEARNINGS); you are the only one who can route + write them. Judge each: capture the durable
+  ones (routing `--proj` by SUBJECT, same rule), drop the task-local noise. They are surfaced
+  ONCE - if you skip them they are gone.
 - An intermediate must-hold rule for a whole subtree goes in that level's `CLAUDE.md` (propose-first
   at CAPTURE time; the case model + guards live in `bitranox:meta-dream-tree` ->
   references/dream-passes.md "CLAUDE.md reconciliation").
