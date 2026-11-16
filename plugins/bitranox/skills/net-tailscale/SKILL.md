@@ -226,7 +226,7 @@ deploy a managed `/etc/resolv.conf`:
 |----------------------------------------------------------------------|-------------------------------------------------------------------------|
 | Baking Tailscale into a clone base / template                        | Every clone inherits one identity; collisions forever                   |
 | Starting the clone without wiping `tailscaled.state`                 | Clone resumes the SOURCE's identity; original drops off the tailnet     |
-| Fixing state but not machine-id / MAC                                | journald and MAC-level DHCP collisions later, misblamed on Tailscale   |
+| Fixing state but not machine-id / MAC                                | journald and MAC-level DHCP collisions later, misblamed on Tailscale    |
 | `--hostname=new` with the old state still present                    | Renames the shared device; no new node is created                       |
 | Assuming `pct clone` copied the host `.conf`                         | Clone has no `/dev/net/tun` grant; tailscaled cannot start              |
 | Inline `--auth-key=tskey-...` on the command line                    | Key leaks into shell history and logs                                   |
