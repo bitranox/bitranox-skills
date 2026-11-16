@@ -8,6 +8,7 @@ latest (written before the save nudge, or already marked STALE) hands the model 
 as current. Injecting nothing when no checkpoint was saved leaves the model believing the summary
 is complete, so that case must say so and point at the transcript on disk.
 """
+import datetime
 import io
 import json
 import os
@@ -64,7 +65,12 @@ def _event(cwd, session="s-1", source="compact", transcript="/t/s-1.jsonl"):
 
 
 def _checkpoint(repo, text, *, after_ask=True, session="s-1"):
-    """Write handover.md before or after this session's save nudge was recorded."""
+    """Write handover.md before or after this session's save nudge was recorded.
+
+    The write is recorded in the session's touched paths, as the PostToolUse recorder does for a
+    Write: with no readable transcript (these events name a path that does not exist), that record
+    is what attributes the file to this session.
+    """
     path = repo / "handover.md"
     if after_ask:
         SIG.mark_checkpoint_asked(session, now=time.time() - 60)
@@ -74,6 +80,7 @@ def _checkpoint(repo, text, *, after_ask=True, session="s-1"):
         old = time.time() - 600
         os.utime(path, (old, old))
         SIG.mark_checkpoint_asked(session, now=time.time() - 60)
+    SIG.record_touched_path(session, str(path))
     return path
 
 
@@ -323,3 +330,181 @@ def test_another_sessions_touched_handover_is_not_this_sessions_checkpoint(tmp_p
                  session="someone-else")
     ctx = _context(_run(monkeypatch, capsys, _event(repo, session="s-1")))
     assert "OTHER-SESSION-18" not in ctx
+
+
+# ---- whose checkpoint is it: attribution from this session's own records ------------------------
+# Several sessions share one main checkout and its linked worktrees, and each writes its own
+# handover.md. A file's mtime says it changed after this session's save request, never that THIS
+# session changed it: a peer's checkpoint, or a tracked copy refreshed by a checkout, is just as
+# new. Measured 2026-11-16: compaction hit while the cwd sat in a linked worktree, and the block
+# handed back that worktree's tracked handover.md (another moment, another session) as this
+# session's own and told the model to mark it STALE, while the session's real checkpoint was the
+# main checkout's uncommitted handover.md. Attribution therefore comes from the session's own
+# transcript: a successful Write/Edit of the path after the request, with no change since.
+
+def _iso(epoch):
+    return datetime.datetime.fromtimestamp(epoch, tz=datetime.UTC).strftime(
+        "%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
+def _transcript(tmp_path, writes, name="s-1.jsonl"):
+    """A session transcript with one Write tool_use plus its tool_result per (path, at, ok)."""
+    lines = []
+    for i, (path, at, ok) in enumerate(writes):
+        tid = f"toolu_{i:02d}"
+        lines.append({"type": "assistant", "timestamp": _iso(at - 0.5), "message": {
+            "role": "assistant", "content": [{"type": "tool_use", "id": tid, "name": "Write",
+                                              "input": {"file_path": str(path), "content": "x"}}]}})
+        result = {"type": "tool_result", "tool_use_id": tid, "content": "ok"}
+        if not ok:
+            result["is_error"] = True
+        lines.append({"type": "user", "timestamp": _iso(at), "message": {
+            "role": "user", "content": [result]}})
+    out = tmp_path / name
+    out.write_text("".join(json.dumps(r) + "\n" for r in lines), encoding="utf-8")
+    return out
+
+
+def _set_mtime(path, epoch):
+    os.utime(path, (epoch, epoch))
+
+
+def _git_init(path):
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    subprocess.run(["git", "init", "-q", str(path)], check=True, env=env)
+
+
+def test_worktree_cwd_hands_back_the_main_checkout_checkpoint_this_session_wrote(
+        tmp_path, monkeypatch, capsys):
+    """(1) The cwd is a linked worktree whose tracked handover.md is NEWER (a checkout rewrote it),
+    but this session wrote the main checkout's handover.md: that one is the session's."""
+    repo = _repo(tmp_path)
+    now = time.time()
+    SIG.mark_checkpoint_asked("s-1", now=now - 300)
+    main_cp = _write_fresh(repo / "handover.md", "# Handover\n- MAIN-OWN-31\n")
+    _set_mtime(main_cp, now - 200)
+    wt = repo / ".claude" / "worktrees" / "wt"
+    wt.mkdir(parents=True)
+    _git_init(wt)
+    wt_cp = wt / "handover.md"
+    wt_cp.write_text("# Handover\n- WORKTREE-TRACKED-32\n", encoding="utf-8")
+    _set_mtime(wt_cp, now - 60)
+    tr = _transcript(tmp_path, [(main_cp, now - 200, True)])
+    ctx = _context(_run(monkeypatch, capsys, _event(wt, transcript=str(tr))))
+    assert "MAIN-OWN-31" in ctx
+    assert str(main_cp) in ctx
+    assert "WORKTREE-TRACKED-32" not in ctx
+    assert str(wt_cp) not in ctx, "a file this session never wrote must not be named for editing"
+
+
+def test_a_peers_newer_checkpoint_in_the_same_checkout_is_not_handed_back_as_ours(
+        tmp_path, monkeypatch, capsys):
+    """(2) A peer session wrote the shared checkout's handover.md after this session's request;
+    this session wrote none. It must not come back as this session's checkpoint."""
+    repo = _repo(tmp_path)
+    now = time.time()
+    SIG.mark_checkpoint_asked("s-1", now=now - 300)
+    peer = repo / "handover.md"
+    peer.write_text("# Handover\n- PEER-NEXT-ACTION-33\n", encoding="utf-8")
+    _set_mtime(peer, now - 120)
+    tr = _transcript(tmp_path, [])
+    ctx = _context(_run(monkeypatch, capsys, _event(repo, transcript=str(tr))))
+    assert "PEER-NEXT-ACTION-33" not in ctx
+    assert "replace its first line" not in ctx, "nothing may be told to edit a file it did not write"
+    assert str(peer) in ctx, "the candidate is still named, with its path"
+    assert "2 min ago" in ctx, "and its age"
+    assert "none is handed back as this session's" in ctx
+
+
+def test_a_peer_overwriting_a_file_this_session_wrote_earlier_is_not_ours(tmp_path, monkeypatch,
+                                                                           capsys):
+    """(2b) This session wrote the shared handover.md, then a peer rewrote it later: the content
+    on disk is the peer's, even though the path is in this session's records."""
+    repo = _repo(tmp_path)
+    now = time.time()
+    SIG.mark_checkpoint_asked("s-1", now=now - 600)
+    shared = _write_fresh(repo / "handover.md", "# Handover\n- PEER-OVERWROTE-34\n")
+    _set_mtime(shared, now - 60)
+    tr = _transcript(tmp_path, [(shared, now - 500, True)])
+    ctx = _context(_run(monkeypatch, capsys, _event(repo, transcript=str(tr))))
+    assert "PEER-OVERWROTE-34" not in ctx
+    assert "replace its first line" not in ctx
+
+
+def test_worktree_cwd_hands_back_the_worktree_copy_this_session_wrote(tmp_path, monkeypatch,
+                                                                       capsys):
+    """(3) The session wrote its worktree's handover.md; a peer's newer one sits in the main
+    checkout, the cwd. The worktree copy is handed back, and only it is named for the edit."""
+    repo = _repo(tmp_path)
+    now = time.time()
+    SIG.mark_checkpoint_asked("s-1", now=now - 300)
+    wt = repo / ".claude" / "worktrees" / "wt"
+    own = _write_fresh(wt / "handover.md", "# Handover\n- WT-OWN-35\n")
+    _set_mtime(own, now - 200)
+    peer = repo / "handover.md"
+    peer.write_text("# Handover\n- MAIN-PEER-36\n", encoding="utf-8")
+    _set_mtime(peer, now - 30)
+    tr = _transcript(tmp_path, [(own, now - 200, True)])
+    ctx = _context(_run(monkeypatch, capsys, _event(repo, transcript=str(tr))))
+    assert "WT-OWN-35" in ctx and str(own) in ctx
+    assert "MAIN-PEER-36" not in ctx
+    assert str(peer) not in ctx
+
+
+def test_a_failed_or_earlier_write_does_not_attribute(tmp_path, monkeypatch, capsys):
+    repo = _repo(tmp_path)
+    now = time.time()
+    SIG.mark_checkpoint_asked("s-1", now=now - 300)
+    cp = _write_fresh(repo / "handover.md", "# Handover\n- NOT-OURS-37\n")
+    _set_mtime(cp, now - 100)
+    tr = _transcript(tmp_path, [(cp, now - 400, True), (cp, now - 100, False)])
+    ctx = _context(_run(monkeypatch, capsys, _event(repo, transcript=str(tr))))
+    assert "NOT-OURS-37" not in ctx
+
+
+def test_without_a_readable_transcript_an_unrecorded_cwd_file_is_only_listed(tmp_path,
+                                                                             monkeypatch, capsys):
+    """No transcript to read: the touched-paths record is the evidence, and a cwd file absent
+    from it (a peer's, or one written through Bash) is named, never handed back as ours."""
+    repo = _repo(tmp_path)
+    SIG.mark_checkpoint_asked("s-1", now=time.time() - 60)
+    (repo / "handover.md").write_text("# Handover\n- UNRECORDED-38\n", encoding="utf-8")
+    ctx = _context(_run(monkeypatch, capsys, _event(repo)))
+    assert "UNRECORDED-38" not in ctx
+    assert str(repo / "handover.md") in ctx
+    assert "replace its first line" not in ctx
+
+
+def test_a_transcript_write_alone_finds_and_attributes_the_checkpoint(tmp_path, monkeypatch,
+                                                                      capsys):
+    """The touched-paths record can miss a write (evicted, or cleared); the transcript names it."""
+    repo = _repo(tmp_path)
+    now = time.time()
+    SIG.mark_checkpoint_asked("s-1", now=now - 300)
+    cp = tmp_path / "scratch" / "handover.md"
+    cp.parent.mkdir()
+    cp.write_text("# Handover\n- TRANSCRIPT-ONLY-39\n", encoding="utf-8")
+    _set_mtime(cp, now - 100)
+    tr = _transcript(tmp_path, [(cp, now - 100, True)])
+    ctx = _context(_run(monkeypatch, capsys, _event(repo, transcript=str(tr))))
+    assert "TRANSCRIPT-ONLY-39" in ctx and str(cp) in ctx
+
+
+@pytest.mark.parametrize("seconds, expected", [
+    (0, "0 min ago"), (119, "1 min ago"), (7199, "119 min ago"), (7200, "2 h 0 min ago"),
+    (3 * 86400, "3 d ago"), (-5, "0 min ago"),
+])
+def test_age(seconds, expected):
+    assert H._age(seconds) == expected
+
+
+def test_own_checkpoint_writes_reads_successful_writes_after_the_request(tmp_path):
+    now = time.time()
+    a, b = tmp_path / "a" / "handover.md", tmp_path / "b" / "handover.md"
+    other = tmp_path / "notes.md"
+    tr = _transcript(tmp_path, [(a, now - 10, True), (b, now - 20, False), (other, now - 5, True),
+                                (a, now - 500, True)])
+    writes = H.own_checkpoint_writes(str(tr), now - 100)
+    assert set(writes) == {os.path.normpath(str(a))}
+    assert abs(writes[os.path.normpath(str(a))] - (now - 10)) < 0.01
+    assert H.own_checkpoint_writes(str(tmp_path / "missing.jsonl"), now) is None
