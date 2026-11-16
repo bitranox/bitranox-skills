@@ -2131,8 +2131,8 @@ def resolve_transcript(proj):
 
 # ---- subagent learnings: buffered by the SubagentStop hook, drained by the main capture --------
 # A subagent's learning is otherwise LOST: the capture nudge is a main-session Stop hook, nothing
-# scans a subagent transcript, and a named/background agent's report never reaches the main
-# transcript unless it SendMessages it. A subagent also cannot cleanly write curated memory itself
+# scans a subagent transcript, and only a subagent's final text can reach the main transcript (on
+# older builds a named agent's not even that unless it SendMessages it). A subagent also cannot cleanly write curated memory itself
 # (its cwd/subject may differ and it is scoped to one task), so the hook BUFFERS the signal here and
 # the main session's capture routes + writes it. Session-keyed, out of the dreamed store.
 

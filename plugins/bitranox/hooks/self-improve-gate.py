@@ -258,8 +258,9 @@ def _nap_owed_hint(proj, session_id="", loaded=frozenset()):
 def _subagent_hint(session):
     """Prose naming learnings a SUBAGENT found this session, or '' when none are buffered.
 
-    A subagent's learning never reaches the main transcript unless the main agent restates it (and a
-    named/background agent's report is not returned at all), so the SubagentStop hook buffers the
+    A subagent's mid-task learning never reaches the main transcript unless the main agent restates
+    it (only the subagent's final text can arrive, and on older builds a named agent's not even
+    that), so the SubagentStop hook buffers the
     signal and the main capture is the one that can route + write it. Surfacing it here is what makes
     those learnings capturable at all.
 

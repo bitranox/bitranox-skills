@@ -41,6 +41,10 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   or as a Subagent hand-back). The texts now say the delivery depends on the build, keep the
   advice to ask for SendMessage when the report is needed on every build, and warn that a report
   can then arrive twice.
+- `meta-self-improve`: the subagent-learnings bullet no longer says a named agent's report is
+  never returned; it says only a subagent's final text can reach you, so a mid-task discovery
+  still depends on the SubagentStop hook. Three hook comments that repeated the old claim are
+  corrected too.
 
 ## [11.10.0]
 

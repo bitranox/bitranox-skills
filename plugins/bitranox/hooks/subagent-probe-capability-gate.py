@@ -149,8 +149,9 @@ def _text_only_kind(prompt):
 
 
 # A NAMED dispatch of a PROBE type is refused whatever its prompt says, because the name alone
-# breaks both things a probe exists for. Its final text never reaches the caller (a named agent
-# delivers only by SendMessage, and an inert type has no such tool), and SubagentStart receives the
+# breaks both things a probe exists for. Its final text may not reach the caller (up to 2.1.268 a
+# named agent delivered only by SendMessage, which an inert type lacks; 2.1.325 carried it in the
+# idle notification's result field), and SubagentStart receives the
 # NAME as `agent_type`, so subagent-brief cannot recognise the probe and briefs it. Measured
 # 2026-09-11 on Claude Code 2.1.268 with one named and one unnamed baseline-probe: the unnamed
 # reply arrived within 6 s and its transcript held no brief; the named reply never arrived and its
