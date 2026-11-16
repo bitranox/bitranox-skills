@@ -46,6 +46,18 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 - net-firewall-pfsense: `snort verify` counts a `suppress gen_id G, sig_id 0` line as covering
   every signature of generator G, as Snort's README.filters defines it. It said NO for such a
   line while Snort suppressed the alert.
+- `meta-dream-crosstree`: a relocate that is refused after the un-bind now has a stated remedy
+  (set the fact's noted topics again), and the `add` refusal is described as the engine applies
+  it: only a frontmatter `topics:` line is refused.
+- `meta-self-improve`: says the same about `add`: a `topics:` line in a body's prose is ordinary
+  text.
+- `meta-dream-nap`: in propose mode and under `off`, a pending arrival at the tree top holds back
+  the whole chain render, and the text now says the cwd's own lines wait for the tree dream too.
+- `meta-dream-tree`: reflowed one paragraph of `references/dream-core.md`.
+- `meta-skill-audit`: the hand-run parse snippet is described as `.py` only, with a pointer to the
+  `fenced_python_syntax` check that parses Python fenced in Markdown.
+- Three shipped Python examples parse again (`coding-python-data-architecture`,
+  `coding-python-textual`, `coding-resilience`).
 
 ## [11.9.0]
 
