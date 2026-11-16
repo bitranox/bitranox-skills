@@ -2,9 +2,9 @@
 """SubagentStop hook: don't let a subagent's learnings die in its own transcript.
 
 The capture nudge (`self-improve-gate.py`) is a MAIN-session Stop hook. Nothing scanned a
-subagent's transcript, and a named/background agent's final text is not returned to the main
-session at all unless it SendMessages it - so a correction, a self-admitted miss, or a discovery a
-subagent made was LOST unless the main agent happened to restate it.
+subagent's transcript, and only its final text ever reaches the main session (for a named agent on
+older builds, not even that unless it SendMessages it) - so a correction, a self-admitted miss, or
+a discovery a subagent made mid-task was LOST unless the main agent happened to restate it.
 
 A subagent cannot cleanly write curated memory itself (it is scoped to one task, and its cwd/subject
 may differ from the fact's real home), so this hook only DETECTS and BUFFERS: it scans the

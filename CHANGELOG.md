@@ -30,6 +30,18 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.10.1]
+
+### Fixed
+
+- `subagent-backstop-nudge`, `subagent-brief`, `subagent-capture` and
+  `subagent-probe-capability-gate` no longer state that a named background agent's final text
+  never reaches the caller. That held up to Claude Code 2.1.268; on 2.1.325 three of three named
+  agents with no SendMessage instruction delivered it (in the idle notification's `result` field,
+  or as a Subagent hand-back). The texts now say the delivery depends on the build, keep the
+  advice to ask for SendMessage when the report is needed on every build, and warn that a report
+  can then arrive twice.
+
 ## [11.10.0]
 
 ### Added

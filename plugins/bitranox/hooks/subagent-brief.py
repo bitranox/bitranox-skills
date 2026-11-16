@@ -12,10 +12,12 @@ Both are recorded in the store as things that actually happened, repeatedly:
   * the harness refuses a subagent's `Write` by FILENAME - `findings_batch1.md` and `report.md`
     were refused while `notes.txt` in the same directory was written fine. A subagent that plans to
     hand back a report file discovers this only after doing the work.
-  * a NAMED subagent's final text is NOT returned to the main session. Only a SendMessage reaches
-    it; otherwise the report sits unread in the subagent's own transcript and the main agent sees
-    nothing but an idle notification. An UNNAMED subagent's final text does arrive, in the caller's
-    completion notification (both re-measured 2026-09-11 on Claude Code 2.1.268).
+  * how a NAMED subagent's final text reaches the main session depends on the build. On Claude
+    Code 2.1.268 (re-measured 2026-09-11) it did not: only a SendMessage reached it, and the main
+    agent saw nothing but an idle notification. On 2.1.325 (measured 2026-11-17, 3 of 3 named
+    agents with no SendMessage instruction) it arrived, in the idle notification's `result` field
+    or as a Subagent hand-back. An UNNAMED subagent's final text arrives in the caller's
+    completion notification on both.
 
 WHY A HOOK AND NOT PROSE. Prose in a skill only works for a subagent that loads that skill, and the
 one skill every session loads is the one that tells subagents to stop reading. `SubagentStart` puts
@@ -65,10 +67,11 @@ BRIEF = (
     "findings_batch1.md - are refused, while an ordinary name such as notes.txt in the same "
     "directory is written normally. The final TEXT returned is the reliable channel, so results "
     "belong there rather than in a file the caller is told to open.\n"
-    "2. A NAMED subagent's final text is not returned to the main session (an unnamed one's is). "
-    "A named subagent's result is delivered only by SendMessage to the caller; without that the "
-    "report stays in this subagent's own transcript and the main session sees an idle "
-    "notification and nothing else."
+    "2. If this subagent is NAMED, whether its final text reaches the main session depends on the "
+    "Claude Code build: older builds deliver a named subagent's result only by SendMessage to the "
+    "caller and show the main session a bare idle notification otherwise, while newer ones carry "
+    "the final text along. When the brief asks for SendMessage, use it; an unnamed subagent's "
+    "final text always arrives."
 )
 
 

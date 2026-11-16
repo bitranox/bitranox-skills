@@ -163,8 +163,9 @@ def _text_only_kind(prompt):
 # tool-capable refusal, which never names the form that works.
 _DENY_NAMED_PROBE = (
     "NAMED PROBE. '{atype}' is dispatched with name='{name}', and naming a probe breaks both "
-    "things it exists for: its final text is not returned to you (a named agent delivers only by "
-    "SendMessage, which an inert probe type does not have), and SubagentStart sees the name "
+    "things it exists for: its final text may not reach you (older Claude Code builds deliver a "
+    "named agent's text only by SendMessage, which an inert probe type does not have), and "
+    "SubagentStart sees the name "
     "instead of the type, so the probe is briefed like an ordinary agent and its baseline is "
     "contaminated. Re-dispatch it UNNAMED, with the same subagent_type."
 )

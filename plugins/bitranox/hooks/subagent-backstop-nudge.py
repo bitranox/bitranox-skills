@@ -50,11 +50,13 @@ _REMINDER = (
 )
 
 _DELIVERY_WARNING = (
-    " ALSO: this dispatch is NAMED, so its final text is NOT returned to you - only an idle "
-    "notification arrives. Its prompt does not mention SendMessage, so its report will sit unread "
-    "in its own transcript and you will have to ping every agent for it. Add to the prompt: "
-    "'deliver your result by calling SendMessage to \"main\" - your plain text is not visible to "
-    "me'. And treat a bare idle notification as 'report NOT sent', never as 'done and reported'."
+    " ALSO: this dispatch is NAMED and its prompt does not mention SendMessage. How a named "
+    "agent's final text reaches you depends on the Claude Code build: up to 2.1.268 it was not "
+    "returned at all (only a bare idle notification), while 2.1.325 carries it in the idle "
+    "notification's `result` field or a Subagent hand-back. If you need the report on every "
+    "build, add to the prompt: 'deliver your result by calling SendMessage to \"main\"'. Treat an "
+    "idle notification with no result as 'report NOT sent', and when a report arrives twice "
+    "(SendMessage and a result field), act on it once."
 )
 
 

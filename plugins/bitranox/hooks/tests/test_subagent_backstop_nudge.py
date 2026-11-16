@@ -81,12 +81,14 @@ def test_reminder_is_ascii():
 
 # --- the SendMessage delivery warning (named == final text stays in its own transcript) ----
 #
-# A NAMED dispatch's final text never reaches the caller: only an idle notification arrives.
-# Without an explicit "SendMessage" instruction in its prompt, the report sits unread in the
-# agent's transcript. Observed twice (2026-07 roster review: 9 of 9 silent; 2026-07-15 bmk
+# On older builds a NAMED dispatch's final text never reached the caller: only an idle
+# notification arrived, and without an explicit "SendMessage" instruction the report sat unread in
+# the agent's transcript. Observed twice (2026-07 roster review: 9 of 9 silent; 2026-07-15 bmk
 # review: 8 of 9 silent), which is why the prose rule was escalated to this guard, and
 # re-measured 2026-09-11 on Claude Code 2.1.268 against an unnamed control whose reply did
-# arrive, in its completion notification.
+# arrive. On 2.1.325 (2026-11-17) 3 of 3 named agents with no SendMessage instruction delivered
+# their final text (idle notification `result` field, or a Subagent hand-back), so the warning
+# now names the build dependence instead of stating the old behaviour as fact.
 
 
 def test_named_dispatch_without_sendmessage_gets_the_delivery_warning():
