@@ -1724,3 +1724,173 @@ def test_a_process_failure_is_exit_2_with_a_json_envelope(exc, capsys):
         raise exc
     assert P.main(["--host", "192.0.2.1", "--json", "arp"], run=boom) == 2
     assert json.loads(capsys.readouterr().out)["ok"] is False
+
+
+# ---- a reservation inside the dynamic pool ------------------------------------------------------
+# ISC dhcpd does not keep a reserved address out of its own pool: it leases it to another client,
+# its pre-lease ping check misses a host that does not answer ping, and the only trace is a
+# "Dynamic and static leases present" line in its log.
+POOL_CONFIG_XML = """<?xml version="1.0"?>
+<pfsense>
+  <dhcpd>
+    <lan>
+      <enable></enable>
+      <range><from>192.0.2.100</from><to>192.0.2.199</to></range>
+      <pool><range><from>192.0.2.220</from><to>192.0.2.229</to></range></pool>
+      <staticmap><mac>00:11:22:33:44:20</mac><ipaddr>192.0.2.20</ipaddr><hostname>outside</hostname></staticmap>
+      <staticmap><mac>00:11:22:33:44:51</mac><ipaddr>192.0.2.150</ipaddr><hostname>runner</hostname></staticmap>
+      <staticmap><mac>00:11:22:33:44:52</mac><ipaddr>192.0.2.100</ipaddr><hostname>lowedge</hostname></staticmap>
+      <staticmap><mac>00:11:22:33:44:53</mac><ipaddr>192.0.2.199</ipaddr><hostname>highedge</hostname></staticmap>
+      <staticmap><mac>00:11:22:33:44:54</mac><ipaddr>192.0.2.225</ipaddr><hostname>extra</hostname></staticmap>
+    </lan>
+    <opt1>
+      <range><from>198.51.100.100</from><to>198.51.100.199</to></range>
+      <staticmap><mac>00:11:22:33:44:60</mac><ipaddr>198.51.100.150</ipaddr><hostname>off</hostname></staticmap>
+    </opt1>
+    <opt2>
+      <enable></enable>
+      <range><from>203.0.113.100</from><to>203.0.113.199</to></range>
+    </opt2>
+  </dhcpd>
+</pfsense>
+"""
+
+
+def _pool_findings(text=POOL_CONFIG_XML):
+    findings = P.doctor_findings(reservations=P.reservations_from_config_xml(text), overrides=[],
+                                 pools=P.pools_from_config_xml(text))
+    return [f for f in findings if f.check == "static_map_in_dynamic_pool"]
+
+
+def _pool_findings_subjects():
+    return [f.subject.split()[0] for f in _pool_findings()]
+
+
+def test_pools_are_read_from_enabled_dhcp_servers_including_additional_pools():
+    """opt1 has a range but no <enable>: its DHCP server is off, so its range leases nothing."""
+    assert P.pools_from_config_xml(POOL_CONFIG_XML) == [
+        {"interface": "lan", "from": "192.0.2.100", "to": "192.0.2.199"},
+        {"interface": "lan", "from": "192.0.2.220", "to": "192.0.2.229"},
+        {"interface": "opt2", "from": "203.0.113.100", "to": "203.0.113.199"},
+    ]
+
+
+def test_doctor_warns_about_a_static_map_inside_its_interfaces_pool_and_names_all_four_parts():
+    found = {f.subject.split()[0]: f for f in _pool_findings()}
+    runner = found["192.0.2.150"]
+    assert runner.severity == "warn"
+    for part in ("00:11:22:33:44:51", "runner", "lan", "192.0.2.100-192.0.2.199"):
+        assert part in runner.subject
+    assert "Dynamic and static leases present" in runner.detail
+
+
+def test_doctor_counts_both_ends_of_a_pool_and_an_additional_pool():
+    """ISC ranges are inclusive, and an additional pool leases dynamically just like the main one."""
+    assert sorted(_pool_findings_subjects()) == ["192.0.2.100", "192.0.2.150", "192.0.2.199", "192.0.2.225"]
+
+
+def test_doctor_ignores_a_static_map_outside_the_pool_and_on_a_disabled_server():
+    subjects = _pool_findings_subjects()
+    assert "192.0.2.20" not in subjects        # outside the pool
+    assert "198.51.100.150" not in subjects    # opt1 serves no DHCP at all
+
+
+def test_a_pool_on_another_interface_does_not_claim_a_reservation():
+    reservations = [{"interface": "lan", "mac": "00:11:22:33:44:70", "ip": "203.0.113.150",
+                     "hostname": "x", "descr": "", "static_arp": False}]
+    pools = [{"interface": "opt2", "from": "203.0.113.100", "to": "203.0.113.199"}]
+    assert P.doctor_findings(reservations=reservations, overrides=[], pools=pools) == []
+
+
+def test_doctor_from_a_snapshot_reports_the_pool_overlap(tmp_path, capsys):
+    config = tmp_path / "config.xml"
+    config.write_text(POOL_CONFIG_XML, encoding="utf-8", newline="")
+    assert P.main(["--json", "doctor", "--config", str(config)]) == 1
+    data = json.loads(capsys.readouterr().out)["data"]
+    assert "static_map_in_dynamic_pool" in {f["check"] for f in data}
+
+
+def test_live_doctor_reads_the_pools_and_reports_the_overlap(capsys):
+    reservations = json.dumps([{"interface": "lan", "mac": "00:11:22:33:44:51", "ip": "192.0.2.150",
+                                "hostname": "runner", "descr": "", "static_arp": False}])
+    pools = json.dumps([{"interface": "lan", "from": "192.0.2.100", "to": "192.0.2.199"}])
+    fake = FakeRun([
+        ("$pools", (0, pools, "")),
+        ('config_get_path("dhcpd"', (0, reservations, "")),
+        ('config_get_path("unbound/hosts"', (0, "[]", "")),
+        ("arp -an", (0, "", "")),
+        ("cat /etc/resolv.conf", (0, "nameserver 127.0.0.1\n", "")),
+        ("test -f", (1, "", "")),
+    ])
+    assert P.main(["--host", "192.0.2.1", "--json", "doctor"], run=fake) == 1
+    data = json.loads(capsys.readouterr().out)["data"]
+    assert [f["check"] for f in data] == ["static_map_in_dynamic_pool"]
+
+
+def test_the_pool_read_skips_a_disabled_dhcp_server_by_testing_the_key_not_its_value():
+    """<enable></enable> reads back as "", so a truthiness test would skip every enabled server."""
+    body = P.php_list_pools()
+    assert 'array_key_exists("enable", $conf)' in body
+    assert '["pool"]' in body and '["range"]' in body
+
+
+# ---- dhcp add / rm keep the resolver's static-mapping names in step ------------------------------
+# With "Register DHCP static mappings" (unbound/regdhcpstatic) on, unbound answers each
+# reservation's hostname from host_entries.conf, which only services_unbound_configure() rewrites;
+# a reconfigure has also been seen to leave unbound stopped, so the restart and liveness check follow.
+@pytest.mark.parametrize("builder", [
+    lambda: P.php_add_reservation("lan", "00:11:22:33:44:50", "192.0.2.50", "printer", ""),
+    lambda: P.php_rm_reservation("00:11:22:33:44:30"),
+])
+def test_the_dhcp_write_reconfigures_unbound_only_when_it_registers_static_mappings(builder):
+    body = builder()
+    gate = ('config_get_path("unbound/enable") !== null && '
+            'config_get_path("unbound/regdhcpstatic") !== null')
+    assert gate in body
+    assert body.index("write_config(") < body.index("services_unbound_configure();")
+    assert '"unbound_follows"' in body
+
+
+def _dhcp_unbound_fake(follows, *, probe=None):
+    flag = "true" if follows else "false"
+    return FakeRun([
+        (RESTART, (0, "", "")),
+        ("host localhost. 127.0.0.1", probe or _answer("localhost", "127.0.0.1")),
+        ("$removed", (0, '{"removed":[{"interface":"lan","ip":"192.0.2.30"}],"unbound_follows":' + flag + "}", "")),
+        ("$added", (0, '{"added":{"interface":"lan","mac":"00:11:22:33:44:50","ip":"192.0.2.50"},'
+                       '"unbound_follows":' + flag + "}", "")),
+        ('"dhcp_backend"', (0, INFO_JSON, BANNER)),
+        ('config_get_path("dhcpd"', (0, RESERVATIONS_JSON, BANNER)),
+        ("cat /conf/config.xml", (0, CONFIG_XML, BANNER)),
+    ])
+
+
+DHCP_WRITES = [
+    ["dhcp", "add", "--mac", "00:11:22:33:44:50", "--ip", "192.0.2.50", "--hostname", "printer"],
+    ["dhcp", "rm", "--mac", "00:11:22:33:44:30"],
+]
+
+
+@pytest.mark.parametrize("argv", DHCP_WRITES)
+def test_a_dhcp_write_restarts_unbound_and_checks_it_answers_when_it_follows(argv, tmp_path, capsys):
+    fake = _dhcp_unbound_fake(True)
+    rc = P.main(["--host", "192.0.2.1", "--json", "--apply", "--snapshot-dir", str(tmp_path), *argv], run=fake)
+    assert rc == 0
+    remotes = [c["remote"] for c in fake.calls]
+    assert RESTART in remotes and "host localhost. 127.0.0.1" in remotes
+    assert json.loads(capsys.readouterr().out)["data"]["unbound"]["restarted"] is True
+
+
+@pytest.mark.parametrize("argv", DHCP_WRITES)
+def test_a_dhcp_write_leaves_unbound_alone_when_it_does_not_register_static_mappings(argv, tmp_path):
+    fake = _dhcp_unbound_fake(False)
+    assert P.main(["--host", "192.0.2.1", "--apply", "--snapshot-dir", str(tmp_path), *argv], run=fake) == 0
+    assert RESTART not in [c["remote"] for c in fake.calls]
+
+
+@pytest.mark.parametrize("argv", DHCP_WRITES)
+def test_a_dhcp_write_over_a_dead_unbound_is_exit_2_saying_the_change_is_written(argv, tmp_path, capsys):
+    fake = _dhcp_unbound_fake(True, probe=TIMED_OUT)
+    rc = P.main(["--host", "192.0.2.1", "--apply", "--snapshot-dir", str(tmp_path), *argv], run=fake)
+    assert rc == 2
+    assert "written to config.xml" in capsys.readouterr().err

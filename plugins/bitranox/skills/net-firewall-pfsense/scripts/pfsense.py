@@ -50,7 +50,9 @@ A removal that removed nothing is a failed action, exit 2: `dhcp rm`, `dhcp rm-s
 `snort unblock` that leaves every requested address present (one address asked for included).
 Only some of several addresses left present is a partial outcome, exit 1, naming them.
 `dns add` and `dns rm` with --apply restart unbound after the write and resolve a name through
-127.0.0.1; when it does not answer they exit 2 saying the change was written.
+127.0.0.1; when it does not answer they exit 2 saying the change was written. `dhcp add` and
+`dhcp rm` with --apply do the same (reconfigure, restart, resolve `localhost.`) when the resolver
+registers DHCP static mappings, so a reservation's hostname follows the change.
 """
 
 import argparse
@@ -576,6 +578,30 @@ def reservations_from_config_xml(text: str) -> list[dict]:
     return out
 
 
+def pools_from_config_xml(text: str) -> list[dict]:
+    """The dynamic ranges of every ENABLED DHCP server in a snapshot: the main range plus each
+    additional pool, as {interface, from, to}.
+
+    A server without `<enable>` hands out nothing, so its range is no pool, and reporting a
+    reservation inside it would be noise. Additional pools sit at `dhcpd/<if>/pool[]/range` with
+    the same `from`/`to` shape as the main range.
+    """
+    root = parse_xml(text)
+    out = []
+    for dhcpd in root.findall("dhcpd"):
+        for iface in dhcpd:
+            if iface.find("enable") is None:
+                continue
+            ranges = [iface.find("range"), *(pool.find("range") for pool in iface.findall("pool"))]
+            for rng in ranges:
+                if rng is None:
+                    continue
+                low, high = (rng.findtext("from") or "").strip(), (rng.findtext("to") or "").strip()
+                if low and high:
+                    out.append({"interface": iface.tag, "from": low, "to": high})
+    return out
+
+
 def overrides_from_config_xml(text: str) -> list[dict]:
     """DNS host overrides from a snapshot. The element is `hosts`, not `hostoverride`."""
     root = parse_xml(text)
@@ -591,9 +617,56 @@ def overrides_from_config_xml(text: str) -> list[dict]:
 
 
 # ---- doctor: pure checks over plain data --------------------------------------------------------
+def _pool_holding(address: ipaddress.IPv4Address | ipaddress.IPv6Address, interface: str,
+                  pools: list[dict]) -> dict | None:
+    """The first pool on `interface` whose inclusive from-to range holds `address`."""
+    for pool in pools:
+        if pool.get("interface") != interface:
+            continue
+        try:
+            low, high = ipaddress.ip_address(pool.get("from", "")), ipaddress.ip_address(pool.get("to", ""))
+        except ValueError:
+            continue
+        if low.version == address.version and low <= address <= high:
+            return pool
+    return None
+
+
+def _reservations_in_pools(reservations: list[dict], pools: list[dict]) -> list[Finding]:
+    """A reservation whose address lies in its own interface's dynamic pool.
+
+    A pool widened after the reservation was made produces one, as can a reservation written by a
+    script that bypasses the GUI's checks. A pool on another interface is never a conflict: each
+    DHCP server leases only its own range.
+    """
+    findings = []
+    for res in reservations:
+        try:
+            address = ipaddress.ip_address(res.get("ip", ""))
+        except ValueError:
+            continue
+        pool = _pool_holding(address, res.get("interface", ""), pools)
+        if pool is None:
+            continue
+        name = res.get("hostname") or res.get("descr") or "(no hostname)"
+        findings.append(Finding(
+            check="static_map_in_dynamic_pool", severity="warn",
+            subject=f"{res['ip']} {res.get('mac', '?')} {name} on {res.get('interface', '?')}, "
+                    f"inside the pool {pool['from']}-{pool['to']}",
+            detail="ISC dhcpd, pfSense's default DHCP backend, does not keep a reserved address out "
+                   "of its dynamic pool: it can lease this address to another client, and its "
+                   "pre-lease ping check misses a host that does not answer ping (Windows by "
+                   "default), so two machines end up on one address. The only trace is dhcpd "
+                   "logging 'Dynamic and static leases present' for it. Move the reservation "
+                   "outside the pool, or shrink the pool so it no longer covers the address.",
+        ))
+    return findings
+
+
 def doctor_findings(*, reservations: list[dict], overrides: list[dict],
                     arp: list[dict] | None = None, resolv_conf: str | None = None,
-                    upgrade_locks: list[str] | None = None) -> list[Finding]:
+                    upgrade_locks: list[str] | None = None,
+                    pools: list[dict] | None = None) -> list[Finding]:
     """Every audit check, as pure logic over plain data.
 
     Each one is a fault that raises no error of its own and so goes unnoticed: they were all found
@@ -632,6 +705,8 @@ def doctor_findings(*, reservations: list[dict], overrides: list[dict],
                        "). Normal for a device with wired and wireless interfaces; only a problem "
                        "if static ARP is also ticked.",
             ))
+
+    findings.extend(_reservations_in_pools(reservations, pools or []))
 
     # ARP is used for POSITIVE evidence only: it is a cache that expires after minutes of silence,
     # so absence means "not seen lately", never "gone". An earlier version drew conclusions from
@@ -742,6 +817,44 @@ echo json_encode($out);
 """
 
 
+def php_list_pools() -> str:
+    """The dynamic ranges of every enabled DHCP server, main range and additional pools alike.
+
+    `enable` is tested by key: `<enable></enable>` reads back as "", so a truthiness test would
+    skip every server that is on.
+    """
+    return """
+$pools = array();
+foreach (config_get_path("dhcpd", array()) as $if => $conf) {
+    if (!is_array($conf) || !array_key_exists("enable", $conf)) { continue; }
+    $ranges = array($conf["range"] ?? array());
+    foreach (($conf["pool"] ?? array()) as $p) { $ranges[] = $p["range"] ?? array(); }
+    foreach ($ranges as $r) {
+        $from = $r["from"] ?? ""; $to = $r["to"] ?? "";
+        if ($from !== "" && $to !== "") { $pools[] = array("interface" => $if, "from" => $from, "to" => $to); }
+    }
+}
+echo json_encode($pools);
+"""
+
+
+def _php_unbound_follows_static_maps() -> str:
+    """Rewrite unbound's static-mapping names when the resolver registers DHCP static mappings.
+
+    With `unbound/regdhcpstatic` on, unbound answers each reservation's hostname from
+    host_entries.conf, which only services_unbound_configure() rewrites: a reservation removed or
+    added without it keeps answering with the old address. The flag is echoed so the caller can
+    restart unbound and check it answers, since the reconfigure has been seen to leave it stopped.
+    Both settings are empty tags when on, so they are tested against null.
+    """
+    return """
+$unbound_follows = config_get_path("unbound/enable") !== null && config_get_path("unbound/regdhcpstatic") !== null;
+if ($unbound_follows) {
+    services_unbound_configure();
+}
+"""
+
+
 def _php_reconfigure_dhcp() -> str:
     """Reload whichever DHCP daemon this box actually runs.
 
@@ -770,6 +883,7 @@ def php_rm_reservation(mac: str) -> str:
 $target = {target};
 $removed = array();
 $plan = array();
+$unbound_follows = false;
 foreach (config_get_path("dhcpd", array()) as $if => $conf) {{
     $kept = array();
     foreach (($conf["staticmap"] ?? array()) as $m) {{
@@ -782,10 +896,11 @@ if (count($removed) == 1) {{
     foreach ($plan as $if => $kept) {{ config_set_path("dhcpd/{{$if}}/staticmap", $kept); }}
     write_config({reason});
     {_php_reconfigure_dhcp()}
+    {_php_unbound_follows_static_maps()}
 }} else {{
     $removed = array();
 }}
-echo json_encode(array("removed" => $removed));
+echo json_encode(array("removed" => $removed, "unbound_follows" => $unbound_follows));
 """
 
 
@@ -849,8 +964,9 @@ $maps[] = array("mac" => {m}, "cid" => "", "ipaddr" => {a}, "hostname" => {h}, "
 config_set_path("dhcpd/{{$if}}/staticmap", $maps);
 write_config({reason});
 {_php_reconfigure_dhcp()}
+{_php_unbound_follows_static_maps()}
 $added = array("interface" => $if, "mac" => {m}, "ip" => {a}, "hostname" => {h});
-echo json_encode(array("added" => $added));
+echo json_encode(array("added" => $added, "unbound_follows" => $unbound_follows));
 """
 
 
@@ -1151,9 +1267,26 @@ def cmd_dhcp_add(args) -> int:
     result = run_php(target, php_add_reservation(interface, mac, args.ip, hostname, args.descr), run=args.run)
     if not result.get("added"):
         raise PfsenseError(str(result.get("error") or "the reservation was not added"))
+    note = _restart_unbound_after_dhcp(target, result, run=args.run,
+                                       change=f"the reservation {args.ip} for {mac}")
     _emit(envelope(command="dhcp add", data=result, ok=True), args.json,
-          f"  reserved {args.ip} for {mac} ({hostname}) on {interface}")
+          f"  reserved {args.ip} for {mac} ({hostname}) on {interface}{note}")
     return 0
+
+
+def _restart_unbound_after_dhcp(target: Target, result: dict, *, run, change: str) -> str:
+    """Restart unbound and check it answers when the DHCP write also reconfigured it.
+
+    The PHP side reconfigured unbound only when it registers DHCP static mappings, and says so in
+    `unbound_follows`. The check resolves `localhost.`, unbound's own built-in local zone: the
+    reservation's name depends on a domain this tool does not read, so the check proves unbound
+    answers, not that it answers that name. Returns the human-output suffix.
+    """
+    if not result.get("unbound_follows"):
+        return ""
+    result["unbound"] = restart_and_verify_unbound(target, name="localhost.", ip="127.0.0.1",
+                                                   run=run, change=change)
+    return "; unbound reconfigured and restarted for the static-mapping name, and answers"
 
 
 def cmd_dhcp_rename(args) -> int:
@@ -1192,8 +1325,10 @@ def cmd_dhcp_rm(args) -> int:
     removed = result.get("removed") or []
     _require_effect(removed, f"the reservation for {mac} matched, but removing it removed nothing "
                              "(it changed since it was listed); config.xml was not written")
+    note = _restart_unbound_after_dhcp(target, result, run=args.run,
+                                       change=f"the removal of the reservation for {mac}")
     _emit(envelope(command="dhcp rm", data=result, ok=True), args.json,
-          f"  removed {len(removed)} reservation(s) for {mac}")
+          f"  removed {len(removed)} reservation(s) for {mac}{note}")
     return 0
 
 
@@ -1863,17 +1998,20 @@ def cmd_doctor(args) -> int:
     if args.config:
         text = Path(args.config).read_text(encoding="utf-8")
         findings = doctor_findings(reservations=reservations_from_config_xml(text),
-                                   overrides=overrides_from_config_xml(text))
+                                   overrides=overrides_from_config_xml(text),
+                                   pools=pools_from_config_xml(text))
         source = args.config
     else:
         target = _target_from_args(args)
         reservations = run_php(target, php_list_reservations(), run=args.run)
         overrides = run_php(target, php_list_overrides(), run=args.run)
+        pools = run_php(target, php_list_pools(), run=args.run)
         arp_out = _read_or_raise(target, "arp -an", run=args.run)
         resolv = _read_or_raise(target, "cat /etc/resolv.conf", run=args.run)
         findings = doctor_findings(reservations=reservations, overrides=overrides,
                                    arp=parse_arp(arp_out), resolv_conf=resolv,
-                                   upgrade_locks=_present_upgrade_locks(target, run=args.run))
+                                   upgrade_locks=_present_upgrade_locks(target, run=args.run),
+                                   pools=pools)
         source = target.host
 
     warns = [f for f in findings if f.severity == "warn"]

@@ -27,6 +27,7 @@ is not the site's backup folder. Where the site keeps one, copy the file there o
 |---------------------------------------------------------------------------|-----------------------------------------------------|
 | Reachable inside its subnet, dead beyond it, nothing logged anywhere      | a DHCP reservation with static ARP armed - `doctor` |
 | An address answers, but for hardware no reservation names                 | a reservation that outlived its device - `doctor`   |
+| Two hosts on one reserved address, "Dynamic and static leases present"    | a reservation inside the DHCP pool - `doctor`       |
 | A download or CDN times out after DNS resolves and the redirect is served | `snort check <host>`, then `snort why <ip>`         |
 | `pkg` and system upgrades fail to resolve                                 | Tailscale Accept DNS rewrote resolv.conf - `doctor` |
 | "Another instance of pfSense-upgrade is running"                          | broken box DNS, the lock is a symptom - `doctor`    |
@@ -149,6 +150,20 @@ retry the edit. After a hand edit or any other call of the reconfigure, do it yo
 `pfSsh.php playback svc restart unbound`, then resolve a name on the box
 (`host <name> 127.0.0.1`) and from another host, with a timeout. Reach the firewall by IP for
 this: once unbound is down, its own name does not resolve either.
+
+**A reservation's DNS name moves only when unbound is rewritten.** With "Register DHCP static
+mappings" on in the DNS Resolver (`unbound/regdhcpstatic`), unbound answers each reservation's
+hostname from `/var/unbound/host_entries.conf`, which only `services_unbound_configure()` rewrites;
+a reservation removed or moved without it keeps answering with its old address. `dhcp add` and
+`dhcp rm` with `--apply` run that reconfigure when the option is on, then restart unbound and
+resolve `localhost.` as above; resolve the reservation's own name yourself
+(`host <hostname>.<domain> 127.0.0.1`). `dhcp rename` does not, so after a rename run the
+reconfigure and the restart yourself. Dynamic leases take another path: with "Register DHCP
+leases" (`unbound/regdhcp`), the `dhcpleases` daemon writes them to
+`/var/unbound/dhcpleases_entries.conf`, and it keeps a freed dynamic entry there until dhcpd
+restarts. So a name can still resolve to a dynamic address its host no longer holds (a host that
+moved to a reservation, or was retired): read that file for the old address, and if it is still
+there, restart the DHCP service (Status > Services) and read it again.
 
 **A `php -f` script that calls `filter_configure_sync()` itself can die after `write_config()`.**
 Observed on pfSense 2.8.1: the call fatal-errors on an undefined `filter_generate_dummynet_rules()`
