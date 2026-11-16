@@ -30,6 +30,29 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.8.0]
+
+### Added
+
+- meta-self-improve: `contrib_queue.py add` takes `--what-file` / `--why-file`, so a lesson that quotes code (backticks, `$(...)`, quotes) can be queued without passing through the shell. Each is exclusive with its inline flag, the file is read as UTF-8, one trailing newline is dropped, and an empty or unreadable file is refused with exit 2. Step 2 of the skill names this route and the `contrib_add` MCP tool.
+- net-firewall-pfsense: `snort fixsteps --cidr` says the plain suppress line covers every address and prints a scoped `track by_src` / `track by_dst` pair for the range as the narrower alternative.
+- coding-python-data-architecture: how to add a key to a persisted file that earlier releases parse with `extra="forbid"`: write it only while it holds data (`model_dump_json(exclude={key})`), pin its absence in a test, and name the remaining downgrade window in the CHANGELOG.
+
+### Fixed
+
+- compact-resume hands back a checkpoint only when the session's own transcript shows it writing that file after the save request with no change since; a newer file in the cwd's checkout or a linked worktree, which can be another session's, is listed with its path and age instead of being handed back as this session's. The context watcher's save request and meta-context-watcher say how such listed files are treated.
+- net-firewall-pfsense: `snort verify` no longer counts a `suppress ... track by_src|by_dst, ip <address>` line as suppressing the rule for every address. It reports each matching line's scope, names the side each address is covered on, and counts a scoped line only for the addresses given with the new repeatable `--ip` or with `--cidr`. Without either, a file holding only scoped lines reads NO. Variables and negations in `ip` read NO.
+- infra-windows-servicing: an in-place repair upgrade can leave the machine unactivated; read LicenseStatus and the installed key's PartialProductKey before and after it, never take the key from BackupProductKeyDefault, get the activation error from slmgr /ato, and retry 0x803F7001 on a MAK before swapping keys.
+- infra-windows-servicing: slmgr /ipk prints the full product key; scripts must mask its output case-insensitively before printing or saving it.
+- infra-windows-servicing: record DISM's exit code redirect-first (`>file echo RC=%ERRORLEVEL%`); the natural form leaves the file empty for exit codes 1-9.
+- infra-windows-servicing: a Setup-log "Staged" line is not an install, and its KB can be the servicing stack update; read the CBS package identity before naming the pending cumulative update.
+- infra-windows-servicing: size a DISM /Add-Package ceiling from the slowest guest class, and read the exit code file and UBR before calling a timed-out install failed.
+- coding-data-architecture: when a typed boundary model replaces a hand-rolled `.get()` walk, the Definition of Done now requires keeping what the walk did with each malformed input shape (kept, skipped, defaulted, aborted), pinned by tests against the old code.
+- coding-data-architecture: a check the live input path applies must also run when a stored copy comes back in (a cache hit, an HTTP 304 served from an ETag cache, state read from disk), by living in the boundary model's validation. coding-input-sanitization lists such a read-back as a boundary and points there.
+- process-debug-systematic: a fault seen once is checked against the same system's earlier runs (previous boots, earlier CI runs, older logs) before a lasting fix is proposed.
+- process-agents-dispatching-parallel: a brief that lets an agent dispatch its own probes tells it to wait for them before ending its turn, and a NAMED agent's brief tells it to report through SendMessage, since its final text never reaches the dispatcher.
+- git-worktrees: an isolation worktree always belongs to the dispatching session's repository. For work in another repository, omit isolation and create the worktree in that repository.
+
 ## [11.7.3]
 
 ### Added
