@@ -38,14 +38,15 @@ jingle_session.cc:428  Session closed with error 4: Local login check failed.
 
 ## Symptom to cause
 
-| Symptom the user reports                             | Real cause                                                                                                    | Confirm with                                                                                                                     | Disproved if                                                                                      |
-|------------------------------------------------------|---------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------|
-| "PIN is not valid" every time, host listed as online | PAM account check rejects the user                                                                            | journal shows `pam_acct_mgmt() returned error 7`                                                                                 | journal shows no `pam_` line during the attempt - the PIN may be genuinely wrong, verify the hash |
-| Connects, then drops immediately                     | Same account-check failure, later in the handshake                                                            | journal shows `Session closed with error 4`                                                                                      | journal shows a network or relay error instead                                                    |
-| Host shows offline in the device list                | The service is not running                                                                                    | `systemctl status chrome-remote-desktop@<user>`                                                                                  | the unit is `active (running)` - the host is registered to a different account or machine         |
-| `sudo: The "no new privileges" flag is set`          | `start-host` ran as root (the binary sets the flag on itself), or the target user's shell already carries NNP | `whoami` in the shell that ran it; if that was already the target user, `runuser -u <user> -- grep NoNewPrivs /proc/self/status` | you ran as the target user AND that reads `0` - the flag is not the obstacle, look elsewhere      |
-| `Failed to set new config` / `Failed to start host`  | The run died after the OAuth code was already spent                                                           | `ls ~<user>/.config/chrome-remote-desktop/host#*.json`                                                                           | no config file was written at all                                                                 |
-| Two device entries, one permanently dead             | A cloned image inherited the source host's config                                                             | more than one `host#*.json`, or a `private_key` from the source                                                                  | exactly one config whose `host_id` matches the live entry                                         |
+| Symptom the user reports                                | Real cause                                                                                                    | Confirm with                                                                                                                     | Disproved if                                                                                      |
+|---------------------------------------------------------|---------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------|
+| "PIN is not valid" every time, host listed as online    | PAM account check rejects the user                                                                            | journal shows `pam_acct_mgmt() returned error 7`                                                                                 | journal shows no `pam_` line during the attempt - the PIN may be genuinely wrong, verify the hash |
+| Connects, then drops immediately                        | Same account-check failure, later in the handshake                                                            | journal shows `Session closed with error 4`                                                                                      | journal shows a network or relay error instead                                                    |
+| Host shows offline in the device list                   | The service is not running; exiting 1 at start after a rename is the hostname row below                       | `systemctl status chrome-remote-desktop@<user>`                                                                                  | the unit is `active (running)` - the host is registered to a different account or machine         |
+| `sudo: The "no new privileges" flag is set`             | `start-host` ran as root (the binary sets the flag on itself), or the target user's shell already carries NNP | `whoami` in the shell that ran it; if that was already the target user, `runuser -u <user> -- grep NoNewPrivs /proc/self/status` | you ran as the target user AND that reads `0` - the flag is not the obstacle, look elsewhere      |
+| `Failed to set new config` / `Failed to start host`     | The run died after the OAuth code was already spent                                                           | `ls ~<user>/.config/chrome-remote-desktop/host#*.json`                                                                           | no config file was written at all                                                                 |
+| Unit exits 1 right after start, after a hostname change | The config file is named after an md5 of the hostname, so the renamed host finds no config                    | `printf %s "$(hostname)" \| md5sum` differs from the hex in the one `host#*.json` name                                           | the hash equals the file name                                                                     |
+| Two device entries, one permanently dead                | A cloned image inherited the source host's config                                                             | more than one `host#*.json`, or a `private_key` from the source                                                                  | exactly one config whose `host_id` matches the live entry                                         |
 
 ## The account-check failure: /etc/shadow group ownership
 
@@ -297,12 +298,48 @@ this offline, against the copy's stopped root filesystem (`<rootfs>`, e.g. after
 3. After the first start, register the copy as a new host (see Registration above) and check that
    exactly one `host#*.json` exists and that its `host_id` differs from the source's.
 
+## A renamed host: move its config to the new hostname's hash
+
+The start script picks its config by name: `host#<md5 of the hostname>.json`, the hostname being
+what `socket.gethostname()` returns (read from the chrome-remote-desktop 151.0.7922.13 start
+script, `/opt/google/chrome-remote-desktop/chrome-remote-desktop`; check yours with
+`grep -n 'host#' <that file>`; `hostname` prints the same name). After `hostnamectl set-hostname`
+the unit looks for a file that does not exist and exits 1 at once. The journal shows at most a
+`Failed to load config: [Errno 2] No such file or directory` line naming the new hash, and a host
+on 142.0.7444.18 was seen exiting with no error line at all, so confirm by hash rather than by
+message (table above).
+
+The registration is intact: `host_id` and `private_key` stay valid, so do not re-register and do
+not ask for an OAuth code. Back the file up, then rename it, together with any other
+`host#<old hash>.*` file:
+
+```bash
+#!/bin/bash
+set -euo pipefail
+CRD_DIR="$(getent passwd <user> | cut -d: -f6)/.config/chrome-remote-desktop"
+NEW="$(printf %s "$(hostname)" | md5sum | cut -d' ' -f1)"
+set -- "$CRD_DIR"/host#*.json
+[ "$#" -eq 1 ] && [ -e "$1" ] || { echo "REFUSE: need exactly one host#*.json"; exit 1; }
+OLD="${1##*/host#}"; OLD="${OLD%.json}"
+[ "$OLD" != "$NEW" ] || { echo "REFUSE: name already matches, not this cause"; exit 1; }
+install -d -m 700 /var/backups/crd && cp -p "$CRD_DIR"/host#"$OLD".* /var/backups/crd/
+for f in "$CRD_DIR"/host#"$OLD".*; do mv -- "$f" "${f/$OLD/$NEW}"; done
+systemctl restart chrome-remote-desktop@<user>
+```
+
+Then read the journal: `Host ready to receive connections` means it is back. This is for the
+same machine under a new name only. A copy of another host that was given a new hostname fails
+the same way, and moving the file there brings it up AS the source: follow "A cloned host" above
+instead. When the history does not settle which one you have, compare the file's `host_id` with
+the config of every other CRD host you run; a match is a copy.
+
 ## Common mistakes
 
 | Mistake                                                  | Why it goes wrong                                                                          |
 |----------------------------------------------------------|--------------------------------------------------------------------------------------------|
 | Treating "PIN is not valid" as a PIN problem             | It is the rendering of a failed PAM account check. The PIN is never consulted.             |
 | Re-registering before reading the journal                | A correctly registered host re-registers correctly and fails identically, one code poorer. |
+| Re-registering a host whose hostname changed             | Only the config file name is stale; moving it to the new hash needs no code.               |
 | Testing the PAM fix as root                              | Root passes either way. The result is the same before and after the fix.                   |
 | Running the positive pamtester case only                 | It passes against a permit-everything PAM stack too.                                       |
 | Running `start-host` as root                             | The binary sets `PR_SET_NO_NEW_PRIVS` on itself and its own `sudo` call is refused.        |
