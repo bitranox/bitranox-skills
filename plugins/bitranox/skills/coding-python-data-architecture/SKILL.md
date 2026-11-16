@@ -469,6 +469,7 @@ def process(data: dict) -> dict:
 
 # BAD: String literals for status
 if user.status == "active":
+    ...
 
 # BAD: Unnecessary conversion chain
 model.model_dump()  # -> dict

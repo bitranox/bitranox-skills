@@ -151,10 +151,13 @@ these two first.
       ...                           # someone else cancelled the child: restart it
 
   # or keep `await child` and tell the two cancels apart:
+  try:
+      await child
   except asyncio.CancelledError:
       task = asyncio.current_task()
       if task is not None and task.cancelling():   # 3.11+: a cancel is pending on US
           raise
+      ...                           # only the child was cancelled: restart it
   ```
 
 - **`Server.wait_closed()` waits for every client connection (from 3.12.0; on 3.11 it returned at
