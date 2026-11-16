@@ -80,9 +80,20 @@ says so. Before either one, when the work builds on unpushed commits:
   a subagent, pass that directory as an ABSOLUTE path in the Agent `cwd` where the tool offers
   that parameter (not every build does; `cwd` and `isolation: "worktree"` are mutually
   exclusive); where it does not, set `baseRef` as above or brief the subagent with absolute paths
-  into the worktree. This is the one case where `git worktree add` beside a native tool is right.
+  into the worktree. This and work in another repository (after this list) are the two cases
+  where `git worktree add` beside a native tool is right.
 - Either way, confirm the expected local commit is in the new worktree: inside it,
   `git merge-base --is-ancestor <sha> HEAD` exits 0.
+
+**Native tools also take the REPOSITORY from the session, not from the task.** A subagent
+dispatched with `isolation: "worktree"` gets a worktree of the repository the dispatching session
+works in, never of the repository the task is about. For work in another repository (a sibling
+repo, a tool repo beside the one you sit in), omit `isolation` and brief the agent to create its
+own worktree in THAT repository (`git -C /abs/other-repo worktree add ...`) and to use absolute
+paths into it, or pass that worktree as the Agent `cwd` where the tool offers the parameter. An
+isolation worktree of the wrong repository leaves the agent a tree its brief does not describe,
+and it stays behind locked by the harness for you to remove (Quick Reference, "A finished
+isolated agent's worktree refuses `remove --force`").
 
 **Bringing an isolated subagent's work back:** its commits were written and tested on its base,
 not on yours, so its green says nothing about the combination. Before you pick, check its commit
@@ -576,7 +587,10 @@ warnings go to stderr.
 
 **Never:**
 - Create a worktree when Step 0 detects existing isolation
-- Use `git worktree add` when you have a native worktree tool (e.g., `EnterWorktree`). This is the #1 mistake - if you have it, use it. The one exception: the work needs unpushed local commits and `worktree.baseRef` is not `head` (Step 1a).
+- Use `git worktree add` when you have a native worktree tool (e.g., `EnterWorktree`). This is
+  the #1 mistake - if you have it, use it. The two exceptions (Step 1a): the work needs unpushed
+  local commits and `worktree.baseRef` is not `head`, or the work is in a repository other than
+  the session's.
 - Remove a worktree while a process launched from it is still running (Step 5)
 - Skip Step 1a by jumping straight to Step 1b's git commands
 - Create worktree without verifying it's ignored (project-local)
