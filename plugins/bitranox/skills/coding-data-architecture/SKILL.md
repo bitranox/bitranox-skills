@@ -163,6 +163,20 @@ The language skill has the checker's exact spellings and worked examples.
      where that field decides the answer
    - [ ] Your own new and rewritten code got the same adversarial read as the code you set out to
      fix: a faithful port passes every existing test while keeping the old bug
+   - [ ] Each boundary model that replaced a `.get()` walk keeps what the walk did with every
+     malformed shape, unless the change is deliberate and listed in the CHANGELOG. Before the
+     first edit, list per shape (a null where a value is expected, one wrong-type item in a list,
+     a missing key, each form a value can arrive in, such as a header holding either seconds or a
+     date) whether the old walk kept the row, skipped it, defaulted the value or aborted the whole
+     load, and pin each in a test that passes on the OLD code first. A strict model inside a loop
+     that skips what it cannot parse turns a defaulted field into a dropped row and an unread form
+     into a lost signal, and nothing raises, so neither the suite nor the error-surface diff
+     (STEP C item 5) sees it
+   - [ ] A check the live input path applies to a value (a host check on a next-page URL) also
+     runs on every path where a stored copy of that value re-enters: a cache hit, a reply served
+     from an ETag cache on HTTP 304, state read back from disk. Each read-back is a boundary too:
+     put the check in the boundary model's own validation, parse every read-back through that
+     model, and test a cache hit holding a value the live path refuses
 
    **Internal Data Handling:**
    - [ ] Eliminate all internal map processing - no `data["key"]` access on structured data
