@@ -856,3 +856,74 @@ def test_queues_flags_a_key_made_from_a_worktree_of_a_repo(tmp_path, capsys):
     _queue_keyed_at(str(linked), "old worktree entry")
     assert Q.main(["queues"]) == 0
     assert f"inside {main}" in capsys.readouterr().out
+
+
+# ---- add --what-file / --why-file: lesson text that quotes code never passes through the shell --
+
+_CODE_LESSON = "run `gate.py --log L` and read $(cat out) - the shell would execute both"
+
+
+def _with_what(argv, flag):
+    """`argv` with a plain --what added when the flag under test is a --why form."""
+    return argv[:1] + ["--what", "a gap"] + argv[1:] if flag.startswith("--why") else argv
+
+
+def test_add_reads_what_and_why_from_files(tmp_path, capsys):
+    what = tmp_path / "what.txt"
+    why = tmp_path / "why.txt"
+    what.write_text(_CODE_LESSON + "\n", encoding="utf-8")
+    why.write_text("line one `x`\nline two\n\n", encoding="utf-8")
+    rc = Q.main(["add", "--what-file", str(what), "--why-file", str(why),
+                 "--target", "skill:compuse-toolbox", "/p/f1"])
+    assert rc == 0 and "queued" in capsys.readouterr().out
+    (rec,) = S.read_contributions("/p/f1")
+    assert rec["what"] == _CODE_LESSON
+    assert rec["why"] == "line one `x`\nline two\n"       # only ONE trailing newline is removed
+
+
+def test_add_what_file_drops_a_crlf_ending_and_a_bom(tmp_path):
+    what = tmp_path / "what.txt"
+    what.write_bytes(b"\xef\xbb\xbf" + _CODE_LESSON.encode("utf-8") + b"\r\n")
+    assert Q.main(["add", "--what-file", str(what), "/p/f2"]) == 0
+    assert S.read_contributions("/p/f2")[0]["what"] == _CODE_LESSON
+
+
+@pytest.mark.parametrize("flag", ["--what", "--why"])
+def test_add_refuses_a_text_flag_together_with_its_file_flag(tmp_path, capsys, flag):
+    f = tmp_path / "t.txt"
+    f.write_text("from the file\n", encoding="utf-8")
+    with pytest.raises(SystemExit) as exc:
+        Q.main(_with_what(["add", flag, "inline", flag + "-file", str(f), "/p/f3"], flag))
+    assert exc.value.code == 2
+    assert "not allowed with argument" in capsys.readouterr().err   # argparse's exclusion message
+    assert S.read_contributions("/p/f3") == []
+
+
+def test_add_without_what_or_what_file_is_a_usage_error(capsys):
+    with pytest.raises(SystemExit) as exc:
+        Q.main(["add", "--why", "w", "/p/f4"])
+    assert exc.value.code == 2
+    assert "--what-file" in capsys.readouterr().err       # the usage names both ways to give it
+
+
+@pytest.mark.parametrize("flag", ["--what-file", "--why-file"])
+@pytest.mark.parametrize("content", [b"", b"\n", b"  \r\n"])
+def test_add_refuses_an_empty_text_file(tmp_path, capsys, flag, content):
+    f = tmp_path / "empty.txt"
+    f.write_bytes(content)
+    assert Q.main(_with_what(["add", flag, str(f), "/p/f5"], flag)) == 2
+    err = capsys.readouterr().err
+    assert flag in err and "empty" in err
+    assert S.read_contributions("/p/f5") == []
+
+
+@pytest.mark.parametrize("flag", ["--what-file", "--why-file"])
+@pytest.mark.parametrize("kind", ["absent", "latin1"])
+def test_add_refuses_a_missing_or_non_utf8_file(tmp_path, capsys, flag, kind):
+    path = tmp_path / ("%s.txt" % kind)
+    if kind == "latin1":
+        path.write_bytes(b"caf\xe9\n")
+    assert Q.main(_with_what(["add", flag, str(path), "/p/f6"], flag)) == 2
+    err = capsys.readouterr().err
+    assert flag in err and "nothing was recorded" in err
+    assert S.read_contributions("/p/f6") == []

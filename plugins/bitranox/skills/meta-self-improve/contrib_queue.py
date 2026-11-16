@@ -15,6 +15,7 @@ the change actually ships.
 
 Usage (cwd defaults to the current directory):
   contrib_queue.py add --what TEXT [--target T] [--why W] [--source S] [cwd]
+  contrib_queue.py add --what-file F [--why-file F] ...  # text that quotes code
   contrib_queue.py list [cwd]
   contrib_queue.py ship --match TEXT [--note WHERE] [cwd]  # this one DELIVERED
   contrib_queue.py drop --match TEXT [--reason WHY] [cwd]  # this one is wrong or stale
@@ -28,7 +29,8 @@ Usage (cwd defaults to the current directory):
 Exit codes: 0 done (a duplicate or already-closed add included); 1 only from `claim`, when another
 holder's claim on the entry has not expired (`! held:`, naming it); 2 could not run: the store could
 not be read or written (nothing was recorded; the message starts `! failed:`), a usage error, an
-empty --what, or a selector / queue key that names nothing (`! refused:` or `no such queue`).
+empty --what, an unreadable or empty --what-file/--why-file, or a selector / queue key that names
+nothing (`! refused:` or `no such queue`).
 
 `claim` is for a session about to work an entry while others may sweep the same queue: it stamps
 the entry with the holder (`--by`, else `$CLAUDE_CODE_SESSION_ID`) and an expiry (`--hours`,
@@ -276,13 +278,44 @@ def _claim_verb(args, proj):
     return 0
 
 
+class _TextFileError(Exception):
+    """A --what-file / --why-file that cannot supply text; the message is the whole report."""
+
+
+def _read_text_file(path, flag):
+    """The text of a `--what-file` / `--why-file`, with ONE trailing line ending removed.
+
+    The file route exists because the argument route cannot carry a lesson that quotes code: a
+    backtick or `$(...)` inside a double-quoted `--what` is executed by the shell before this
+    program runs, and the PreToolUse guard refuses the call. Read as utf-8-sig so an editor's BOM
+    is not stored as the first character; only the one line ending a text editor appends is
+    dropped, so the body's own blank lines and inner newlines survive. An empty file (or one of
+    only whitespace) is refused rather than stored as an empty field.
+    """
+    try:
+        text = Path(path).read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise _TextFileError("! failed: could not read %s %s (%s) - nothing was recorded"
+                             % (flag, path, exc)) from None
+    text = text.removesuffix("\n").removesuffix("\r")
+    if not text.strip():
+        raise _TextFileError("! refused: %s %s is empty - nothing was recorded" % (flag, path))
+    return text
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Pending upstream-contribution queue (durable intent).")
     sub = ap.add_subparsers(dest="cmd")
     a = sub.add_parser("add", help="queue a pending skill/hook contribution")
-    a.add_argument("--what", required=True, help="the change the learning warrants")
+    what = a.add_mutually_exclusive_group(required=True)
+    what.add_argument("--what", help="the change the learning warrants")
+    what.add_argument("--what-file", help="read --what from this UTF-8 file instead - for text "
+                                          "that quotes code (backticks, $(...)), which the shell "
+                                          "would run if it were an argument")
     a.add_argument("--target", default="", help="where it goes, e.g. skill:meta-dream-tree")
-    a.add_argument("--why", default="", help="the evidence/reason it is shippable")
+    why = a.add_mutually_exclusive_group()
+    why.add_argument("--why", default="", help="the evidence/reason it is shippable")
+    why.add_argument("--why-file", help="read --why from this UTF-8 file instead")
     a.add_argument("--source", default="", help="the fact slug or session it came from")
     a.add_argument("proj", nargs="?", default=None)
     ls = sub.add_parser("list", help="show the pending contributions (does NOT consume them)")
@@ -347,6 +380,14 @@ def main(argv=None):
             return 2
 
     if args.cmd == "add":
+        try:
+            if args.what_file is not None:
+                args.what = _read_text_file(args.what_file, "--what-file")
+            if args.why_file is not None:
+                args.why = _read_text_file(args.why_file, "--why-file")
+        except _TextFileError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
         if not args.what.strip():
             # an empty intent is not a contribution; add_contribution's False for it used to be
             # reported as "already queued" with exit 0

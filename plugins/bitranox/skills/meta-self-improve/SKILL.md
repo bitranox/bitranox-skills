@@ -163,6 +163,13 @@ plus a generic git habit) is split, and each half routed on its own. Take the FI
 3. **Otherwise** - no skill in use, or one loaded for unrelated work (a git quirk hit while a
    Proxmox skill was loaded) and no shipped skill covering this domain: use the table below.
 
+A lesson that quotes code (a backtick, `$(...)`, a quote) never goes on the command line: in a
+double-quoted `--what` the shell RUNS it, and a PreToolUse guard refuses the call. Write each
+field to a file with the Write tool and pass `--what-file F` / `--why-file F` in place of
+`--what` / `--why` (read as UTF-8, one trailing newline dropped, an empty file refused), or queue
+it with `mcp__bitranox__contrib_add`, which takes the text with no shell in between - outside a
+temporary worktree only (step 3b).
+
 In cases 1 and 2 the entry carries the lesson itself, and you write NO memory fact - unless the
 rule also binds work outside that skill's description, and then pass `--skill <name>` (the name
 as the Skill tool takes it, e.g. `bitranox:compuse-git`) to the engine `add`, which records it in
