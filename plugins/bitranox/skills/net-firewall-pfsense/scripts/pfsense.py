@@ -1583,17 +1583,90 @@ def cmd_snort_unblock(args) -> int:
     return code
 
 
-def suppresses(supp_text: str, sig: SignatureId) -> bool:
-    """True when a live `suppress` statement names this generator AND this signature.
+Network = ipaddress.IPv4Network | ipaddress.IPv6Network
+
+_TRACKS = ("by_src", "by_dst")
+
+
+@dataclass(frozen=True)
+class SuppressScope:
+    """Which addresses one live `suppress` statement for a rule applies to.
+
+    `track` None with `understood` True is the plain form, which suppresses the rule for every
+    address. A scoped form names the side of the alert (`by_src`, `by_dst`) and the addresses on
+    that side (`networks`). `understood` False is a statement whose scope this tool does not
+    evaluate (a variable, a negation, track without ip): it counts as covering nothing.
+    """
+
+    track: str | None
+    ip: str | None
+    networks: tuple[Network, ...] = ()
+    understood: bool = True
+
+    def covers(self, target: Network | None) -> bool:
+        if not self.understood:
+            return False
+        if self.track is None:
+            return True
+        if target is None:
+            return False
+        return any(target.version == net.version and target.subnet_of(net) for net in self.networks)
+
+    @property
+    def label(self) -> str:
+        if self.track is None and self.understood:
+            return "every address"
+        return f"track {self.track}, ip {self.ip}"
+
+
+def _scope_networks(ip_value: str) -> tuple[Network, ...] | None:
+    """The networks a suppress `ip` value names, or None for a form not evaluated here.
+
+    Snort's README.filters documents a single address and a CIDR block; a bracketed list of them
+    is read member by member. A `$VARIABLE` or a `!` negation would need Snort's own variable
+    table and list semantics, so it is not guessed at: None, and the statement covers nothing.
+    """
+    inner = ip_value[1:-1] if ip_value.startswith("[") and ip_value.endswith("]") else ip_value
+    networks = []
+    for member in (part.strip() for part in inner.split(",")):
+        try:
+            networks.append(ipaddress.ip_network(member, strict=False))
+        except ValueError:
+            return None
+    return tuple(networks)
+
+
+def _parse_scope(rest: str) -> SuppressScope:
+    """The scope of one statement, from the text after its `sig_id <n>`."""
+    track = re.search(r"\btrack\s+([^,\s]+)", rest)
+    ip = re.search(r"\bip\s+(\[[^\]]*\]|[^,\s]+)", rest)
+    if track is None and ip is None:
+        return SuppressScope(track=None, ip=None)
+    track_value = track.group(1) if track else None
+    ip_value = ip.group(1) if ip else None
+    # Snort requires track and ip together; one without the other, or a track it does not
+    # define, is not a scope this tool can vouch for.
+    networks = _scope_networks(ip_value) if ip_value is not None else None
+    if track_value not in _TRACKS or networks is None:
+        return SuppressScope(track=track_value, ip=ip_value, understood=False)
+    return SuppressScope(track=track_value, ip=ip_value, networks=networks)
+
+
+def suppress_scopes(supp_text: str, sig: SignatureId) -> list[SuppressScope]:
+    """The scope of every live `suppress` statement that names this generator AND this signature.
 
     Anchored per line to a live statement: a commented-out line, or a SID named only in a trailing
     comment, suppresses nothing. The generator is part of the match because `gen_id 1, sig_id 9`
     leaves a GID 125 SID 9 alert firing, and reading it as the fix being in place is how a no-op
     suppression went unnoticed. Only the order pfSense writes (`gen_id` before `sig_id`) counts:
     whether Snort accepts the reverse was not checked, and a NO there is the safe misreading.
+    The scope is returned rather than a yes/no because `track by_src, ip X` suppresses the rule
+    only where X is the alert's source: counting it as a full suppression said yes while every
+    other address stayed blocked.
     """
-    live_rule = rf"(?m)^[ \t]*suppress\b[^#\n]*\bgen_id\s+{sig.gid}\b[^#\n]*\bsig_id\s+{sig.sid}\b"
-    return re.search(live_rule, supp_text) is not None
+    live_rule = re.compile(rf"^[ \t]*suppress\b[^#\n]*\bgen_id\s+{sig.gid}\b[^#\n]*\bsig_id\s+{sig.sid}\b"
+                           r"(?P<rest>[^#\n]*)", re.MULTILINE)
+    return [_parse_scope(match.group("rest")) for match in live_rule.finditer(supp_text)]
 
 
 def _assumed_note(sig: SignatureId) -> str:
@@ -1602,8 +1675,60 @@ def _assumed_note(sig: SignatureId) -> str:
     return " (gen_id 1 assumed for a bare --sid; pass the GID:SID that snort why prints)"
 
 
+def _verify_targets(args) -> list[tuple[str, Network | None]]:
+    """The addresses the suppression must cover: each --ip, and the --cidr range.
+
+    An --ip that is not an address is refused (ValueError, exit 2). An unparsable --cidr is kept
+    with no network: it still goes to the pass-list check verbatim, and no scoped suppression can
+    be shown to cover it.
+    """
+    targets: list[tuple[str, Network | None]] = []
+    for ip in args.ip or []:
+        address = ipaddress.ip_address(ip.strip())
+        targets.append((str(address), ipaddress.ip_network(address)))
+    if args.cidr:
+        try:
+            targets.append((args.cidr, ipaddress.ip_network(args.cidr.strip(), strict=False)))
+        except ValueError:
+            targets.append((args.cidr, None))
+    return targets
+
+
+def _scope_verdict(scopes: list[SuppressScope], targets) -> tuple[bool, dict[str, list[str]], list[str]]:
+    """(suppressed for what was asked, which scopes cover each target, the human lines)."""
+    if not scopes:
+        return False, {}, []
+    if any(s.understood and s.track is None for s in scopes):
+        return True, {label: ["all"] for label, _ in targets}, []
+    coverage = {label: [s.track for s in scopes if s.covers(net)] for label, net in targets}
+    lines = []
+    for label, tracks in coverage.items():
+        if tracks:
+            sides = " and ".join(f"track {t}" for t in tracks)
+            lines.append(f"    {label}: yes ({sides}: only alerts with it on that side)")
+        else:
+            lines.append(f"    {label}: NO - outside every scoped suppression of this rule")
+    return bool(targets) and all(coverage.values()), coverage, lines
+
+
+def _suppressed_line(sig: SignatureId, scopes: list[SuppressScope], targets, suppressed: bool) -> str:
+    head = f"  GID:SID {sig.label} suppressed: "
+    if not scopes:
+        return head + "NO"
+    if any(s.understood and s.track is None for s in scopes):
+        return head + "yes, for every address"
+    unread = [s.label + " (scope not understood)" for s in scopes if not s.understood]
+    read = [s.label for s in scopes if s.understood]
+    named = "; ".join(read + unread)
+    if not targets:
+        return (head + f"NO - only for {named}. Give --ip <blocked address> or --cidr to check "
+                "whether that covers the address being blocked")
+    return head + ("yes" if suppressed else "NO") + f", only for {named}"
+
+
 def cmd_snort_verify(args) -> int:
     sig = parse_sid_spec(args.sid)
+    targets = _verify_targets(args)
     target = _target_from_args(args)
     rc, ps_out, _ = run_remote(target, "ps auxww", run=args.run)
     instance = instance_dir_from_ps(ps_out) if rc == 0 else None
@@ -1612,9 +1737,13 @@ def cmd_snort_verify(args) -> int:
 
     checks: dict[str, object] = {"instance_dir": instance, "gid": sig.gid, "sid": sig.sid,
                                  "gid_assumed": sig.gid_assumed}
-    # The SUPPRESSION file carries the GID:SID.
+    # The SUPPRESSION file carries the GID:SID and the scope of each statement.
     _, supp, _ = run_remote(target, f"cat {instance}/supp* 2>/dev/null", run=args.run)
-    checks["sid_suppressed"] = suppresses(supp, sig)
+    scopes = suppress_scopes(supp, sig)
+    suppressed, coverage, coverage_lines = _scope_verdict(scopes, targets)
+    checks["sid_suppressed"] = suppressed
+    checks["suppressions"] = [{"track": s.track, "ip": s.ip, "understood": s.understood} for s in scopes]
+    checks["coverage"] = coverage
 
     if args.cidr:
         # The GENERATED PASS LIST only. Never grep the suppression file for this: its comments
@@ -1624,15 +1753,39 @@ def cmd_snort_verify(args) -> int:
         checks["cidr_passlisted"] = args.cidr in entries
         checks["passlist_entries"] = len(entries)
 
-    ok = bool(checks["sid_suppressed"]) and (not args.cidr or bool(checks.get("cidr_passlisted")))
+    ok = suppressed and (not args.cidr or bool(checks.get("cidr_passlisted")))
     human = "\n".join(
         [f"  live instance: {instance}",
-         f"  GID:SID {sig.label} suppressed: {'yes' if checks['sid_suppressed'] else 'NO'}"
-         f"{_assumed_note(sig)}"]
+         _suppressed_line(sig, scopes, targets, suppressed) + _assumed_note(sig)]
+        + coverage_lines
         + ([f"  {args.cidr} in pass list: {'yes' if checks.get('cidr_passlisted') else 'NO'}"] if args.cidr else [])
     )
     _emit(envelope(command="snort verify", data=checks, ok=True), args.json, human)
     return 0 if ok else 1
+
+
+def _scoped_suppress_lines(sig: SignatureId, cidr: str | None) -> list[str]:
+    """The narrower alternative to the all-addresses suppression, when a range was given.
+
+    The plain line silences the rule for every address, which is the reviewer's call to make,
+    so the scope is said out loud. A scoped pair names BOTH sides because the range can be the
+    alert's source or its destination depending on the rule, and one side alone leaves the other
+    direction blocking. The range goes into a suppress line only when it parses as a network.
+    """
+    if not cidr:
+        return ["     That line suppresses the rule for EVERY address. Give --cidr <range> for a form",
+                "     scoped to one range."]
+    try:
+        network = ipaddress.ip_network(cidr.strip(), strict=False)
+    except ValueError:
+        return ["     That line suppresses the rule for EVERY address. No scoped form is printed:",
+                "     --cidr is not an address range."]
+    base = f"suppress gen_id {sig.gid}, sig_id {sig.sid}"
+    return ["     That line suppresses the rule for EVERY address. To suppress it only for traffic",
+            f"     to or from {network}, add these two lines instead (the range can be either side",
+            "     of the alert):",
+            f"       {base}, track by_src, ip {network}",
+            f"       {base}, track by_dst, ip {network}"]
 
 
 def fix_steps(*, sig: SignatureId, cidr: str | None = None) -> str:
@@ -1653,6 +1806,7 @@ def fix_steps(*, sig: SignatureId, cidr: str | None = None) -> str:
         f"  1. Suppress the rule: add 'suppress gen_id {sig.gid}, sig_id {sig.sid}' to the WAN suppression",
         "     list (Services > Snort > Pass Lists / Suppress, or config.xml).",
         *assumed,
+        *_scoped_suppress_lines(sig, cidr),
         "",
         f"  2. Pass-list the range: add {range_line} as a LITERAL <item> in the Snort pass list",
         "     entry's <address>. Do NOT add it to a firewall ALIAS: an alias entry there is a",
@@ -1842,7 +1996,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = snort.add_parser("verify", help="is the SID suppressed and the CIDR pass-listed, in the LIVE instance?")
     p.add_argument("--sid", required=True, metavar="GID:SID",
                    help="the rule as snort why prints it; a bare SID means gen_id 1")
-    p.add_argument("--cidr")
+    p.add_argument("--cidr", help="the pass-listed range; a scoped suppression must cover it too")
+    p.add_argument("--ip", action="append", metavar="ADDRESS",
+                   help="a blocked address a scoped suppression must cover (repeatable)")
     p.set_defaults(func=cmd_snort_verify)
     p = snort.add_parser("fixsteps", help="print the durable three-part fix")
     p.add_argument("--sid", required=True, metavar="GID:SID",

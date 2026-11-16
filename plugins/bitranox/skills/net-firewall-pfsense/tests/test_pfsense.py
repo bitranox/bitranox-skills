@@ -631,6 +631,28 @@ def test_snort_fixsteps_with_a_bare_sid_says_gen_id_1_is_assumed(capsys):
     assert (result["data"]["gid"], result["data"]["sid"], result["data"]["gid_assumed"]) == (1, 2071408, True)
 
 
+def test_snort_fixsteps_with_a_cidr_offers_a_suppression_scoped_to_that_range(capsys):
+    """The all-sources line silences the rule for every address; a scoped pair names both sides."""
+    assert P.main(["snort", "fixsteps", "--sid", "125:9", "--cidr", "198.51.100.0/22"], run=FakeRun()) == 0
+    out = capsys.readouterr().out
+    assert "suppress gen_id 125, sig_id 9, track by_src, ip 198.51.100.0/22" in out
+    assert "suppress gen_id 125, sig_id 9, track by_dst, ip 198.51.100.0/22" in out
+    assert "EVERY address" in out
+
+
+def test_snort_fixsteps_without_a_cidr_offers_no_scoped_line(capsys):
+    assert P.main(["snort", "fixsteps", "--sid", "125:9"], run=FakeRun()) == 0
+    out = capsys.readouterr().out
+    assert "track by_" not in out
+    assert "EVERY address" in out and "--cidr" in out
+
+
+def test_snort_fixsteps_prints_no_scoped_line_for_a_cidr_that_is_not_a_range(capsys):
+    assert P.main(["snort", "fixsteps", "--sid", "125:9", "--cidr", "not-a-range"], run=FakeRun()) == 0
+    out = capsys.readouterr().out
+    assert "track by_" not in out and "not an address range" in out
+
+
 def test_snort_fixsteps_refuses_a_malformed_sid_without_printing_a_suppress_line(capsys):
     assert P.main(["snort", "fixsteps", "--sid", "125:"], run=FakeRun()) == 2
     captured = capsys.readouterr()
@@ -1335,9 +1357,9 @@ def test_snort_verify_without_the_sid_is_no():
     assert _verify("suppress gen_id 1, sig_id 999\n") == 1
 
 
-def _verify_sid(sid, supp):
+def _verify_sid(sid, supp, *extra):
     fake = FakeRun([("ps auxww", (0, PS_SNORT, "")), ("/supp*", (0, supp, ""))])
-    return P.main(["--host", "192.0.2.1", "snort", "verify", "--sid", sid], run=fake)
+    return P.main(["--host", "192.0.2.1", "snort", "verify", "--sid", sid, *extra], run=fake)
 
 
 def test_snort_verify_does_not_count_the_same_sid_under_another_generator():
@@ -1347,7 +1369,96 @@ def test_snort_verify_does_not_count_the_same_sid_under_another_generator():
 
 def test_snort_verify_counts_the_suppression_of_the_generator_given():
     assert _verify_sid("125:9", "suppress gen_id 125, sig_id 9\n") == 0
-    assert _verify_sid("125:9", "suppress gen_id 125, sig_id 9, track by_src, ip 192.0.2.146\n") == 0
+    assert _verify_sid("125:9", "suppress gen_id 125, sig_id 9, track by_src, ip 192.0.2.146\n",
+                       "--ip", "192.0.2.146") == 0
+
+
+# ---- snort verify: a scoped suppression covers only the addresses it lists -----------------------
+# Snort's README.filters: `suppress gen_id G, sig_id S` suppresses the event completely, while
+# `..., track by_src|by_dst, ip <ip>` suppresses it only where that side of the alert is <ip>
+# (a single address or a CIDR block).
+SCOPED_SRC = "suppress gen_id 125, sig_id 9, track by_src, ip 192.0.2.146\n"
+
+
+def _verify_json(sid, supp, *extra, passlist=""):
+    fake = FakeRun([("ps auxww", (0, PS_SNORT, "")), ("/supp*", (0, supp, "")),
+                    ("*Whitelist*", (0, passlist, ""))])
+    return P.main(["--host", "192.0.2.1", "--json", "snort", "verify", "--sid", sid, *extra], run=fake)
+
+
+def test_snort_verify_says_no_for_an_address_a_scoped_suppression_does_not_list(capsys):
+    """The block on another source recurs, so verify must not say yes for it."""
+    assert _verify_sid("125:9", SCOPED_SRC, "--ip", "192.0.2.7") == 1
+    out = capsys.readouterr().out
+    assert "192.0.2.7: NO" in out
+    assert "track by_src, ip 192.0.2.146" in out
+
+
+def test_snort_verify_without_an_address_does_not_call_a_scoped_suppression_complete(capsys):
+    assert _verify_sid("125:9", SCOPED_SRC) == 1
+    out = capsys.readouterr().out
+    assert "only for track by_src, ip 192.0.2.146" in out and "--ip" in out
+
+
+def test_snort_verify_names_the_direction_a_scoped_suppression_covers(capsys):
+    assert _verify_sid("125:9", SCOPED_SRC, "--ip", "192.0.2.146") == 0
+    assert "192.0.2.146: yes (track by_src" in capsys.readouterr().out
+
+
+def test_snort_verify_an_unscoped_suppression_covers_every_address(capsys):
+    assert _verify_sid("125:9", "suppress gen_id 125, sig_id 9\n", "--ip", "203.0.113.5") == 0
+    assert "every address" in capsys.readouterr().out
+
+
+def test_snort_verify_matches_an_address_against_a_cidr_scope():
+    supp = "suppress gen_id 1, sig_id 2071408, track by_dst, ip 198.51.100.0/24\n"
+    assert _verify_sid("1:2071408", supp, "--ip", "198.51.100.7") == 0
+    assert _verify_sid("1:2071408", supp, "--ip", "198.51.101.7") == 1
+    assert _verify_sid("1:2071408", supp, "--ip", "2001:db8::1") == 1
+
+
+def test_snort_verify_matches_against_each_member_of_a_bracketed_list():
+    supp = "suppress gen_id 1, sig_id 9, track by_src, ip [192.0.2.5, 198.51.100.0/24]\n"
+    assert _verify_sid("1:9", supp, "--ip", "192.0.2.5") == 0
+    assert _verify_sid("1:9", supp, "--ip", "198.51.100.200") == 0
+    assert _verify_sid("1:9", supp, "--ip", "192.0.2.6") == 1
+
+
+def test_snort_verify_checks_every_address_given():
+    assert _verify_sid("125:9", SCOPED_SRC, "--ip", "192.0.2.146", "--ip", "192.0.2.7") == 1
+
+
+@pytest.mark.parametrize("ip_value", ["$HOME_NET", "!192.0.2.146", "[192.0.2.146,!192.0.2.7]", "bogus"])
+def test_snort_verify_does_not_count_a_scope_it_cannot_read(ip_value, capsys):
+    """A variable or a negation is not evaluated here, so NO is the safe reading."""
+    supp = f"suppress gen_id 125, sig_id 9, track by_src, ip {ip_value}\n"
+    assert _verify_sid("125:9", supp, "--ip", "192.0.2.146") == 1
+    assert "not understood" in capsys.readouterr().out
+
+
+def test_snort_verify_does_not_count_track_without_ip_or_an_unknown_track():
+    assert _verify_sid("125:9", "suppress gen_id 125, sig_id 9, track by_src\n", "--ip", "192.0.2.1") == 1
+    assert _verify_sid("125:9", "suppress gen_id 125, sig_id 9, ip 192.0.2.1\n", "--ip", "192.0.2.1") == 1
+    assert _verify_sid("125:9", "suppress gen_id 125, sig_id 9, track by_any, ip 192.0.2.1\n",
+                       "--ip", "192.0.2.1") == 1
+
+
+def test_snort_verify_an_unscoped_line_beside_a_scoped_one_covers_everything():
+    supp = SCOPED_SRC + "suppress gen_id 125, sig_id 9\n"
+    assert _verify_sid("125:9", supp, "--ip", "192.0.2.7") == 0
+
+
+def test_snort_verify_checks_the_cidr_is_inside_a_scoped_suppression(capsys):
+    supp = "suppress gen_id 1, sig_id 9, track by_dst, ip 198.51.100.0/22\n"
+    assert _verify_json("1:9", supp, "--cidr", "198.51.100.0/24", passlist="198.51.100.0/24\n") == 0
+    data = json.loads(capsys.readouterr().out)["data"]
+    assert data["suppressions"] == [{"track": "by_dst", "ip": "198.51.100.0/22", "understood": True}]
+    assert data["coverage"] == {"198.51.100.0/24": ["by_dst"]}
+    assert _verify_json("1:9", supp, "--cidr", "198.51.96.0/20", passlist="198.51.96.0/20\n") == 1
+
+
+def test_snort_verify_refuses_an_ip_that_is_not_an_address():
+    assert _verify_sid("125:9", SCOPED_SRC, "--ip", "192.0.2.300") == 2
 
 
 def test_snort_verify_needs_both_ids_in_one_live_statement():

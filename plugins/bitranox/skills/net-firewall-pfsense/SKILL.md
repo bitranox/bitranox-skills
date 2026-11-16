@@ -235,3 +235,13 @@ for ISC, `services_kea_configure()` for Kea). Edit the raw file with an XML pars
   a different rule, so the suppression is a no-op and the block comes back; both verbs say when
   they assumed `gen_id 1`. Given only a SID, run `snort why <ip>` for the GID before writing the
   fix. If it finds no alert, the GID is unknown: do not fill in 1 or a GID from another alert.
+- Reading a scoped suppression as a full one. `suppress gen_id 125, sig_id 9` silences the rule
+  for every address; adding `track by_src, ip <address or CIDR>` (or `track by_dst`) silences it
+  only for alerts with that address on that side, so every other address can still be blocked.
+  `snort verify` prints the scope of each matching line and counts a scoped one only for the
+  addresses you name with `--ip <blocked address>` (repeatable) or `--cidr`; without them it
+  answers NO. A named address (or range) outside every scoped line reads NO. One inside a line's
+  address or CIDR reads yes and names the side it is covered on: a `by_dst` yes still leaves the
+  alerts with that address as source blocking. An `ip` holding a variable or a `!` negation is
+  not evaluated and also reads NO. With `--cidr`, `fixsteps` prints the scoped form as a pair,
+  `track by_src` and `track by_dst`, because the range can be either side of the alert.
