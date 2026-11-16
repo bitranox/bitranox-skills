@@ -155,3 +155,22 @@ A plain Proxmox QEMU VM is different in three ways:
   again when authentication suddenly starts failing mid-session. It lives only in the running QEMU
   process and is gone at the next VM start.
 - **It is not layout-aware:** with the default en-us keymap, type with `--us-shift` (see Gotchas).
+
+## VMware Workstation VMs
+
+VMware Workstation has its own VNC server, switched on per VM in the VM's `.vmx` file. Edit the file
+while the VM is powered off:
+
+```text
+RemoteDisplay.vnc.enabled = "TRUE"
+RemoteDisplay.vnc.port = "<port>"
+RemoteDisplay.vnc.password = "<password>"
+```
+
+At power-on VMware replaces the password line with a hashed `RemoteDisplay.vnc.key`. The server's
+keymap is US (whether `type` needs `--us-shift` there is untested), and it listens on every
+interface, so firewall the port and reach it through an SSH tunnel
+(`ssh -N -L 127.0.0.1:<local-port>:127.0.0.1:<port> <user>@<host>`). A headless Windows guest
+booting from an EFI ISO stops at "Press any key to boot from CD or DVD": right after `vmrun start`,
+send `vnc-remote-control --port <local-port> key space` once a second until a screenshot shows the
+installer.

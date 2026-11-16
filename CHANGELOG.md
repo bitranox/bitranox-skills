@@ -30,6 +30,17 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.7.2]
+
+### Fixed
+
+- coding-python-logging: `ConsoleStream.STDERR` writes to whatever `sys.stderr` is when a line is written; it does not bind a stream at `init`. Section 9 adds how a suite that filters CLI stderr by the console format pins `LOG_CONSOLE_FORMAT_PRESET=short_loc` for every test, and how to keep a late queued line out of the next in-process run.
+- infra-proxmox-bindsnap: a pve-container build newer than the compatible-versions list is not untested on that ground alone; the overlay matches the guarded files' checksum per guard, so judge a node from its journal line.
+
+### Added
+
+- compuse-vnc: a "VMware Workstation VMs" section: the `.vmx` VNC server, reaching it through an SSH tunnel, and pressing space past the EFI ISO boot prompt.
+
 ## [11.7.1]
 
 ### Fixed
