@@ -92,6 +92,21 @@ An SSH session is a flaky external resource: it can drop, hang, or time out mid-
   a stdout/stderr-merging helper (see the table above) - so `/dev/null` CAUSES that corruption, and
   a persistent file ends it after the first connect instead of forcing you to discard stderr.
 
+  **Is a host's key recorded? Ask `ssh-keygen -F`, never `grep`.** Debian and Ubuntu ship
+  `HashKnownHosts yes` in `/etc/ssh/ssh_config` (the OpenSSH default is `no`), so ssh writes each
+  new entry as `|1|<salt>|<hash> <keytype> <key>`: neither the name nor the address is in the file,
+  and a `grep` for either returns 0 for a host that IS recorded. Run
+  `ssh-keygen -F <name> -f <file>` and `ssh-keygen -F <address> -f <file>`: a printed
+  `# Host ... found` line means recorded (exit 0), no output means not in that file (exit 1; a
+  missing file exits 255). Check both, and count a find under either as recorded: ssh records the
+  name it was given and, with `CheckHostIP` at its default `no`, not the address beside it; a
+  non-22 port is looked up as `'[host]:port'`. Check the right FILE too: a `Host` pattern matches
+  the name typed, not the address it resolves to, so `ssh host.example` skips a
+  `Host 192.0.2.*` block and records into the default file;
+  `ssh -G <name> | grep -i '^userknownhostsfile'` lists the files that apply; check each. Lines
+  starting `|1|` are hashed. Existing plaintext lines are not converted, so a file can mix both,
+  and `grep` then finds only the old plaintext entries.
+
   Why `accept-new` and not `no`: accept-new records a NEW host but REFUSES a changed or revoked
   key before anything runs (OpenSSH 10.2: the REMOTE HOST IDENTIFICATION HAS CHANGED banner,
   `Host key verification failed.`, exit 255, command not run), whereas `no` logs in and RUNS the
