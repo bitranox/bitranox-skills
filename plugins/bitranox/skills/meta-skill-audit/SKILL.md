@@ -43,6 +43,11 @@ for p in pathlib.Path("skills").rglob("*.py"):
 EOF
 ```
 
+That snippet reads `.py` files only. Python fenced in the skills' Markdown (a `python` or `py`
+block in a SKILL.md or a reference page) is parsed by the `fenced_python_syntax` check of
+`script_prepass.py` (see "The pre-pass runs first" below), which accepts a dedented fragment, a
+class-body method fragment and a doctest `>>>` block.
+
 Worth the same treatment: JSON/YAML files that must parse, `CSS_PATH`-style asset references that
 must resolve, relative links that must land on a shipped file, and the plugin's own mirror gate.
 A real sweep found a shipped example with unescaped nested quotes that had never been executed -
