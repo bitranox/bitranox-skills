@@ -30,6 +30,20 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.10.0]
+
+### Added
+
+- meta-skill-audit: `script_prepass.py` gains `fenced_python_syntax`, which parses every
+  ```python / ```py example in the skills' Markdown. Fences are matched the CommonMark way, and
+  method-body fragments, dedented excerpts and doctest blocks are accepted, so only a block no
+  reading can parse is reported. Before, only `.py` files were parsed.
+
+### Fixed
+
+- hooks tests: `test_make_push_args_nudge.py` wrote `\;` in plain string literals, an invalid
+  escape that raises a SyntaxWarning on every parse; the backslash is now escaped (same strings).
+
 ## [11.9.0]
 
 ### Changed
