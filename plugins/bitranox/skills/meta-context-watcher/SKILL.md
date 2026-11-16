@@ -456,8 +456,20 @@ the next action. A question you have not yet put to the user about a blocked ite
 without stopping the work. All of those rules apply again when the task in flight is finished and
 you choose what comes next. A block saying NO checkpoint was saved means the compaction summary is
 all that carried over: when the next step needs detail it lacks, read the transcript the block names
-before continuing. The checkpoint's lessons need nothing from you: after a compaction the Stop gate
-asks for `bitranox:meta-dream-nap`, which captures them.
+before continuing. A block that LISTS checkpoint files (path and age) without handing one back found
+none that this session's own records show it wrote: the block hands back only a file the session
+wrote with Write or Edit after the save request and that nothing changed since, never one picked by
+the cwd or the newest mtime, because sessions share a checkout and its worktrees. Each listed file
+may be another session's, or one you wrote through Bash. Opening one to see what work it describes
+is fine. One that describes work the summary never names is not yours: leave it alone and continue
+as when no checkpoint was saved. One that describes the summary's work is still only notes, not
+your checkpoint: check its next action against the summary and `git log` / `git status`, and
+continue from the summary's step. A listed file is yours only when the summary or the transcript
+the block names shows you writing that path through Bash after the save request, and the file's
+age shows no later change; a matching subject is no proof, since a peer can work the same task.
+With that proof, handle it as a checkpoint handed back; without it, do not edit it or mark it
+STALE. The checkpoint's lessons need nothing from you: after a compaction the Stop gate asks for
+`bitranox:meta-dream-nap`, which captures them.
 
 Never amend a stale handover to update it - write a NEW one and replace the file. An edited handover
 holds two moments with no way to tell them apart.
