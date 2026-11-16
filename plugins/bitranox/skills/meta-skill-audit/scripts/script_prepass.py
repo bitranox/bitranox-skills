@@ -29,11 +29,14 @@ Pure standard library.
 
 import argparse
 import ast
+import doctest
 import json
 import re
 import subprocess
 import sys
+import textwrap
 import traceback
+import warnings
 from pathlib import Path
 
 # A hook is launched by run-python.sh, which execs a plain python3: no venv, no PEP 723 resolution.
@@ -94,6 +97,117 @@ def syntax_errors(paths):
         except (OSError, ValueError) as exc:
             out.append((rel, 0, "unreadable: %s" % exc))
     return out
+
+
+# A fence opener per CommonMark: three or more backticks or tildes. Any indentation is accepted,
+# because a fence nested in a list item sits deeper than the three spaces a top-level one may have.
+_FENCE_OPEN = re.compile(r"^( *)(`{3,}|~{3,})(.*)$")
+_PYTHON_INFO = frozenset({"python", "py", "python3"})
+
+
+def _fenced_blocks(lines):
+    """Yield (language, first content line index, content lines) for every fenced block.
+
+    CommonMark rules, because a scanner that miscounts fences reads prose as code or code as
+    prose: a backtick opener's info string may not hold a backtick (then it is no fence at all), a
+    closer is the same character at least as long with nothing after it, an unclosed block runs to
+    the end of the document, and each content line loses up to the opener's own indentation."""
+    i = 0
+    while i < len(lines):
+        match = _FENCE_OPEN.match(lines[i])
+        if match is None or (match.group(2)[0] == "`" and "`" in match.group(3)):
+            i += 1
+            continue
+        indent, fence, info = len(match.group(1)), match.group(2), match.group(3).strip()
+        closer = re.compile(r"^ *%s{%d,}[ \t]*$" % (re.escape(fence[0]), len(fence)))
+        end = i + 1
+        while end < len(lines) and not closer.match(lines[end]):
+            end += 1
+        content = [line[min(indent, len(line) - len(line.lstrip(" "))):]
+                   for line in lines[i + 1:end]]
+        yield (info.split()[0].lower() if info else ""), i + 1, content
+        i = end + 1
+
+
+def _quiet_parse(src):
+    """ast.parse without the SyntaxWarnings a doc's string literals raise (an invalid escape such
+    as a regex's backslash-semicolon): the check asks only whether the block parses, and those
+    warnings would bury the summary."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", SyntaxWarning)
+        return ast.parse(src)
+
+
+def _fragment_error(src):
+    """None when the block parses as a module, a dedented excerpt, or a class body; otherwise
+    the SyntaxError of the block as written.
+
+    Docs show method bodies and indented excerpts on purpose; those parse once dedented or wrapped
+    in a class, so only a block no reading can parse is reported."""
+    dedented = textwrap.dedent(src)
+    for candidate in (dedented, "class _Fragment:\n" + textwrap.indent(dedented, "    ")):
+        try:
+            _quiet_parse(candidate)
+            return None
+        except SyntaxError:
+            continue
+    try:
+        _quiet_parse(src)
+    except SyntaxError as exc:
+        return exc
+    return None
+
+
+def _doctest_errors(src):
+    """[(line offset in the block, message)] for each `>>>` example that does not parse."""
+    out = []
+    for example in doctest.DocTestParser().get_examples(textwrap.dedent(src)):
+        try:
+            _quiet_parse(example.source)
+        except SyntaxError as exc:
+            out.append((example.lineno + (exc.lineno or 1) - 1, exc.msg))
+    return out
+
+
+def _block_errors(src):
+    """[(line offset in the block, message)] for one fenced Python block."""
+    first = next((line.strip() for line in src.split("\n") if line.strip()), "")
+    if first.startswith(">>>"):
+        return _doctest_errors(src)
+    exc = _fragment_error(src)
+    return [] if exc is None else [((exc.lineno or 1) - 1, exc.msg)]
+
+
+def fenced_python_syntax(paths):
+    """Every ```python example in shipped Markdown must at least parse, as the .py files must.
+
+    Returns [(rel, markdown line, message)]. A reader copies these blocks as they are, and nothing
+    else ever parsed them: syntax_errors sees only .py files."""
+    out = []
+    for rel, path in paths:
+        try:
+            lines = _lines(path)
+        except (OSError, ValueError) as exc:
+            out.append((rel, 0, "unreadable: %s" % exc))
+            continue
+        for language, start, content in _fenced_blocks(lines):
+            if language not in _PYTHON_INFO:
+                continue
+            for offset, message in _block_errors("\n".join(content)):
+                out.append((rel, start + offset + 1,
+                            "fenced python block does not parse: %s" % message))
+    return out
+
+
+def markdown_targets(room):
+    """[(rel, path)] for every Markdown file shipped under the room's skills/, minus the
+    directories a skill does not ship to readers (its .skillwriter ledger, caches)."""
+    skills = Path(room) / "skills"
+    if not skills.is_dir():
+        return []
+    skip = {".skillwriter", ".pytest_cache", ".git", "node_modules", "__pycache__"}
+    return [(path.relative_to(room).as_posix(), path) for path in sorted(skills.rglob("*.md"))
+            if not skip.intersection(path.relative_to(skills).parts)]
 
 
 _IMPORT_ERROR_CATCHERS = frozenset({"ImportError", "ModuleNotFoundError", "Exception",
@@ -614,6 +728,7 @@ def _unmeasured_note(unmeasured):
 
 CHECKS = {
     "syntax_errors": syntax_errors,
+    "fenced_python_syntax": fenced_python_syntax,
     "unguarded_third_party_imports": unguarded_third_party_imports,
     "subprocess_text_without_encoding": subprocess_text_without_encoding,
     "os_access_x_ok": os_access_x_ok,
@@ -674,6 +789,8 @@ def run_prepass(room, targets, ci_min=CI_MIN, vendored=(), run=_run, unmeasured=
     unmeasured = {} if unmeasured is None else unmeasured
     unmeasured.setdefault("js_parse", [])
     for name, fn in (("syntax_errors", lambda: syntax_errors(py + vendored_py)),
+                     ("fenced_python_syntax",
+                      lambda: fenced_python_syntax(markdown_targets(room))),
                      ("unguarded_third_party_imports",
                       lambda: unguarded_third_party_imports(hook_py, siblings)),
                      ("subprocess_text_without_encoding",
