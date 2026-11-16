@@ -30,6 +30,12 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.7.3]
+
+### Added
+
+- infra-proxmox: a troubleshooting row saying that `qm status` and the lock cannot tell whether a script or test harness is driving a VM; ask the tool's own record before stopping, resetting or restoring it.
+
 ## [11.7.2]
 
 ### Fixed
