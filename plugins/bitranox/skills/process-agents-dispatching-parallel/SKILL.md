@@ -174,6 +174,13 @@ Each agent gets:
   ground truth yourself (the CI run for its commit finished, no gate process left in its checkout,
   the commit not yet made) and SendMessage it the verdict. Keep your own backstop armed until the
   COMMIT lands, not until the gate starts.
+- **Waited-for probes, when the agent may dispatch agents of its own** (RED/GREEN probes, a
+  finder). Write: "wait for every agent you dispatch before you end your turn." An agent whose
+  turn ends while its own dispatches still run is no longer running to them: their hand-back
+  fails ("the agent that spawned you is no longer running"), and each report lands in YOUR
+  session or is retried until the probe gives up. When such a report reaches you, forward it with
+  SendMessage to the agent that dispatched that probe, by the name you gave it; it still needs
+  the result.
 - **A per-item progress record, when an agent works a list.** Have it write one line per finished
   item (to its notes file, or as one commit per item) as it goes. Agents in a fan-out share one
   usage limit and can all stop at once mid-batch; with the record, a resumed agent, or you, skips
@@ -193,7 +200,9 @@ Each agent gets:
   bitranox:git-worktrees, Step 1a), so a commit you made locally and have not pushed is missing
   from its tree, and nothing says so. Push first, or tell each agent to fast-forward to that sha,
   and afterwards check every worktree: `git -C <worktree> merge-base --is-ancestor <sha> HEAD`
-  exits 0.
+  exits 0. That worktree is also always one of YOUR session's repository: for work in another
+  repository, omit `isolation` (bitranox:git-worktrees, Step 1a, "Native tools also take the
+  REPOSITORY from the session").
 
 **Keep destructive steps out of lane briefs.** Deleting a remote ref or a branch, removing
 worktrees, a hard reset or a force push bundled into a brief with ordinary work makes the auto-mode
