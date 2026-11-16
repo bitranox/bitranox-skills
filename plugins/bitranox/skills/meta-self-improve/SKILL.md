@@ -240,8 +240,10 @@ route, `set-topics`, is not a capture's to take: when the fact now seems to belo
 say so in the capture's report line, for the tree dream.
 
 **Topics are never written by hand.** A new fact has no topics: `add` refuses a new fact whose
-body file carries a `topics:` line, and on an update it keeps the stored line whatever the file
-says. Only `set-topics` changes the line, and a dream chooses the topics, never a capture.
+body file carries a `topics:` line in its frontmatter, and on an update it keeps the stored line
+whatever the file's frontmatter says. A `topics:` line in the prose below the frontmatter is
+ordinary text: `add` stores it and it tags nothing. Only `set-topics` changes the frontmatter
+line, and a dream chooses the topics, never a capture.
 
 **An update re-sends what `add` requires, and stores every value it is given.** `--title` and
 `--hook` (or `--hook-file`) are required on every `add`, an update included - with no hook it

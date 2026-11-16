@@ -77,9 +77,10 @@ Create one todo per step.
    of truth - do not re-implement the funnel here.
    A fact lifted or copied into another tree arrives UNTAGGED: topics belong to one tree's
    list (`memory_engine.py topics-show`), so no `topics:` line crosses a tree boundary. Write
-   the copy's body without that line (`add` refuses a new fact whose body carries one), and
-   do not tag it in this run: the target tree's own dream tags it against that tree's list
-   (`bitranox:meta-dream-tree` step 5).
+   the copy's body without that line (`add` refuses a new fact whose body carries one in its
+   frontmatter; a `topics:` line in the prose below the frontmatter is ordinary text to it),
+   and do not tag it in this run: the target tree's own dream tags it against that tree's
+   list (`bitranox:meta-dream-tree` step 5).
 3. **Cheap convergence pre-check, THEN ask before the deep scan.** The cross-project semantic read (the
    fan-out below) is the expensive part - dozens of subagents. Do NOT run it unconditionally. First the
    cheap, deterministic pass: which stores changed since the last global dream, `reconcile_memory_index.py
@@ -153,20 +154,24 @@ Create one todo per step.
    topics, so the audit lists it once per such level and counts each in `TOTAL misplaced`:
    judge and report it as ONE fact. `relocate` refuses it
    (`! refused: '<slug>' is placed by topic`), from whichever level you name. When the
-   relocate is to be applied (in `auto`, or once the user approved the proposal), un-bind it
-   in the source tree first:
+   relocate is to be applied (in `auto`, or once the user approved the proposal), note the
+   `topics:` line in its body's frontmatter, then un-bind it in the source tree:
    `memory_engine.py set-topics --proj <source anchor> --slug <slug> --clear`, requiring
    `set topics on 1 fact(s); 0 unchanged` (`<source anchor>` is the source tree's top). A
    fact that had a line at several levels then has ONE line, at the source tree's top
    (`set-topics` prints a `~ note:` line naming it); a fact that had one line keeps it where
    it was. Run the audit again and use the `relocate` command it now prints for that slug,
-   which names the level holding the line, requiring `relocated <slug>:`. In `propose` the
-   un-bind is part of the proposal and is not run: the proposal names both commands, the
-   relocate from the level the line will then stand at. The fact arrives in the target tree
-   UNTAGGED, as a lifted or copied one does (step 2): `relocate` copies the body without a
-   `topics:` line (it prints `~ note: dropped the topics: line of <slug>` for a body that
-   still has one, such as a universal fact's `topics: []`), and the target tree's own dream
-   tags it, not this run.
+   which names the level holding the line, requiring `relocated <slug>:`. When the relocate
+   prints `! refused:` instead, the fact is still in the source tree, un-bound: set its
+   topics again (a comma-separated list) with
+   `memory_engine.py set-topics --proj <source anchor> --slug <slug> --topics <the noted topics>`,
+   requiring `set topics on 1 fact(s); 0 unchanged`, and name the refusal in the report. In
+   `propose` the un-bind is part of the proposal and is not run: the proposal names both
+   commands, the relocate from the level the line will then stand at. The fact arrives in
+   the target tree UNTAGGED, as a lifted or copied one does (step 2): `relocate` copies the
+   body without a `topics:` line (it prints `~ note: dropped the topics: line of <slug>` for
+   a body that still has one, such as a universal fact's `topics: []`), and the target
+   tree's own dream tags it, not this run.
    - **Jev shadow on that judgement** (only when `jev_shadow.py status` exits 0; home
      `<plugin>/skills/meta-self-improve/`, launch via `hooks/run-python.sh`; procedure in its
      `references/jev-shadow.md`), per tree, each in a fresh `D=$(mktemp -d)` of its own outside any

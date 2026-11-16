@@ -194,6 +194,9 @@ violation.
    `set-level-topics`, propose the change with its cost, and dry-run again; when the dry run
    still counts one (or the level had no line to restore), do not run the real render, and
    list those lines with their cost in the report (un-binding a fact is the tree dream's).
+   With the real render not run, nothing of this step's placement is written: the lines the
+   dry run counted for the cwd's own level and the rest of the chain wait for the tree
+   dream's render too, so name them in the deferred list.
 5. **Prune the obvious**: leaked task-state and dead-content entries AT the chain's levels
    (propose-first per the removal policy in `bitranox:meta-dream-tree` -> references/dream-passes.md).
    Include version-bound facts: run `versionrot.py scan --chain <cwd> --pypi --json` (home:
