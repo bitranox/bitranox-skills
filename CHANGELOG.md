@@ -43,6 +43,9 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 - hooks tests: `test_make_push_args_nudge.py` wrote `\;` in plain string literals, an invalid
   escape that raises a SyntaxWarning on every parse; the backslash is now escaped (same strings).
+- net-firewall-pfsense: `snort verify` counts a `suppress gen_id G, sig_id 0` line as covering
+  every signature of generator G, as Snort's README.filters defines it. It said NO for such a
+  line while Snort suppressed the alert.
 
 ## [11.9.0]
 

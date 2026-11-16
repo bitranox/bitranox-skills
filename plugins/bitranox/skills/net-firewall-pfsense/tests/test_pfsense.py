@@ -1373,6 +1373,21 @@ def test_snort_verify_counts_the_suppression_of_the_generator_given():
                        "--ip", "192.0.2.146") == 0
 
 
+def test_snort_verify_counts_sig_id_0_as_every_signature_of_its_generator():
+    """Snort's README.filters: sig_id 0 "applies to all sig_ids for the given gen_id"."""
+    assert _verify_sid("125:9", "suppress gen_id 125, sig_id 0\n") == 0
+    assert _verify_sid("125:9", "suppress gen_id 125, sig_id 0, track by_src, ip 192.0.2.146\n",
+                       "--ip", "192.0.2.146") == 0
+
+
+def test_snort_verify_does_not_count_sig_id_0_of_another_generator():
+    assert _verify_sid("125:9", "suppress gen_id 1, sig_id 0\n") == 1
+
+
+def test_snort_verify_does_not_read_a_sid_starting_with_0_as_the_wildcard():
+    assert _verify_sid("125:9", "suppress gen_id 125, sig_id 09\n") == 1
+
+
 # ---- snort verify: a scoped suppression covers only the addresses it lists -----------------------
 # Snort's README.filters: `suppress gen_id G, sig_id S` suppresses the event completely, while
 # `..., track by_src|by_dst, ip <ip>` suppresses it only where that side of the alert is <ip>

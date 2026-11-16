@@ -1802,9 +1802,11 @@ def suppress_scopes(supp_text: str, sig: SignatureId) -> list[SuppressScope]:
     The scope is returned rather than a yes/no because `track by_src, ip X` suppresses the rule
     only where X is the alert's source: counting it as a full suppression said yes while every
     other address stayed blocked.
+    `sig_id 0` matches too: Snort's README.filters says it "applies to all sig_ids for the given
+    gen_id", and reading it as some other signature said NO while Snort suppressed the alert.
     """
-    live_rule = re.compile(rf"^[ \t]*suppress\b[^#\n]*\bgen_id\s+{sig.gid}\b[^#\n]*\bsig_id\s+{sig.sid}\b"
-                           r"(?P<rest>[^#\n]*)", re.MULTILINE)
+    live_rule = re.compile(rf"^[ \t]*suppress\b[^#\n]*\bgen_id\s+{sig.gid}\b[^#\n]*"
+                           rf"\bsig_id\s+(?:{sig.sid}|0)\b(?P<rest>[^#\n]*)", re.MULTILINE)
     return [_parse_scope(match.group("rest")) for match in live_rule.finditer(supp_text)]
 
 
