@@ -92,9 +92,15 @@ _HOST_ANSWER_RX = re.compile(r"\bhas (?:IPv6 )?address (\S+)")
 # instance dir, because a previous interface assignment leaves a same-uuid dir behind.
 _SNORT_CONF_RX = re.compile(r"\bsnort\b[^\n]*?-c\s+(\S+snort\.conf)")
 
-# Field positions in a snort CSV alert line.
-_A_TS, _A_SID, _A_MSG, _A_SRC, _A_DST = 0, 2, 4, 6, 8
+# Field positions in a snort CSV alert line: timestamp, GID, SID, rev, message, proto, src, sport,
+# dst, dport, ... The GID is read because a SID alone names a rule only under generator 1: a
+# preprocessor alert (GID 125, SID 9) and the text rule 1:9 are different rules.
+_A_TS, _A_GID, _A_SID, _A_MSG, _A_SRC, _A_DST = 0, 1, 2, 4, 6, 8
 _A_MIN_FIELDS = 10
+
+# `--sid` takes `GID:SID` or a bare SID. ASCII digits only: str.isdigit() and int() also accept
+# other scripts' digits, which would then be printed into a suppress line Snort cannot parse.
+_SID_SPEC_RX = re.compile(r"(?:([0-9]+):)?([0-9]+)")
 
 # `? (192.0.2.10) at 00:11:22:33:44:55 on igb1 expires in 1200 seconds [ethernet]`
 _ARP_RX = re.compile(r"\((?P<ip>[0-9.]+)\)\s+at\s+(?P<mac>[0-9a-fA-F:]+|\(incomplete\))\s+on\s+(?P<iface>\S+)(?P<rest>.*)")
@@ -143,14 +149,41 @@ class Target:
 
 
 @dataclass(frozen=True)
+class SignatureId:
+    """A Snort rule identity: generator id plus signature id, as `--sid` was given.
+
+    `gid_assumed` records that the caller gave a bare SID and generator 1 was filled in, so the
+    output can say so instead of presenting a guess as the alert's own generator.
+    """
+
+    gid: int
+    sid: int
+    gid_assumed: bool = False
+
+    @property
+    def label(self) -> str:
+        return f"{self.gid}:{self.sid}"
+
+
+@dataclass(frozen=True)
 class Alert:
-    """One parsed snort alert line."""
+    """One parsed snort alert line.
+
+    `gid` and `sid` keep the digit strings of the log line, which is what `snort why --json`
+    has always emitted; `signature` is the typed form the code compares and prints.
+    """
 
     timestamp: str
+    gid: str
     sid: str
     message: str
     src: str
     dst: str
+
+    @property
+    def signature(self) -> SignatureId:
+        # parse_alerts admits a line only when both fields are ASCII digits, so int() holds.
+        return SignatureId(gid=int(self.gid), sid=int(self.sid))
 
 
 @dataclass(frozen=True)
@@ -348,10 +381,11 @@ def parse_alerts(text: str, ip: str | None = None) -> list[Alert]:
     """
     alerts: list[Alert] = []
     for row in csv.reader(io.StringIO(text)):
-        if len(row) < _A_MIN_FIELDS or not row[_A_SID].strip().isdigit():
+        if len(row) < _A_MIN_FIELDS or not _is_ascii_number(row[_A_GID]) or not _is_ascii_number(row[_A_SID]):
             continue
         alert = Alert(
             timestamp=row[_A_TS].strip(),
+            gid=row[_A_GID].strip(),
             sid=row[_A_SID].strip(),
             message=row[_A_MSG].strip(),
             src=row[_A_SRC].strip(),
@@ -360,6 +394,29 @@ def parse_alerts(text: str, ip: str | None = None) -> list[Alert]:
         if ip is None or ip in (alert.src, alert.dst):
             alerts.append(alert)
     return alerts
+
+
+def _is_ascii_number(field: str) -> bool:
+    return re.fullmatch(r"[0-9]+", field.strip()) is not None
+
+
+def parse_sid_spec(text: str) -> SignatureId:
+    """`GID:SID` or a bare SID, as `--sid` takes it. A bare SID means generator 1.
+
+    Generator 1 is Snort's own default for a SID given alone (the text rules), and it is what a
+    bare `--sid` always meant here, so a bare SID keeps working - but the result says the
+    generator was assumed, because for a preprocessor alert it is the wrong rule.
+
+    Raises:
+        ValueError: anything but ASCII digits, optionally `digits:` in front.
+    """
+    match = _SID_SPEC_RX.fullmatch(text.strip())
+    if match is None:
+        raise ValueError(f"--sid must be GID:SID (e.g. 125:9) or a bare SID, not {text!r}")
+    gid, sid = match.groups()
+    if gid is None:
+        return SignatureId(gid=1, sid=int(sid), gid_assumed=True)
+    return SignatureId(gid=int(gid), sid=int(sid))
 
 
 _ALERT_STAMP_RX = re.compile(
@@ -1435,7 +1492,7 @@ def cmd_snort_check(args) -> int:
             lines.append(f"  {'BLOCKED' if ip in blocked else 'clear  '}  {ip}  ({name})")
     if blocked:
         lines.append("")
-        lines.append(f"Next: pfsense.py snort why {blocked[0]}   then snort fixsteps --sid <SID>")
+        lines.append(f"Next: pfsense.py snort why {blocked[0]}   then snort fixsteps --sid <GID:SID>")
     _emit(envelope(command="snort check", data=data, ok=True), args.json, "\n".join(lines))
     return 1 if blocked else 0
 
@@ -1471,7 +1528,7 @@ def cmd_snort_why(args) -> int:
     firewall_now, out = split_firewall_clock(out)
     if rc != 0 and not out.strip():
         raise PfsenseError(f"could not read the snort alert logs on {target.host}: {err.strip()[:200]}")
-    found = {ip: [asdict(a) for a in parse_alerts(out, ip=ip)] for ip in args.ips}
+    found = {ip: parse_alerts(out, ip=ip) for ip in args.ips}
     skipped = []
     now = firewall_now
     if now is None:
@@ -1484,16 +1541,19 @@ def cmd_snort_why(args) -> int:
         if not alerts:
             lines.append(f"  {ip}: no alert names this IP (the block may come from a reputation feed)")
             continue
-        sids = sorted({a["sid"] for a in alerts})
+        # GID:SID, never the SID alone: the suppression has to name the generator that fired.
+        signatures = sorted({a.signature for a in alerts}, key=lambda s: (s.gid, s.sid))
         # The glob reads the current file BEFORE the rotated ones, so file order is not time
         # order: pick by the stamp, with the year the stamp leaves out inferred from today.
-        latest = asdict(latest_alert([Alert(**a) for a in alerts], now=now))
-        lines.append(f"  {ip}: {len(alerts)} alert(s), SID(s) {', '.join(sids)}")
-        lines.append(f"      latest: {latest['timestamp']}  {latest['message']}")
+        latest = latest_alert(alerts, now=now)
+        lines.append(f"  {ip}: {len(alerts)} alert(s), GID:SID {', '.join(s.label for s in signatures)}")
+        lines.append(f"      latest: {latest.timestamp}  {latest.message}  (GID:SID {latest.signature.label})")
+        lines.append(f"      next:   pfsense.py snort fixsteps --sid {latest.signature.label}")
     for note in skipped:
         print(f"pfsense: note: {note}", file=sys.stderr)
     any_found = any(found.values())
-    _emit(envelope(command="snort why", data=found, ok=True, skipped=skipped), args.json,
+    data = {ip: [asdict(a) for a in alerts] for ip, alerts in found.items()}
+    _emit(envelope(command="snort why", data=data, ok=True, skipped=skipped), args.json,
           "\n".join(lines))
     return 0 if any_found else 1
 
@@ -1517,25 +1577,44 @@ def cmd_snort_unblock(args) -> int:
     if still:
         human += f"\n  STILL BLOCKED: {', '.join(still)}"
     human += ("\n\nThis is temporary. Clearing the table does NOT stop the rule re-adding the "
-              "address on the next packet: suppress the SID too, with snort fixsteps --sid <SID>.")
+              "address on the next packet: suppress the rule too, with snort fixsteps --sid <GID:SID> "
+              "(snort why prints it).")
     _emit(envelope(command="snort unblock", data=data, ok=True), args.json, human)
     return code
 
 
+def suppresses(supp_text: str, sig: SignatureId) -> bool:
+    """True when a live `suppress` statement names this generator AND this signature.
+
+    Anchored per line to a live statement: a commented-out line, or a SID named only in a trailing
+    comment, suppresses nothing. The generator is part of the match because `gen_id 1, sig_id 9`
+    leaves a GID 125 SID 9 alert firing, and reading it as the fix being in place is how a no-op
+    suppression went unnoticed. Only the order pfSense writes (`gen_id` before `sig_id`) counts:
+    whether Snort accepts the reverse was not checked, and a NO there is the safe misreading.
+    """
+    live_rule = rf"(?m)^[ \t]*suppress\b[^#\n]*\bgen_id\s+{sig.gid}\b[^#\n]*\bsig_id\s+{sig.sid}\b"
+    return re.search(live_rule, supp_text) is not None
+
+
+def _assumed_note(sig: SignatureId) -> str:
+    if not sig.gid_assumed:
+        return ""
+    return " (gen_id 1 assumed for a bare --sid; pass the GID:SID that snort why prints)"
+
+
 def cmd_snort_verify(args) -> int:
+    sig = parse_sid_spec(args.sid)
     target = _target_from_args(args)
     rc, ps_out, _ = run_remote(target, "ps auxww", run=args.run)
     instance = instance_dir_from_ps(ps_out) if rc == 0 else None
     if not instance:
         raise PfsenseError(f"snort does not appear to be running on {target.host}")
 
-    checks: dict[str, object] = {"instance_dir": instance}
-    # The SUPPRESSION file carries the SID.
+    checks: dict[str, object] = {"instance_dir": instance, "gid": sig.gid, "sid": sig.sid,
+                                 "gid_assumed": sig.gid_assumed}
+    # The SUPPRESSION file carries the GID:SID.
     _, supp, _ = run_remote(target, f"cat {instance}/supp* 2>/dev/null", run=args.run)
-    # Anchored per line to a live `suppress` statement: a commented-out line, or a SID named only in
-    # a trailing comment, suppresses nothing and must not read as the fix being in place.
-    live_rule = rf"(?m)^[ \t]*suppress\b[^#\n]*\bsig_id\s+{re.escape(args.sid)}\b"
-    checks["sid_suppressed"] = bool(re.search(live_rule, supp))
+    checks["sid_suppressed"] = suppresses(supp, sig)
 
     if args.cidr:
         # The GENERATED PASS LIST only. Never grep the suppression file for this: its comments
@@ -1548,14 +1627,15 @@ def cmd_snort_verify(args) -> int:
     ok = bool(checks["sid_suppressed"]) and (not args.cidr or bool(checks.get("cidr_passlisted")))
     human = "\n".join(
         [f"  live instance: {instance}",
-         f"  sid {args.sid} suppressed: {'yes' if checks['sid_suppressed'] else 'NO'}"]
+         f"  GID:SID {sig.label} suppressed: {'yes' if checks['sid_suppressed'] else 'NO'}"
+         f"{_assumed_note(sig)}"]
         + ([f"  {args.cidr} in pass list: {'yes' if checks.get('cidr_passlisted') else 'NO'}"] if args.cidr else [])
     )
     _emit(envelope(command="snort verify", data=checks, ok=True), args.json, human)
     return 0 if ok else 1
 
 
-def fix_steps(*, sid: str, cidr: str | None = None) -> str:
+def fix_steps(*, sig: SignatureId, cidr: str | None = None) -> str:
     """The durable three-part fix, spelled out for a human to apply and review.
 
     Deliberately NOT automated: it edits the firewall's config.xml, which is a reviewed change.
@@ -1563,11 +1643,16 @@ def fix_steps(*, sid: str, cidr: str | None = None) -> str:
     obvious one (clearing the table) is the dirty patch that lets it recur within hours.
     """
     range_line = cidr or "<the destination range, e.g. 198.51.100.0/22>"
+    assumed = ([f"     gen_id 1 is assumed: --sid {sig.sid} gave no generator. If snort why shows",
+                f"     another GID for SID {sig.sid}, re-run with --sid <GID>:{sig.sid}; under any other",
+                "     generator this line suppresses a different rule and the block recurs."]
+               if sig.gid_assumed else [])
     return "\n".join([
         "Durable fix (all three parts, or it recurs):",
         "",
-        f"  1. Suppress the rule: add 'suppress gen_id 1, sig_id {sid}' to the WAN suppression",
+        f"  1. Suppress the rule: add 'suppress gen_id {sig.gid}, sig_id {sig.sid}' to the WAN suppression",
         "     list (Services > Snort > Pass Lists / Suppress, or config.xml).",
+        *assumed,
         "",
         f"  2. Pass-list the range: add {range_line} as a LITERAL <item> in the Snort pass list",
         "     entry's <address>. Do NOT add it to a firewall ALIAS: an alias entry there is a",
@@ -1579,14 +1664,15 @@ def fix_steps(*, sid: str, cidr: str | None = None) -> str:
         "     pfsense.py snort unblock <ip> ... --apply",
         "",
         "Then resync Snort so the files are regenerated, and verify with:",
-        f"  pfsense.py snort verify --sid {sid}" + (f" --cidr {cidr}" if cidr else ""),
+        f"  pfsense.py snort verify --sid {sig.label}" + (f" --cidr {cidr}" if cidr else ""),
     ])
 
 
 def cmd_snort_fixsteps(args) -> int:
-    steps = fix_steps(sid=args.sid, cidr=args.cidr)
-    _emit(envelope(command="snort fixsteps", data={"sid": args.sid, "cidr": args.cidr, "steps": steps}, ok=True),
-          args.json, steps)
+    sig = parse_sid_spec(args.sid)
+    steps = fix_steps(sig=sig, cidr=args.cidr)
+    data = {"gid": sig.gid, "sid": sig.sid, "gid_assumed": sig.gid_assumed, "cidr": args.cidr, "steps": steps}
+    _emit(envelope(command="snort fixsteps", data=data, ok=True), args.json, steps)
     return 0
 
 
@@ -1747,18 +1833,20 @@ def build_parser() -> argparse.ArgumentParser:
     p = snort.add_parser("check", help="is a host/URL/IP blocked in snort2c?")
     p.add_argument("targets", nargs="+")
     p.set_defaults(func=cmd_snort_check)
-    p = snort.add_parser("why", help="which SID blocked this IP (reads the rotated alert logs)")
+    p = snort.add_parser("why", help="which GID:SID blocked this IP (reads the rotated alert logs)")
     p.add_argument("ips", nargs="+")
     p.set_defaults(func=cmd_snort_why)
     p = snort.add_parser("unblock", parents=[mut], help="delete IPs from snort2c (temporary; suppress the SID too)")
     p.add_argument("ips", nargs="+")
     p.set_defaults(func=cmd_snort_unblock)
     p = snort.add_parser("verify", help="is the SID suppressed and the CIDR pass-listed, in the LIVE instance?")
-    p.add_argument("--sid", required=True)
+    p.add_argument("--sid", required=True, metavar="GID:SID",
+                   help="the rule as snort why prints it; a bare SID means gen_id 1")
     p.add_argument("--cidr")
     p.set_defaults(func=cmd_snort_verify)
     p = snort.add_parser("fixsteps", help="print the durable three-part fix")
-    p.add_argument("--sid", required=True)
+    p.add_argument("--sid", required=True, metavar="GID:SID",
+                   help="the rule as snort why prints it; a bare SID means gen_id 1")
     p.add_argument("--cidr")
     p.set_defaults(func=cmd_snort_fixsteps)
 

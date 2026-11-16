@@ -226,6 +226,12 @@ for ISC, `services_kea_configure()` for Kea). Edit the raw file with an XML pars
   prove absence. ARP is good for positive evidence only.
 - Clearing `snort2c` and calling it fixed. The rule re-adds the address on the next packet. The
   fix that sticks has three parts, which `snort fixsteps` prints for the case at hand: suppress the
-  SID that fired, add the range as a LITERAL entry in the Snort pass list (a firewall alias there
+  rule that fired, add the range as a LITERAL entry in the Snort pass list (a firewall alias there
   is a no-op), and `snort unblock --apply` what is already blocked; then resync Snort and run
   `snort verify`.
+- Suppressing by SID alone. A Snort rule is its generator and signature together: `snort why`
+  prints `GID:SID` (`125:9` for one ftp_telnet preprocessor alert; each preprocessor has its own
+  GID), and `fixsteps` and `verify` take it as `--sid 125:9`. A bare `--sid 9` means `gen_id 1`,
+  a different rule, so the suppression is a no-op and the block comes back; both verbs say when
+  they assumed `gen_id 1`. Given only a SID, run `snort why <ip>` for the GID before writing the
+  fix. If it finds no alert, the GID is unknown: do not fill in 1 or a GID from another alert.

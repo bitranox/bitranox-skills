@@ -30,6 +30,17 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.7.1]
+
+### Fixed
+
+- net-firewall-pfsense: `snort why` reports each alert as GID:SID (it dropped the generator, so a
+  preprocessor alert such as 125:9 read as SID 9), and `snort fixsteps` / `snort verify` take
+  `--sid GID:SID`. Before this, `fixsteps` printed `suppress gen_id 1` for every alert, which
+  suppresses a different rule for a preprocessor alert, and `verify` matched the SID under any
+  generator. A bare `--sid` still means gen_id 1, and both verbs say so; `verify` with a bare SID
+  now checks gen_id 1 only. A malformed `--sid` exits 2.
+
 ## [11.7.0]
 
 ### Added

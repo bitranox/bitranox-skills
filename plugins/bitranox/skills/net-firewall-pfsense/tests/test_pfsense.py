@@ -157,6 +157,32 @@ def test_parse_alerts_filters_by_ip():
     assert P.parse_alerts(line, ip="203.0.113.1") == []
 
 
+# A real pfSense 2.8.1 Snort alert line (addresses replaced): a preprocessor alert, generator 125.
+# Its SID 9 names a different rule under generator 1, so the generator has to travel with the SID.
+ALERT_GID_125 = ('11/16/26-01:54:17.521185 ,125,9,1,"(ftp_telnet) Evasive (incomplete) TELNET CMD on '
+                 'FTP Command Channel",TCP,192.0.2.146,3535,198.51.100.105,443,65159,'
+                 'Potentially Bad Traffic,2,alert,Allow\n')
+
+
+def test_parse_alerts_reads_the_generator_id():
+    alerts = P.parse_alerts(ALERT_GID_125)
+    assert [(a.gid, a.sid) for a in alerts] == [("125", "9")]
+    assert (alerts[0].src, alerts[0].dst) == ("192.0.2.146", "198.51.100.105")
+
+
+def test_parse_sid_spec_reads_gid_colon_sid_and_assumes_gid_1_for_a_bare_sid():
+    assert P.parse_sid_spec("125:9") == P.SignatureId(gid=125, sid=9, gid_assumed=False)
+    assert P.parse_sid_spec("2071408") == P.SignatureId(gid=1, sid=2071408, gid_assumed=True)
+    assert P.parse_sid_spec(" 1:2071408 ") == P.SignatureId(gid=1, sid=2071408, gid_assumed=False)
+
+
+@pytest.mark.parametrize("text", ["", "125:", ":9", "125:9:1", "abc", "9;reboot", "-1", "1.5",
+                                  "125 9", chr(0x0662)])
+def test_parse_sid_spec_refuses_anything_but_digits_or_gid_colon_sid(text):
+    with pytest.raises(ValueError):
+        P.parse_sid_spec(text)
+
+
 def test_instance_dir_comes_from_the_running_process_not_a_glob():
     """A stale snort_<uuid>_<oldif> dir sorts FIRST, so a glob inspects a file nothing writes."""
     ps = "root 123 snort -R 12345 -c /usr/local/etc/snort/snort_9999_igb0/snort.conf -i igb0\n"
@@ -582,9 +608,33 @@ def test_snort_check_reports_an_unreadable_table_rather_than_calling_it_clear():
 
 
 def test_fix_steps_names_all_three_parts():
-    steps = P.fix_steps(sid="2071408", cidr="198.51.100.0/22")
+    steps = P.fix_steps(sig=P.parse_sid_spec("2071408"), cidr="198.51.100.0/22")
     assert "2071408" in steps and "198.51.100.0/22" in steps
     assert "suppress" in steps.lower() and "pass list" in steps.lower() and "unblock" in steps
+
+
+def test_snort_fixsteps_suppresses_the_generator_that_fired(capsys):
+    """gen_id 1, sig_id 9 is a different rule: following the old output verbatim shipped a no-op."""
+    assert P.main(["snort", "fixsteps", "--sid", "125:9"], run=FakeRun()) == 0
+    out = capsys.readouterr().out
+    assert "'suppress gen_id 125, sig_id 9'" in out
+    assert "gen_id 1," not in out
+    assert "snort verify --sid 125:9" in out
+    assert "assumed" not in out
+
+
+def test_snort_fixsteps_with_a_bare_sid_says_gen_id_1_is_assumed(capsys):
+    assert P.main(["--json", "snort", "fixsteps", "--sid", "2071408"], run=FakeRun()) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert "'suppress gen_id 1, sig_id 2071408'" in result["data"]["steps"]
+    assert "gen_id 1 is assumed" in result["data"]["steps"]
+    assert (result["data"]["gid"], result["data"]["sid"], result["data"]["gid_assumed"]) == (1, 2071408, True)
+
+
+def test_snort_fixsteps_refuses_a_malformed_sid_without_printing_a_suppress_line(capsys):
+    assert P.main(["snort", "fixsteps", "--sid", "125:"], run=FakeRun()) == 2
+    captured = capsys.readouterr()
+    assert "suppress" not in captured.out and "GID:SID" in captured.err
 
 
 # ---- errors are typed, and reported without a traceback -----------------------------------------
@@ -1285,6 +1335,45 @@ def test_snort_verify_without_the_sid_is_no():
     assert _verify("suppress gen_id 1, sig_id 999\n") == 1
 
 
+def _verify_sid(sid, supp):
+    fake = FakeRun([("ps auxww", (0, PS_SNORT, "")), ("/supp*", (0, supp, ""))])
+    return P.main(["--host", "192.0.2.1", "snort", "verify", "--sid", sid], run=fake)
+
+
+def test_snort_verify_does_not_count_the_same_sid_under_another_generator():
+    """The no-op fix the old fixsteps printed must not then read as verified."""
+    assert _verify_sid("125:9", "suppress gen_id 1, sig_id 9\n") == 1
+
+
+def test_snort_verify_counts_the_suppression_of_the_generator_given():
+    assert _verify_sid("125:9", "suppress gen_id 125, sig_id 9\n") == 0
+    assert _verify_sid("125:9", "suppress gen_id 125, sig_id 9, track by_src, ip 192.0.2.146\n") == 0
+
+
+def test_snort_verify_needs_both_ids_in_one_live_statement():
+    """Two half-matching lines, or a SID only in a comment, suppress nothing for 125:9. A reversed
+    statement reads NO: only the order pfSense writes is trusted."""
+    assert _verify_sid("125:9", "suppress gen_id 125, sig_id 8\nsuppress gen_id 1, sig_id 9\n") == 1
+    assert _verify_sid("125:9", "suppress gen_id 125, sig_id 8 # sig_id 9\n") == 1
+    assert _verify_sid("125:9", "suppress sig_id 9, gen_id 125\n") == 1
+
+
+def test_snort_verify_matches_whole_numbers_only():
+    assert _verify_sid("1:9", "suppress gen_id 125, sig_id 9\n") == 1
+    assert _verify_sid("125:9", "suppress gen_id 125, sig_id 99\n") == 1
+    assert _verify_sid("12:9", "suppress gen_id 125, sig_id 9\n") == 1
+
+
+def test_snort_verify_with_a_bare_sid_means_gen_id_1_and_says_so(capsys):
+    assert _verify_sid("9", "suppress gen_id 125, sig_id 9\n") == 1
+    out = capsys.readouterr().out
+    assert "1:9" in out and "gen_id 1 assumed" in out
+
+
+def test_snort_verify_refuses_a_malformed_sid():
+    assert _verify_sid("9;x", "suppress gen_id 1, sig_id 9\n") == 2
+
+
 def test_snort_verify_is_an_error_when_snort_is_not_running():
     fake = FakeRun([("ps auxww", (0, "root 1 /sbin/init\n", ""))])
     assert P.main(["--host", "192.0.2.1", "snort", "verify", "--sid", "1"], run=fake) == 2
@@ -1299,6 +1388,27 @@ def test_snort_why_labels_the_newest_alert_latest_whatever_the_file_order(capsys
     fake = FakeRun([("/var/log/snort", (0, ALERT_NEW + ALERT_OLD, ""))])
     assert P.main(["--host", "192.0.2.1", "snort", "why", "198.51.100.9"], run=fake) == 0
     assert "latest: 08/02-10:00:00.000000  NEW alert" in capsys.readouterr().out
+
+
+def test_snort_why_reports_gid_colon_sid(capsys):
+    """It printed 'SID(s) 9' for a generator-125 alert, and the 9 led to the wrong suppression."""
+    fake = FakeRun([("/var/log/snort", (0, ALERT_GID_125 + ALERT_OLD, ""))])
+    assert P.main(["--host", "192.0.2.1", "snort", "why", "198.51.100.105"], run=fake) == 0
+    out = capsys.readouterr().out
+    assert "GID:SID 125:9" in out
+    assert "fixsteps --sid 125:9" in out
+
+
+def test_snort_why_lists_each_gid_sid_pair_in_numeric_order(capsys):
+    lines = ALERT_GID_125 + ALERT_GID_125.replace(",125,9,", ",1,2071408,") + ALERT_GID_125.replace(",125,9,", ",1,9,")
+    fake = FakeRun([("/var/log/snort", (0, lines, ""))])
+    assert P.main(["--host", "192.0.2.1", "--json", "snort", "why", "198.51.100.105"], run=fake) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert [(a["gid"], a["sid"]) for a in result["data"]["198.51.100.105"]] == [
+        ("125", "9"), ("1", "2071408"), ("1", "9")]
+    fake = FakeRun([("/var/log/snort", (0, lines, ""))])
+    P.main(["--host", "192.0.2.1", "snort", "why", "198.51.100.105"], run=fake)
+    assert "GID:SID 1:9, 1:2071408, 125:9" in capsys.readouterr().out
 
 
 def _snort_line(moment: datetime.datetime, message: str) -> str:
@@ -1339,7 +1449,7 @@ def test_snort_why_with_the_firewall_clock_skips_nothing(capsys):
 
 
 def _alert(stamp: str, message: str) -> P.Alert:
-    return P.Alert(timestamp=stamp, sid="1", message=message, src="192.0.2.7", dst="198.51.100.9")
+    return P.Alert(timestamp=stamp, gid="1", sid="1", message=message, src="192.0.2.7", dst="198.51.100.9")
 
 
 def test_latest_alert_crosses_a_year_boundary():
@@ -1471,13 +1581,16 @@ SCRIPT = pathlib.Path(P.__file__)
 
 
 def test_a_non_cp1252_character_on_a_cp1252_stdout_does_not_crash(tmp_path):
-    """A Windows pipe is cp1252; an unencodable character used to raise mid-report with exit 1."""
+    """A Windows pipe is cp1252; an unencodable character used to raise mid-report with exit 1.
+
+    The character rides in --cidr, which fixsteps echoes as given; --sid only accepts digits."""
     env = dict(os.environ, PYTHONIOENCODING="cp1252", XDG_STATE_HOME=str(tmp_path))
     env.pop("PYTHONUTF8", None)
-    proc = subprocess.run([sys.executable, str(SCRIPT), "snort", "fixsteps", "--sid", chr(0x0141)],
+    proc = subprocess.run([sys.executable, str(SCRIPT), "snort", "fixsteps", "--sid", "1",
+                           "--cidr", chr(0x0141)],
                           capture_output=True, env=env, check=False)
     assert proc.returncode == 0, proc.stderr.decode("utf-8", "replace")
-    assert b"sig_id ?" in proc.stdout
+    assert b"add ? as a LITERAL" in proc.stdout
 
 
 def test_a_target_file_saved_with_a_bom_still_has_its_first_section(tmp_path):
