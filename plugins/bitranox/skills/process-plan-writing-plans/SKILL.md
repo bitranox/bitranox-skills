@@ -43,7 +43,9 @@ model produces a shallow or incoherent decomposition. If the session is on a les
 the design/decomposition to a pinned `opus` subagent, or offer switch-model-or-continue
 (the main agent cannot self-switch its model). The Self-Review below is NOT delegable at any tier -
 it is a fresh-eyes pass over the plan YOU just wrote against the spec, and a subagent that never saw
-the plan take shape cannot know what was considered and rejected. See `bitranox:process-agents-subagent-driven-development` ("The session model is fixed").
+the plan take shape cannot know what was considered and rejected. The one part of the
+Self-Review you may hand off is the run of the plan's code (item 9 there says how). See
+`bitranox:process-agents-subagent-driven-development` ("The session model is fixed").
 - You reason best about code you can hold in context at once, and your edits are more reliable when files are focused. Prefer smaller, focused files over large ones that do too much.
 - Files that change together should live together. Split by responsibility, not by technical layer.
 - In existing codebases, follow established patterns. If the codebase uses large files, don't unilaterally restructure, but if a file you're modifying has grown unwieldy, including a split in the plan is reasonable.
@@ -175,7 +177,9 @@ Every step must contain the actual content an engineer needs. These are **plan f
 
 ## Self-Review
 
-After writing the complete plan, look at the spec with fresh eyes and check the plan against it. This is a checklist you run yourself, not a subagent dispatch.
+After writing the complete plan, look at the spec with fresh eyes and check the plan against it.
+This is a checklist you run yourself, not a subagent dispatch; only item 9's run may be handed off,
+as that item describes.
 
 **1. Spec coverage:** Skim each section/requirement in the spec. Can you point to a task that implements it? List any gaps.
 
@@ -205,6 +209,12 @@ additions, and run the lint, format check, type check and that task's tests ther
 gate with every task applied cannot see a defect only the earlier state has, such as a format
 error at the point where a later task's code would have continued the file.
 
+For a task that MOVES tests from one repo to another, list each moved test's imports and check
+every imported name against the TARGET repo before dispatch. A name the two repos do not share (a
+type only one of them defines, or one they define differently) needs a mapping, and the task
+spells that mapping out. Measured: such a list found types only the target repo had and a flaw in
+the plan's mapping before the implementer met either.
+
 **9. Run the plan's code:** When the plan carries complete code and tests, extract each task's blocks into a scratch copy of the repo in task order and run that task's prescribed tests and lint, instead of only reading them. Where a task prescribes a mutation battery, run it against the extracted code too (bitranox:compuse-toolbox `mutation_arm.py --battery`): every arm must turn a test RED, and a surviving arm is either an equivalent mutant (drop the arm and the redundant line it mutated) or a test whose input passes under both the right and the wrong code (fix the input). Green tests on the extracted code tell neither apart. A test that asserts a substring of the output (a flag name, a word) must fail with the code it guards deleted: check that no other path in the same scenario prints that substring, and prescribe the exact message where one does. Measured: running extracted code found a wrong assertion that reading had missed; a plan whose battery was never run shipped an equivalent mutant and a length test that could not fail, two extra fix rounds; two substring tests passed with their guarded code deleted because another path always warned with the same flag name.
 
 Three ways the run can check the wrong thing:
@@ -221,6 +231,19 @@ Three ways the run can check the wrong thing:
   the formatter check over the plan FILE too. Extracting the code leaves the plan's own fenced
   blocks unchecked, and the formatter rewrites a fragment block (methods meant for a class body,
   indented) the first time the real gate runs on the committed plan.
+
+This item stays owed when a subagent drafted the tasks: a drafter reads its own code back, and
+its report is no evidence that anything ran. The run is also the one part of this review you may
+hand off. Dispatch a pinned `opus` agent with this item's text, the three traps included, to
+extract and run the plan in a scratch clone (`git clone --no-local <repo> <scratch dir>`), ending
+with the repo's full gate with every task applied, while you work the other items yourself. It
+returns each defect and each surviving battery arm with the command it ran and the output.
+Judging them and folding them into the plan stays yours, and the review is not finished until
+that is done. Measured: a delegated run of a
+subagent-drafted plan found 25 defects that reading had missed (call sites a task's Files list
+omitted, which only the full gate's test collection shows; RED claims that held only on paper;
+prose where code was due; a "strict" claim that was false for float fields), and with them folded
+in, the next four tasks came back with zero or one false premise each.
 
 **10. Platforms:** Read the repo's CI OS matrix (the workflow file, or the config it is generated from) and make every platform claim in Global Constraints agree with it: each prescribed test passes on every OS there or skips with a stated reason. A test that isolates `HOME` also sets `USERPROFILE`, which `Path.home()` reads on Windows. Measured: a plan said "Linux only" while CI ran Windows and macOS, and a test that set only `HOME` passed locally and failed on Windows after the release.
 
