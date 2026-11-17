@@ -927,7 +927,8 @@ mutation. Read it too when code in a unit suite could reach a real host or a use
 (ssh, a keyring, a session bus), a test guards a secret its own failure output could print, a test
 spawns a nested test runner or several writers appending to one file, asserts only a real tool's
 verdict, relies on `tests/conftest.py` fixtures reaching `src/` doctests or on fixtures ported
-from a template, feeds a FIFO from a writer thread, or derives its input from a constant you are
+from a template, isolates the suite in an autouse fixture (an override or fallback knob it sets,
+a file it plants), feeds a FIFO from a writer thread, or derives its input from a constant you are
 about to mutate. Read it too when a test proves an input was refused before any side effect,
 proves a timed wake or poll fires, runs `git commit` under a sandboxed or fresh home directory, or
 cancels an operation at every await or step to check what it leaves behind.

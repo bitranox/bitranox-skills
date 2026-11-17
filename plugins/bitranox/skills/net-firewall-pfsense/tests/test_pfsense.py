@@ -581,6 +581,40 @@ def test_snapshot_writes_a_timestamped_file(tmp_path):
     assert path.parent == tmp_path and path.read_text(encoding="utf-8") == CONFIG_XML
 
 
+@pytest.mark.skipif(os.name != "posix", reason="file modes are POSIX-only")
+def test_a_snapshot_is_readable_by_its_owner_only_whatever_the_umask(tmp_path):
+    # The file holds password hashes and private keys. In an existing folder others can read (a
+    # shared site folder keeps its mode), a umask-default 0644 file would hand them out.
+    shared = tmp_path / "shared"
+    shared.mkdir(mode=0o755)
+    old = os.umask(0o022)
+    try:
+        path = P.do_snapshot(TARGET, shared, run=FakeRun([("cat /conf/config.xml",
+                                                           (0, CONFIG_XML, BANNER))]))
+    finally:
+        os.umask(old)
+    assert path.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.skipif(os.name != "posix", reason="file modes are POSIX-only")
+def test_a_snapshot_replacing_a_same_second_file_tightens_its_mode(tmp_path, monkeypatch):
+    fixed = datetime.datetime(2026, 1, 2, 3, 4, 5)
+
+    class Clock(datetime.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed
+
+    monkeypatch.setattr(P, "datetime", Clock)  # the clock: the one external edge here
+    stale = tmp_path / f"config-{TARGET.host}-20260102030405.xml"
+    stale.write_text("old", encoding="utf-8")
+    stale.chmod(0o644)
+    path = P.do_snapshot(TARGET, tmp_path, run=FakeRun([("cat /conf/config.xml",
+                                                         (0, CONFIG_XML, BANNER))]))
+    assert path == stale and path.read_text(encoding="utf-8") == CONFIG_XML
+    assert path.stat().st_mode & 0o777 == 0o600
+
+
 def test_snapshot_refuses_to_save_something_that_is_not_a_config(tmp_path):
     """A snapshot nobody can restore from is worse than no snapshot, so a bad read must not be kept."""
     fake = FakeRun([("cat /conf/config.xml", (0, "ssh: connect to host: Connection timed out\n", ""))])
@@ -836,6 +870,194 @@ def test_apply_with_a_new_snapshot_dir_inside_a_repo_writes_nothing_there(tmp_pa
     assert rc == 2
     assert not (repo / "snaps2").exists()
     assert not any("write_config" in body for body in fake.php_bodies())
+
+
+# ---- a folder the repository ignores is not a folder it can publish ----------------------------
+def _ignoring_repo(tmp_path):
+    """A repo whose .gitignore ignores `configs/`, the usual home of a site's dated backups."""
+    repo = _git_repo(tmp_path / "repo")
+    (repo / ".gitignore").write_text("configs/\n", encoding="utf-8")
+    return repo
+
+
+@needs_git
+def test_prepare_accepts_an_existing_directory_the_repo_ignores(tmp_path):
+    """Measured: a machine repo's gitignored configs/ was refused on every change until
+    --allow-repo-snapshot, though git would never stage a file written there."""
+    repo = _ignoring_repo(tmp_path)
+    (repo / "configs").mkdir()
+    assert P.prepare_snapshot_dir(repo / "configs") == repo / "configs"
+
+
+@needs_git
+def test_prepare_accepts_a_new_directory_below_an_ignored_one(tmp_path):
+    repo = _ignoring_repo(tmp_path)
+    target = repo / "configs" / "fw1"
+    assert P.prepare_snapshot_dir(target) == target
+    assert target.is_dir()
+
+
+@needs_git
+def test_prepare_refuses_an_unignored_directory_inside_the_repo(tmp_path):
+    """The control: an ignore rule elsewhere must not open the rest of the checkout."""
+    repo = _ignoring_repo(tmp_path)
+    (repo / "notes").mkdir()
+    with pytest.raises(P.PfsenseError, match="git work tree"):
+        P.prepare_snapshot_dir(repo / "notes")
+
+
+@needs_git
+def test_prepare_refuses_an_ignored_directory_that_holds_a_tracked_file(tmp_path):
+    """git calls a NEW file in configs/ ignored even when configs/ holds a force-added tracked
+    file, so the ignore answer alone would let a snapshot sit beside committed content."""
+    repo = _ignoring_repo(tmp_path)
+    (repo / "configs").mkdir()
+    (repo / "configs" / "keep.txt").write_text("x", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "-f", "configs/keep.txt"],
+                   check=True, capture_output=True)
+    with pytest.raises(P.PfsenseError, match="git work tree"):
+        P.prepare_snapshot_dir(repo / "configs")
+
+
+@needs_git
+def test_prepare_refuses_an_ignored_directory_with_a_tracked_file_deeper_down(tmp_path):
+    repo = _ignoring_repo(tmp_path)
+    (repo / "configs" / "old").mkdir(parents=True)
+    (repo / "configs" / "old" / "keep.txt").write_text("x", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "-f", "configs/old/keep.txt"],
+                   check=True, capture_output=True)
+    with pytest.raises(P.PfsenseError, match="git work tree"):
+        P.prepare_snapshot_dir(repo / "configs")
+
+
+def _repo_with_ignore(tmp_path, rules):
+    repo = _git_repo(tmp_path / "repo")
+    (repo / ".gitignore").write_text(rules, encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", ".gitignore"], check=True, capture_output=True)
+    return repo
+
+
+def _stages(repo, path):
+    """Whether `git add -A` would stage `path`: the question every acceptance must answer no to."""
+    out = subprocess.run(["git", "-C", str(repo), "add", "-A", "--dry-run"], check=True,
+                         capture_output=True, text=True).stdout
+    return path.relative_to(repo).as_posix() in out
+
+
+@needs_git
+@pytest.mark.parametrize("negation", ["!configs/*.xml", "!configs/config-*"])
+def test_prepare_refuses_a_folder_whose_negation_re_includes_the_snapshot(tmp_path, negation):
+    """Measured: `configs/*` plus a negation made git call the FOLDER ignored while `git add -A`
+    staged the snapshot written into it, password hashes and keys included."""
+    repo = _repo_with_ignore(tmp_path, f"configs/*\n{negation}\n")
+    (repo / "configs").mkdir()
+    (repo / "configs" / "config-x.xml").write_text("<pfsense/>", encoding="utf-8")
+    assert _stages(repo, repo / "configs" / "config-x.xml"), "the fixture must show the leak"
+    with pytest.raises(P.PfsenseError, match="git work tree"):
+        P.prepare_snapshot_dir(repo / "configs")
+
+
+@needs_git
+def test_prepare_still_accepts_a_negation_for_another_file_only(tmp_path):
+    """The control: `configs/*` with `!configs/.gitkeep` keeps every snapshot ignored."""
+    repo = _repo_with_ignore(tmp_path, "configs/*\n!configs/.gitkeep\n")
+    (repo / "configs").mkdir()
+    assert P.prepare_snapshot_dir(repo / "configs") == repo / "configs"
+
+
+@needs_git
+def test_prepare_refuses_a_folder_ignored_only_by_a_per_user_excludes_file(tmp_path, monkeypatch):
+    """Another user of the same checkout lacks this file, so for them the snapshot is committable."""
+    repo = _git_repo(tmp_path / "repo")
+    global_excludes = tmp_path / "my-excludes"
+    global_excludes.write_text("configs/\n", encoding="utf-8")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "gitconfig"))  # git's own config file
+    (tmp_path / "gitconfig").write_text(f"[core]\n\texcludesFile = {global_excludes}\n",
+                                        encoding="utf-8")
+    with pytest.raises(P.PfsenseError, match="git work tree"):
+        P.prepare_snapshot_dir(repo / "configs")
+
+
+@needs_git
+def test_prepare_accepts_a_folder_the_clone_excludes_in_info_exclude(tmp_path):
+    repo = _git_repo(tmp_path / "repo")
+    with open(repo / ".git" / "info" / "exclude", "a", encoding="utf-8") as handle:
+        handle.write("configs/\n")
+    assert P.prepare_snapshot_dir(repo / "configs") == repo / "configs"
+
+
+@needs_git
+def test_prepare_accepts_an_untracked_gitignore_in_the_checkout(tmp_path):
+    """An untracked .gitignore sits in the shared working tree, so every user of the checkout
+    has it; `git add -A` stages the .gitignore and still skips the folder."""
+    repo = _git_repo(tmp_path / "repo")
+    (repo / ".gitignore").write_text("configs/\n", encoding="utf-8")
+    assert P.prepare_snapshot_dir(repo / "configs") == repo / "configs"
+
+
+@needs_git
+@pytest.mark.skipif(os.name != "posix", reason="symlinks need privileges on Windows")
+def test_prepare_judges_a_dotdot_path_where_the_file_lands(tmp_path):
+    """`notes/../configs` with notes a symlink lands in sub/configs, which nothing ignores."""
+    repo = _repo_with_ignore(tmp_path, "/configs/\n")
+    (repo / "sub" / "deeper").mkdir(parents=True)
+    (repo / "notes").symlink_to(repo / "sub" / "deeper")
+    with pytest.raises(P.PfsenseError, match="git work tree"):
+        P.prepare_snapshot_dir(repo / "notes" / ".." / "configs")
+
+
+@needs_git
+def test_prepare_accepts_an_ignored_folder_with_a_non_ascii_name(tmp_path):
+    """git quotes a non-ASCII path in its answer unless told not to, which read as not ignored."""
+    name = "B" + chr(0x00FC) + "ro"
+    repo = _repo_with_ignore(tmp_path, name + "/\n")
+    assert P.prepare_snapshot_dir(repo / name) == repo / name
+
+
+@needs_git
+def test_the_repo_checks_ignore_an_inherited_git_dir(tmp_path, monkeypatch):
+    """A GIT_DIR from a hook would answer from another repository's index and excludes."""
+    repo = _git_repo(tmp_path / "repo")
+    with open(repo / ".git" / "info" / "exclude", "a", encoding="utf-8") as handle:
+        handle.write("configs/\n")  # a rule only THIS repository's git dir holds
+    other = _git_repo(tmp_path / "other")
+    monkeypatch.setenv("GIT_DIR", str(other / ".git"))  # the environment a hook can hand down
+    assert P.prepare_snapshot_dir(repo / "configs") == repo / "configs"
+
+
+def test_prepare_refuses_when_the_ignore_question_cannot_be_answered(tmp_path):
+    """The exemption fails closed: inside a work tree, a git that errors on check-ignore refuses."""
+    target = tmp_path / "repo"
+    target.mkdir()
+
+    def git(argv, *, stdin_text=None, timeout=30):
+        if "rev-parse" in argv:
+            return 0, "true\n", ""
+        raise OSError("git vanished")
+    with pytest.raises(P.PfsenseError, match="git work tree"):
+        P.prepare_snapshot_dir(target, run=git)
+
+
+def test_prepare_refuses_a_check_ignore_that_names_no_path(tmp_path):
+    """Only git echoing the directory back counts as ignored, never a bare exit 0."""
+    target = tmp_path / "repo"
+    target.mkdir()
+
+    def git(argv, *, stdin_text=None, timeout=30):
+        return (0, "true\n", "") if "rev-parse" in argv else (0, "", "")
+    with pytest.raises(P.PfsenseError, match="git work tree"):
+        P.prepare_snapshot_dir(target, run=git)
+
+
+@needs_git
+def test_apply_writes_its_snapshot_into_an_ignored_site_folder(tmp_path):
+    """End to end: the call that exited 2 now writes the backup and applies."""
+    repo = _ignoring_repo(tmp_path)
+    fake = GitPassingFake(_fake_for_mutation().responses)
+    rc = P.main(["--host", "192.0.2.1", "--apply", "--snapshot-dir", str(repo / "configs"),
+                 "dhcp", "rm", "--mac", "00:11:22:33:44:30"], run=fake)
+    assert rc == 0
+    assert list((repo / "configs").glob("config-192.0.2.1-*.xml"))
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX modes only")

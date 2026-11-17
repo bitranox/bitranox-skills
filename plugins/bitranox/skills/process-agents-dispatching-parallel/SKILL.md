@@ -204,6 +204,13 @@ Each agent gets:
   repository, omit `isolation` (bitranox:git-worktrees, Step 1a, "Native tools also take the
   REPOSITORY from the session").
 
+**A brief built from an earlier one is re-read whole before dispatch.** Copying a brief and
+replacing some paragraphs (focus, output) while keeping others (rules) leaves the kept text
+written for the old task. Check every KEPT paragraph against what the new text grants, and drop
+or reword a kept rule that contradicts it in the same edit: an agent given both follows the rule,
+so a new focus offering a test host beside a kept "do not use any remote host" leaves that host
+unused and the tests that needed it unrun.
+
 **Keep destructive steps out of lane briefs.** Deleting a remote ref or a branch, removing
 worktrees, a hard reset or a force push bundled into a brief with ordinary work makes the auto-mode
 permission classifier refuse the WHOLE dispatch (`[Git Destructive]`), not just that step, and the

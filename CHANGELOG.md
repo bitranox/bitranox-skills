@@ -30,6 +30,53 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.10.10]
+
+### Fixed
+
+- `net-firewall-pfsense`: `--snapshot-dir` now accepts a folder inside a git work tree when git
+  would never stage the snapshot there, instead of refusing every such folder until
+  `--allow-repo-snapshot`. Git must ignore both the folder and the snapshot file, so `configs/*`
+  with `!configs/*.xml` is refused, and nothing may be tracked in the folder. The ignore rule must
+  come from a `.gitignore` in the checkout or `.git/info/exclude`, never a per-user
+  `core.excludesFile`. The path is resolved first, a non-ASCII folder name works, and the git
+  checks ignore an inherited `GIT_DIR`. Snapshot files are now written with mode 0600 whatever
+  the umask or the folder's mode.
+- `compuse-toolbox` `gate.py`: the closing report of a run appended to a pinned log no longer
+  quotes the run-header marker, so `grep "##### gate run" LOG | tail -1` lands on the last run's
+  header; the report names the header's line number instead. A log the gate may append to but
+  not read still runs the gate.
+- `repo-gate`:
+  - a mirrored-skill DRIFT message shows its first differing lines against the twin's closest
+    checkout (published, main checkout or a linked worktree) and names it;
+  - the DRIFT header lists the differing files of the same reading its first lines come from;
+  - `--ci` lists every failing test with its first error line (up to 60, then a count and a
+    per-directory tally) instead of the first 14 node ids, counts setup and teardown errors apart
+    from failures (labelled ERROR), reads a coloured pytest summary, and keeps its memory flat
+    however large the junit report;
+  - a tool-repo refusal where only the staging differs says to `git add` the file in an earlier
+    command instead of "regenerate and bump".
+
+### Changed
+
+- `meta-skill-writer`: Step 0b and the ledger step say what to do in a worktree branched before
+  `skill_decisions.py` existed (run the installed plugin's copy with `--skill-dir` /
+  `--skills-dir`), and that `add` checks anchors against the marketplace copy, so a mirrored
+  skill's text goes there first. The release-history finder also catches the trailing
+  "(X.Y.Z and later)" form, with a test.
+- `coding-python-performance-review`: a compiled regex can still be quadratic when a match can
+  start at every position of one long run; two measured shapes, their anchored fixes and the
+  proof pair (a growth-ratio test plus a replay of old and new results).
+- `git-worktrees`: finding and removing a worktree locked by an agent of your own session no
+  longer depends on git's English error text.
+- `process-review-enhance-code-quality`: compare what pytest collects with the test files on disk
+  before scoring; a fix-range sweep settles its batch but never ends the loop; each re-sweep
+  dispatches its reviewers on opus at medium effort.
+- `process-agents-dispatching-parallel`: a brief built from an earlier one is re-read whole
+  before dispatch.
+- `process-test-design`: an autouse isolation fixture sets the fallback knob, never the
+  override, and a planted search sentinel is visible to every test that counts results.
+
 ## [11.10.9]
 
 ### Fixed

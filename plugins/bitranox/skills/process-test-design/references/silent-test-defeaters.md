@@ -14,7 +14,8 @@ git ref, guards against cost, or tests environment isolation - or when you are a
 path is untested, or a mutation survives. Also when a unit suite's code can reach a real host or a
 user-facing service, a test guards a secret it might print, a test spawns a nested test runner or
 several writers to one file, asserts a real tool's verdict, relies on conftest fixtures reaching
-`src/` doctests or on fixtures ported from a template, feeds a FIFO from a writer thread, times a
+`src/` doctests or on fixtures ported from a template, isolates the suite in an autouse fixture
+(an override or fallback knob it sets, a file it plants), feeds a FIFO from a writer thread, times a
 cost ratio or a growth ratio, or verifies a fix for a rare flake. Also when a test proves an input
 was refused before any side effect, proves a timed wake or poll fires, or runs `git commit` under a
 sandboxed or fresh home directory, or cancels an operation at every await or step to check what
@@ -551,6 +552,24 @@ missing = sorted(autouse_fixtures(template) - autouse_fixtures(derived))
 print("\n".join(missing) or "no autouse fixture missing")
 sys.exit(1 if missing else 0)
 ```
+
+### An autouse isolation fixture sets the FALLBACK knob, never the override
+
+When the code resolves a location from an override knob with a plain fallback (`LIB_X_ROOT`, else
+`APPDATA` or `XDG_CONFIG_HOME`), an autouse fixture that isolates the suite by setting the
+OVERRIDE wins over every test that sets the plain knob itself. Those tests then fail, or pass
+without exercising what they name, and often on one platform only, the one whose fallback they
+set. Point every platform's fallback knob the lookup reads under the temp dir in the fixture
+(`APPDATA` and `XDG_CONFIG_HOME` alike), delete the override (`setenv` then `delenv`, so teardown
+restores it even when it was absent; see "`monkeypatch.delenv(name, raising=False)` on an ABSENT
+variable records nothing to undo" above), and let a test that exercises the override set it
+itself. Two more reach-limits of an isolation fixture:
+
+- A fixture that must also cover doctests under `src/` lives in a ROOT `conftest.py` (see
+  "`tests/conftest.py` fixtures never reach a `src/` doctest").
+- A file the fixture plants to stop an upward search (a `.env`, a project marker at the temp root)
+  is found by every test that counts that search's results, so each of those counts includes it.
+  Have those tests expect it, or assert on the files they planted by name rather than on a count.
 
 ## Cross-thread tests: wait on what the call itself does
 

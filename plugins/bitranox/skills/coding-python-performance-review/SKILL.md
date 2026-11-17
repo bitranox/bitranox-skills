@@ -356,6 +356,34 @@ fi
 
 Every `re.match(r'...', ...)` inside a function body should become a module-level `_RE = re.compile(r'...')` with `_RE.match(...)` at the call site. The call does not recompile each time: the `re` module caches compiled patterns (512 by default), so it pays a cache lookup, measured at 240 ns against 130 ns compiled for a small match on Python 3.14. That is worth removing on a hot path. It turns into a real recompile on every call only when more distinct patterns cycle through than the cache holds.
 
+**A compiled pattern can still be quadratic: check where a match can START.** `finditer`,
+`search`, `sub` and `findall` retry the pattern at every position, so when a start can sit at
+many positions of one run and the pattern then reads to the run's end before it fails, N
+characters cost about N squared steps. Short test inputs and a profile of normal data never show
+it, and `find_uncompiled_regex.py` does not look for it. Two shapes, one cause:
+
+- `CLASS+` before a required suffix, such as `[\w./-]+\.(?:py|sh)\b`, over a long token with no
+  suffix: every start inside the token rescans to its end. Anchor the start with a negative
+  lookbehind of the SAME class, `(?<![\w./-])[\w./-]+\.(?:py|sh)\b`: the leftmost match always
+  begins a run, so the matches stay the same and the cost is linear. A lookbehind narrower than
+  the class stays quadratic on runs of the characters it omits, and a wider one drops matches
+  that follow them.
+- A start alternative that matches after every newline, such as `(?<=[;&|\n])`, followed by
+  `\s*`: each start absorbs the blank lines after it, so N whitespace-only lines (a blanked
+  heredoc) are rescanned from every line. Use `[^\S\n]*` after such an anchor, so each newline is
+  a start of its own. The match then begins after the blank lines rather than before them: the
+  spans move while what the caller reads from the match stays the same.
+
+Prove a rewrite with both, since neither covers the other: a growth-ratio test (the same input at
+N and 8N: linear is about 8x, quadratic about 64x; one run per kind of character the class
+accepts, for `[\w./-]` a run of letters, one of `.`, one of `/` and one of `-`), and a replay of
+the old and new pattern over real inputs comparing what the caller uses from each match (the
+verdict, the group), not the raw spans. Measured on the first shape: 3.5 ms at 2,000 characters
+and 223 ms at 16,000 (64x), against 0.02 and 0.16 ms anchored. File it as an Unsafe Input
+finding. It is SEVERE when the scanned text can grow without bound (a transcript, a log, a
+pasted command) or real input already costs seconds per run, and MEDIUM when it only costs
+measurably on a hot path.
+
 #### 4c: Profile to Find Hot Functions
 
 Run `find_hotspots.py` from the skill directory and analyze profiling data:

@@ -134,6 +134,15 @@ checkout. Nothing fetches; the audits, and every DRIFT message, name a repo whos
   A tool-repo push refused only because the matching marketplace text sits COMMITTED on a linked
   worktree's unpushed branch is not drift: the table says `UNPUSHED`, and the refusal names that
   worktree and branch and says to push it to the marketplace's master first.
+  A tool-repo commit refused only because its fix sits on disk unstaged says `UNSTAGED`: `git add`
+  the file in an earlier command (the gate judges a command before any of it runs), then commit.
+- A twin in a bmk-managed tool repo is rewritten by that repo's own gate: `make test` runs
+  `ruff format` over the fenced Python blocks of its `SKILL.md` (comment spacing, blank lines).
+  So for a change to both copies, gate the twin first and mirror its FORMATTED text back into the
+  marketplace before committing either side. A marketplace DRIFT message diffs against the
+  checkout of the twin closest to the marketplace text - the tool repo's main checkout or a linked
+  worktree, at its committed text and, on a commit, its uncommitted text too - and names that
+  checkout and its differing files, so its "First lines" show what is left.
 
 ## Skill decisions are recorded per skill
 

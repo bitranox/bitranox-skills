@@ -5510,3 +5510,323 @@ def test_a_twin_edit_that_keeps_every_anchor_passes(tmp_path, monkeypatch):
     _tool_repo_commit(monkeypatch, public, tool)
 
     assert RG.main(parts=_parts()) == 0
+
+
+# --- an UNSTAGED tool-repo fix matched by a marketplace WORKTREE, not the main checkout -----------
+#
+# Measured 2026-11-17 (lib_layered_config 9670b44): the marketplace side of the edit sat committed
+# in a marketplace linked worktree and the tool repo's SKILL.md was right on disk but not staged.
+# The worktree was the checkout that matched, yet the refusal reported was the MAIN checkout's,
+# where the disk text does not match either, so it said regenerate and bump. Staging SKILL.md in
+# an earlier call made the identical commit pass.
+
+def _stage_a_first_draft(tool):
+    """Stage a tool-repo edit that matches no marketplace checkout: the index both arms ship."""
+    write(tool / TW_SKILL, TWIN_BODY.replace("One paragraph of content.", "A first draft."))
+    _g(tool, "add", TW_SKILL)
+
+
+def test_a_tool_repo_commit_matched_by_a_marketplace_worktree_says_stage_not_regenerate(
+        tmp_path, monkeypatch, capsys):
+    public, root, tool = _published_pair(tmp_path)
+    mwt = _marketplace_worktree(root, public / "KI" / "bitranox-skills-wt")
+    _drift(mwt / MP_SKILL, MIRROR_BODY)
+    _g(mwt, "commit", "-qam", "the marketplace side, committed in a worktree")
+    _stage_a_first_draft(tool)                              # an earlier draft, staged
+    _drift(tool / TW_SKILL, TWIN_BODY)                      # the fix: in sync on disk, NOT staged
+    _tool_repo_commit(monkeypatch, public, tool)
+
+    assert RG.main(parts=_parts()) == 2
+    err = capsys.readouterr().err
+    assert "UNSTAGED " in err and "modified but not staged" in err
+    assert "Regenerate" not in err and "bump" not in err, err
+    assert "earlier" in err, "the gate judges the whole command first, so git add must run before it"
+
+
+def test_a_tool_repo_commit_no_checkout_matches_on_disk_keeps_the_regenerate_advice(
+        tmp_path, monkeypatch, capsys):
+    # Control: the disk text matches neither the main checkout nor the worktree.
+    public, root, tool = _published_pair(tmp_path)
+    mwt = _marketplace_worktree(root, public / "KI" / "bitranox-skills-wt")
+    _drift(mwt / MP_SKILL, MIRROR_BODY)
+    _g(mwt, "commit", "-qam", "the marketplace side, committed in a worktree")
+    _stage_a_first_draft(tool)
+    write(tool / TW_SKILL, TWIN_BODY.replace("One paragraph of content.", "A DIFFERENT edit."))
+    _tool_repo_commit(monkeypatch, public, tool)
+
+    assert RG.main(parts=_parts()) == 2
+    err = capsys.readouterr().err
+    assert "Regenerate" in err and "not staged" not in err
+
+
+# --- a DRIFT message diffs against the CLOSEST checkout of the twin, not only its published ref ----
+#
+# Measured 2026-11-17 shipping 11.10.2: the twin's own gate (bmk's make test) reformatted a code
+# example in a linked worktree of the tool repo, and the marketplace commit was refused three times
+# with "First lines" diffed against the twin's PUBLISHED text. Those lines were the change both sides
+# had made; the real difference, a blank line and a comment's spacing further on, showed only by
+# calling `_mirror_differences` on the worktree by hand.
+
+_SHARED = IN_PROGRESS + "\n\n```python\nimport your_package as lib\nlib.run()\n```\n"
+_FORMATTED = _SHARED + "\nA tail line,  formatted by the twin's gate."
+_UNFORMATTED = _SHARED + "A tail line, as the marketplace wrote it."
+
+
+def _twin_formatted_in_a_worktree(public, root, tool):
+    twt = _tool_worktree(tool, public / "libs" / "thing-wt-fmt")
+    write(twt / TW_SKILL, TWIN_BODY.replace("One paragraph of content.", _FORMATTED))
+    _g(twt, "commit", "-qam", "the twin's edit, as its gate formatted it")
+    write(root / MP_SKILL, MIRROR_BODY.replace("One paragraph of content.", _UNFORMATTED))
+    _g(root, "add", "-A")
+    return twt
+
+
+@pytest.mark.parametrize("stage", [RG.STAGE_INDEX, RG.STAGE_HEAD])
+def test_a_drift_message_shows_the_diff_against_the_closest_twin_checkout(tmp_path, stage):
+    public, root, tool = _published_pair(tmp_path)
+    twt = _twin_formatted_in_a_worktree(public, root, tool)
+    if stage == RG.STAGE_HEAD:
+        _g(root, "commit", "-qm", "the marketplace side")
+
+    fails = RG.check_skill_mirrors(root, stage=stage, notices=[], mirrors=THING)
+
+    assert len(fails) == 1
+    first_lines = fails[0].split("First lines")[-1]
+    assert "formatted by the twin's gate" in first_lines, fails[0]
+    assert "-One paragraph of content." not in first_lines, "that is the change both sides made"
+    assert str(twt) in fails[0], "the message must name the checkout it diffed against"
+
+
+def test_a_drift_message_keeps_the_published_diff_when_no_worktree_is_closer(tmp_path):
+    # Control: a tool worktree exists, but it is farther from the marketplace text than the
+    # published twin, so the published diff stays the one shown and the worktree goes unnamed.
+    public, root, tool = _published_pair(tmp_path)
+    twt = _tool_worktree(tool, public / "libs" / "thing-wt-far")
+    write(twt / TW_SKILL, TWIN_BODY.replace("One paragraph of content.", "Far\naway\nfrom\nit."))
+    _g(twt, "commit", "-qam", "unrelated")
+    _drift(root / MP_SKILL, MIRROR_BODY)
+    _g(root, "add", "-A")
+
+    fails = RG.check_skill_mirrors(root, notices=[], mirrors=THING)
+
+    assert len(fails) == 1 and "+" + IN_PROGRESS in fails[0].split("First lines")[-1]
+    assert str(twt) not in fails[0]
+
+
+# --- a failing suite reports EVERY failure, with its first error line ------------------------------
+#
+# Measured 2026-11-17: `repo-gate.py --ci` on a run with 69 failures in two directories printed the
+# last 15 lines of pytest's output, 14 FAILED ids from one directory and no error text, so a second
+# ten-minute run was needed to learn whether anything else had failed. These drive the real pytest.
+
+def _failing_suite(tests, counts):
+    """Write ``counts[dir]`` failing tests into each ``tests/<dir>``, each with its own message."""
+    for directory, count in counts.items():
+        body = "".join("def test_%s_%d():\n    assert False, 'boom-%s-%d'\n\n" % (directory, n, directory, n)
+                       for n in range(count))
+        write(tests / directory / ("test_%s.py" % directory), body + "def test_ok():\n    pass\n")
+
+
+def test_a_failing_suite_names_every_failure_with_its_first_error_line(tmp_path):
+    tests = tmp_path / "tests"
+    _failing_suite(tests, {"alpha": 20, "beta": 5})
+
+    problems = RG.check_pytest(tmp_path, [tests])
+    joined = "\n".join(problems)
+
+    assert "pytest failed:" in problems[0] and "25 failed" in problems[0]
+    for directory, count in (("alpha", 20), ("beta", 5)):
+        for n in range(count):
+            node = "tests/%s/test_%s.py::test_%s_%d" % (directory, directory, directory, n)
+            assert ("FAILED %s - " % node) in joined, node
+            assert "boom-%s-%d" % (directory, n) in joined, "the first E line of %s" % node
+    assert "tests/alpha 20" in joined and "tests/beta 5" in joined, "the per-directory tally"
+
+
+def test_a_long_failure_list_is_capped_with_the_unshown_count_and_the_tally(tmp_path):
+    tests = tmp_path / "tests"
+    _failing_suite(tests, {"alpha": RG.PYTEST_FAILURES_SHOWN + 7, "beta": 3})
+
+    problems = RG.check_pytest(tmp_path, [tests])
+    joined = "\n".join(problems)
+
+    assert sum(1 for line in problems if line.lstrip().startswith("FAILED ")) == RG.PYTEST_FAILURES_SHOWN
+    assert "10 more failure" in joined
+    assert "tests/alpha %d" % (RG.PYTEST_FAILURES_SHOWN + 7) in joined and "tests/beta 3" in joined
+
+
+
+# --- review round: the closest-checkout diff and the junit failure report -------------------------
+
+def test_a_drift_message_diffs_against_the_tool_main_checkouts_uncommitted_text(tmp_path):
+    # A commit accepts the twin's uncommitted main-checkout text (`_matches_uncommitted_other_side`),
+    # so that reading is a candidate too, not only the linked worktrees.
+    public, root, tool = _published_pair(tmp_path)
+    write(tool / TW_SKILL, TWIN_BODY.replace("One paragraph of content.", _FORMATTED))   # uncommitted
+    write(root / MP_SKILL, MIRROR_BODY.replace("One paragraph of content.", _UNFORMATTED))
+    _g(root, "add", "-A")
+
+    fails = RG.check_skill_mirrors(root, stage=RG.STAGE_INDEX, notices=[], mirrors=THING)
+
+    assert len(fails) == 1
+    first_lines = fails[0].split("First lines")[-1]
+    assert "formatted by the twin's gate" in first_lines, fails[0]
+    assert "-One paragraph of content." not in first_lines
+    assert "uncommitted" in fails[0]
+
+
+def test_a_push_never_diffs_against_the_tool_main_checkouts_uncommitted_text(tmp_path):
+    # Control: a push reads the twin at what it committed, so uncommitted text is no candidate.
+    public, root, tool = _published_pair(tmp_path)
+    write(tool / TW_SKILL, TWIN_BODY.replace("One paragraph of content.", _FORMATTED))
+    write(root / MP_SKILL, MIRROR_BODY.replace("One paragraph of content.", _UNFORMATTED))
+    _g(root, "commit", "-qam", "the marketplace side")
+
+    fails = RG.check_skill_mirrors(root, stage=RG.STAGE_HEAD, notices=[], mirrors=THING)
+
+    assert len(fails) == 1 and "-One paragraph of content." in fails[0].split("First lines")[-1]
+
+
+def test_a_drift_header_lists_the_files_of_the_reading_its_first_lines_come_from(tmp_path):
+    # The worktree's SKILL.md matches the marketplace but it carries one extra file: it is the
+    # closest reading, so the header must list ITS differing file, not the published SKILL.md.
+    public, root, tool = _published_pair(tmp_path)
+    twt = _tool_worktree(tool, public / "libs" / "thing-wt-extra")
+    _drift(twt / TW_SKILL, TWIN_BODY)
+    write(twt / "skills/python-thing/references/extra.md", "extra\n")
+    _g(twt, "add", "-A")
+    _g(twt, "commit", "-qm", "the edit plus an extra reference")
+    _drift(root / MP_SKILL, MIRROR_BODY)
+    _g(root, "add", "-A")
+
+    fails = RG.check_skill_mirrors(root, notices=[], mirrors=THING)
+
+    assert len(fails) == 1
+    header = fails[0].split("Regenerate")[0]
+    assert "references/extra.md" in header and "SKILL.md" not in header, fails[0]
+    assert str(twt) in header
+
+
+def _class_failure_ahead_of_many(tests):
+    """A class-method failure collected FIRST, then enough failures that an output tail cannot hold it."""
+    write(tests / "test_a_cls.py",
+          "class TestThing:\n    def test_it(self):\n        raise ValueError('bad value')\n")
+    _failing_suite(tests, {"zeta": 20})
+
+
+def test_a_failing_class_method_beyond_any_output_tail_keeps_its_node_id(tmp_path):
+    tests = tmp_path / "tests"
+    _class_failure_ahead_of_many(tests)
+
+    joined = "\n".join(RG.check_pytest(tmp_path, [tests]))
+
+    assert "FAILED tests/test_a_cls.py::TestThing::test_it - ValueError: bad value" in joined, joined
+
+
+def test_a_coloured_run_still_reports_its_summary(tmp_path, monkeypatch):
+    # The harness exports FORCE_COLOR, which pytest honours on a pipe too.
+    monkeypatch.setenv("FORCE_COLOR", "3")
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    tests = tmp_path / "tests"
+    _failing_suite(tests, {"alpha": 2})
+
+    problems = RG.check_pytest(tmp_path, [tests])
+
+    assert problems[0].startswith("pytest failed: 2 failed, 1 passed"), problems[0]
+    assert "\x1b" not in "\n".join(problems)
+
+
+def test_a_setup_error_is_labelled_error_and_counted_apart(tmp_path):
+    tests = tmp_path / "tests"
+    write(tests / "test_err.py",
+          "import pytest\n\n@pytest.fixture\ndef broken():\n    raise RuntimeError('no fixture')\n\n"
+          "def test_needs_it(broken):\n    pass\n")
+
+    problems = RG.check_pytest(tmp_path, [tests])
+    joined = "\n".join(problems)
+
+    assert problems[0] == "pytest failed: 1 error" or problems[0].startswith("pytest failed: 1 error in"), problems[0]
+    assert "ERROR tests/test_err.py::test_needs_it - RuntimeError: no fixture" in joined, joined
+    assert "FAILED " not in joined
+
+
+def _junit_cases(path, cases):
+    write(path, '<?xml version="1.0" encoding="utf-8"?><testsuites><testsuite tests="%d">%s'
+                "</testsuite></testsuites>" % (len(cases), "".join(cases)))
+
+
+_JUNIT_PASS = '<testcase classname="tests.test_x" name="test_ok" file="tests/test_x.py" line="1"/>'
+_JUNIT_FAIL = ('<testcase classname="tests.test_x" name="test_bad" file="tests/test_x.py" line="2">'
+         '<failure message="AssertionError: nope">E   AssertionError: nope</failure></testcase>')
+_JUNIT_ERROR = ('<testcase classname="tests.test_x" name="test_err" file="tests/test_x.py" line="3">'
+          '<error message="failed on setup">E   RuntimeError: boom</error></testcase>')
+
+
+def test_failure_report_counts_failures_and_errors_apart_without_a_summary(tmp_path):
+    report = tmp_path / "junit.xml"
+    _junit_cases(report, [_JUNIT_PASS, _JUNIT_FAIL, _JUNIT_ERROR])
+
+    lines = RG.failure_report(report, "")
+
+    assert lines[0] == "pytest failed: 1 failed, 1 error"
+    assert "  FAILED tests/test_x.py::test_bad - AssertionError: nope" in lines
+    assert "  ERROR tests/test_x.py::test_err - RuntimeError: boom" in lines
+
+
+@pytest.mark.parametrize("shape", ["missing", "truncated", "no failures"])
+def test_failure_report_gives_nothing_it_cannot_ground(tmp_path, shape):
+    report = tmp_path / "junit.xml"
+    if shape == "truncated":
+        write(report, '<?xml version="1.0"?><testsuites><testsuite><testcase name="t"><fail')
+    elif shape == "no failures":
+        _junit_cases(report, [_JUNIT_PASS, _JUNIT_PASS])
+
+    assert RG.failure_report(report, "1 failed in 0.1s") == []
+
+
+@pytest.mark.parametrize("shape", ["missing", "truncated", "no failures"])
+def test_a_failed_run_whose_report_cannot_ground_it_falls_back_to_the_output_tail(tmp_path, monkeypatch,
+                                                                                 shape):
+    def fake_run(cmd, **_kw):
+        report = Path(next(a for a in cmd if a.startswith("--junitxml=")).split("=", 1)[1])
+        if shape == "truncated":
+            write(report, "<testsuites><testsuite><testcase")
+        elif shape == "no failures":
+            _junit_cases(report, [_JUNIT_PASS])
+
+        class Done:
+            returncode = 1
+            stdout = "FAILED tests/test_x.py::test_bad - AssertionError: nope\n1 failed in 0.1s\n"
+            stderr = ""
+        return Done()
+
+    monkeypatch.setattr(RG.subprocess, "run", fake_run)
+    tests = tmp_path / "tests"
+    tests.mkdir()
+
+    problems = RG.check_pytest(tmp_path, [tests])
+
+    assert problems[0] == "pytest failed:" and not RG.is_could_not_run(problems)
+    assert any("FAILED tests/test_x.py::test_bad" in line for line in problems)
+
+
+def _peak_report_memory(tmp_path, cases):
+    import tracemalloc
+
+    report = tmp_path / ("junit-%d.xml" % cases)
+    _junit_cases(report, [_JUNIT_PASS] * cases + [_JUNIT_FAIL])
+    tracemalloc.start()
+    try:
+        tracemalloc.reset_peak()
+        lines = RG.failure_report(report, "")
+        _current, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert lines and lines[0].startswith("pytest failed")
+    return peak
+
+
+def test_failure_report_memory_does_not_grow_with_the_report(tmp_path):
+    # Growth ratio, not a byte limit: 8x the testcases must not cost anywhere near 8x the memory.
+    small, large = _peak_report_memory(tmp_path, 5000), _peak_report_memory(tmp_path, 40000)
+    assert large < 2 * small, (small, large)

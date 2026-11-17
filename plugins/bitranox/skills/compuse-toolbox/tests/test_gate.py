@@ -1223,6 +1223,40 @@ class TestTheLogCarriesTheVerdictAndWhereItRan:
         text = log.read_text(encoding="utf-8")
         assert text.index("OUT-LINE") < text.index("ALL GATES PASSED")
 
+    def test_the_last_marker_line_in_a_reused_log_is_the_run_header(self, tmp_path, capsys):
+        """`grep -n "##### gate run" LOG | tail -1` must land on the LAST run's header.
+
+        Measured: the closing trailer of a run appended to a pinned log quoted the marker itself
+        ("this run starts at the last '##### gate run' line"), and the verdict is appended to the
+        log too, so that grep found the trailer below the run and the failing output read empty.
+        """
+        log = tmp_path / "g.log"
+        gate.main(["--log", str(log), "--gate", OK])
+        gate.main(["--log", str(log), "--gate", OK])
+        printed = capsys.readouterr().out
+        lines = log.read_text(encoding="utf-8").split("\n")
+        hits = [n for n, line in enumerate(lines, start=1) if gate.RUN_MARKER in line]
+        assert len(hits) == 2, hits
+        assert re.fullmatch(re.escape(gate.RUN_MARKER) + r" \S+ #####", lines[hits[-1] - 1]), (
+            lines[hits[-1] - 1])
+        # The trailer names where the run starts, so the reader needs no grep at all.
+        assert f"line {hits[-1]} " in printed, printed
+
+    @pytest.mark.skipif(os.name != "posix" or os.geteuid() == 0,
+                        reason="a write-only mode needs POSIX and a non-root user")
+    def test_a_log_it_may_append_to_but_not_read_still_runs_the_gate(self, tmp_path, capsys):
+        """Counting the earlier lines added a READ of the log; a write-only log (mode 0200) then
+        failed the run with "cannot write the log", where the gate ran fine before."""
+        log = tmp_path / "g.log"
+        log.write_text("earlier run\n", encoding="utf-8")
+        log.chmod(0o200)
+        try:
+            rc = gate.main(["--log", str(log), "--gate", OK])
+        finally:
+            log.chmod(0o600)
+        assert rc == 0
+        assert "at its own run header" in capsys.readouterr().out
+
     def test_the_run_header_names_the_working_directory(self, tmp_path, monkeypatch):
         here = tmp_path / "checkout"
         here.mkdir()

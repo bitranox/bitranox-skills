@@ -349,8 +349,21 @@ def _run(argv: list[str], *, stdin_text: str | None = None, timeout: int = 30) -
     it into stdout is what corrupts parsed output.
     """
     proc = subprocess.run(argv, input=stdin_text, capture_output=True, text=True,
-                          encoding="utf-8", errors="replace", timeout=timeout, check=False)
+                          encoding="utf-8", errors="replace", timeout=timeout, check=False,
+                          env=_child_env(argv))
     return proc.returncode, proc.stdout, proc.stderr
+
+
+def _child_env(argv: list[str]) -> dict[str, str] | None:
+    """The environment for a child: a git child loses every GIT_* variable.
+
+    A GIT_DIR or GIT_INDEX_FILE inherited from a hook or a linked-worktree push would make the
+    repository checks answer from another repository's index and excludes. Other children keep the
+    caller's environment untouched (None).
+    """
+    if not argv or Path(argv[0]).name not in ("git", "git.exe"):
+        return None
+    return {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
 
 
 def run_remote(target: Target, command: str, *, run=_run, stdin_text: str | None = None,
@@ -1147,20 +1160,108 @@ def nearest_existing(directory: Path) -> Path:
     return probe
 
 
-def prepare_snapshot_dir(directory: Path, *, allow_repo: bool = False, run=_run) -> Path:
+SNAPSHOT_PROBE_NAME = "config-snapshot.xml"
+
+
+def ignored_by_git(directory: Path, *, filename: str = SNAPSHOT_PROBE_NAME, run=_run) -> bool:
+    """True only when git would never stage `directory/filename`, for anyone using this checkout.
+
+    A site's dated backups often live in a gitignored folder of its own machine repo. Four things
+    must all hold, because each one alone let a snapshot become committable:
+
+    - the FILE is ignored, not just the folder: with `configs/*` plus `!configs/*.xml` git calls
+      `configs/` ignored while the negation re-includes every snapshot in it;
+    - the folder is ignored too, and nothing is tracked beneath it (`ls-files`): a force-added
+      file makes the folder a tracked place even while a new file there reads as ignored;
+    - every matching rule comes from a .gitignore in the checkout or the clone's info/exclude, never
+      a per-user core.excludesFile, which another user of the same checkout does not have;
+    - the path is resolved first, so `notes/../configs` through a symlink is judged where the
+      file will land, not by its spelling.
+
+    core.quotePath=false keeps a non-ASCII path unquoted in git's answer. Fail-closed, unlike
+    inside_git_worktree: this is an exemption from a refusal, so any doubt keeps the refusal.
+    """
+    directory = Path(directory).expanduser().resolve()
+    probe = nearest_existing(directory)
+    asked_dir = directory.as_posix().rstrip("/") + "/"
+    asked_file = (directory / filename).as_posix()
+    try:
+        top = _git_toplevel(probe, run=run)
+        if top is None:
+            return False
+        rc, out, _err = run(["git", "-c", "core.quotePath=false", "-C", str(probe), "check-ignore",
+                             "--stdin", "-z", "-v"], stdin_text=f"{asked_dir}\0{asked_file}\0",
+                            timeout=10)
+        if rc != 0:
+            return False
+        sources = _ignore_sources(out or "")
+        if set(sources) != {asked_dir, asked_file}:
+            return False
+        if not all(_trusted_ignore_source(src, top, run=run) for src in sources.values()):
+            return False
+        rc, tracked, _err = run(["git", "-c", "core.quotePath=false", "-C", str(top), "ls-files",
+                                 "-z", "--", asked_dir], timeout=10)
+    except Exception:
+        return False
+    return rc == 0 and not (tracked or "").strip("\0")
+
+
+def _git_toplevel(probe: Path, *, run=_run) -> Path | None:
+    rc, out, _err = run(["git", "-C", str(probe), "rev-parse", "--show-toplevel"], timeout=10)
+    text = (out or "").strip()
+    return Path(text).resolve() if rc == 0 and text else None
+
+
+def _ignore_sources(out: str) -> dict[str, str]:
+    """Map each path check-ignore -v -z named to the source of the rule that IGNORES it.
+
+    Records are four NUL-ended fields: source, line, pattern, path. A path whose deciding pattern
+    starts with `!` matched a negation, which RE-INCLUDES it, so it is left out of the map.
+    """
+    fields = out.split("\0")
+    sources: dict[str, str] = {}
+    for i in range(0, len(fields) - 3, 4):
+        source, _line, pattern, path = fields[i:i + 4]
+        if source and not pattern.startswith("!"):
+            sources[path] = source
+    return sources
+
+
+def _trusted_ignore_source(source: str, top: Path, *, run=_run) -> bool:
+    """A .gitignore inside the checkout, or this clone's info/exclude; nothing per-user.
+
+    Both live in the checkout every user of it shares (a tracked or untracked .gitignore alike).
+    A per-user core.excludesFile does not: git names it by a path outside the work tree. The
+    source is resolved against the top (joining keeps an absolute source as it is) and must land
+    inside it, so no drive-dependent absoluteness test decides it.
+    """
+    resolved = (top / source).resolve()
+    rc, out, _err = run(["git", "-C", str(top), "rev-parse", "--git-path", "info/exclude"],
+                        timeout=10)
+    if rc == 0 and out.strip() and resolved == (top / out.strip()).resolve():
+        return True
+    return resolved.name == ".gitignore" and resolved.is_relative_to(top)
+
+
+def prepare_snapshot_dir(directory: Path, *, allow_repo: bool = False,
+                         filename: str = SNAPSHOT_PROBE_NAME, run=_run) -> Path:
     """Create `directory` private to the user, refusing a git work tree unless told otherwise.
 
-    The work-tree probe runs on the nearest EXISTING ancestor: git cannot answer for a directory
-    that is not there yet, so probing only an existing one let a new dir inside a checkout through.
+    A directory the work tree ignores, with nothing tracked beneath it, is not refused (see
+    ignored_by_git). The work-tree probe runs on the nearest EXISTING ancestor: git cannot answer
+    for a directory that is not there yet, so probing only an existing one let a new dir inside a
+    checkout through.
     Only a directory this call creates is made 0700; an existing one keeps its mode (it may be
     shared or served), with a warning when others can read it.
     """
     directory = Path(directory).expanduser()
-    if not allow_repo and inside_git_worktree(nearest_existing(directory), run=run):
+    if (not allow_repo and inside_git_worktree(nearest_existing(directory), run=run)
+            and not ignored_by_git(directory, filename=filename, run=run)):
         raise PfsenseError(
-            f"{directory} is inside a git work tree, and a snapshot is a live config.xml with "
-            f"password hashes and private keys in it. Pass --snapshot-dir to send it somewhere "
-            f"private (default {default_snapshot_dir()}), or --allow-repo-snapshot to override."
+            f"{directory} is inside a git work tree and not ignored by it, and a snapshot is a "
+            f"live config.xml with password hashes and private keys in it. Pass --snapshot-dir to "
+            f"send it somewhere private (default {default_snapshot_dir()}) or to a folder the "
+            f"repository ignores, or --allow-repo-snapshot to override."
         )
     created = not directory.exists()
     directory.mkdir(parents=True, exist_ok=True)
@@ -1182,17 +1283,33 @@ def do_snapshot(target: Target, directory: Path, *, run=_run, allow_repo: bool =
     """
     # Resolve the destination BEFORE fetching: a refusal should cost nothing, and there is no
     # reason to pull 180 KB of credentials over the wire only to decline to write it.
-    directory = prepare_snapshot_dir(directory, allow_repo=allow_repo, run=run)
+    stamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    name = f"config-{target.host}-{stamp}.xml"
+    directory = prepare_snapshot_dir(directory, allow_repo=allow_repo, filename=name, run=run)
     rc, out, err = run_remote(target, "cat /conf/config.xml", run=run, timeout=max(target.timeout, 60))
     if rc != 0:
         raise PfsenseError(f"could not read /conf/config.xml from {target.host}: {err.strip()[:200]}")
     root = parse_xml(out)
     if root.tag != "pfsense":
         raise PfsenseError(f"root element is <{root.tag}>, not <pfsense>; refusing to save it")
-    stamp = datetime.now().strftime("%Y%m%d%H%M%S")
-    path = directory / f"config-{target.host}-{stamp}.xml"
-    path.write_text(out, encoding="utf-8")
+    path = directory / name
+    _write_private(path, out)
     return path
+
+
+def _write_private(path: Path, text: str) -> None:
+    """Write `text` to `path` readable by its owner only, whatever the umask.
+
+    A snapshot holds password hashes and private keys, and an existing snapshot folder keeps its
+    own mode (it may be shared), so the FILE must be private even where the folder is not. The
+    mode is set at creation (0600) and again with fchmod, because O_CREAT ignores the mode for a
+    file that already exists: a second snapshot in the same second replaces the first.
+    """
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        if os.name == "posix":
+            os.fchmod(handle.fileno(), 0o600)
+        handle.write(text)
 
 
 # ---- commands -----------------------------------------------------------------------------------
@@ -2067,7 +2184,8 @@ def _mutation_flags() -> argparse.ArgumentParser:
                         help="where a pre-change snapshot is written (default is a private "
                              "per-user state dir, never the current directory)")
     common.add_argument("--allow-repo-snapshot", action="store_true", default=argparse.SUPPRESS,
-                        help="permit writing a snapshot inside a git work tree")
+                        help="permit writing a snapshot inside a git work tree, in a folder "
+                             "it does not ignore")
     return common
 
 
@@ -2085,7 +2203,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help=f"where a pre-change snapshot is written "
                          f"(default {default_snapshot_dir()}, mode 0700)")
     ap.add_argument("--allow-repo-snapshot", action="store_true",
-                    help="permit writing a snapshot inside a git work tree (refused by default)")
+                    help="permit writing a snapshot inside a git work tree (refused by default unless the "
+                         "repository ignores the folder)")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("info", help="version, DHCP backend, resolver, interfaces, packages").set_defaults(func=cmd_info)

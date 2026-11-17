@@ -667,7 +667,8 @@ subagent on the old text wrote the call the library refuses" is the test result.
 **Describe the latest release only.** A skill for a tool or library its readers install at the
 latest release (`uvx`, a fresh install) states current behaviour in the present tense. Do not write
 version-history lines: "From / Before / Since / Until / Starting with / As of / New in X.Y.Z ...",
-"Available from ...", "previously", "no longer", "as before" or "used to". When a release adds
+a trailing "(X.Y.Z and later)" on a rule or bold lead, "Available from ...", "previously", "no
+longer", "as before" or "used to". When a release adds
 behaviour, write the new rule as plain current behaviour, and rewrite every history line you meet
 while editing (the finder below lists candidates; the review after it decides which are history), in
 both copies of a mirrored skill. Version history belongs in the tool's CHANGELOG. The reader runs
@@ -680,7 +681,7 @@ phrase broken across a line end ("no" ending one line, "longer" starting the nex
 grep:
 
 ```bash
-P='(from|before|since|until|starting with|as of|new in) ([A-Za-z_-]+ )?v?[0-9]+\.[0-9]|available from|previously|no longer|used to|as before'
+P='(from|before|since|until|starting with|as of|new in) ([A-Za-z_-]+ )?v?[0-9]+\.[0-9]|v?[0-9]+\.[0-9]+(\.[0-9]+)? ((and|or) (later|newer)|onwards)|available from|previously|no longer|used to|as before'
 grep -rniE "$P" <skill-dir> --include='*.md' | grep -v '/.skillwriter/'
 find <skill-dir> -name '*.md' -not -path '*/.skillwriter/*' -exec sh -c '
   tr -s "[:space:]" " " < "$2" | grep -oiE ".{0,40}($1).{0,40}" |
@@ -688,10 +689,10 @@ find <skill-dir> -name '*.md' -not -path '*/.skillwriter/*' -exec sh -c '
 ' _ "$P" {} \;
 ```
 
-Review each hit, never rewrite blindly: a version floor in an install line (`pkg>=0.3.2`), a
-sentence about the tool's behaviour rather than the skill's history ("the skill documents
-behaviour the tool no longer has"), and a skill deliberately pinned to one version (see
-"Referencing external DOCS") are not history.
+Review each hit, never rewrite blindly: a version floor in an install line (`pkg>=0.3.2`) or a
+requirement on another tool ("needs Rust 1.80 or newer"), a sentence about the tool's behaviour
+rather than the skill's history ("the skill documents behaviour the tool no longer has"), and a
+skill deliberately pinned to one version (see "Referencing external DOCS") are not history.
 
 ## File Organization
 
@@ -1171,6 +1172,23 @@ plugins/bitranox/hooks/repo-gate.py --mirrors` lists the pairs) keeps its ledger
 copy: run the command from the marketplace repo, or add
 `--skill-dir <marketplace>/plugins/bitranox/skills/<skill>` after the marketplace skill name.
 
+A worktree branched before `skill_decisions.py` existed has no such file, and the command exits 2
+("can't open file"). Run the installed plugin's copy instead, pointed at the worktree's skill,
+where `<installed>` is the plugin's version directory under
+`~/.claude/plugins/cache/<marketplace>/bitranox/`:
+
+```bash
+python3 <installed>/hooks/skill_decisions.py show <skill> \
+  --skill-dir <worktree>/plugins/bitranox/skills/<skill> --kind rejected,removed --full
+python3 <installed>/hooks/skill_decisions.py show <skill> \
+  --skill-dir <worktree>/plugins/bitranox/skills/<skill>
+python3 <installed>/hooks/skill_decisions.py add \
+  --skills-dir <worktree>/plugins/bitranox/skills --from-file <entries.json>
+```
+
+The two `show` commands read that worktree's own ledger. `add` takes the skills directory under the
+plural `--skills-dir`, not one skill's directory, and writes the entries into the worktree's ledger.
+
 **Resuming a skill edit after a compaction:** the summary can list `show` and the RED baseline as
 done when they never ran. Re-run both before any GREEN probe or commit.
 
@@ -1223,8 +1241,12 @@ exactly those two fields, the tier saying how the decision was established:
 `add` always assigns `v` and `id`, keeps a `date` you supply (`YYYY-MM-DD`) and otherwise sets
 today's UTC date, and refuses an invalid entry with one line per problem. A file naming several
 skills is all or nothing: one refused entry writes none of them. An anchor is counted in the
-files git tracks, so `git add` a new Markdown file before quoting from it. Entry text is public,
-so it names no private host, path or repo.
+working-tree text of the files git tracks, so `git add` a new Markdown file before quoting from it
+(an edit to a tracked file counts unstaged). `add` counts it in the skill directory whose ledger it
+writes (under `--skills-dir`, else `plugins/bitranox/skills` at the git top of the cwd): the
+marketplace copy, never in a tool repo's twin. For a mirrored skill edited in its tool repo, write
+the same text into that marketplace checkout or worktree before the `add`, or every anchor of the
+new text reads found 0. Entry text is public, so it names no private host, path or repo.
 
 - **Picking an anchor:** quote 20 to 200 characters that are the stable core of one rule: unique
   in the skill's Markdown (`add` refuses a phrase it finds zero times or twice), not a heading,

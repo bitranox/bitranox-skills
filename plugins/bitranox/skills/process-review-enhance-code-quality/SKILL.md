@@ -40,7 +40,9 @@ worktree. See `bitranox:meta-self-improve` ("Pathfinder discipline").
                                 ▼
    Did this sweep find a SEVERE or MEDIUM giving a realistic caller wrong behaviour?
                    ├── yes → SWEEP AGAIN from 2 (fixes create findings)
-                   └── no  → 7. Re-score and report
+                   └── no  → Was it a FULL sweep (every checklist row, not a fix range)?
+                              ├── no  → SWEEP AGAIN from 2, as a full sweep
+                              └── yes → 7. Re-score and report
 ```
 
 **The outer loop is the point.** One sweep is not a review. Keep sweeping until a sweep that
@@ -129,6 +131,21 @@ when any of these holds, however green the run:
 | Tests that cannot fail     | Asserts nothing, restates the implementation, or asserts on the mock; a call-order assertion over private methods is this          |
 | Filler                     | Tests the language, the framework, or a constructor storing its arguments - deletable with nothing lost                            |
 | Flaky or order-dependent   | Needs a re-run, a real `sleep`, or a specific execution order; shared mutable state between tests                                  |
+
+**Before scoring the suite, compare what the runner COLLECTS with the test files on disk.** A
+green run at high coverage says nothing about a file that never ran. A pytest `python_files`
+pattern with a path in it (`tests/**/test_*.py`) is matched against the whole path, so it skips
+every test file directly in `tests/`, and the run stays green. From the pytest rootdir, list the
+files the runner collects from and the test files on disk (with the project's own `python_files`
+patterns in the `find`), and report every file on disk that collected nothing:
+
+```bash
+pytest --collect-only -q > collect.log; rc=$?
+[ "$rc" -eq 0 ] || [ "$rc" -eq 5 ] || { echo "REFUSE: collection failed (rc=$rc), see collect.log"; exit 1; }
+grep '::' collect.log | cut -d: -f1 | LC_ALL=C sort -u > collected.txt
+find tests \( -name 'test_*.py' -o -name '*_test.py' \) | LC_ALL=C sort > on_disk.txt
+LC_ALL=C comm -13 collected.txt on_disk.txt   # on disk, never collected
+```
 
 **Recommend DELETING low-value tests, do not preserve them.** A test that cannot fail is negative
 value: it costs maintenance and buys false confidence. Never propose a type-checker or lint
@@ -488,10 +505,15 @@ If the section exists, append. Do not duplicate entries. If the section does not
 
 **Do not stop after one sweep.** Go back to Step 2 and sweep again whenever the sweep just
 finished FOUND a gate-holding finding: a SEVERE or MEDIUM that gives a realistic caller wrong
-behaviour. Stop after a full sweep - one that walked every row of the aspect checklist - that found
-no gate-holding finding. Fixing a gate-holding finding does not make its sweep the last one: the fix is unreviewed
-code, so the next sweep runs. Then re-run the rubric and present the before/after scorecard with
-the per-sweep severity table below.
+behaviour. Each re-sweep dispatches its reviewers the way Step 3 does: `model: "opus"` AND
+`effort: "medium"` on every reviewer, pinned per dispatch (the synthesis pass keeps its own effort
+from Step 3). Stop after a full sweep - one that
+walked every row of the aspect checklist - that found no gate-holding finding. A fix-range sweep,
+one that reviewed only the last fix batch, can settle that batch but never ends the loop: after a
+fix-range sweep with no gate-holding finding, the next sweep is a full one. Fixing a gate-holding
+finding does not make its sweep the last one: the fix is unreviewed code, so the next sweep runs.
+Then re-run the rubric and present the before/after scorecard with the per-sweep severity table
+below.
 
 **Only wrong behaviour holds the loop open.** Wrong behaviour is what a caller GETS: a wrong result
 or exit code, a crash, lost data, a security hole, or a doc statement a caller acts on and is
@@ -553,8 +575,8 @@ price.
 
 **Watch the severity table, every sweep.** Report it with the running totals:
 
-| Sweep | SEVERE | MEDIUM | MINOR | gate-holding (wrong behaviour, realistic caller) | caused by the last sweep's fixes |
-|-------|--------|--------|-------|--------------------------------------------------|----------------------------------|
+| Sweep | full / fix-range | SEVERE | MEDIUM | MINOR | gate-holding (wrong behaviour, realistic caller) | caused by the last sweep's fixes |
+|-------|------------------|--------|--------|-------|--------------------------------------------------|----------------------------------|
 
 When SEVERE has gone and MEDIUM stays flat while fixes keep seeding new findings, that is the
 plateau: more sweeps buy findings of shrinking reach at the same cost. Classify every remaining
@@ -614,7 +636,7 @@ transcript from a thorough one.
 | Error contract     | One hierarchy; EVERY exception a public call can let escape, a stdlib or dependency one included (see below the table)                                |
 | Cross-platform     | Each supported OS's branch, and the type check for each                                                                                               |
 | Packaging          | Builds, installs clean, entry points and marker files present in the wheel                                                                            |
-| Tests              | Could they fail? Real seams not self-mocks, an e2e path, no filler; stable and isolated                                                               |
+| Tests              | Could they fail? Real seams not self-mocks, an e2e path, no filler; stable and isolated; every test file on disk collected (Step 3)                   |
 | Shipped skill      | Covers the whole API and CLI (see the always-on checks)                                                                                               |
 | Docs and changelog | Match the code as it is now, including what the current change added                                                                                  |
 | Interface shape    | COUNT (clumps, long lists, anonymous returns, tramps, re-parses, flags) THEN the meaning check on the dominant shape - both, or the row is not walked |

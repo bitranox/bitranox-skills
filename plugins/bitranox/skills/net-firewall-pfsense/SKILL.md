@@ -19,7 +19,9 @@ snapshot: `snapshot` saves the config, not the disk.
 
 `snapshot`, and the one each `--apply` takes, writes to the tool's private state directory, which
 is not the site's backup folder. Where the site keeps one, copy the file there or point
-`--snapshot-dir <folder>` at it, and check that it arrived.
+`--snapshot-dir <folder>` at it, and check that it arrived. The file is named
+`config-<host>-<YYYYmmddHHMMSS>.xml`. A backup folder inside the site's git repo is accepted when
+the repo ignores it and tracks nothing in it; the rule and the warning it can print are below.
 
 ## Diagnose first
 
@@ -87,7 +89,14 @@ included. Only some of several addresses left present is a partial outcome: exit
 
 A snapshot is a whole `config.xml`, with password hashes, private keys and certificates in it, so
 it is written to a private per-user state directory (`--snapshot-dir` to choose another). Writing
-one into a git work tree is refused unless you pass `--allow-repo-snapshot`.
+one into a git work tree is refused unless git ignores that folder and nothing in it is tracked
+(git must ignore the snapshot FILE as well as the folder, so `configs/*` with a negation such as
+`!configs/*.xml` is refused; the rule must come from a .gitignore in the checkout or the clone's
+`.git/info/exclude`, never a per-user `core.excludesFile`; a force-added file in it makes it
+tracked), or you pass `--allow-repo-snapshot`. The snapshot file itself is always written 0600. A
+folder the tool creates is made private (0700); an existing one keeps its mode, and if the
+FOLDER's mode lets others read it the tool warns "is readable by others" and writes anyway. On a share whose modes the mount sets (SMB/CIFS), chmod cannot clear that warning:
+the share's own permissions decide who can read the snapshot, so check those instead.
 
 ```bash
 pfsense.py --host 192.0.2.1 --user admin --ssh "ssh -i /path/to/key" doctor

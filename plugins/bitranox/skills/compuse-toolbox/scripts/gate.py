@@ -78,7 +78,11 @@ watcher polling the log sees the verdict too: a log ending at a gate's last outp
 exactly like a run still going. Each run in the log starts with `##### gate run <time> #####`
 followed by `cwd: <dir>` and `repo: <work tree top level>` (a gate with its own --gate-cwd names
 it under its `=== gate:` line), because several sessions gating the same command left logs that
-differed in nothing else.
+differed in nothing else. A run appended to a log that already held one names its header's line
+number in the closing report; that report never quotes the header text, so a grep for the header
+matches the run headers and nothing the gate itself wrote (a gated command that prints the marker
+text can still add a match of its own). When the earlier log cannot be read (a write-only file),
+the line number is left out and the report says the run starts at its own header.
 
 Exit codes: 0 every gate passed (or, with --then, the follow-up's own code); a red run exits the
 single failing gate's OWN code where that is unambiguous (a taxonomy code such as 2 survives),
@@ -599,6 +603,8 @@ class GateResult:
 class GateReport:
     results: list[GateResult]
     appended_to_earlier_run: bool = False
+    start_line: int = 0
+    """1-based line of this run's header in the log; 0 when it is not known."""
 
     @property
     def ok(self) -> bool:
@@ -692,6 +698,27 @@ RUN_MARKER = "##### gate run"
 NOT_A_REPO = "(not a git work tree)"
 
 
+def _header_line(log_path: Path) -> int:
+    """The line the next run header lands on, or 0 when the earlier log cannot be read.
+
+    0 is the report's "at its own run header" form: a log the gate may append to but not read
+    (mode 0200) must not turn into a failed run, as it was not one before the line was counted.
+    """
+    try:
+        return count_newlines(log_path) + 2
+    except OSError:
+        return 0
+
+
+def count_newlines(path: Path) -> int:
+    """Newlines in `path`, read in pieces so a long pinned log is never held whole."""
+    count = 0
+    with path.open("rb") as f:
+        while piece := f.read(_READ_PIECE):
+            count += piece.count(b"\n")
+    return count
+
+
 def git_toplevel(directory: str) -> str:
     """The git work tree `directory` belongs to, or NOT_A_REPO. Never raises.
 
@@ -725,6 +752,9 @@ def run_gates(gates, log_path, summary: str = "", run_cwd: str | None = None) ->
     results: list[GateResult] = []
     # A pinned --log keeps every earlier run, and a grep of it answers for all of them at once.
     appended = log_path.exists() and log_path.stat().st_size > 0
+    # The header follows the blank line written before it, whether or not the earlier content
+    # ended in a newline, so it sits two lines past the newlines already there.
+    start_line = _header_line(log_path) if appended else 2
 
     with log_path.open("a", encoding="utf-8") as log:
         log.write(f"\n{RUN_MARKER} {datetime.now(timezone.utc).isoformat(timespec='seconds')} #####\n")
@@ -759,7 +789,7 @@ def run_gates(gates, log_path, summary: str = "", run_cwd: str | None = None) ->
                                       summary_lines=scan.summary_lines,
                                       test_count=scan.counter.count(), started=started))
 
-    return GateReport(results=results, appended_to_earlier_run=appended)
+    return GateReport(results=results, appended_to_earlier_run=appended, start_line=start_line)
 
 
 def format_report(report: GateReport, log_path) -> str:
@@ -779,7 +809,11 @@ def format_report(report: GateReport, log_path) -> str:
     out.append("ALL GATES PASSED" if report.ok else "GATE RED - follow-up NOT run")
     out.append(f"log: {log_path}")
     if report.appended_to_earlier_run:
-        out.append(f"  holds earlier runs too: this run starts at the last '{RUN_MARKER}' line, "
+        # The marker text itself must stay out of this line: it is appended to the log too, so
+        # quoting it made `grep -n <marker> LOG | tail -1` land here, below an empty-looking run.
+        start = (f"at line {report.start_line} (tail -n +{report.start_line} <log>)"
+                 if report.start_line else "at its own run header")
+        out.append(f"  holds earlier runs too: this run starts {start}, "
                    "and its verdict is the line above, or the LAST closing line in the log - "
                    "never the first one a grep finds")
     return "\n".join(out)
