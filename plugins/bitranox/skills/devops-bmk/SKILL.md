@@ -185,6 +185,17 @@ would use, which `uv python find --system --show-version X.Y` reports. Under
 `UV_PYTHON_PREFERENCE=system` the venv stays on the distro Python instead of rebuilding every run.
 Declare no `:: Python :: X.Y` classifier and bmk picks no version at all - uv's default stands.
 
+**With a Python minor declared, `UV_PYTHON` does not choose the interpreter a gate runs on.** bmk
+never reads the variable: every env-touching `make` hands uv the highest declared minor as an
+explicit `--python`, which outranks it, and rebuilds a `.venv` standing on another minor. So
+`UV_PYTHON=3.14 make test` in a project declaring 3.14 and 3.15 gates on 3.15, and a `.venv` you
+created on 3.14 is back on 3.15 after the run. With no `:: Python :: X.Y` classifier bmk passes no
+version when it creates a missing `.venv`, so there the variable decides, as part of uv's default;
+an existing `.venv` keeps its interpreter. To gate on another declared minor, run `make test-all`
+(its `.venv-<minor>` cell) or let CI do it. In a report of a local gate, name the interpreter it
+ran on, read after the run: `.venv/bin/python -V` (a `test-all` cell:
+`.venv-<minor>/bin/python -V`; on Windows `Scripts\python.exe` in place of `bin/python`).
+
 The same classifiers drive `make test-all`: it provisions one `.venv-<minor>` per declared version
 and runs pytest + pyright in each, in parallel by default, so you can reproduce CI's Python-version
 matrix locally before you push. Each cell's pyright makes the same per-OS runs as `make test`'s
@@ -528,6 +539,22 @@ forwarded (e.g. `make push fix login bug`). Most have short aliases.
   cooldown between two runs minutes apart, so one pass is not enough; stop on any other changed
   file. Then bump, gate the bump commit as above, and release. Bumping first and gating after
   leaves that churn behind the release commit, where `release` refuses the dirty tree.
+- **A raised runtime floor needs a CHANGELOG line, and bmk writes none.** The floor update raises
+  the requirements in `[project].dependencies` like any others, and those are what every install
+  of the package must satisfy; the only thing bmk writes to `CHANGELOG.md` is the bump's heading
+  rename. After the last gate before the bump, compare them with the last tag (any `python3` 3.11
+  or later, for `tomllib`; a repo with no tag yet has no released requirements to compare, and
+  the command fails there):
+
+  ```bash
+  git show "$(git describe --tags --abbrev=0)":pyproject.toml | python3 -c 'import sys, tomllib; old = set(tomllib.loads(sys.stdin.read())["project"].get("dependencies", [])); new = set(tomllib.load(open("pyproject.toml", "rb"))["project"].get("dependencies", [])); sys.stdout.writelines(("- " if r in old else "+ ") + r + "\n" for r in sorted(old ^ new))'
+  ```
+
+  It prints nothing when no runtime requirement changed, else a `-` line for each requirement as
+  the tag has it and a `+` line as the tree has it. When it prints, add one line under
+  `## [Unreleased]` before `make bump-*`, such as
+  `runtime dependency floors raised: pydantic >=2.14.1 -> >=2.14.3`. A floor that a gate raises
+  after the bump gets its line under the new version's heading, before the release.
 - `push` starts with a `deps` check (its first stage, `update_deps`, runs it) that FAILS when any
   dependency floor in `pyproject.toml` is behind the latest PyPI release (an exact pin excepted,
   see the next point), which can be minutes old. In the default JSON mode that is an

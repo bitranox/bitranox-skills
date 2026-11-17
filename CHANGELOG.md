@@ -30,6 +30,17 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.10.5]
+
+### Changed
+
+- `devops-bmk`: with a Python minor declared, `UV_PYTHON` does not choose the interpreter a gate
+  runs on; bmk hands uv the highest declared minor and rebuilds a `.venv` on any other. Gate
+  another minor with `make test-all` or CI, and name the interpreter a local gate ran on.
+- `devops-bmk` (release): a runtime floor the dependency refresh raises needs a CHANGELOG line,
+  which bmk does not write; a one-line comparison of `[project].dependencies` against the last tag
+  lists what moved.
+
 ## [11.10.4]
 
 ### Fixed
