@@ -30,6 +30,28 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.10.12]
+
+### Fixed
+
+- `compuse-toolbox` `ci_wait.py`:
+  - a failed wait prints every job of every run with its conclusion (failed ones first) just
+    above the verdict line, so the full set of failed cells is in one place instead of only the
+    jobs that had failed by the last poll; `--json` carries them as `data.jobs`. The verdict
+    line and the exit codes are unchanged;
+  - an exhausted GitHub API rate limit ends the wait at once with the new state `rate-limited`
+    (exit 2) and the reset time in local time and UTC, instead of retrying for the whole error
+    grace against a limit every session of the account shares. A 403 with requests left, or a
+    limit that cannot be read, keeps the retry.
+
+### Changed
+
+- `infra-chrome-remote-desktop`: a browser that takes about 25 s to open inside the session
+  comes from a session file that starts its own D-Bus (`dbus-launch`), so every keyring request
+  waits out the activation timeout; the skill gives the check (time a secrets ping on the
+  desktop's bus against the user bus) and the fix (use the user bus when its socket exists,
+  `dbus-launch` only as the fallback). The session file runs under `/bin/sh`.
+
 ## [11.10.11]
 
 ### Changed

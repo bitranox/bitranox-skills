@@ -38,15 +38,16 @@ jingle_session.cc:428  Session closed with error 4: Local login check failed.
 
 ## Symptom to cause
 
-| Symptom the user reports                                | Real cause                                                                                                    | Confirm with                                                                                                                     | Disproved if                                                                                      |
-|---------------------------------------------------------|---------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------|
-| "PIN is not valid" every time, host listed as online    | PAM account check rejects the user                                                                            | journal shows `pam_acct_mgmt() returned error 7`                                                                                 | journal shows no `pam_` line during the attempt - the PIN may be genuinely wrong, verify the hash |
-| Connects, then drops immediately                        | Same account-check failure, later in the handshake                                                            | journal shows `Session closed with error 4`                                                                                      | journal shows a network or relay error instead                                                    |
-| Host shows offline in the device list                   | The service is not running; exiting 1 at start after a rename is the hostname row below                       | `systemctl status chrome-remote-desktop@<user>`                                                                                  | the unit is `active (running)` - the host is registered to a different account or machine         |
-| `sudo: The "no new privileges" flag is set`             | `start-host` ran as root (the binary sets the flag on itself), or the target user's shell already carries NNP | `whoami` in the shell that ran it; if that was already the target user, `runuser -u <user> -- grep NoNewPrivs /proc/self/status` | you ran as the target user AND that reads `0` - the flag is not the obstacle, look elsewhere      |
-| `Failed to set new config` / `Failed to start host`     | The run died after the OAuth code was already spent                                                           | `ls ~<user>/.config/chrome-remote-desktop/host#*.json`                                                                           | no config file was written at all                                                                 |
-| Unit exits 1 right after start, after a hostname change | The config file is named after an md5 of the hostname, so the renamed host finds no config                    | `printf %s "$(hostname)" \| md5sum` differs from the hex in the one `host#*.json` name                                           | the hash equals the file name                                                                     |
-| Two device entries, one permanently dead                | A cloned image inherited the source host's config                                                             | more than one `host#*.json`, or a `private_key` from the source                                                                  | exactly one config whose `host_id` matches the live entry                                         |
+| Symptom the user reports                                | Real cause                                                                                                    | Confirm with                                                                                                                     | Disproved if                                                                                                                |
+|---------------------------------------------------------|---------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------|
+| "PIN is not valid" every time, host listed as online    | PAM account check rejects the user                                                                            | journal shows `pam_acct_mgmt() returned error 7`                                                                                 | journal shows no `pam_` line during the attempt - the PIN may be genuinely wrong, verify the hash                           |
+| Connects, then drops immediately                        | Same account-check failure, later in the handshake                                                            | journal shows `Session closed with error 4`                                                                                      | journal shows a network or relay error instead                                                                              |
+| Host shows offline in the device list                   | The service is not running; exiting 1 at start after a rename is the hostname row below                       | `systemctl status chrome-remote-desktop@<user>`                                                                                  | the unit is `active (running)` - the host is registered to a different account or machine                                   |
+| `sudo: The "no new privileges" flag is set`             | `start-host` ran as root (the binary sets the flag on itself), or the target user's shell already carries NNP | `whoami` in the shell that ran it; if that was already the target user, `runuser -u <user> -- grep NoNewPrivs /proc/self/status` | you ran as the target user AND that reads `0` - the flag is not the obstacle, look elsewhere                                |
+| `Failed to set new config` / `Failed to start host`     | The run died after the OAuth code was already spent                                                           | `ls ~<user>/.config/chrome-remote-desktop/host#*.json`                                                                           | no config file was written at all                                                                                           |
+| Unit exits 1 right after start, after a hostname change | The config file is named after an md5 of the hostname, so the renamed host finds no config                    | `printf %s "$(hostname)" \| md5sum` differs from the hex in the one `host#*.json` name                                           | the hash equals the file name                                                                                               |
+| Two device entries, one permanently dead                | A cloned image inherited the source host's config                                                             | more than one `host#*.json`, or a `private_key` from the source                                                                  | exactly one config whose `host_id` matches the live entry                                                                   |
+| Browser takes about 25 s to open inside the session     | The session file started its own bus (`dbus-launch`), so the desktop cannot reach the keyring                 | the desktop's `DBUS_SESSION_BUS_ADDRESS` is not `unix:path=/run/user/<uid>/bus` (see "The session bus" below)                    | the Ping on the desktop's own bus answers fast with no error, or the user-bus Ping is slow too - the keyring itself is slow |
 
 ## The account-check failure: /etc/shadow group ownership
 
@@ -268,6 +269,63 @@ systemctl enable --now chrome-remote-desktop@<user>
 systemctl status chrome-remote-desktop@<user>
 ```
 
+### The session bus: do not start a second one
+
+The launcher starts the session file through `/bin/sh` and hands it its own environment. Under the
+systemd unit that normally includes `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/<uid>/bus`, the
+user bus where gnome-keyring and the other user services run, so a file without any bus line
+already puts the desktop on the right bus.
+
+A session file that runs `eval $(dbus-launch --sh-syntax)` (a line often copied from other
+remote-desktop setups) puts the whole desktop on a private bus instead. The keyring is not
+reachable there, so every `org.freedesktop.secrets` call from the desktop waits out libdbus's
+25-second reply timeout: Chrome, and any other program that stores passwords through libsecret,
+takes about 25 s to start. CPU, memory and the browser itself all look healthy.
+
+Confirm it as root, against the running desktop (use the session binary this box runs):
+
+```bash
+PID="$(pgrep -n -u <user> -x mate-session)"     # -n: the newest, when there are several
+# prints the marker for the CRD desktop; no line means a different desktop (a local login):
+# then set PID to another of the PIDs `pgrep -u <user> -x mate-session` lists and check again
+tr '\0' '\n' < "/proc/$PID/environ" | grep -x CHROME_REMOTE_DESKTOP_SESSION=1
+DESKTOP_BUS="$(tr '\0' '\n' < "/proc/$PID/environ" | sed -n 's/^DBUS_SESSION_BUS_ADDRESS=//p')"
+# healthy: unix:path=/run/user/<uid>/bus; a /tmp/dbus-... path is the private bus
+echo "$DESKTOP_BUS"
+for BUS in "$DESKTOP_BUS" "unix:path=/run/user/$(id -u <user>)/bus"; do
+    echo "$BUS"
+    time runuser -u <user> -- env DBUS_SESSION_BUS_ADDRESS="$BUS" dbus-send --session \
+        --print-reply --dest=org.freedesktop.secrets /org/freedesktop/secrets \
+        org.freedesktop.DBus.Peer.Ping > /dev/null
+done
+```
+
+On the private bus the Ping ends in `org.freedesktop.DBus.Error.NoReply` after about 25 s; on the
+user bus it answers in milliseconds and prints no error. A fast error line (`ServiceUnknown`) is
+not a healthy answer: nothing provides the keyring on that bus. The user-bus Ping is the control:
+when it is slow as well, the keyring itself is the problem and the bus is not.
+
+Fix the session file to use the user bus whenever its socket exists, and start a private bus only
+as the fallback. Keep it POSIX `sh`: without a shebang line, `/bin/sh` is the shell that runs it.
+
+```sh
+# Use the systemd user bus when it exists; start a private bus only without one.
+if [ -S "/run/user/$(id -u)/bus" ]; then
+    export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus"
+    dbus-update-activation-environment --systemd DISPLAY XAUTHORITY
+else
+    eval "$(dbus-launch --sh-syntax)"
+fi
+exec /usr/bin/mate-session
+```
+
+`dbus-update-activation-environment` (package `dbus-bin` on Debian and Ubuntu) hands `DISPLAY` to
+the services the user bus starts, so a keyring unlock prompt opens on the remote desktop; an unset
+`XAUTHORITY` is skipped silently. The file is read when a session starts, so the change takes
+effect at the next session start, not in the running desktop. Restarting the unit starts one, but
+it ends the current session: tell the user first. Then re-run the check above, expect the user-bus
+address, and time the browser's first window.
+
 ## A cloned host: retire the inherited registration before the first start
 
 A copy of a registered host (a restored backup, a cloned VM or container) carries the source's
@@ -335,22 +393,24 @@ the config of every other CRD host you run; a match is a copy.
 
 ## Common mistakes
 
-| Mistake                                                  | Why it goes wrong                                                                          |
-|----------------------------------------------------------|--------------------------------------------------------------------------------------------|
-| Treating "PIN is not valid" as a PIN problem             | It is the rendering of a failed PAM account check. The PIN is never consulted.             |
-| Re-registering before reading the journal                | A correctly registered host re-registers correctly and fails identically, one code poorer. |
-| Re-registering a host whose hostname changed             | Only the config file name is stale; moving it to the new hash needs no code.               |
-| Testing the PAM fix as root                              | Root passes either way. The result is the same before and after the fix.                   |
-| Running the positive pamtester case only                 | It passes against a permit-everything PAM stack too.                                       |
-| Running `start-host` as root                             | The binary sets `PR_SET_NO_NEW_PRIVS` on itself and its own `sudo` call is refused.        |
-| Reaching for `--user-name` to avoid running as the user  | The flag is on the process; the target account is not the problem.                         |
-| Leaving the NOPASSWD grant in place                      | A registration convenience becomes a standing privilege escalation.                        |
-| Retrying the fixed command with the same `--code`        | A run that reached the config write already spent it. The retry dies on a dead code.       |
-| Probing the root shell for `NoNewPrivs` after a root run | The binary sets the flag on itself, so the invoking shell reads `0` and looks innocent.    |
-| Stacking a second `start-host` on a half-written config  | The local `host_id` and the directory entry disagree and the host never connects.          |
-| Trusting one PIN-hash comparison                         | The swapped-argument form returns `False` for every input.                                 |
-| Cloning a machine that already had CRD registered        | The clone inherits `host_id` and `private_key` and fights the original for the entry.      |
-| Disabling only `chrome-remote-desktop@<user>` on a clone | A wrapper unit that starts it (`ExecStart=systemctl start ...`) brings it up regardless.   |
+| Mistake                                                   | Why it goes wrong                                                                          |
+|-----------------------------------------------------------|--------------------------------------------------------------------------------------------|
+| Treating "PIN is not valid" as a PIN problem              | It is the rendering of a failed PAM account check. The PIN is never consulted.             |
+| Re-registering before reading the journal                 | A correctly registered host re-registers correctly and fails identically, one code poorer. |
+| Re-registering a host whose hostname changed              | Only the config file name is stale; moving it to the new hash needs no code.               |
+| Testing the PAM fix as root                               | Root passes either way. The result is the same before and after the fix.                   |
+| Running the positive pamtester case only                  | It passes against a permit-everything PAM stack too.                                       |
+| Running `start-host` as root                              | The binary sets `PR_SET_NO_NEW_PRIVS` on itself and its own `sudo` call is refused.        |
+| Reaching for `--user-name` to avoid running as the user   | The flag is on the process; the target account is not the problem.                         |
+| Leaving the NOPASSWD grant in place                       | A registration convenience becomes a standing privilege escalation.                        |
+| Retrying the fixed command with the same `--code`         | A run that reached the config write already spent it. The retry dies on a dead code.       |
+| Probing the root shell for `NoNewPrivs` after a root run  | The binary sets the flag on itself, so the invoking shell reads `0` and looks innocent.    |
+| Stacking a second `start-host` on a half-written config   | The local `host_id` and the directory entry disagree and the host never connects.          |
+| Trusting one PIN-hash comparison                          | The swapped-argument form returns `False` for every input.                                 |
+| Cloning a machine that already had CRD registered         | The clone inherits `host_id` and `private_key` and fights the original for the entry.      |
+| Disabling only `chrome-remote-desktop@<user>` on a clone  | A wrapper unit that starts it (`ExecStart=systemctl start ...`) brings it up regardless.   |
+| Running `dbus-launch` in the session file                 | The desktop leaves the user bus the keyring is on; each keyring call waits 25 s.           |
+| Starting a keyring daemon in the session file to fix that | It treats the symptom on the wrong bus; put the desktop back on the user bus instead.      |
 
 ## Red flags - stop
 

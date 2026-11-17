@@ -23,6 +23,12 @@ retried on its own budget; the streak resets on any answered poll, and only a su
 ends the wait - reported as `error` with gh's own last message, never as a `timeout` that would
 blame CI for the API.
 
+One gh failure is not weather: a spent API rate limit (a 403 "API rate limit exceeded"). Retrying
+it spent the whole grace, about ten more calls, against a limit every session on the account
+shares. So after each failed call the quota is read (`gh api rate_limit`, which GitHub does not
+count against it), and when its `core` remaining is 0 the wait ends at once as `rate-limited`,
+exit 2, naming when it resets in local time and in UTC. A quota that cannot be read keeps the retry.
+
 An all-green answer is CONFIRMED before it is returned (`--settle`, 20 seconds), for the same
 reason one level up: the runs for a push are not all created at the same instant, so the first
 poll can see a SUBSET of them, and a subset that is entirely terminal is indistinguishable from
@@ -79,6 +85,12 @@ and a green run with an unfinished job is waited for. `--fail-on-failed-job` end
 `failed` as soon as such a job failed; it is off by default because a `continue-on-error` job
 fails without failing its run and the API does not say which jobs carry it.
 
+A poll line names only the jobs failed BY THAT POLL, and the verdict line names runs, not jobs, so
+neither says which cells a red push failed in. Measured: a reader quoted a poll's one failed macOS
+cell while the windows cell was still running, and windows failed too. So a `failed` wait reads
+every job of every run once more and prints them, failed ones first, as a block on stderr BEFORE
+the verdict line (JSON: `data.jobs`), leaving the verdict line last and unchanged.
+
 `--workflow NAME` counts only that workflow's runs (asked for server-side), for waiting on a
 release workflow without also waiting on CI. A `no-runs` verdict names its two live causes: a
 push to a branch the workflows' `on: push` filters exclude, and - when the local repository
@@ -115,11 +127,13 @@ Run: `uv run scripts/ci_wait.py --ref HEAD`
 Exit 0 = every counted run for that sha succeeded (or was skipped; scheduled runs are not counted
 unless `--event any`), 1 = at least one did not, 2 = could
 not tell (bad sha, a ref that does not resolve, a bad flag value, no runs for it, a run awaiting
-approval, a run stuck in the queue, every failed run refused by GitHub for account billing, timed out, `gh` failed, or the tool itself crashed). `--json` prints the envelope
-`{ok, command, data: {state, summary, runs, sha, not_counted}, skipped}` on every exit, a usage
-error included (`sha` is absent when the sha itself was refused; `not_counted`, the scheduled runs
-the default filter left out of the last answered poll, is present only under the default filter
-once a poll answered); `ok` is false exactly on exit 2, with `error` repeating the summary.
+approval, a run stuck in the queue, every failed run refused by GitHub for account billing, timed out, the API rate limit spent, `gh` failed, or the tool itself crashed). `--json` prints the envelope
+`{ok, command, data: {state, summary, runs, sha, not_counted, jobs}, skipped}` on every exit, a
+usage error included (`sha` is absent when the sha itself was refused; `not_counted`, the scheduled
+runs the default filter left out of the last answered poll, is present only under the default
+filter once a poll answered; `jobs`, every job of every run as
+`{databaseId, workflowName, state, jobs: [{name, status, conclusion}] or null}`, only on `failed`);
+`ok` is false exactly on exit 2, with `error` repeating the summary.
 """
 
 import argparse
@@ -133,12 +147,12 @@ import subprocess
 import sys
 import time
 import traceback
-from datetime import datetime
+from datetime import UTC, datetime, tzinfo
 from dataclasses import dataclass, replace
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from enum import StrEnum
 from types import MappingProxyType
-from typing import Final
+from typing import Final, TypeIs
 
 from _cli_envelope import EnvelopeArgumentParser, emit
 
@@ -202,6 +216,7 @@ class CiState(StrEnum):
     STUCK_QUEUED = "stuck-queued"
     NO_RUNS = "no-runs"
     TIMEOUT = "timeout"
+    RATE_LIMITED = "rate-limited"
     ERROR = "error"
 
 
@@ -211,7 +226,7 @@ class CiState(StrEnum):
 _EXIT_CODES: Final[Mapping[CiState, int]] = MappingProxyType({
     CiState.SUCCESS: 0, CiState.FAILED: 1, CiState.BILLING_BLOCKED: 2, CiState.PENDING: 2,
     CiState.PENDING_APPROVAL: 2, CiState.STUCK_QUEUED: 2, CiState.NO_RUNS: 2,
-    CiState.TIMEOUT: 2, CiState.ERROR: 2,
+    CiState.TIMEOUT: 2, CiState.RATE_LIMITED: 2, CiState.ERROR: 2,
 })
 #: GitHub's annotation on a job it refused to start for billing. Matched on the text because
 #: nothing else separates it: the run concludes `failure` exactly like a real one, and the only
@@ -262,7 +277,7 @@ class Verdict:
 
     Attributes:
         state: ``success``, ``failed``, ``billing-blocked``, ``pending``, ``pending-approval``,
-            ``stuck-queued``, ``no-runs``, ``timeout`` or ``error``.
+            ``stuck-queued``, ``no-runs``, ``timeout``, ``rate-limited`` or ``error``.
         summary: One human line naming the runs that decided it.
         runs: The rows the verdict was computed from.
     """
@@ -328,6 +343,96 @@ def tally_jobs(jobs: Iterable[object]) -> JobTally:
         else:
             queued.append(name)
     return JobTally(done, running, len(queued), tuple(queued), tuple(running_names), tuple(failed))
+
+
+@dataclass(frozen=True)
+class JobOutcome:
+    """One job of a run as the closing report names it.
+
+    Attributes:
+        name: The job name, the matrix label included.
+        status: ``completed``, ``in_progress``, ``queued``, ...
+        conclusion: The job's conclusion, ``None`` while it is not completed.
+    """
+
+    name: str
+    status: str
+    conclusion: str | None
+
+    @property
+    def label(self) -> str:
+        """The conclusion of a completed job, else its status: what the job IS at report time."""
+        if self.status == _TERMINAL:
+            return str(self.conclusion)
+        return self.status
+
+    @property
+    def failed(self) -> bool:
+        return self.status == _TERMINAL and self.conclusion in _JOB_FAILED
+
+
+@dataclass(frozen=True)
+class RunJobs:
+    """Every job of one run, read once the wait ended ``failed``.
+
+    Attributes:
+        run_id: The run's ``databaseId``.
+        workflow: The run's workflow name.
+        state: The run's conclusion when it completed, else its status.
+        jobs: The jobs in the order the API listed them; ``None`` when they could not be read.
+    """
+
+    run_id: object
+    workflow: str
+    state: str
+    jobs: tuple[JobOutcome, ...] | None
+
+
+def read_run_jobs(runs: Iterable[dict[str, object]],
+                  read: Callable[[object], list[dict[str, object]] | None]) -> tuple[RunJobs, ...]:
+    """Every job of every run in ``runs``, read through ``read`` (one call per run).
+
+    The closing report needs this because the poll lines cannot stand in for it: a poll names only
+    the jobs that had failed BY THAT POLL, and the run-level verdict names none. Measured: a reader
+    quoted "failed: tests (macos-latest, py3.15)" from a poll while the windows cell was still
+    running, shipped a fix for macOS alone, and the windows cell failed too.
+    """
+    answers = []
+    for row in runs:
+        run_id = row.get("databaseId")
+        state = row.get("conclusion") if row.get("status") == _TERMINAL else row.get("status")
+        raw = read(run_id)
+        jobs = None if raw is None else tuple(
+            JobOutcome(str(j.get("name") or j.get("databaseId") or "?"), str(j.get("status")),
+                       None if j.get("conclusion") is None else str(j.get("conclusion")))
+            for j in raw if isinstance(j, dict))
+        answers.append(RunJobs(run_id, str(row.get("workflowName")), str(state), jobs))
+    return tuple(answers)
+
+
+def format_run_jobs(run: RunJobs) -> list[str]:
+    """The closing report's lines for one run: a header, then one line per job. PURE.
+
+    Failed jobs come first, then every other job that did not pass, then the rest, each group in
+    the API's order, so the cells a fix has to cover are at the top however long the matrix is.
+    """
+    head = f"jobs of run {run.run_id} ({run.workflow}, {run.state})"
+    if run.jobs is None:
+        return [f"{head}: not read (gh could not list them); see `gh run view {run.run_id}`"]
+    failed = sum(1 for job in run.jobs if job.failed)
+    ordered = sorted(run.jobs, key=lambda job: 0 if job.failed else 1 if job.label not in _PASSING else 2)
+    width = max((len(job.label) for job in ordered), default=0)
+    return [f"{head}: {failed} of {len(run.jobs)} failed",
+            *(f"  {job.label:<{width}}  {job.name}" for job in ordered)]
+
+
+def run_jobs_payload(runs: Iterable[RunJobs]) -> list[dict[str, object]]:
+    """The ``data.jobs`` field of the JSON envelope. PURE."""
+    return [{"databaseId": run.run_id, "workflowName": run.workflow, "state": run.state,
+             "jobs": None if run.jobs is None else [
+                 {"name": job.name, "status": job.status, "conclusion": job.conclusion}
+                 for job in run.jobs]}
+            for run in runs]
 
 
 def format_duration(seconds: float) -> str:
@@ -633,6 +738,7 @@ def wait_for(
     fail_on_failed_job: bool = False,
     workflow: str | None = None,
     run_billing_blocked: Callable[[object], bool | None] | None = None,
+    rate_limit_spent: Callable[[], str | None] | None = None,
 ) -> Verdict:
     """Poll ``fetch`` until every run is terminal, or a budget runs out.
 
@@ -733,10 +839,16 @@ def wait_for(
             billing (``True``), did not (``False``), or it could not be told (``None``). Asked
             for every failed run once the verdict is ``failed``; only when EVERY one answers
             ``True`` is the verdict ``billing-blocked`` instead. ``None`` here skips the check.
+        rate_limit_spent: Asked after every failed ``fetch``: the verdict line when the
+            account's API rate limit is spent, else ``None`` (not spent, or it could not be
+            read, which keeps the retry). A spent limit ends the wait at once as
+            ``rate-limited``: measured, a 403 "API rate limit exceeded" was retried for the whole
+            ``error_grace_s``, about ten more calls against an empty limit that every session on
+            the account shares, and the wait still ended in ``error``.
 
     Returns:
         The terminal verdict: ``success``, ``failed``, ``billing-blocked``, ``pending-approval``,
-        ``stuck-queued``, ``no-runs``, ``timeout`` or ``error``.
+        ``stuck-queued``, ``no-runs``, ``timeout``, ``rate-limited`` or ``error``.
 
     Raises:
         GhUnavailable: `gh` cannot be run here; no budget can fix that.
@@ -779,6 +891,9 @@ def wait_for(
         except GhFailed as exc:
             errors_seen += 1
             last_error = str(exc)
+            if rate_limit_spent is not None and (spent := rate_limit_spent()) is not None:
+                return Verdict(CiState.RATE_LIMITED, f"{spent}; last gh failure: {last_error}",
+                               tuple(last_rows))
             error_since = timer.now() if error_since is None else error_since
             if timer.now() - error_since >= error_grace_s:
                 return _gh_gave_up(errors_seen, last_error)
@@ -1276,6 +1391,70 @@ def gh_run_billing_blocked(run_id: object, *, repo: str | None = None,
     return False
 
 
+@dataclass(frozen=True)
+class RateLimit:
+    """The REST ``core`` quota, as `gh api rate_limit` reports it.
+
+    Attributes:
+        remaining: Requests left in the current window.
+        limit: Requests the window allows.
+        reset: When the window resets, in epoch seconds.
+    """
+
+    remaining: int
+    limit: int
+    reset: float
+
+
+def parse_rate_limit(answer: object) -> RateLimit | None:
+    """The ``resources.core`` quota of a `gh api rate_limit` answer, or ``None``. PURE.
+
+    ``core`` because every call this tool makes (`gh run list`, `gh run view`, the annotations) is
+    a REST call. Any other shape is an unknown, never a spent limit.
+    """
+    resources = answer.get("resources") if isinstance(answer, dict) else None
+    core = resources.get("core") if isinstance(resources, dict) else None
+    if not isinstance(core, dict):
+        return None
+    remaining, limit, reset = core.get("remaining"), core.get("limit"), core.get("reset")
+    if not (_is_count(remaining) and _is_count(limit) and _is_count(reset)):
+        return None
+    return RateLimit(remaining, limit, float(reset))
+
+
+def _is_count(value: object) -> TypeIs[int]:
+    """A JSON integer, never a bool (``True`` is an ``int`` to Python, never a count). PURE."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def gh_rate_limit(*, repo: str | None = None,
+                  timeout_s: float = GH_CALL_FLOOR_S) -> RateLimit | None:
+    """The account's REST quota (`gh api rate_limit`); ``None`` when it could not be read.
+
+    GitHub does not count this endpoint against the limit, so asking it after a failed call costs
+    none of the budget the question is about. An enterprise ``HOST/OWNER/NAME`` is asked on that
+    host: the quota is per host.
+    """
+    gh_api, _base = _gh_api_target(repo)
+    try:
+        return parse_rate_limit(_gh_json([*gh_api, "rate_limit"], timeout_s))
+    except (GhFailed, GhUnavailable):
+        return None
+
+
+def rate_limit_summary(spent: RateLimit, *, now: float, tz: tzinfo | None = None) -> str:
+    """The ``rate-limited`` verdict line, naming the reset in local time and in UTC. PURE.
+
+    ``tz`` is the local zone (``None``: the machine's), a parameter so a test pins the text.
+    """
+    utc = datetime.fromtimestamp(spent.reset, UTC)
+    local = utc.astimezone(tz)
+    return (f"the GitHub API rate limit is spent ({spent.remaining} of {spent.limit} core requests "
+            f"left); it resets at {local:%Y-%m-%d %H:%M:%S %Z} ({utc:%Y-%m-%d %H:%M:%S} UTC), in "
+            f"{format_duration(max(0.0, spent.reset - now))}. The limit is shared by every session "
+            f"on the account, so retrying before then only fails again")
+
+
 def _gh_api_target(repo: str | None) -> tuple[list[str], str]:
     """(the `gh api` argv prefix, the ``repos/OWNER/NAME`` path) for ``repo``. PURE.
 
@@ -1615,6 +1794,18 @@ def _run(args: argparse.Namespace) -> int:
             return hold_older_attempts(seen_fetch(), args.min_attempt)
     jobs_now = _JobsPerPoll(side_call(gh_run_jobs))
     fetch = jobs_now.clearing_on(fetch)
+
+    def rate_spent() -> str | None:
+        bound = deadline.side_bound()
+        if bound is None:
+            return None
+        # The floor, not the full side bound: this is asked after EVERY failed poll, and a stalled
+        # API would otherwise double each failed poll's time.
+        quota = gh_rate_limit(repo=repo, timeout_s=min(GH_CALL_FLOOR_S, bound))
+        if quota is None or quota.remaining > 0:
+            return None
+        return rate_limit_summary(quota, now=time.time())
+
     try:
         result = wait_for(
             fetch,
@@ -1636,9 +1827,13 @@ def _run(args: argparse.Namespace) -> int:
             workflow=args.workflow,
             run_billing_blocked=lambda run_id: gh_run_billing_blocked(
                 run_id, repo=repo, bound=deadline.side_bound),
+            rate_limit_spent=rate_spent,
         )
     except (GhFailed, GhUnavailable) as exc:
         return _emit(Verdict(CiState.ERROR, str(exc)), as_json=args.json, sha=sha)
+    # Every job of every run, read afresh once the wait ended red: the poll lines named only the
+    # jobs failed by each poll, and the verdict line names runs, not jobs.
+    jobs = read_run_jobs(result.runs, side_call(gh_run_jobs)) if result.state == CiState.FAILED else ()
     if result.state == CiState.NO_RUNS:
         on_remote = sha_on_a_remote(sha, cwd=local_dir) if args.repo is None or local_dir else None
         result = replace(result, summary=result.summary + no_runs_hint(on_remote))
@@ -1646,7 +1841,7 @@ def _run(args: argparse.Namespace) -> int:
         result = replace(result, summary=result.summary
                          + _usual_durations(result.runs, repo, deadline.side_bound))
     return _emit(result, as_json=args.json, sha=sha,
-                 not_counted=not_counted[-1] if not_counted else None)
+                 not_counted=not_counted[-1] if not_counted else None, jobs=jobs)
 
 
 class _Deadline:
@@ -1753,14 +1948,17 @@ def _resolve_repo_once(timeout_s: float) -> str | None:
 
 
 def _emit(result: Verdict, *, as_json: bool, sha: str | None = None,
-          not_counted: int | None = None) -> int:
+          not_counted: int | None = None, jobs: Sequence[RunJobs] = ()) -> int:
     """Print the verdict and return its exit code; diagnostics to stderr, never into the data.
 
     ``sha`` is the commit that was watched, once known, so a ``--ref`` caller learns what it
     resolved to; it is absent when the sha itself was refused. ``not_counted`` is how many runs
     the default event filter left out of the last answered poll (``None``: not measured). JSON
     carries it as its own field and leaves ``summary`` as it was, so a consumer matching the
-    summary is unaffected; the text line gets :func:`_not_counted_note` appended.
+    summary is unaffected; the text line gets :func:`_not_counted_note` appended. ``jobs`` (a
+    ``failed`` wait only) is every job of every run: JSON carries it as ``data.jobs``, text prints
+    it as a block on stderr BEFORE the verdict line, so the verdict stays the last line and keeps
+    its exact form for a caller reading it.
     """
     code = exit_code_for(result.state)
     if as_json:
@@ -1770,8 +1968,13 @@ def _emit(result: Verdict, *, as_json: bool, sha: str | None = None,
             data["sha"] = sha
         if not_counted is not None:
             data["not_counted"] = not_counted
+        if jobs:
+            data["jobs"] = run_jobs_payload(jobs)
         emit(code, "ci_wait", data, error=result.summary if code == 2 else None, indent=None)
         return code
+    for run in jobs:
+        for line in format_run_jobs(run):
+            print(line, file=sys.stderr)
     summary = result.summary + _not_counted_note(not_counted, result.state)
     if code == 0:
         print(summary)
