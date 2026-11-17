@@ -33,6 +33,7 @@ import subprocess
 import sys
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import NoReturn
 
@@ -40,7 +41,20 @@ import claude_paths
 import tell_chars
 
 LEDGER_REL = ".skillwriter/decisions.jsonl"
-KINDS = ("rule", "removed", "rejected", "void")
+
+
+class Kind(StrEnum):
+    """An entry's `kind`. The values are the strings the ledger holds; entries stay dicts and
+    validate_entry checks membership, so comparing against a member is what makes a misspelt kind
+    an AttributeError at import rather than a comparison that is false for every entry."""
+
+    RULE = "rule"
+    REMOVED = "removed"
+    REJECTED = "rejected"
+    VOID = "void"
+
+
+KINDS = tuple(Kind)
 TIERS = ("measured", "user", "argued", "inherited")
 ORIGINS = ("authored", "imported", "baseline", "ab")
 FIELDS = ("v", "id", "date", "kind", "topic", "decision", "why", "evidence", "reopen_if",
@@ -142,14 +156,14 @@ def _list_problems(entry: dict) -> list[str]:
     supersedes = _list(entry, "supersedes")
     if any(not _ID.fullmatch(x) for x in supersedes if isinstance(x, str)):
         problems.append("supersedes: every item must be an entry id")
-    if entry.get("kind") == "void" and not supersedes:
+    if entry.get("kind") == Kind.VOID and not supersedes:
         problems.append("supersedes: a void entry names the entry it withdraws")
     return problems
 
 
 def _anchor_problems(entry: dict) -> list[str]:
     anchors = _list(entry, "anchors")
-    if entry.get("kind") != "rule":
+    if entry.get("kind") != Kind.RULE:
         return ["anchors: only a rule entry carries anchors"] if anchors else []
     if not anchors:
         return ["anchors: a rule entry needs at least one"]
@@ -202,7 +216,7 @@ def validate_entry(entry: dict) -> list[str]:
     if type(entry.get("v")) is not int or entry.get("v") != 1:
         problems.append("v: must be the integer 1")
     problems += _date_problems(entry)
-    required = ("decision", "why") if entry.get("kind") == "void" else ("decision", "why", "reopen_if")
+    required = ("decision", "why") if entry.get("kind") == Kind.VOID else ("decision", "why", "reopen_if")
     problems += ["%s: empty" % f for f in required if not _text(entry, f)]
     problems += _vocabulary_problems(entry) + _list_problems(entry) + _anchor_problems(entry)
     unencodable = _unencodable_problems(entry)
@@ -276,7 +290,7 @@ def live_entries(lines_factory: LinesFactory) -> Iterator[dict]:
     voided: set[str] = set()
     supersedes: dict[str, list[str]] = {}     # ids only, never an entry's text
     for entry in parse_entries(lines_factory()):
-        if entry["kind"] == "void":
+        if entry["kind"] == Kind.VOID:
             voided.update(entry["supersedes"])
         elif entry["supersedes"]:
             supersedes[entry["id"]] = entry["supersedes"]
@@ -285,7 +299,7 @@ def live_entries(lines_factory: LinesFactory) -> Iterator[dict]:
         if entry_id not in voided:
             superseded.update(targets)
     for entry in parse_entries(lines_factory()):
-        if entry["id"] not in superseded and entry["kind"] != "void":
+        if entry["id"] not in superseded and entry["kind"] != Kind.VOID:
             yield entry
 
 
@@ -389,7 +403,7 @@ def render_brief(lines_factory: LinesFactory, *, skill: str, budget_chars: int =
     """
     blocks, used, left = [], 0, 0
     for entry in live_entries(lines_factory):
-        if entry["kind"] not in ("rejected", "removed"):
+        if entry["kind"] not in (Kind.REJECTED, Kind.REMOVED):
             continue
         block = None if left else _brief_block(entry)
         # A strict oldest-first prefix: once one block does not fit, every later entry is counted,
@@ -480,7 +494,7 @@ def _entry_problems(entry: dict, known: _Known, corpus: str, untracked_md: bool)
         found.append("id: an identical entry is already in the ledger or earlier in this batch")
     targets = [s for s in _list(entry, "supersedes") if isinstance(s, str)]
     found += ["supersedes: unknown id %s" % s for s in targets if s not in known.ids]
-    if entry.get("kind") == "void":
+    if entry.get("kind") == Kind.VOID:
         found += ["supersedes: %s is a void; a void cannot be voided" % s
                   for s in targets if s in known.voids]
     return found
@@ -530,7 +544,7 @@ def prepare_entries(skill_dir: str | Path, entries: list[dict], *,
     known = _Known(set(), set())
     for e in parse_entries(file_lines(path)):
         known.ids.add(e["id"])
-        if e["kind"] == "void":
+        if e["kind"] == Kind.VOID:
             known.voids.add(e["id"])
     corpus = normalise(corpus_from_dir(skill_dir))
     untracked_md = _untracked_markdown(Path(skill_dir))
@@ -548,7 +562,7 @@ def prepare_entries(skill_dir: str | Path, entries: list[dict], *,
         problems += ["entry %d: %s" % (n, p)
                      for p in _entry_problems(entry, known, corpus, untracked_md)]
         known.ids.add(entry["id"])
-        if entry.get("kind") == "void":
+        if entry.get("kind") == Kind.VOID:
             known.voids.add(entry["id"])
         ids.append(entry["id"])
         chunks.append(_encoded(entry))
@@ -783,7 +797,7 @@ def _shown(entries: Iterable[dict], args: argparse.Namespace, kinds: set[str]) -
         if e["kind"] in kinds and args.topic in (None, e["topic"]) and args.id in (None, e["id"]):
             count += 1
             yield e if args.full else {k: e[k] for k in _SHORT_FIELDS}
-    if not args.all and ((args.kind and "void" in kinds) or (args.id and not count)):
+    if not args.all and ((args.kind and Kind.VOID in kinds) or (args.id and not count)):
         print(_ALL_HINT, file=sys.stderr)
 
 

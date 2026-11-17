@@ -13,6 +13,7 @@ import json
 import os
 import subprocess
 import sys
+import tracemalloc
 from pathlib import Path
 
 import pytest
@@ -916,3 +917,23 @@ def test_an_unreadable_dir_inside_a_content_excluded_tree_is_a_floor_warning(
         locked.chmod(0o755)
     assert done.returncode == 0, done.stderr
     assert "floor" in done.stderr
+
+
+def _tag_check_peak(path: Path) -> int:
+    tracemalloc.start()
+    try:
+        assert srccount._is_cachedir_tag(path) is True
+        return tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+
+def test_cachedir_tag_check_reads_the_signature_only_whatever_the_file_size(tmp_path):
+    # The spec needs the first 43 bytes; reading the whole file made a large CACHEDIR.TAG cost
+    # its full size in memory for a prefix compare.
+    small, large = tmp_path / "small.tag", tmp_path / "large.tag"
+    small.write_bytes(srccount._CACHEDIR_SIGNATURE + b"\n" + b"x" * 1_000_000)
+    large.write_bytes(srccount._CACHEDIR_SIGNATURE + b"\n" + b"x" * 8_000_000)
+    peak_small, peak_large = _tag_check_peak(small), _tag_check_peak(large)
+    assert peak_large < 2 * peak_small + 65536, (peak_small, peak_large)
+    assert peak_large < 1_000_000, peak_large

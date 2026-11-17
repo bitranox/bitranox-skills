@@ -11,6 +11,7 @@ import json
 import os
 import sys
 import traceback
+from dataclasses import dataclass
 from pathlib import Path
 
 import memory_engine as ME
@@ -35,6 +36,33 @@ class BadRequest(ValueError):
 
 # ME.ADD_REFUSALS is what the CLI `add` reports as a refusal; taken whole so the two cannot drift.
 REFUSALS = (ow.BacklogError, BadInput, *ME.ADD_REFUSALS, ME.ExcludedLevel, sig.MemoryWritesOff)
+
+
+@dataclass(frozen=True)
+class MemoryAdded:
+    """What memory_add reports: `to_data` is the envelope's `data`, keys in the order relayed."""
+
+    slug: str
+    level: str
+    created: bool
+    warnings: list[str]
+
+    def to_data(self):
+        return {"slug": self.slug, "level": self.level,
+                "action": "created" if self.created else "updated", "warnings": self.warnings}
+
+
+@dataclass(frozen=True)
+class ContribQueued:
+    """What contrib_add reports; `reason` says why nothing was queued and is absent when it was."""
+
+    queued: bool
+    reason: str | None = None
+
+    def to_data(self):
+        if self.queued:
+            return {"queued": True}
+        return {"queued": False, "reason": self.reason}
 
 
 def _backlog_list(inp, cwd):
@@ -129,8 +157,8 @@ def _memory_add(inp, cwd):
     slug, created, advice = ME.add_with_advice(
         str(level), title=_text(inp, "title"), hook=_text(inp, "hook"), body=_optional_text(inp, "body"),
         type_=type_, slug=inp.get("slug"), skill=inp.get("skill"))
-    return {"slug": slug, "level": str(level.resolve()),
-            "action": "created" if created else "updated", "warnings": advice}
+    return MemoryAdded(slug=slug, level=str(level.resolve()), created=bool(created),
+                       warnings=advice).to_data()
 
 
 def _contrib_add(inp, cwd):
@@ -142,8 +170,8 @@ def _contrib_add(inp, cwd):
     queued = sig.add_contribution(proj, {"what": what, "target": target, "why": why,
                                          "source": "mod:contrib_add"}, strict=True)
     if queued:
-        return {"queued": True}
-    return {"queued": False, "reason": sig.why_not_queued(proj, what, target)}
+        return ContribQueued(queued=True).to_data()
+    return ContribQueued(queued=False, reason=sig.why_not_queued(proj, what, target)).to_data()
 
 
 TOOLS = {"backlog_list": _backlog_list, "backlog_add": _backlog_add,

@@ -49,7 +49,9 @@ import re
 import shlex
 import subprocess
 import sys
+from enum import StrEnum
 from pathlib import Path
+from typing import NamedTuple
 
 try:
     import yaml as _yaml
@@ -67,7 +69,7 @@ from shell_text import (
     iter_segments,
 )
 
-__all__ = ["main", "notice"]
+__all__ = ["Notice", "PushedRef", "TriggerState", "main", "notice", "push_trigger_state"]
 
 _BYPASS_ENV = "BITRANOX_CI_WATCH"
 
@@ -191,7 +193,7 @@ def _landed_sha(cwd: str) -> str | None:
     upstream = _git(["rev-parse", "--verify", "-q", "@{u}"], cwd)
     if not head or not upstream or head != upstream:
         return None
-    return head if re.fullmatch(r"[0-9a-f]{40}", head) else None
+    return head if _FULL_SHA.fullmatch(head) else None
 
 
 def _has_workflows(cwd: str) -> bool:
@@ -214,8 +216,36 @@ _PR_EVENTS = frozenset({"pull_request", "pull_request_target"})
 # fires on a new branch's FIRST push, which nothing local tells apart from a later one (and it
 # takes no branch filter).
 _UNJUDGED_EVENTS = frozenset({"workflow_run", "create"})
-#: What a push to one branch does, decided over every workflow file.
-RUNS, PR_ONLY, NO_RUN, UNKNOWN = "runs", "pr-only", "no-run", "unknown"
+class TriggerState(StrEnum):
+    """What a push to one branch does, decided over every workflow file."""
+
+    RUNS = "runs"
+    PR_ONLY = "pr-only"
+    NO_RUN = "no-run"
+    UNKNOWN = "unknown"
+
+
+class PushedRef(NamedTuple):
+    """The ref a push built: its sha, its kind ("tag" or "branch") and its short name."""
+
+    sha: str
+    kind: str
+    name: str
+
+    @property
+    def display(self) -> str:
+        """`<kind> <name>`, the form the notice and the recorded entry show."""
+        return "%s %s" % (self.kind, self.name)
+
+
+class Notice(NamedTuple):
+    """What `notice` says about one landed push, and whether the Stop gate is owed a watch."""
+
+    text: str
+    sha: str
+    branch: str
+    repo: str
+    owed: bool
 
 
 def _branch_filter_matches(patterns, branch: str) -> bool:
@@ -258,25 +288,25 @@ def _filter_regex(pattern: str) -> str:
     return "".join(out)
 
 
-def _workflow_builds_branch(doc, branch: str) -> str:
+def _workflow_builds_branch(doc, branch: str) -> TriggerState:
     """One workflow's answer for a push to ``branch``: RUNS, PR_ONLY, NO_RUN or UNKNOWN."""
     if not isinstance(doc, dict):
-        return UNKNOWN
+        return TriggerState.UNKNOWN
     on = doc.get("on", doc.get(True))       # PyYAML 1.1 reads a bare `on` key as the boolean True
     if isinstance(on, str):
         on = [on]
     if isinstance(on, list):
         on = {event: None for event in on if isinstance(event, str)}
     if not isinstance(on, dict):
-        return UNKNOWN
+        return TriggerState.UNKNOWN
     if any(event in on for event in _UNJUDGED_EVENTS):
-        return UNKNOWN
+        return TriggerState.UNKNOWN
     pushed = _push_filter_admits(on["push"], branch) if "push" in on else False
     if pushed is None:
-        return UNKNOWN
+        return TriggerState.UNKNOWN
     if pushed:
-        return RUNS
-    return PR_ONLY if any(event in on for event in _PR_EVENTS) else NO_RUN
+        return TriggerState.RUNS
+    return TriggerState.PR_ONLY if any(event in on for event in _PR_EVENTS) else TriggerState.NO_RUN
 
 
 def _push_filter_admits(push, branch: str) -> bool | None:
@@ -295,29 +325,32 @@ def _push_filter_admits(push, branch: str) -> bool | None:
     return None
 
 
-def push_trigger_state(repo: str, branch: str) -> str:
+def push_trigger_state(repo: str, branch: str) -> TriggerState:
     """RUNS when any workflow's push trigger admits ``branch``; PR_ONLY or NO_RUN when every file
     was read and none does (PR_ONLY: a pull_request trigger could still run for an open pull
     request); UNKNOWN when any file could not be judged, or PyYAML is missing."""
     if _yaml is None:
-        return UNKNOWN
+        return TriggerState.UNKNOWN
     root = _git(["rev-parse", "--show-toplevel"], repo)
     if not root:
-        return UNKNOWN
+        return TriggerState.UNKNOWN
     try:
         files = sorted((Path(root) / ".github" / "workflows").glob("*.y*ml"))
         answers = {_workflow_builds_branch(_yaml.safe_load(path.read_text(encoding="utf-8")),
                                            branch) for path in files}
     except (OSError, UnicodeDecodeError, _yaml.YAMLError):
-        return UNKNOWN
+        return TriggerState.UNKNOWN
     # One workflow that certainly runs settles it; only then does an unjudged file block a no.
-    for state_name in (RUNS, UNKNOWN, PR_ONLY):
+    for state_name in (TriggerState.RUNS, TriggerState.UNKNOWN, TriggerState.PR_ONLY):
         if state_name in answers:
             return state_name
-    return NO_RUN if answers else UNKNOWN
+    return TriggerState.NO_RUN if answers else TriggerState.UNKNOWN
 
 
 _SCP_LIKE = re.compile(r"^[^/]+@([^:/]+):")
+_FULL_SHA = re.compile(r"[0-9a-f]{40}")
+#: a top-level key of gh's hosts.yml: the only unindented lines it holds
+_HOSTS_YML_KEY = re.compile(r"^([A-Za-z0-9._-]+):", re.M)
 
 
 def _gh_hosts() -> set[str]:
@@ -333,7 +366,7 @@ def _gh_hosts() -> set[str]:
         text = (Path(base) / "hosts.yml").read_text(encoding="utf-8", errors="replace")
     except (OSError, RuntimeError, ValueError):
         return hosts
-    hosts.update(m.group(1) for m in re.finditer(r"^([A-Za-z0-9._-]+):", text, re.M))
+    hosts.update(m.group(1) for m in _HOSTS_YML_KEY.finditer(text))
     return hosts
 
 
@@ -455,7 +488,7 @@ def _resolve_source(repo: str, src: str) -> tuple[str, str] | None:
     hits = []
     for ref, kind in candidates:
         sha = _git(["rev-parse", "--verify", "-q", ref + "^{commit}"], repo)
-        if sha and re.fullmatch(r"[0-9a-f]{40}", sha):
+        if sha and _FULL_SHA.fullmatch(sha):
             hits.append((sha, kind))
     if len(hits) > 1:
         return _AMBIGUOUS
@@ -485,7 +518,7 @@ _STATEMENT_SEP = LIST_SEP
 
 # A named ref that was pushed and did NOT land: record nothing, and do not fall back to the
 # current branch's landed test, which can pass for a commit this command never sent.
-_NOT_LANDED = ("", "")
+_NOT_LANDED = PushedRef("", "", "")
 
 
 def _short_ref(name: str) -> str:
@@ -511,8 +544,8 @@ def _statement_around(text: str, index: int) -> str:
     return text[start:]
 
 
-def _pushed_ref(command: str, repo: str, tool_name: str = "Bash") -> tuple[str, str] | None:
-    """What this push actually built: (sha, display); None to fall back to the branch test; or
+def _pushed_ref(command: str, repo: str, tool_name: str = "Bash") -> PushedRef | None:
+    """What this push actually built; None to fall back to the branch test; or
     `_NOT_LANDED` when a named branch was pushed and its tracking ref shows it did not arrive.
 
     The refspecs are read from the push that BUILDS (`_build_push_words`); a `src:dst` pair takes
@@ -541,7 +574,7 @@ def _pushed_ref(command: str, repo: str, tool_name: str = "Bash") -> tuple[str, 
         if kind == "branch" and not _branch_landed(repo, words[0], name, sha):
             unlanded = True
             continue
-        return sha, "%s %s" % (kind, name)
+        return PushedRef(sha, kind, name)
     if unlanded:
         return _NOT_LANDED
     if _BULK_TAGS.search(commands_only_aligned(command, tool_name)):
@@ -553,7 +586,7 @@ def _pushed_ref(command: str, repo: str, tool_name: str = "Bash") -> tuple[str, 
                        "--format=%(refname:short)", "refs/tags"], repo)
         found = _resolve_source(repo, "refs/tags/" + newest) if newest else None
         if found and found != _AMBIGUOUS:
-            return found[0], "tag " + newest
+            return PushedRef(found[0], "tag", newest)
     return None
 
 
@@ -570,8 +603,8 @@ def _watching(command: str, tool_name: str = "Bash") -> bool:
     return bool(_WRAPPER.search(masked) and _WATCHING.search(command))
 
 
-def notice(command, cwd: str = "", tool_name: str = "Bash") -> tuple[str, str, str, str, bool] | None:
-    """(text, sha, branch, repo, owed) for this command, or None if it is not a landed push.
+def notice(command, cwd: str = "", tool_name: str = "Bash") -> Notice | None:
+    """The `Notice` for this command, or None if it is not a landed push.
 
     ``owed`` is False when the push certainly starts no run: the text then says so, and nothing
     is recorded for the Stop gate to ask after.
@@ -603,36 +636,39 @@ def notice(command, cwd: str = "", tool_name: str = "Bash") -> tuple[str, str, s
     if pushed == _NOT_LANDED:
         return None
     if pushed:
-        sha, branch = pushed
+        sha, kind, name, branch = pushed.sha, pushed.kind, pushed.name, pushed.display
     else:
         # No ref named, so this is the ordinary `git push`: the branch landed-test applies.
         sha = _landed_sha(repo)
         if not sha:
             return None
-        branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], repo) or "HEAD"
-    name = branch[len("branch "):] if branch.startswith("branch ") else branch
-    triggers = RUNS if branch.startswith("tag ") or name == "HEAD" else push_trigger_state(repo, name)
-    if triggers == NO_RUN:
+        kind = "branch"
+        name = branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], repo) or "HEAD"
+    # Branch filters judge a branch push only: a tag, or a branch name git could not give, keeps
+    # the ordinary nudge.
+    triggers = (TriggerState.RUNS if kind == "tag" or name == "HEAD"
+                else push_trigger_state(repo, name))
+    if triggers == TriggerState.NO_RUN:
         text = ("No workflow in this repo runs for a push to %s: no `on: push` trigger names that "
                 "branch and none could run for it otherwise, so this push (%s) starts no run "
                 "and nothing beyond the local gate has validated it. A merge to, or a pull "
                 "request against, a branch the triggers name would get a verdict."
                 % (name, sha[:12]))
-        return text, sha, branch, repo, False
-    if triggers == PR_ONLY:
+        return Notice(text, sha, branch, repo, False)
+    if triggers == TriggerState.PR_ONLY:
         text = ("No `on: push` trigger in this repo names %s, so this push (%s) starts a run only "
                 "if an open pull request from that branch matches a pull_request trigger. Check "
                 "before moving on:\n    uv run %s --sha %s --repo %s\n"
                 "`no-runs` (exit 2) then means no pull request runs it and nothing beyond the "
                 "local gate has validated it; 0 passed, 1 failed."
                 % (name, sha[:12], _CI_WAIT, sha, shlex.quote(repo)))
-        return text, sha, branch, repo, True
+        return Notice(text, sha, branch, repo, True)
     text = ("CI is now running for the push you just made: %s (%s).\n"
             "Watch it before moving on - this repo's CI blocks on every cell:\n"
             "    uv run %s --sha %s --repo %s\n"
             "Exit 0 every run passed, 1 something failed, 2 could not tell."
             % (sha[:12], branch, _CI_WAIT, sha, shlex.quote(repo)))
-    return text, sha, branch, repo, True
+    return Notice(text, sha, branch, repo, True)
 
 
 def main(raw: str | None = None) -> int:
@@ -669,9 +705,9 @@ def main(raw: str | None = None) -> int:
         found = notice(command, cwd, shell)
         if not found:
             return 0
-        text, sha, branch, repo, owed = found
-        if owed:
-            state.record_push(key, session, sha, repo=repo, branch=branch)
+        text = found.text
+        if found.owed:
+            state.record_push(key, session, found.sha, repo=found.repo, branch=found.branch)
     except Exception:  # noqa: BLE001 - a nudge must never wedge a turn
         return 0
 

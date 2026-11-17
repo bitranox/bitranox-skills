@@ -27,6 +27,7 @@ source, the hook is silent rather than guessing by directory name.
 Fail-open on any error. ASCII only.
 """
 
+import functools
 import json
 import os
 import re
@@ -86,7 +87,14 @@ _NOTICE = (
 def own_marketplace_name():
     """The name of the marketplace this plugin runs from, read off CLAUDE_PLUGIN_ROOT; None when
     the hook runs outside a plugin install, in which case nothing can be the plugin's source."""
-    root = os.environ.get("CLAUDE_PLUGIN_ROOT") or ""
+    return _marketplace_name_of(os.environ.get("CLAUDE_PLUGIN_ROOT") or "")
+
+
+@functools.lru_cache(maxsize=4)
+def _marketplace_name_of(root):
+    """`own_marketplace_name` for one CLAUDE_PLUGIN_ROOT value. Cached by the value: it is asked
+    for every ancestor of every path token a command names, and resolving it is a filesystem walk
+    whose answer cannot change while the value does not."""
     if not root:
         return None
     try:

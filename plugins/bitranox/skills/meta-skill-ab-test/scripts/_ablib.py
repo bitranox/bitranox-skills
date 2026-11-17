@@ -16,6 +16,8 @@ from collections.abc import Callable
 from pathlib import Path, PurePath
 from typing import Any
 
+_NON_ALNUM_RE = re.compile(r"[^a-zA-Z0-9]")
+
 __all__ = [
     "EXCLUDED_TREE_DIRS",
     "EXIT_ERROR",
@@ -109,7 +111,7 @@ def dashkey(path: PurePath) -> str:
     Claude Code truncates a name over 200 characters and appends a hash; that case is not
     reproduced here, so a caller must not rebuild such a path from this value.
     """
-    return re.sub(r"[^a-zA-Z0-9]", "-", str(path))
+    return _NON_ALNUM_RE.sub("-", str(path))
 
 
 def utc_now() -> str:

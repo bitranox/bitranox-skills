@@ -54,6 +54,7 @@ import os
 import re
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 from shell_text import (  # noqa: E402 - shared with the guards
     is_shell_tool,
@@ -62,11 +63,13 @@ from shell_text import (  # noqa: E402 - shared with the guards
 )
 
 __all__ = [
+    "ArmedUndo",
     "arm_recovery",
     "build_message",
     "destructive_ops",
     "matching_recovery",
     "mentions",
+    "parse_state",
     "recovery_class",
     "strip_comment_lines",
 ]
@@ -102,6 +105,9 @@ COMMON_ID_FLOOR = 8
 FIRE_CAP = 3                 # messages per session; one undo event can produce at most one of them
 STATE_VERSION = 1
 MAX_SEEN_IDS = 4000          # bound the state file on a marathon session
+# A fresh state (lost file, a STATE_VERSION change) rereads the whole transcript, 50+ MB on long
+# sessions. Read and absorb it this many bytes at a time, so memory holds one chunk, not the file.
+READ_CHUNK = 1024 * 1024
 GATED_TOOLS = ("Bash", "PowerShell", "Write", "Edit", "NotebookEdit")
 
 # ----------------------------------------------------------------------------- text regions
@@ -191,7 +197,10 @@ def recovery_class(tool: str, tool_input: dict) -> str:
 _GUEST = re.compile(r"\b(?:qm|pct)\s+[a-z-]+\s+(\d{3,6})\b")
 _SSHHOST = re.compile(r"(?<![\w.-])[a-z_][\w.-]*@([a-z0-9][\w.-]*)", re.I)
 _IPV4 = re.compile(r"(?<![\w.])((?:\d{1,3}\.){3}\d{1,3})(?![\w.])")
-_FILEISH = re.compile(r"[\w./\\~-]+\.(?:ps1|py|sh|bash|psm1|cmd|bat)\b")
+# Tried only where a path token STARTS: unanchored, a long token holding no script name was
+# rescanned from each of its positions, quadratic in its length (9.8 s per hook run on a
+# transcript of 4000-character commands). The leftmost match always starts a token anyway.
+_FILEISH = re.compile(r"(?<![\w./\\~-])[\w./\\~-]+\.(?:ps1|py|sh|bash|psm1|cmd|bat)\b")
 # `ssh-ed25519 AAAA... root@buildhost` - the trailing word of a public key is its COMMENT, not a
 # host. Installing fleet keys made every such command "mention" the same phantom host, and that
 # phantom carried a false firing in the corpus.
@@ -279,6 +288,15 @@ def arm_recovery(window: list, undo_mentions: set, seen: dict, position: int) ->
     return {i for i in ids if i.startswith(("vm:", "host:")) and int(seen.get(i, 0)) <= limit}, ops
 
 
+class ArmedUndo(NamedTuple):
+    """One undo the gate watches for a retry of. A NamedTuple, so json writes it as the plain
+    [position, ids, ops] list the state file has always held."""
+
+    position: int
+    ids: tuple
+    ops: tuple
+
+
 def matching_recovery(armed: list, pending_ids: set, pending_ops: set, position: int):
     """The most recent armed undo this pending call re-attempts, or None. PURE.
 
@@ -302,14 +320,54 @@ def _state_path(session: str) -> Path:
     return session_state_path(session, ".recovery-gate.json")
 
 
+def _is_count(value) -> bool:
+    return type(value) is int and value >= 0             # bool is an int; it is no count
+
+
+def _is_names(value) -> bool:
+    return isinstance(value, list) and all(isinstance(v, str) for v in value)
+
+
+def _armed_undo(item):
+    """The ArmedUndo a stored [position, ids, ops] item holds, or None for any other shape."""
+    if not (isinstance(item, list) and len(item) == 3 and _is_count(item[0])
+            and _is_names(item[1]) and _is_names(item[2])):
+        return None
+    return ArmedUndo(item[0], tuple(item[1]), tuple(item[2]))
+
+
+def parse_state(state) -> dict | None:
+    """The state a stored file holds, with its armed items as ArmedUndo, or None when any field has
+    a shape this hook did not write. PURE.
+
+    Every field is checked here, at the one place the file is read: a malformed item that reached
+    `_absorb` raised before the state was saved, so the same item raised on every later call and
+    the gate stayed silent for the rest of the session."""
+    if not isinstance(state, dict) or state.get("v") != STATE_VERSION:
+        return None
+    if not all(_is_count(state.get(k, 0)) for k in ("off", "n", "fires")):
+        return None
+    seen, window = state.get("seen", {}), state.get("window", [])
+    cited, armed = state.get("cited", []), state.get("armed", [])
+    if not (isinstance(seen, dict) and all(isinstance(k, str) and _is_count(v) for k, v in seen.items())):
+        return None
+    if not (isinstance(window, list) and all(
+            isinstance(w, list) and len(w) == 2 and _is_names(w[0]) and _is_names(w[1]) for w in window)):
+        return None
+    if not (isinstance(cited, list) and all(_is_count(c) for c in cited) and isinstance(armed, list)):
+        return None
+    undos = [_armed_undo(item) for item in armed]
+    if None in undos:
+        return None
+    return dict(state, armed=undos)
+
+
 def _load(session: str) -> dict:
     try:
         state = json.loads(_state_path(session).read_text(encoding="utf-8"))
     except Exception:                                     # noqa: BLE001 - absent/corrupt: start fresh
         return {}
-    if not isinstance(state, dict) or state.get("v") != STATE_VERSION:
-        return {}
-    return state
+    return parse_state(state) or {}
 
 
 def _save(session: str, state: dict) -> None:
@@ -349,12 +407,14 @@ def _tool_calls(chunk: str):
                 yield block.get("name") or "?", tool_input if isinstance(tool_input, dict) else {}
 
 
-def _read_new_lines(transcript: str, offset: int) -> tuple:
-    """(complete new text, new offset). Reads only the tail written since `offset`.
+def _read_new_lines(transcript: str, offset: int, limit: int = READ_CHUNK) -> tuple:
+    """(complete new text, new offset): the whole lines written since `offset`, about `limit` bytes
+    of them; call again from the new offset for the rest, until the text comes back empty.
 
     Re-reading the whole transcript per call costs 400-500 ms on the largest transcripts on this machine
     (50 MB, 1600 records) and this hook runs on EVERY Bash, Write and Edit. A partial trailing line is
-    left for the next call - the file is being appended to while this reads.
+    left for the next call - the file is being appended to while this reads. One line longer than
+    `limit` (a Write of a big file) is still returned whole, or the offset could never pass it.
     """
     try:
         size = os.path.getsize(transcript)
@@ -367,9 +427,14 @@ def _read_new_lines(transcript: str, offset: int) -> tuple:
     try:
         with open(transcript, "rb") as handle:
             handle.seek(offset)
-            raw = handle.read(size - offset)
+            parts = [handle.read(min(size - offset, limit))]
+            read = len(parts[0])
+            while b"\n" not in parts[-1] and offset + read < size and parts[-1]:
+                parts.append(handle.read(min(size - offset - read, limit)))
+                read += len(parts[-1])
     except OSError:
         return "", offset
+    raw = b"".join(parts)
     cut = raw.rfind(b"\n")
     if cut < 0:
         return "", offset
@@ -407,13 +472,13 @@ def _absorb(state: dict, records: list) -> dict:
         if undo:
             ids, ops = arm_recovery(window, record_mentions, seen, position)
             if ids:
-                armed.append([position, sorted(ids), sorted(ops)])
+                armed.append(ArmedUndo(position, tuple(sorted(ids)), tuple(sorted(ops))))
         for identifier in record_mentions:
             seen[identifier] = int(seen.get(identifier, 0)) + 1
         window.append([sorted(record_mentions), sorted(record_ops)])
         window = window[-BLAST_RADIUS:]
     state["window"] = [[list(m), list(o)] for m, o in window]
-    state["armed"] = [a for a in armed if int(state.get("n") or 0) - int(a[0]) <= LOOKBACK_EVENTS][-40:]
+    state["armed"] = [a for a in armed if int(state.get("n") or 0) - a.position <= LOOKBACK_EVENTS][-40:]
     if len(seen) > MAX_SEEN_IDS:                          # bound the file; singletons are the bulk
         state["seen"] = {k: v for k, v in seen.items() if v > 1}
     return state
@@ -458,9 +523,19 @@ def main() -> int:
         tool_input = {}
     text = acting_text(tool, tool_input)
     state = _load(session) or {"v": STATE_VERSION, "off": 0, "n": 0}
-    chunk, offset = _read_new_lines(transcript, int(state.get("off") or 0))
-    state["off"] = offset
-    history, pending_record = split_pending(list(_tool_calls(chunk)), (tool, text))
+    # Absorbed record by record as each chunk is read, holding back only the newest: it may be the
+    # call being gated, which split_pending judges before it joins the history.
+    newest = None
+    while True:
+        chunk, offset = _read_new_lines(transcript, int(state.get("off") or 0))
+        state["off"] = offset
+        if not chunk:
+            break
+        for record in _tool_calls(chunk):
+            if newest is not None:
+                _absorb(state, [newest])
+            newest = record
+    history, pending_record = split_pending([newest] if newest is not None else [], (tool, text))
     state = _absorb(state, history)
 
     # This call's own event number, taken BEFORE it is absorbed below: read afterwards, `n` already
@@ -468,7 +543,8 @@ def main() -> int:
     position = int(state.get("n") or 0) + 1
     hit = None
     if int(state.get("fires") or 0) < FIRE_CAP and not recovery_class(tool, tool_input):
-        armed = [a for a in state.get("armed") or [] if int(a[0]) not in set(state.get("cited") or [])]
+        cited = set(state.get("cited") or [])
+        armed = [a for a in state.get("armed") or [] if a.position not in cited]
         hit = matching_recovery(armed, mentions(tool, tool_input), destructive_ops(text), position)
     if hit:
         index, subjects, ops = hit

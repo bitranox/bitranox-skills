@@ -524,6 +524,33 @@ def test_peak_memory_does_not_grow_with_the_number_of_candidate_pairs():
         f"peak from {small_peak} to {large_peak} bytes"
 
 
+def _duplicates_among_common_words(n: int) -> list[DS.Fact]:
+    """`n` facts: each pair (2k, 2k+1) shares three words nothing else carries (the duplicates
+    the scan exists to find), and every fact also carries two words a sixth of the corpus
+    shares, under a fraction-of-the-corpus ceiling at any size."""
+    out = []
+    for i in range(n):
+        k, g = i // 2, i % 6
+        out.append(DS.Fact(slug=f"f{i}", level="/lvl", title=f"fact {i}",
+                           text=f"dup{k}red dup{k}green dup{k}blue common{g}alpha common{g}beta"))
+    return out
+
+
+def test_the_compared_pairs_stop_growing_quadratically_when_facts_share_common_words():
+    """A word a fifth of the corpus carries passed a ceiling of n // 5 at any size, so facts
+    sharing two such words made the compared pairs grow with the square of the store; a word
+    carried by more facts than a fixed number links nothing worth scoring."""
+    pairs = {}
+    for n in (120, 960):
+        corpus = _duplicates_among_common_words(n)
+        result = DS.run(corpus, threshold=0.4)
+        found = {(c.a.slug, c.b.slug) for c in result.candidates}
+        assert {(f"f{2 * k}", f"f{2 * k + 1}") for k in range(n // 2)} <= found
+        pairs[n] = result.compared_pairs
+    assert pairs[960] <= 16 * pairs[120], \
+        f"8x the facts raised the compared pairs from {pairs[120]} to {pairs[960]}"
+
+
 def test_the_row_at_a_time_scan_finds_the_same_pairs_and_scores():
     # Six groups of five: the planted control joins one group, which then holds six carriers,
     # still within the index's ceiling of max(5, 30 // 5) = 6, so no group is dropped.

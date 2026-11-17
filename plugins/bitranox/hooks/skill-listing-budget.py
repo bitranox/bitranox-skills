@@ -24,6 +24,7 @@ emits nothing and exits 0, so a broken hook never blocks a session.
 import json
 import math
 import sys
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -196,8 +197,19 @@ def _bare_entries(content, names):
     return [ln[2:].strip() for ln in content.splitlines() if ln.startswith("- ") and ": " not in ln]
 
 
+@dataclass(frozen=True)
+class Listing:
+    """One injected skill listing: its length, the entries that arrived as a bare `- name`, when
+    it was produced (epoch seconds, None if unreadable) and in which directory (None if absent)."""
+
+    total: int
+    bare: list[str]
+    timestamp: float | None = None
+    cwd: str | None = None
+
+
 def _last_full_listing(transcript):
-    """Return the transcript's LAST full listing as a summary dict, or None when it has none.
+    """Return the transcript's LAST full listing as a Listing, or None when it has none.
 
     A later full listing (after /reload-plugins) supersedes an earlier one. A delta
     (`isInitial: false`) carries only the skills added since, so it is not the listing the budget
@@ -214,21 +226,20 @@ def _last_full_listing(transcript):
             content = "\n".join(str(part) for part in content)
         if not isinstance(content, str) or not content:
             continue
-        found = {
-            "total": len(content),
-            "bare": _bare_entries(content, attachment.get("names")),
-            "timestamp": _epoch(record.get("timestamp")),
-            "cwd": record.get("cwd"),
-        }
+        cwd = record.get("cwd")
+        found = Listing(
+            total=len(content),
+            bare=_bare_entries(content, attachment.get("names")),
+            timestamp=_epoch(record.get("timestamp")),
+            cwd=cwd if isinstance(cwd, str) else None,
+        )
     return found
 
 
 def newest_listing(config, max_files=5):
     """Return the most recent injected listing, or None if none is readable.
 
-    The result is {"total", "bare", "timestamp", "cwd"}: its length, the entries that arrived as a
-    bare `- name`, when it was produced (epoch seconds, None if unreadable) and in which directory.
-    The listing is the OUTCOME the estimate is trying to predict, so reading it back closes the
+    The result is a Listing. The listing is the OUTCOME the estimate is trying to predict, so reading it back closes the
     loop: any bare entry is a description the router never saw. Only the newest `max_files`
     transcripts are opened; the first of them holding a full listing answers, with its last one.
     """
@@ -250,7 +261,7 @@ def listing_is_current(listing, settings_path):
     packed under a value the file no longer holds, whatever the model. A listing whose timestamp
     cannot be read cannot be placed, so it is not trusted either.
     """
-    produced = listing.get("timestamp")
+    produced = listing.timestamp
     if produced is None:
         return False
     try:
@@ -302,14 +313,14 @@ def observed_requirement(listing, descriptions, current):
     not hold - above 200k tokens x 3 chars an old listing clears the floor - which is why the
     floor alone let a re-read listing ratchet the fraction up at every SessionStart.
     """
-    if not listing or not listing["bare"]:
+    if not listing or not listing.bare:
         return None
-    if listing["total"] < DENOMINATOR_FLOOR * current:
+    if listing.total < DENOMINATOR_FLOOR * current:
         return None  # produced under an older, smaller fraction: it says nothing about this one
-    owed = sum(2 + min(len(descriptions[name]), MAX_DESC_CHARS) for name in listing["bare"] if descriptions.get(name))
-    if owed <= 0 or listing["total"] <= 0:
+    owed = sum(2 + min(len(descriptions[name]), MAX_DESC_CHARS) for name in listing.bare if descriptions.get(name))
+    if owed <= 0 or listing.total <= 0:
         return None  # every bare entry is a bundled skill or has no description to restore
-    return (current * (listing["total"] + owed) / listing["total"]) * SAFETY
+    return (current * (listing.total + owed) / listing.total) * SAFETY
 
 
 def build_message(entries, demand, change, dropped=0):
@@ -336,12 +347,12 @@ def _correction(config, entries, current, settings_path):
     listing = newest_listing(config)
     if listing is None or not listing_is_current(listing, settings_path):
         return None
-    if project_overrides_fraction(listing.get("cwd"), config):
+    if project_overrides_fraction(listing.cwd, config):
         return None
     observed = observed_requirement(listing, dict(entries), current)
     if observed is None:
         return None
-    return min(FRACTION_CAP, math.ceil(observed * 100) / 100), len(listing["bare"])
+    return min(FRACTION_CAP, math.ceil(observed * 100) / 100), len(listing.bare)
 
 
 def wanted_fraction(config, entries, current, settings_path=None):

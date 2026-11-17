@@ -21,6 +21,14 @@ def plan(argv, home="/home/nobody", default_user="localuser", config_user=lambda
     return " ".join(built), host, known_hosts
 
 
+def test_plan_names_its_three_parts():
+    planned = F.plan(F.parse_args(["--trust-changing-host-keys", "--key", "/k", "h", "uptime"]),
+                     home="/opt/nobody", default_user="u", config_user=lambda host: None)
+    assert type(planned) is F.Plan
+    assert planned.host == "h" and planned.argv[0] == "ssh"
+    assert planned.known_hosts is not None
+
+
 # ---- trap 1: scp carries the user in the path -------------------------------------------------
 
 def test_user_flag_reaches_an_scp_destination_not_only_the_key():

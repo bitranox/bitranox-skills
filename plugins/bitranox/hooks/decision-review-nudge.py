@@ -59,6 +59,7 @@ a turn.
 import json
 import os
 import sys
+from enum import StrEnum
 from typing import NamedTuple
 
 import self_improve_signals as sig
@@ -72,9 +73,14 @@ import shell_text
 # since, rather than to the size of the session.
 _MAX_TRANSCRIPT_BYTES = 8 * 1024 * 1024
 
-GOAL_NONE = "none"
-GOAL_ACTIVE = "active"
-GOAL_MET = "met"
+
+
+class GoalState(StrEnum):
+    """Where the session's /goal stands; the values are what the state file stores."""
+
+    NONE = "none"
+    ACTIVE = "active"
+    MET = "met"
 
 
 class ShellCall(NamedTuple):
@@ -93,7 +99,7 @@ class Signals(NamedTuple):
     """What one pass over a WINDOW of the transcript found."""
 
     commands: list                                        # of ShellCall, in transcript order
-    goal_state: str
+    goal_state: GoalState
     offset: int
 
 
@@ -109,7 +115,7 @@ def read_line(raw, commands, goal_state):
     if isinstance(attachment, dict) and attachment.get("type") == "goal_status":
         # The LAST record wins: a goal reports `met: false` on every turn it is still running,
         # then once with `met: true`.
-        goal_state = GOAL_MET if attachment.get("met") is True else GOAL_ACTIVE
+        goal_state = GoalState.MET if attachment.get("met") is True else GoalState.ACTIVE
     message = msg.get("message")
     if not isinstance(message, dict):
         return goal_state                                 # a string or null message has no tools
@@ -142,7 +148,7 @@ def _resume_from(transcript_path, start):
 
 
 def transcript_signals(transcript_path, start=0, max_bytes=_MAX_TRANSCRIPT_BYTES,
-                       goal_state=GOAL_NONE):
+                       goal_state=GoalState.NONE):
     """Scan [start, EOF) and report what is there, plus the offset reached.
 
     `goal_state` carries the state the previous run ended on: a window holding no goal record
@@ -181,10 +187,7 @@ def transcript_signals(transcript_path, start=0, max_bytes=_MAX_TRANSCRIPT_BYTES
     return Signals(commands, goal_state, consumed)
 
 
-_GOAL_STATES = frozenset({GOAL_NONE, GOAL_ACTIVE, GOAL_MET})
-
-
-def conclusion_score(signals, previous=0, previous_goal=GOAL_NONE):
+def conclusion_score(signals, previous=0, previous_goal=GoalState.NONE):
     """How many times work has concluded, as a number that only ever grows within a session.
 
     Counting rather than answering yes/no is what lets a LATER conclusion be told from the same one
@@ -200,14 +203,14 @@ def conclusion_score(signals, previous=0, previous_goal=GOAL_NONE):
     though no command was run. A RUNNING goal counts nothing (`goal_started` covers it), and
     neither does a commit or a push - see the module docstring for the measurements behind both.
     """
-    goal_met = signals.goal_state == GOAL_MET and previous_goal != GOAL_MET
+    goal_met = signals.goal_state == GoalState.MET and previous_goal != GoalState.MET
     prs = sum(1 for call in signals.commands if shell_text.opens_a_pr(call.command, call.tool))
     return previous + int(goal_met) + prs
 
 
-def goal_started(signals, previous_goal=GOAL_NONE):
+def goal_started(signals, previous_goal=GoalState.NONE):
     """True on the first Stop that sees a goal running which the previous run had not seen."""
-    return signals.goal_state == GOAL_ACTIVE and previous_goal != GOAL_ACTIVE
+    return signals.goal_state == GoalState.ACTIVE and previous_goal != GoalState.ACTIVE
 
 
 def reached_a_conclusion(signals):
@@ -215,10 +218,13 @@ def reached_a_conclusion(signals):
     return conclusion_score(signals) > 0
 
 
-ASK_NONE = "none"
-ASK_BLOCK = "block"
-ASK_REMIND = "remind"
-ASK_GOAL = "goal"
+class Ask(StrEnum):
+    """What this Stop asks of the session: nothing, a block, or one of two reminders."""
+
+    NONE = "none"
+    BLOCK = "block"
+    REMIND = "remind"
+    GOAL = "goal"
 
 
 def decide(score, last_score, started_goal=False):
@@ -233,8 +239,8 @@ def decide(score, last_score, started_goal=False):
     once, because this hook cannot tell the Stop that ends a goal from one that merely pauses it.
     """
     if score > 0 and score > last_score:
-        return ASK_BLOCK if last_score <= 0 else ASK_REMIND
-    return ASK_GOAL if started_goal else ASK_NONE
+        return Ask.BLOCK if last_score <= 0 else Ask.REMIND
+    return Ask.GOAL if started_goal else Ask.NONE
 
 
 class State(NamedTuple):
@@ -242,10 +248,10 @@ class State(NamedTuple):
 
     offset: int
     score: int
-    goal: str
+    goal: GoalState
 
 
-EMPTY_STATE = State(0, 0, GOAL_NONE)
+EMPTY_STATE = State(0, 0, GoalState.NONE)
 
 
 def asked_flag(session):
@@ -266,12 +272,24 @@ def read_state(session):
         return EMPTY_STATE
     if not isinstance(raw, dict):
         return EMPTY_STATE            # an earlier bare-integer file: start clean rather than guess
-    goal = raw.get("goal")
     try:
-        return State(int(raw.get("offset") or 0), int(raw.get("score") or 0),
-                     goal if goal in _GOAL_STATES else GOAL_NONE)
+        return State(int(raw.get("offset") or 0), int(raw.get("score") or 0), _goal_from_disk(raw))
     except (TypeError, ValueError):
         return EMPTY_STATE
+
+
+def _goal_from_disk(raw):
+    """The stored goal as a GoalState. An absent key is NONE; a value naming no state is reported
+    on stderr and read as NONE too, because a Stop hook must never wedge the turn over its own
+    state file, and the file is rewritten at the end of this run."""
+    if "goal" not in raw:
+        return GoalState.NONE
+    try:
+        return GoalState(raw["goal"])
+    except ValueError:
+        print("decision-review-nudge: state file goal %r names no goal state; reading it as %r"
+              % (raw["goal"], GoalState.NONE.value), file=sys.stderr)
+        return GoalState.NONE
 
 
 def write_state(session, state):
@@ -341,12 +359,12 @@ def main():
     # this when nothing was found would re-scan the same window forever and, once the window hit
     # the cap, never reach anything past it.
     write_state(session, State(signals.offset, score, signals.goal_state))
-    if verdict == ASK_NONE:
+    if verdict == Ask.NONE:
         return 0
-    if verdict == ASK_BLOCK:
+    if verdict == Ask.BLOCK:
         sys.stdout.write(json.dumps({"decision": "block", "reason": _REASON}))
     else:
-        reminder = _GOAL_REMINDER if verdict == ASK_GOAL else _REMINDER
+        reminder = _GOAL_REMINDER if verdict == Ask.GOAL else _REMINDER
         sys.stdout.write(json.dumps({"hookSpecificOutput": {
             "hookEventName": "Stop", "additionalContext": reminder}}))
     return 0

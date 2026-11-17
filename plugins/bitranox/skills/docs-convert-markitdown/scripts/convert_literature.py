@@ -29,6 +29,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+_YEAR_RE = re.compile(r'(?<!\d)(19|20)\d{2}(?!\d)')
+_NAME_SPLIT_RE = re.compile(r'[_\-]')
+
 EXIT_OK = 0
 EXIT_NONE_FOUND = 1
 EXIT_ERROR = 2
@@ -93,12 +96,12 @@ def extract_metadata_from_filename(filename: str) -> dict[str, str]:
 
     # Try to extract year. NOT \b: an underscore is a word character, so \b never fires
     # between '_' and a digit and the year is missed in the documented Author_Year_Title form.
-    year_match = re.search(r'(?<!\d)(19|20)\d{2}(?!\d)', name)
+    year_match = _YEAR_RE.search(name)
     if year_match:
         metadata['year'] = year_match.group()
 
     # Split by underscores or dashes
-    parts = [p for p in re.split(r'[_\-]', name) if p]
+    parts = [p for p in _NAME_SPLIT_RE.split(name) if p]
     if 'year' in metadata:
         # the caller already gets the year in its own field; leaving it in the title too
         # means every downstream filename/citation carries it twice

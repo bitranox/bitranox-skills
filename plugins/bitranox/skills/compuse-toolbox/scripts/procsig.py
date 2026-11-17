@@ -109,6 +109,7 @@ Run: `uv run scripts/procsig.py --exe myserver`
 """
 
 import argparse
+import functools
 import ipaddress
 import os
 import re
@@ -536,20 +537,50 @@ def scan(proc_root, *, exe=None, comm=None, cmdline=None) -> list[dict]:
         return []
     hits = []
     for pdir in sorted(Path(proc_root).glob("[0-9]*"), key=lambda p: int(p.name)):
-        pid = int(pdir.name)
-        p_exe, p_comm = _read_exe(pdir), _read_comm(pdir)
-        parts = _read_cmdline_parts(pdir)
-        p_cmd = " ".join(parts).strip()                         # full cmdline, for display/self-check
+        proc = _ProcFiles(pdir)
         if exe is not None:
-            ok = _exe_matches(p_exe, exe)
+            ok = _exe_matches(proc.exe, exe)
         elif comm is not None:
-            ok = _comm_matches(p_comm, comm, p_exe, parts)
+            ok = _comm_matches_lazily(proc, comm)
         else:
-            searchable = _cmdline_search_text(parts, p_exe, p_comm)
+            searchable = _cmdline_search_text(proc.parts, proc.exe, proc.comm)
             ok = bool(cmdline) and searchable is not None and cmdline in searchable
         if ok:
-            hits.append({"pid": pid, "exe": p_exe, "comm": p_comm, "cmdline": p_cmd})
+            hits.append({"pid": int(pdir.name), "exe": proc.exe, "comm": proc.comm,
+                         "cmdline": " ".join(proc.parts).strip()})
     return hits
+
+
+class _ProcFiles:
+    """One /proc/<pid>, each of its files read on first use and at most once.
+
+    A scan reads every process on the host, and most do not match: a filter on exe needs only
+    the exe link, a short comm only the comm file, so the others are read for a hit alone.
+    """
+
+    def __init__(self, pdir: Path):
+        self.pdir = pdir
+
+    @functools.cached_property
+    def exe(self) -> str:
+        return _read_exe(self.pdir)
+
+    @functools.cached_property
+    def comm(self) -> str:
+        return _read_comm(self.pdir)
+
+    @functools.cached_property
+    def parts(self) -> list[str]:
+        return _read_cmdline_parts(self.pdir)
+
+
+def _comm_matches_lazily(proc: _ProcFiles, needle: str) -> bool:
+    """`_comm_matches`, reading the exe and argv only when a truncated comm must be confirmed."""
+    if not proc.comm:
+        return False
+    if len(needle.encode("utf-8")) <= _COMM_LEN:
+        return proc.comm == needle
+    return _comm_matches(proc.comm, needle, proc.exe, proc.parts)
 
 
 # ---- --peer: which local process holds a TCP connection to a given host[:port] ------------------

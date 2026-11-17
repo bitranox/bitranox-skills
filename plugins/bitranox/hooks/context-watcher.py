@@ -101,6 +101,8 @@ import os
 import pathlib
 import subprocess
 import sys
+from enum import StrEnum
+from types import MappingProxyType
 
 import self_improve_signals as sig
 
@@ -409,47 +411,61 @@ def _git(proj, *args):
     return done.returncode, done.stdout
 
 
-def handover_tracking(proj) -> str:
+class HandoverTracking(StrEnum):
+    """What git holds of the handover.md a session would overwrite."""
+
+    TRACKED = "tracked"          # git holds its history
+    UNTRACKED = "untracked"      # it exists but git has no copy: gitignored, never added, no repo
+    ABSENT = "absent"            # nothing to overwrite
+    UNKNOWN = "unknown"          # git could not be asked
+
+
+def handover_tracking(proj) -> HandoverTracking:
     """Whether the handover.md a session would overwrite has earlier versions in git. IMPURE.
 
-    "tracked" (git holds its history), "untracked" (it exists but git has no copy: gitignored,
-    never added, or no repository at all), "absent" (nothing to overwrite), or "unknown" (git
-    could not be asked). It is a per-repo fact - some repos gitignore the file, others commit it -
-    so the save request tests it instead of asserting either. Never raises.
+    It is a per-repo fact - some repos gitignore the file, others commit it - so the save request
+    tests it instead of asserting either. Never raises.
     """
     try:
         rc, top = _git(proj, "rev-parse", "--show-toplevel")
         if rc != 0:
-            return "untracked" if (pathlib.Path(proj) / "handover.md").exists() else "absent"
+            return _present_or_absent(pathlib.Path(proj))
         root = top.strip()
         rc, _out = _git(root, "ls-files", "--error-unmatch", "--", "handover.md")
         if rc == 0:
-            return "tracked"
-        return "untracked" if (pathlib.Path(root) / "handover.md").exists() else "absent"
+            return HandoverTracking.TRACKED
+        return _present_or_absent(pathlib.Path(root))
     except Exception:                         # noqa: BLE001 - a missing git must not wedge a turn
-        return "unknown"
+        return HandoverTracking.UNKNOWN
 
 
-_OVERWRITE_WARNING = {
-    "tracked": (
+def _present_or_absent(root) -> HandoverTracking:
+    return HandoverTracking.UNTRACKED if (root / "handover.md").exists() else HandoverTracking.ABSENT
+
+
+# Keyed by every member, so a tracking value outside the vocabulary is a ValueError in _save
+# rather than a `.get` that silently drops the warning; ABSENT has nothing to overwrite.
+_OVERWRITE_WARNING = MappingProxyType({
+    HandoverTracking.ABSENT: None,
+    HandoverTracking.TRACKED: (
         "The handover is written by OVERWRITING the outgoing one. `handover.md` is tracked here, "
         "so its earlier versions are in git history - but nobody diffs a handover against its "
         "predecessor looking for what went missing, so carry anything still open into "
         "`OPEN-WORK.md` before you overwrite it, not after."),
-    "untracked": (
+    HandoverTracking.UNTRACKED: (
         "The handover is written by OVERWRITING the outgoing one, and git holds no copy of "
         "`handover.md` here, so anything still open that you do not first carry into "
         "`OPEN-WORK.md` is gone with no earlier version to recover it from. Reconcile before you "
         "overwrite, not after."),
-    "unknown": (
+    HandoverTracking.UNKNOWN: (
         "The handover is written by OVERWRITING the outgoing one, and whether git keeps its "
         "earlier versions could not be checked here (`git ls-files --error-unmatch handover.md` "
         "answers it). If it does not, anything still open that you do not first carry into "
         "`OPEN-WORK.md` is gone for good. Reconcile before you overwrite, not after."),
-}
+})
 
 
-def _save(detail, tracking="unknown") -> str:
+def _save(detail, tracking=HandoverTracking.UNKNOWN) -> str:
     fill = {k: format(v, ",") if isinstance(v, int) and k != "pct" else v for k, v in detail.items()}
     text = (
         "This session is carrying %(tokens)s tokens of context. The harness auto-compacts at about "
@@ -475,7 +491,7 @@ def _save(detail, tracking="unknown") -> str:
             "~/.claude/settings.json through the update-config skill; it takes effect in the next "
             "session." % {"limit": fill["limit"], "env": _ENV_COMPACT_WINDOW, "raw": detail["limit"],
                           "now": fill["harness"] if detail.get("harness") else "unset"})
-    warning = _OVERWRITE_WARNING.get(tracking)
+    warning = _OVERWRITE_WARNING[HandoverTracking(tracking)]
     return text + "\n\n" + warning if warning else text
 
 

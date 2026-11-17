@@ -22,9 +22,10 @@ as skipped and does not change the exit code. A symlink to a directory met insid
 not followed (git stores the link, never merges through it) and is named on stderr; a directory
 you pass as PATH is walked even when it is a link, and a link to a FILE is always read.
 
-A walk skips what git never merges into: `.git`, every venv (`.venv`, `.venv-3.12`, ... by prefix),
-`node_modules`, `__pycache__` and the tool caches (`.mypy_cache`, `.pytest_cache`, `.ruff_cache`),
-the same set grep_all prunes. Scanning them made a clean checkout with a venv report markers (a
+A walk skips what git never merges into: `.git`, every venv (`.venv`, `.venv-3.12`, ... by prefix,
+and any directory holding a `pyvenv.cfg`), `node_modules`, `__pycache__` and the tool caches
+(`.mypy_cache`, `.pytest_cache`, `.ruff_cache`): the set in `_vendored_dirs`, which grep_all prunes
+too. Scanning them made a clean checkout with a venv report markers (a
 dist-info METADATA or a compiled .pyc holds a marker-shaped line by chance) after a minute and
 1.3 GB of reading. A directory you NAME is scanned whatever its name. A file with a NUL byte in its
 first 4 KB is skipped as binary (git writes no markers into a file it treats as binary) and the
@@ -41,15 +42,13 @@ import re
 import sys
 from pathlib import Path
 
+from _vendored_dirs import prune_vendored
+
 # git conflict markers, ONLY at line start: the 7-char <<<<<<< / >>>>>>> / ||||||| (branch name may
 # follow after a space) and the middle ======= (exactly 7 equals on its own line, allowing trailing
 # whitespace). Matching only at line start avoids a marker embedded in a string/doc.
 _MARKER = re.compile(r"^(?:<<<<<<<|>>>>>>>|\|\|\|\|\|\|\|)(?:\s|$)|^=======\s*$")
 _OPEN, _CLOSE, _MIDDLE = "<<<<<<<", ">>>>>>>", "======="
-_SKIP_DIRS = frozenset({".git", "node_modules", "__pycache__", ".mypy_cache", ".pytest_cache",
-                        ".ruff_cache"})
-_SKIP_DIR_PREFIXES = (".venv",)
-"""Prefix, not name: .venv-win, .venv-3.12 and .venv-bmk are venvs too (grep_all's rule)."""
 _BINARY_SNIFF = 4096
 _LOOKAHEAD = 3
 """Lines after the current one the heading rules read: an RST overline at i checks the underline at
@@ -204,8 +203,7 @@ def _expand(targets, unreadable: list[str], linked_dirs: list[str] | None = None
         pt = Path(t)
         if pt.is_dir():
             for dirpath, dirs, names in os.walk(t, onerror=_record):
-                dirs[:] = [d for d in dirs
-                           if d not in _SKIP_DIRS and not d.startswith(_SKIP_DIR_PREFIXES)]
+                prune_vendored(dirpath, dirs)
                 if linked_dirs is not None:
                     linked_dirs.extend(os.path.join(dirpath, d) for d in dirs
                                        if os.path.islink(os.path.join(dirpath, d)))

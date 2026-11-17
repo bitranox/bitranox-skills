@@ -293,6 +293,70 @@ def test_a_truncated_transcript_restarts_the_read(tmp_path):
     assert chunk == '{"a": 1}\n' and offset == 9
 
 
+def test_a_read_stops_at_the_last_whole_line_within_its_limit(tmp_path):
+    transcript = tmp_path / "t.jsonl"
+    transcript.write_bytes(b'{"a": 1}\n{"b": 2}\n{"c": 3}\n')
+    assert gate._read_new_lines(str(transcript), 0, limit=20) == ('{"a": 1}\n{"b": 2}\n', 18)
+    assert gate._read_new_lines(str(transcript), 18, limit=20) == ('{"c": 3}\n', 27)
+    assert gate._read_new_lines(str(transcript), 27, limit=20) == ("", 27)
+
+
+def test_a_line_longer_than_the_limit_is_still_read_whole(tmp_path):
+    """A Write of a large file is one JSONL line; a limit that cut it would never advance."""
+    transcript = tmp_path / "t.jsonl"
+    long_line = b'{"w": "' + b"x" * 100 + b'"}\n'
+    transcript.write_bytes(long_line + b'{"b": 2}\n')
+    chunk, offset = gate._read_new_lines(str(transcript), 0, limit=16)
+    assert chunk == long_line.decode() and offset == len(long_line)
+
+
+def _peak_rss_kb(tmp_path, megabytes):
+    """ru_maxrss of one hook run with no saved state, so it reads a transcript of `megabytes`."""
+    home = tmp_path / ("home%s" % megabytes)
+    home.mkdir()
+    transcript = tmp_path / ("t%s.jsonl" % megabytes)
+    # Wide records with a short command: the bulk is what a whole read holds, while the
+    # per-record parse of the command stays cheap, so the run takes a fraction of a second.
+    line = _line("Bash", {"command": "echo step", "description": "x" * 4000})
+    # Line by line: a forked child counts the parent's resident pages until it execs, so a
+    # transcript held here as one string would show up in the child's peak.
+    with open(transcript, "w", encoding="utf-8") as handle:
+        for _ in range(int(megabytes * 1024 * 1024 / len(line))):
+            handle.write(line)
+    payload = {"tool_name": "Bash", "tool_input": {"command": "echo final"}, "session_id": "s",
+               "transcript_path": str(transcript)}
+    env = dict(os.environ, HOME=str(home), USERPROFILE=str(home))
+    proc = subprocess.Popen([sys.executable, str(HOOK)], stdin=subprocess.PIPE,
+                            stdout=subprocess.DEVNULL, env=env)
+    proc.stdin.write(json.dumps(payload).encode("utf-8"))
+    proc.stdin.close()
+    _, status, usage = os.wait4(proc.pid, 0)
+    assert os.waitstatus_to_exitcode(status) == 0
+    return usage.ru_maxrss
+
+
+@pytest.mark.skipif(not hasattr(os, "wait4"), reason="os.wait4 rusage is POSIX-only")
+def test_a_whole_transcript_reread_does_not_grow_memory_with_its_size(tmp_path):
+    """A lost or version-bumped state file restarts the read at 0. Read whole, a 50 MB transcript
+    sat in memory as bytes, as text and as every tool call parsed from it at once."""
+    small = _peak_rss_kb(tmp_path, 2)
+    large = _peak_rss_kb(tmp_path, 16)
+    assert large - small < 8 * 1024, (small, large)
+
+
+def test_a_reread_from_the_start_still_fires_across_read_chunks(tmp_path):
+    """Calls absorbed in several reads must still form one history: the undo in the first read,
+    more than a read's worth of other records, the retry at the end, judged with no saved state."""
+    session = Session(tmp_path)
+    assert session.bash(DESTROY) == ""
+    assert session.bash(UNDO) == ""
+    prose = json.dumps({"type": "user", "message": {"content": "p" * 1000}}) + "\n"
+    with open(session.transcript, "a", encoding="utf-8") as handle:
+        handle.write(prose * (gate.READ_CHUNK // len(prose) + 50))
+    next(iter(session.home.rglob("*.recovery-gate.json"))).unlink()
+    assert "STOP-CHECK" in session.bash(RETRY)
+
+
 def test_sidechain_records_are_not_this_session_s_actions():
     """A subagent's calls are its own; folding them in makes one dispatch look like a burst."""
     main = json.dumps({"message": {"content": [{"type": "tool_use", "name": "Bash", "input": {}}]}})
@@ -506,6 +570,40 @@ def test_corrupt_state_starts_over_rather_than_crashing(tmp_path):
     assert json.loads(state.read_text())["v"] == gate.STATE_VERSION
 
 
+@pytest.mark.parametrize("field,bad", [
+    ("armed", [["x", ["vm:1"], ["mirror"]]]),     # a position that is not a number
+    ("armed", [5]),                                # an item that is not a record at all
+    ("seen", {"host:192.0.2.10": "many"}),
+    ("window", [["vm:1"]]),
+    ("off", "twelve"),
+])
+def test_well_formed_json_of_the_wrong_shape_starts_over_rather_than_silencing_the_gate(
+        tmp_path, field, bad):
+    """A state file that parses but holds a malformed item raised inside the hook before the state
+    was saved, so the same item raised on every later call and the gate never fired again."""
+    session = Session(tmp_path)
+    session.bash("echo warm up")
+    path = next(iter(session.home.rglob("*.recovery-gate.json")))
+    state = json.loads(path.read_text(encoding="utf-8"))
+    state[field] = bad
+    path.write_text(json.dumps(state), encoding="utf-8")
+    assert session.bash(DESTROY) == ""
+    assert session.bash(UNDO) == ""
+    assert "STOP-CHECK" in session.bash(RETRY)
+
+
+def test_a_saved_state_keeps_its_on_disk_shape(tmp_path):
+    """The armed records are written as the plain [position, ids, ops] lists earlier releases
+    read, so a state file survives a downgrade."""
+    session = Session(tmp_path)
+    session.bash(DESTROY)
+    session.bash(UNDO)
+    path = next(iter(session.home.rglob("*.recovery-gate.json")))
+    armed = json.loads(path.read_text(encoding="utf-8"))["armed"]
+    assert armed and all(type(a) is list and type(a[0]) is int and type(a[1]) is list
+                         and type(a[2]) is list for a in armed)
+
+
 # --------------------------------------------------------------- rank 10 regressions
 
 def test_a_powershell_call_names_its_subjects_like_bash():
@@ -606,3 +704,28 @@ def test_a_non_dict_tool_input_on_stdin_is_read_as_empty(tmp_path):
     assert session.call("Bash", ["not", "a", "dict"]) == ""
     state = json.loads(next(iter(session.home.rglob("*.recovery-gate.json"))).read_text())
     assert state["n"] == 3
+
+
+def _best_mentions_seconds(command, rounds=3):
+    import time
+    best = None
+    for _ in range(rounds):
+        start = time.perf_counter()
+        gate.mentions("Bash", {"command": command})
+        spent = time.perf_counter() - start
+        best = spent if best is None else min(best, spent)
+    return best
+
+
+def test_mentions_grows_linearly_with_one_long_token():
+    # A script-name pattern tried from every position of one unbroken token rescanned the token
+    # each time: 4000 characters cost 14.8 ms per call and a transcript of such commands 9.8 s
+    # per hook run. Linear work grows ~8x for 8x the token, quadratic ~64x.
+    small = _best_mentions_seconds("echo " + "a" * 2000)
+    large = _best_mentions_seconds("echo " + "a" * 16000)
+    assert large / small < 24, (small, large)
+
+
+def test_mentions_still_finds_a_script_inside_a_path_token():
+    found = gate.mentions("Bash", {"command": "bash ./deploy/run-all.sh && python3 x/y.tool.py"})
+    assert {"f:run-all.sh", "f:y.tool.py"} <= found

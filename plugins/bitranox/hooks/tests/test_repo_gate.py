@@ -752,6 +752,35 @@ def git_repo(tmp_path, files):
     return tmp_path
 
 
+def _secrets_peak(root, size):
+    import tracemalloc
+
+    git_repo(root, {"small.txt": "x\n"})
+    (root / "big.txt").write_bytes(b"a" * size)
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+    tracemalloc.start()
+    try:
+        RG.check_secrets(root)
+        return tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+
+def test_secrets_does_not_load_a_file_past_its_size_cap(tmp_path):
+    """An oversized tracked file is skipped unscanned, so loading it first buys nothing.
+
+    The cap must hold the read itself: peak memory at 3 MB and at 24 MB stays within a constant,
+    where reading the whole file before checking its size made it grow with the file."""
+    small = _secrets_peak(tmp_path / "a", 3_000_000)
+    large = _secrets_peak(tmp_path / "b", 24_000_000)
+    assert large < 2 * small, (small, large)
+
+
+def test_secrets_still_skips_an_oversized_file(tmp_path):
+    git_repo(tmp_path, {"big.txt": "token = " + GH_TOKEN + "\n" + "a" * 2_100_000})
+    assert RG.check_secrets(tmp_path) == []
+
+
 def test_secrets_clean_repo(tmp_path):
     git_repo(tmp_path, {"skills/x/SKILL.md": "just docs, host media.example.com, ip 192.0.2.10\n"})
     assert RG.check_secrets(tmp_path) == []

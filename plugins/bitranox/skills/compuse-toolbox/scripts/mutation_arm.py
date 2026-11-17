@@ -133,10 +133,33 @@ import signal
 import subprocess
 import sys
 import tempfile
+from enum import Enum
 from pathlib import Path
 
 from _cli_envelope import (EXIT_ERROR, EXIT_NO, EXIT_YES, EnvelopeArgumentParser, emit,
                            envelope_for_exit, guarded, render)
+
+
+class Verdict(str, Enum):
+    """What one arm earned. The values are the strings the JSON report and the text output carry.
+
+    A `str, Enum` and not StrEnum: this jig declares a 3.10 floor. Its f-string form differs
+    between 3.10 and 3.11+, so text output takes `.value` (or a str method such as `.upper()`).
+    """
+
+    KILLED = "killed"
+    SURVIVED = "survived"
+    INCONCLUSIVE = "inconclusive"
+    TIMEOUT = "timeout"
+    ERROR = "error"
+
+
+# Every verdict named, so a member added later without an exit code fails the pin test instead
+# of falling through to a default.
+_EXIT_BY_VERDICT = {
+    Verdict.KILLED: EXIT_YES, Verdict.SURVIVED: EXIT_NO, Verdict.INCONCLUSIVE: EXIT_ERROR,
+    Verdict.TIMEOUT: EXIT_ERROR, Verdict.ERROR: EXIT_ERROR,
+}
 
 # The sibling that finds and replaces anchors. A failed import is held, never raised: its
 # traceback exits 1, which is this tool's SURVIVED - so main() refuses with 2 instead, and the
@@ -281,7 +304,7 @@ def _write_log(log_path, output):
     return str(log_path)
 
 
-def command_verdict(returncode: int | None, output: str) -> tuple[str, str | None]:
+def command_verdict(returncode: int | None, output: str) -> tuple[Verdict, str | None]:
     """(verdict, reason) of a ``--cmd`` arm, judged on its exit status. PURE.
 
     0 survived; 126/127 (could not be executed) and a mutant that did not build are inconclusive;
@@ -289,16 +312,17 @@ def command_verdict(returncode: int | None, output: str) -> tuple[str, str | Non
     summary is not parsed, so read the reason before believing a kill.
     """
     if returncode is None:
-        return "timeout", None
+        return Verdict.TIMEOUT, None
     tail = next((line.strip() for line in reversed(output.splitlines()) if line.strip()), "")
     if returncode == 0:
-        return "survived", None
+        return Verdict.SURVIVED, None
     if returncode in (126, 127):
-        return "inconclusive", f"exit {returncode}: the command could not run ({tail})"
+        return Verdict.INCONCLUSIVE, f"exit {returncode}: the command could not run ({tail})"
     built = _DID_NOT_BUILD.search(output)
     if built:
-        return "inconclusive", f"exit {returncode}: the mutant did not build ({built.group(0).strip()})"
-    return "killed", f"exit {returncode}: {tail}"
+        return (Verdict.INCONCLUSIVE,
+                f"exit {returncode}: the mutant did not build ({built.group(0).strip()})")
+    return Verdict.KILLED, f"exit {returncode}: {tail}"
 
 
 def runner_hint(output: str, runner) -> str | None:
@@ -456,7 +480,7 @@ def did_not_run_reason(returncode: int | None, output: str) -> str | None:
     return f"{reason}; pytest: {said}" if said else reason
 
 
-def verdict_for(returncode: int | None, output: str | None = None) -> str:
+def verdict_for(returncode: int | None, output: str | None = None) -> Verdict:
     """What a pytest exit code means for a mutation arm.
 
     5 is the one that matters: pytest collected NOTHING, so the arm never ran. Folding that into
@@ -474,14 +498,19 @@ def verdict_for(returncode: int | None, output: str | None = None) -> str:
     something it never reached.
     """
     if returncode is None:
-        return "timeout"
+        return Verdict.TIMEOUT
     if returncode == 1 and output is not None and failure_reason(output) is None:
-        return "inconclusive"
-    return {0: "survived", 1: "killed"}.get(returncode, "inconclusive")
+        return Verdict.INCONCLUSIVE
+    return {0: Verdict.SURVIVED, 1: Verdict.KILLED}.get(returncode, Verdict.INCONCLUSIVE)
 
 
-def exit_code_for(verdict: str) -> int:
-    return {"killed": 0, "survived": 1}.get(verdict, 2)
+def exit_code_for(verdict: Verdict | str) -> int:
+    """0 killed, 1 survived, 2 for a verdict that leaves the answer unknown.
+
+    Raises:
+        ValueError: `verdict` is no Verdict value; a misspelt one must not pass for unknown.
+    """
+    return _EXIT_BY_VERDICT[Verdict(verdict)]
 
 
 def bytecode_caches(path):
@@ -710,13 +739,13 @@ def run_arm(planned, nodeid, *, runner=None, timeout=None, command=False, log_pa
             removed, left = remove_bytecode(list(saved))
             purged += removed
     if error:
-        verdict, reason = "error", error
+        verdict, reason = Verdict.ERROR, error
     elif command:
         verdict, reason = command_verdict(returncode, output)
     else:
         verdict = verdict_for(returncode, output)
         reason = did_not_run_reason(returncode, output or "") or failure_reason(output) or (
-            runner_hint(output, runner) if verdict == "inconclusive" else None)
+            runner_hint(output, runner) if verdict == Verdict.INCONCLUSIVE else None)
     return {
         "mutations": [{"path": str(p)} for p, _, _ in planned],
         "test": nodeid,
@@ -971,7 +1000,7 @@ def _print_output_tail(arm, indent="  ") -> None:
     """The end of the output of an arm no pytest summary explains: what the one-line reason cannot
     say. A pytest arm that killed names its failing test instead, and a survivor has nothing to
     explain."""
-    if arm.get("output_tail") and not arm.get("caught_by") and arm["verdict"] != "survived":
+    if arm.get("output_tail") and not arm.get("caught_by") and arm["verdict"] != Verdict.SURVIVED:
         print(f"{indent}output:")
         for line in arm["output_tail"].splitlines():
             print(f"{indent}  {line}")
@@ -988,7 +1017,7 @@ def _warn_restore(report) -> None:
 
 
 def _explain_unfinished(report, runner) -> None:
-    if report["verdict"] == "inconclusive":
+    if report["verdict"] == Verdict.INCONCLUSIVE:
         print(f"  pytest exit {report['pytest_returncode']} - the arm did not run",
               file=sys.stderr)
         if report["pytest_returncode"] in _PYTEST_DID_NOT_RUN:
@@ -997,7 +1026,7 @@ def _explain_unfinished(report, runner) -> None:
             print("  no FAILED/ERROR line in pytest's summary: does "
                   f"{runner[0]} have pytest and the project? Name the project's interpreter "
                   "with --python.", file=sys.stderr)
-    if report["verdict"] == "timeout":
+    if report["verdict"] == Verdict.TIMEOUT:
         print(f"  killed at {report['timeout_s']}s - the arm did not finish, so this says "
               "nothing about whether it would have noticed; the mutation may make it SPIN",
               file=sys.stderr)
@@ -1142,7 +1171,7 @@ def run_battery(arms, tests, *, runner, timeout=None, command=False, log_dir=Non
             report = run_arm(planned, arm_tests or tests, runner=runner, timeout=timeout,
                              command=command, log_path=_arm_log_path(log_dir, index, label))
         except (AnchorError, OSError) as exc:
-            report = {"verdict": "error", "failure": f"refused before mutating - {exc}",
+            report = {"verdict": Verdict.ERROR, "failure": f"refused before mutating - {exc}",
                       "caught_by": [], "restored": True, "bytecode_left": []}
         result["arms"].append({"label": label, **report})
         if not report["restored"]:
@@ -1213,7 +1242,7 @@ def _print_battery(result) -> None:
         line = f"{arm['verdict'].upper():<12} {arm['label']}"
         if arm["caught_by"]:
             line += "  caught by: " + ", ".join(arm["caught_by"])
-        elif arm["verdict"] != "survived" and arm.get("failure"):
+        elif arm["verdict"] != Verdict.SURVIVED and arm.get("failure"):
             line += f"  ({arm['failure']})"
         print(line)
         _print_output_tail(arm, indent="    ")

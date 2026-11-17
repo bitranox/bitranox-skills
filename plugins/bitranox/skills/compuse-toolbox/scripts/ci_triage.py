@@ -42,6 +42,7 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Callable, Iterable, Sequence
+from typing import NamedTuple
 
 # gate's splitter, not a copy: shlex on POSIX, CommandLineToArgvW on Windows. A bare str.split()
 # ignored quoting, so `--cmd "python3 -c 'import x'"` ran with its argument torn in two.
@@ -80,6 +81,20 @@ _PATH_OR_FLAG = re.compile(r"(?<!\S)--?[A-Za-z][\w-]*(?:=\S*)?|(?<=[/\\])[\w.-]+
 _BOMS = [(b"\xef\xbb\xbf", "utf-8"), (b"\xff\xfe", "utf-16-le"), (b"\xfe\xff", "utf-16-be")]
 
 Runner = Callable[[Sequence[str]], "tuple[str, int]"]
+
+
+class GhColumns(NamedTuple):
+    """The job and step columns of one `gh run view --log` line."""
+
+    job: str | None
+    step: str | None
+
+
+class CapturedLog(NamedTuple):
+    """A log to triage and the exit code of the command that produced it (0 for a file)."""
+
+    text: str
+    rc: int
 
 
 class TriageError(Exception):
@@ -128,14 +143,14 @@ def _hits(lines: list[str], keywords, indices: Iterable[int]) -> list[tuple[int,
     return out
 
 
-def _gh_columns(line: str) -> tuple[str | None, str | None]:
+def _gh_columns(line: str) -> GhColumns:
     """(job, step) of a `gh run view --log` line; step is None when the line has no step column
     or gh wrote UNKNOWN STEP for it, and job is None only for a line with no gh columns at all."""
     m = _GH_COLUMNS.match(line)
     if m is None:
-        return None, None
+        return GhColumns(None, None)
     job, step = m.group(1), m.group(2)
-    return job, (None if step == _GH_UNMAPPED else step)
+    return GhColumns(job, None if step == _GH_UNMAPPED else step)
 
 
 def _chosen_steps(columns, lines: list[str], step: str) -> set[tuple[str | None, str]]:
@@ -194,24 +209,24 @@ def decode(data: bytes) -> str:
     return data.decode("utf-8", errors="replace")
 
 
-def _run(argv: Sequence[str]) -> tuple[str, int]:
+def _run(argv: Sequence[str]) -> CapturedLog:
     exe = shutil.which(argv[0])
     if exe is None:
         raise TriageError(f"command not found: {argv[0]}")
     out = subprocess.run([exe, *argv[1:]], capture_output=True)
-    return decode(out.stdout or b"") + decode(out.stderr or b""), out.returncode
+    return CapturedLog(decode(out.stdout or b"") + decode(out.stderr or b""), out.returncode)
 
 
 def _tail(text: str, n: int = 20) -> str:
     return "\n".join(log_lines(text)[-n:])
 
 
-def _read_source(args, run: Runner) -> tuple[str, int]:
-    """(log text, exit code of the command that produced it; 0 for a file or stdin)."""
+def _read_source(args, run: Runner) -> CapturedLog:
+    """The log text and the exit code of the command that produced it (0 for a file or stdin)."""
     if args.file is not None:
         try:
             with open(args.file, "rb") as fh:
-                return decode(fh.read()), 0
+                return CapturedLog(decode(fh.read()), 0)
         except OSError as exc:
             raise TriageError(f"cannot read {args.file}: {exc}") from exc
     if args.cmd is not None:
@@ -222,15 +237,15 @@ def _read_source(args, run: Runner) -> tuple[str, int]:
         if not argv:
             raise TriageError("--cmd is empty")
         try:
-            return run(argv)
+            return CapturedLog(*run(argv))
         except OSError as exc:
             raise TriageError(f"cannot run {argv[0]}: {exc}") from exc
     if args.gh is not None:
         return _read_gh(args, run)
-    return decode(sys.stdin.buffer.read()), 0
+    return CapturedLog(decode(sys.stdin.buffer.read()), 0)
 
 
-def _read_gh(args, run: Runner) -> tuple[str, int]:
+def _read_gh(args, run: Runner) -> CapturedLog:
     argv = ["gh", "run", "view", args.gh, "--log"] + (["--repo", args.repo] if args.repo else [])
     try:
         text, rc = run(argv)
@@ -238,7 +253,7 @@ def _read_gh(args, run: Runner) -> tuple[str, int]:
         raise TriageError(f"cannot run gh: {exc}") from exc
     if rc != 0:
         raise TriageError(f"gh exited {rc}; no log to triage:\n{_tail(text)}")
-    return text, 0
+    return CapturedLog(text, 0)
 
 
 def _validate(args) -> None:

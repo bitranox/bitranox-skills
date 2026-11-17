@@ -4,7 +4,9 @@ This module exists so the command-scanning guards agree about what counts as DAT
 are the corpus that proved the two former copies behaviourally identical before they were merged;
 keeping them here is what stops the next edit from splitting the behaviour again.
 """
+import cProfile
 import os
+import pstats
 import subprocess
 import pytest
 import shell_text as S
@@ -1288,3 +1290,74 @@ def test_is_work_tree_root_takes_only_a_marker_git_would_accept(tmp_path):
     assert S.is_work_tree_root(str(empty)) is False
     assert S.is_work_tree_root(str(junk)) is False
     assert S.is_work_tree_root(str(none)) is False
+
+
+# ---- cost of the whole-command views ---------------------------------------------------------
+
+def _profiled_calls(fn):
+    """{function name: primitive call count} for one call of `fn` under cProfile."""
+    profiler = cProfile.Profile()
+    profiler.runcall(fn)
+    counts = {}
+    for (_file, _line, name), (primitive, *_rest) in pstats.Stats(profiler).stats.items():
+        counts[name] = counts.get(name, 0) + primitive
+    return counts
+
+
+def test_masking_plain_text_does_not_probe_every_character():
+    """The walk tried four `startswith` spellings on every character, about 33 calls per byte of
+    a heredoc script; a run with nothing special in it needs none."""
+    plain = "echo " + "word " * 2000
+    calls = _profiled_calls(lambda: S.mask_data_regions(plain + "x" * 7))
+    assert calls.get("<method 'startswith' of 'str' objects>", 0) < 50
+    assert S.mask_data_regions(plain) == plain                  # plain text is copied as is
+
+
+def _big_command():
+    body = "\n".join(f"x = {i}  # it's $(not) a \"command\"" for i in range(400))
+    return f"cd /r && cat > f.py <<'EOF'\n{body}\nEOF\ngit commit -m \"a; b\" && git push  # c\n"
+
+
+def test_each_whole_command_view_is_derived_once_however_often_it_is_asked():
+    """Several helpers of one hook ask for the same view of the same command; each re-derived it
+    from the raw text, so the passes over a large command grew with the number of helpers."""
+    command = _big_command()
+
+    def walks(times):
+        # A generator's count is its resumptions, so compare one round against five rather than
+        # against 1: the walks must cost the same however many times the views are asked for.
+        getattr(S, "clear_view_caches", lambda: None)()
+
+        def ask():
+            for _ in range(times):
+                S.strip_heredoc_bodies(command)
+                S.blank_heredoc_bodies(command)
+                S.mask_data_regions(command)
+                S.blank_unexpanded_text(command)
+                list(S.iter_segments(command, "Bash"))
+
+        calls = _profiled_calls(ask)
+        # Names inside each walk, so the count means the same before and after the cache: the
+        # comment check runs in both the masking and the unexpanded-text walk.
+        return {name: calls.get(name, 0) for name in
+                ("run", "_step", "_iter_separators", "_hash_starts_a_word", "_blank_unexpanded")}
+
+    once = walks(1)
+    assert all(once.values()), once                   # every walk is seen at all
+    assert walks(5) == once
+
+
+def test_a_cached_view_answers_exactly_what_a_fresh_derivation_does():
+    command = _big_command()
+    first = (S.strip_heredoc_bodies(command), S.blank_heredoc_bodies(command),
+             S.mask_data_regions(command, tool_name="PowerShell"), S.heredoc_bodies(command),
+             S.blank_unexpanded_text(command), list(S.iter_segments(command, "Bash")),
+             list(S.iter_heredocs(command)))
+    getattr(S, "clear_view_caches", lambda: None)()
+    again = (S.strip_heredoc_bodies(command), S.blank_heredoc_bodies(command),
+             S.mask_data_regions(command, tool_name="PowerShell"), S.heredoc_bodies(command),
+             S.blank_unexpanded_text(command), list(S.iter_segments(command, "Bash")),
+             list(S.iter_heredocs(command)))
+    assert [type(x) for x in first] == [str, str, str, str, str, list, list]
+    assert first[:6] == again[:6]
+    assert [(a, o.group(0), b) for a, o, b in first[6]] == [(a, o.group(0), b) for a, o, b in again[6]]

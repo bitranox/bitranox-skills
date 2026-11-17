@@ -44,6 +44,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "hooks"))
 
 import claude_paths
 
+_LEVELLED_HEADING_RE = re.compile(r"^(#{2,4}) (.+?)\s*$")
+_HEADING_TEXT_RE = re.compile(r"^#{2,4} (.+?)\s*$")
+_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
 __all__ = [
     "ControlError",
     "Stamp",
@@ -321,7 +325,7 @@ def sections(text: str) -> list[dict[str, Any]]:
 
     for kind, line, _lang in _walk(text):
         if kind == "prose":
-            m = re.match(r"^(#{2,4}) (.+?)\s*$", line)
+            m = _LEVELLED_HEADING_RE.match(line)
             if m:
                 close()
                 level, title = len(m.group(1)), m.group(2)
@@ -531,14 +535,14 @@ def coverage(stamp: dict[str, Any], refs_dir: Path) -> dict[str, Any]:
 
     documented: set[str] = set()
     for line in text.split("\n"):
-        m = re.match(r"^#{2,4} (.+?)\s*$", line)
+        m = _HEADING_TEXT_RE.match(line)
         if m:
-            documented.update(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", m.group(1)))
+            documented.update(_IDENT_RE.findall(m.group(1)))
     # Search inside backticked spans by word, not by whole-span equality: a name is documented when
     # it appears as `$CLAUDE_MODEL` or `CLAUDE_CODE_DEBUG_LOG_LEVEL=verbose`, not only when a span
     # happens to equal it exactly.
     ticked_text = " ".join(TICK_RX.findall(text))
-    ticked_words = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", ticked_text))
+    ticked_words = set(_IDENT_RE.findall(ticked_text))
 
     def is_documented(name: str) -> bool:
         return name in documented or name in ticked_words

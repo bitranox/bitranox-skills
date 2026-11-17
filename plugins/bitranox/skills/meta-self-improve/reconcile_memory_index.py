@@ -55,6 +55,11 @@ import memory_engine as ME  # noqa: E402
 import self_improve_signals as sig  # noqa: E402
 import uuid_store as us  # noqa: E402
 
+_FRONTMATTER_KEY_RE = re.compile(r"^([A-Za-z0-9_-]+):\s*(.*)$")
+_SLUG_SEP_RE = re.compile(r"[_-]")
+_SENTENCE_END_RE = re.compile(r"(?<=[.!?])\s")
+_FRONTMATTER_OPEN_RE = re.compile(r"---[ \t]*\r?\n")
+
 _HOOK_MAX = 160
 _TYPE_PREFIXES = us.TYPE_PREFIXES
 _WIKILINK_RX = re.compile(r"\[\[([^\]]+)\]\]")   # run it over ME.mask_code_regions(text): a
@@ -85,7 +90,7 @@ def parse_frontmatter(text):
     i = 0
     while i < len(block):
         line = block[i]
-        m = re.match(r"^([A-Za-z0-9_-]+):\s*(.*)$", line)
+        m = _FRONTMATTER_KEY_RE.match(line)
         if not m:
             i += 1
             continue
@@ -125,7 +130,7 @@ def derive_title(meta, body, filename):
         if s.startswith("# "):
             return _collapse(s[2:])
     name = meta.get("name") or Path(filename).stem
-    parts = re.split(r"[_-]", name)
+    parts = _SLUG_SEP_RE.split(name)
     if len(parts) > 1 and parts[0].lower() in _TYPE_PREFIXES:
         parts = parts[1:]
     title = " ".join(p for p in parts if p).strip()
@@ -137,7 +142,7 @@ def derive_hook(meta, body):
     hook = _collapse(meta.get("description", ""))
     if not hook:
         para = _collapse(body)
-        hook = re.split(r"(?<=[.!?])\s", para)[0] if para else ""
+        hook = _SENTENCE_END_RE.split(para)[0] if para else ""
     if len(hook) > _HOOK_MAX:
         hook = hook[: _HOOK_MAX - 3].rstrip() + "..."
     return hook
@@ -1015,7 +1020,7 @@ def appended_type_damage(raw):
     top of a damaged body. `prose` is the text with only the appended block removed."""
     head, m = ME._frontmatter(raw)
     content = (head[m.end():] if m else head).lstrip()
-    if not re.match(r"---[ \t]*\r?\n", content) or ME._frontmatter(content)[1] is not None:
+    if not _FRONTMATTER_OPEN_RE.match(content) or ME._frontmatter(content)[1] is not None:
         return None
     end = content.find("\n---", 3)
     front, rest = (content[:end], content[end:]) if end > 0 else (content.rstrip(), "")

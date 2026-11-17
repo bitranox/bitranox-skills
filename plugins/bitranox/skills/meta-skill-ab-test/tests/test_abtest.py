@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tarfile
 import time
+import tracemalloc
 from pathlib import Path
 
 import _ablib as L
@@ -136,6 +137,63 @@ def test_record_starts_a_new_line_after_a_final_line_without_newline(tmp_path):
     (tmp_path / "journal.jsonl").write_text('{"step": "seal"}', encoding="utf-8")
     T.record(tmp_path, step="arm", round=1, arm="C", status="ran")
     assert [r["step"] for r in L.read_jsonl(tmp_path / "journal.jsonl")] == ["seal", "arm"]
+
+
+def _peak(fn, *args, **kwargs):
+    tracemalloc.start()
+    try:
+        out = fn(*args, **kwargs)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    return peak, out
+
+
+def test_an_append_does_not_read_the_whole_journal_to_find_its_last_byte(tmp_path):
+    # Only the last byte decides whether a torn write needs a newline first; the journal grows
+    # by a row per arm attempt, so reading all of it on every append grows with the run.
+    peaks = []
+    for rows in (2000, 16000):
+        run_dir = tmp_path / f"r{rows}"
+        run_dir.mkdir()
+        row = json.dumps({"step": "seal", "pad": "x" * 100}) + "\n"
+        (run_dir / "journal.jsonl").write_text(row * rows, encoding="utf-8")
+        peaks.append(_peak(T.record, run_dir, step="arm")[0])
+    assert peaks[1] < 2 * peaks[0], f"8x the journal raised the append's peak from {peaks[0]} to {peaks[1]} bytes"
+
+
+def test_an_append_after_a_torn_write_without_newline_still_starts_its_own_line(tmp_path):
+    (tmp_path / "journal.jsonl").write_bytes(b'{"step": "seal"}\n{"step": "arm", "rou')
+    T.record(tmp_path, step="arm", round=1, arm="C", status="ran")
+    assert (tmp_path / "journal.jsonl").read_bytes().split(b"\n")[1] == b'{"step": "arm", "rou'
+
+
+def _stream(path, filler, *, last):
+    rows = [{"type": "assistant", "message": {"id": f"m{i}", "content": [{"type": "text", "text": "y" * 200}]}}
+            for i in range(filler)]
+    rows.append(last)
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    return path
+
+
+def test_the_auth_check_reads_the_stream_a_line_at_a_time(tmp_path):
+    last = {"type": "assistant", "error": "authentication_failed"}
+    small_peak, small = _peak(T._auth_failed_in, _stream(tmp_path / "s.jsonl", 500, last=last))
+    large_peak, large = _peak(T._auth_failed_in, _stream(tmp_path / "l.jsonl", 4000, last=last))
+    assert small is large is True
+    assert large_peak < 2 * small_peak, f"8x the stream raised the peak from {small_peak} to {large_peak} bytes"
+
+
+def test_the_auth_check_finds_the_error_on_a_record_carrying_a_raw_line_separator(tmp_path):
+    # A raw U+2028 inside a JSON string is not a line end: splitting on it broke the record.
+    rec = {"type": "assistant", "message": {"error": "authentication_failed", "text": "a" + chr(0x2028) + "b"}}
+    stream = tmp_path / "s.jsonl"
+    stream.write_text(json.dumps(rec, ensure_ascii=False) + "\n", encoding="utf-8")
+    assert T._auth_failed_in(stream) is True
+
+
+def test_the_auth_check_is_false_for_a_stream_without_the_error(tmp_path):
+    assert T._auth_failed_in(_stream(tmp_path / "s.jsonl", 3, last={"type": "result"})) is False
 
 
 def test_a_failing_command_prints_a_json_envelope_and_one_stderr_line(tmp_path, capsys):

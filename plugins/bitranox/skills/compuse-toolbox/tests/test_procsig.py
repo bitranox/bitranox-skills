@@ -552,3 +552,57 @@ def test_scan_peer_finds_this_process_on_a_real_loopback_connection():
     finally:
         for s in (accepted, client, server):
             s.close()
+
+
+# ---- scan reads only what its filter needs ------------------------------------------------------
+
+# An audit hook cannot be removed, so it is installed once and records only while a test points
+# _OPENS_UNDER at a fake proc root; the "open" event is raised by every file open.
+_OPENS_UNDER: list[str] = []
+_OPENED: list[str] = []
+
+
+def _record_open(event, args):
+    if event == "open" and _OPENS_UNDER and str(args[0]).startswith(_OPENS_UNDER[0]):
+        _OPENED.append(Path(str(args[0])).name)
+
+
+sys.addaudithook(_record_open)
+
+
+def _files_opened_by(root, **needle):
+    _OPENED.clear()
+    _OPENS_UNDER[:] = [str(root)]
+    try:
+        hits = P.scan(root, **needle)
+    finally:
+        _OPENS_UNDER.clear()
+    return hits, sorted(_OPENED)
+
+
+def test_scan_by_exe_opens_no_comm_or_cmdline_file_of_a_process_it_does_not_report(tmp_path):
+    # The exe is a readlink; reading comm and cmdline for every pid tripled the /proc reads.
+    for pid in range(100, 110):
+        _mkproc(tmp_path, pid, exe="/usr/bin/bash")
+    _mkproc(tmp_path, 200, exe="/usr/local/bin/openvmm", cmdline=["openvmm", "--vm", "a"])
+    hits, opened = _files_opened_by(tmp_path, exe="openvmm")
+    assert hits == [{"pid": 200, "exe": "/usr/local/bin/openvmm", "comm": "openvmm",
+                     "cmdline": "openvmm --vm a"}]
+    assert opened == ["cmdline", "comm"]
+
+
+def test_scan_by_a_short_comm_reads_only_comm_for_a_process_it_does_not_report(tmp_path):
+    for pid in range(100, 110):
+        _mkproc(tmp_path, pid, exe="/usr/bin/bash")
+    _mkproc(tmp_path, 200, exe="/x/vmworker", comm="vmworker")
+    hits, opened = _files_opened_by(tmp_path, comm="vmworker")
+    assert [h["pid"] for h in hits] == [200]
+    assert opened == ["cmdline"] + ["comm"] * 11
+
+
+def test_scan_by_a_truncated_comm_still_confirms_it_against_argv(tmp_path):
+    _mkproc(tmp_path, 300, exe="/x/backup-scheduler", comm="backup-schedule",
+            cmdline=["backup-scheduler"])
+    _mkproc(tmp_path, 301, exe="/x/backup-scheduler-v2", comm="backup-schedule",
+            cmdline=["backup-scheduler-v2"])
+    assert [h["pid"] for h in P.scan(tmp_path, comm="backup-scheduler")] == [300]

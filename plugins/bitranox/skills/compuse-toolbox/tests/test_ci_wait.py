@@ -249,6 +249,23 @@ class TestExitCodes:
         assert ci_wait.exit_code_for("timeout") == 2
         assert ci_wait.exit_code_for("no-runs") == 2
 
+    def test_a_misspelt_state_is_refused_not_mapped_to_could_not_tell(self):
+        # A typo in a state literal used to exit 2 ("could not tell") with nothing said, so a
+        # verdict meant to read `success` would silently become an unexplained failure.
+        with pytest.raises(ValueError, match="sucess"):
+            ci_wait.Verdict("sucess", "CI=success")
+        with pytest.raises(ValueError, match="sucess"):
+            ci_wait.exit_code_for("sucess")
+
+    def test_every_state_has_an_exit_code(self):
+        assert set(ci_wait._EXIT_CODES) == set(ci_wait.CiState)
+
+    def test_the_state_keeps_its_wire_string(self):
+        verdict = ci_wait.Verdict("no-runs", "none")
+        assert verdict.state is ci_wait.CiState.NO_RUNS
+        assert f"{verdict.state}" == "no-runs"
+        assert json.dumps({"state": verdict.state}) == '{"state": "no-runs"}'
+
 
 class TestGhRuns:
     """The client-side filter and the gh edge. `subprocess` is a true external edge, so it is
@@ -1584,7 +1601,7 @@ class TestARunNoRunnerPicksUpIsReportedNotWaitedOut:
     def test_the_cli_takes_the_flag_and_reports_the_state_in_the_envelope(self, monkeypatch, capsys):
         monkeypatch.setattr(ci_wait, "sha_is_known_locally", lambda sha, **kw: True)
         monkeypatch.setattr(ci_wait, "gh_runs", lambda sha, **kw: [queued_row("release", 777)])
-        monkeypatch.setattr(ci_wait, "gh_run_started", lambda rid, **kw: False)
+        monkeypatch.setattr(ci_wait, "gh_run_jobs", lambda rid, **kw: [{"status": "queued"}])
         monkeypatch.setattr(ci_wait.time, "sleep", lambda _s: None)
         clock = iter(range(0, 100000, 30))
         monkeypatch.setattr(ci_wait.time, "monotonic", lambda: next(clock))
@@ -1721,7 +1738,7 @@ class TestGhRunStarted:
         listing = [queued_row("ci", 39932914131, event="push")]
         monkeypatch.setattr(ci_wait, "gh_runs", lambda sha, **kw: listing)
         monkeypatch.setattr(ci_wait, "gh_run", lambda rid, **kw: listing[0])
-        monkeypatch.setattr(ci_wait, "gh_run_started", lambda rid, **kw: True)
+        monkeypatch.setattr(ci_wait, "gh_run_jobs", lambda rid, **kw: [{"status": "in_progress"}])
         monkeypatch.setattr(ci_wait.time, "sleep", lambda _s: None)
         clock = iter(range(0, 100000, 30))
         monkeypatch.setattr(ci_wait.time, "monotonic", lambda: next(clock))
@@ -1732,6 +1749,40 @@ class TestGhRunStarted:
         payload = json.loads(capsys.readouterr().out)
         assert rc == 2
         assert payload["data"]["state"] == "timeout"
+
+
+class TestOneJobsReadPerRunPerPoll:
+    """The stuck check (did any job start?) and the progress note (how many jobs are done?) both
+    read `gh run view <id> --json jobs`. Asking gh twice for the same run in one poll spends the
+    account-wide API budget for an answer the first call already gave."""
+
+    def test_a_queued_run_past_its_grace_is_read_once_per_poll(self, monkeypatch, capsys):
+        monkeypatch.setattr(ci_wait, "sha_is_known_locally", lambda sha, **kw: True)
+        listing = [queued_row("ci", 39932914131, event="push")]
+        monkeypatch.setattr(ci_wait, "gh_runs", lambda sha, **kw: listing)
+        monkeypatch.setattr(ci_wait, "gh_run", lambda rid, **kw: listing[0])
+        monkeypatch.setattr(ci_wait, "gh_run_jobs", REAL_GH_RUN_JOBS)
+        polls: list[int] = []
+        real_gh_runs = ci_wait.gh_runs
+
+        def counting_gh_runs(sha, **kw):
+            polls.append(1)
+            return real_gh_runs(sha, **kw)
+
+        monkeypatch.setattr(ci_wait, "gh_runs", counting_gh_runs)
+        calls: list[list[str]] = []
+        monkeypatch.setattr(ci_wait.subprocess, "run", jobs_gh(
+            [{"status": "in_progress", "name": "test"}], calls))
+        monkeypatch.setattr(ci_wait.time, "sleep", lambda _s: None)
+        clock = iter(range(0, 100000, 30))
+        monkeypatch.setattr(ci_wait.time, "monotonic", lambda: next(clock))
+
+        rc = ci_wait.main(["--sha", SHA, "--repo", "o/r", "--json", "--queued-grace", "60",
+                           "--timeout", "1200"])
+
+        assert rc == 2 and json.loads(capsys.readouterr().out)["data"]["state"] == "timeout"
+        job_reads = [c for c in calls if c[:3] == ["gh", "run", "view"] and "jobs" in c]
+        assert polls and len(job_reads) <= len(polls), (len(job_reads), len(polls))
 
 
 def vanishing_gh(listings: list[list[dict[str, object]]], by_id: dict[int, dict[str, object]],

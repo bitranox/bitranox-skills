@@ -530,8 +530,17 @@ class AdoptError(Exception):
     """The adoption could not run as asked. Exit 2."""
 
 
+_URL_RE = re.compile(r"^(https?://|git@|ssh://|git://|file://)")
+_NAME_JUNK_RE = re.compile(r"[^a-z0-9-]")
+_DASH_RUN_RE = re.compile(r"-+")
+_GIT_SUFFIX_RE = re.compile(r"\.git$")
+_NON_WORD_RE = re.compile(r"\W")
+_NOTICE_END_RE = re.compile(r"^(?:### |---[ \t]*$)", re.MULTILINE)
+_SOURCE_LINE_RE = re.compile(r"^- Source: (.*)$", re.MULTILINE)
+
+
 def is_url(source):
-    return bool(re.match(r"^(https?://|git@|ssh://|git://|file://)", source))
+    return bool(_URL_RE.match(source))
 
 
 # Never copied out of a source: a VCS dir would ship another repo's history into the marketplace
@@ -585,8 +594,8 @@ def _locate_skill_dir(base):
 
 def normalize_name(raw):
     name = raw.strip().lower().replace("_", "-").replace(" ", "-")
-    name = re.sub(r"[^a-z0-9-]", "", name)
-    name = re.sub(r"-+", "-", name).strip("-")
+    name = _NAME_JUNK_RE.sub("", name)
+    name = _DASH_RUN_RE.sub("-", name).strip("-")
     return name
 
 
@@ -594,7 +603,7 @@ def derive_name(source, subdir):
     if subdir:
         return Path(subdir).name
     if is_url(source):
-        return re.sub(r"\.git$", "", source.rstrip("/").split("/")[-1])
+        return _GIT_SUFFIX_RE.sub("", source.rstrip("/").split("/")[-1])
     p = Path(source)
     return p.stem if p.suffix == ".md" else p.name
 
@@ -721,7 +730,7 @@ def scaffold_tests(skill_dir, script):
         return None
     tests.mkdir(parents=True, exist_ok=True)
     rel = script.relative_to(skill_dir).parts
-    module = re.sub(r"\W", "_", script.stem)
+    module = _NON_WORD_RE.sub("_", script.stem)
     (tests / "conftest.py").write_text(CONFTEST.format(script_dir=_path_expr(rel[:-1])),
                                        encoding="utf-8", newline="\n")
     stub = tests / f"test_{module}.py"
@@ -850,12 +859,12 @@ def _notice_entry(text, name):
     start = re.search(rf"^### {re.escape(name)}[ \t]*$", text, re.MULTILINE)
     if start is None:
         return None
-    end = re.search(r"^(?:### |---[ \t]*$)", text[start.end():], re.MULTILINE)
+    end = _NOTICE_END_RE.search(text[start.end():])
     return text[start.end():start.end() + end.start()] if end else text[start.end():]
 
 
 def _credited_source(entry_text):
-    match = re.search(r"^- Source: (.*)$", entry_text, re.MULTILINE)
+    match = _SOURCE_LINE_RE.search(entry_text)
     return match.group(1).strip() if match else None
 
 

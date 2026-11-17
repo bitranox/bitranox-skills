@@ -329,6 +329,19 @@ def test_doctor_stays_quiet_on_a_config_with_nothing_wrong():
     assert [f for f in P.doctor_findings(reservations=clean, overrides=[]) if f.severity == "warn"] == []
 
 
+def test_a_finding_with_a_misspelled_severity_is_refused():
+    """`doctor` exits 1 only on a `warn`: a misspelled one would be filed as informational."""
+    with pytest.raises(ValueError):
+        P.Finding(check="static_arp_armed", severity="wran", subject="s", detail="d")
+
+
+def test_a_finding_severity_keeps_its_wire_string():
+    finding = P.Finding(check="c", severity="warn", subject="s", detail="d")
+    assert finding.severity is P.Severity.WARN
+    assert json.dumps(P.asdict(finding)) == (
+        '{"check": "c", "severity": "warn", "subject": "s", "detail": "d"}')
+
+
 def test_one_address_shared_by_several_macs_is_context_not_a_warning():
     """Measured: warning on this alone fired 5 times on a config that was entirely correct.
 

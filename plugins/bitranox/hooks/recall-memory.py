@@ -405,7 +405,7 @@ def main():
     by_score = sorted(hits, key=lambda p: (-_score(p), p))
     transcript = ev.get("transcript_path") or ""
     cfg = sig.load_config()
-    if classifier.site_mode(cfg, "recall_rerank") == "decide":
+    if classifier.site_mode(cfg, "recall_rerank") is classifier.SiteMode.DECIDE:
         ranked = _decide_recall(prompt, sid, by_score, ranked, hits, keywords, transcript, cfg)
     else:
         _shadow_recall(prompt, sid, by_score, ranked, hits, keywords, transcript)

@@ -61,6 +61,17 @@ def test_match_mode_searches_both_streams():
     assert A.fired(A.Run(2, "other text", ""), "match", "BLOCKED") is False
 
 
+def test_a_misspelt_fired_mode_is_refused_not_read_as_output():
+    # "nonzro" used to fall through to the output rule, so a library caller's typo scored every
+    # claim on a firing rule nobody asked for.
+    with pytest.raises(ValueError):
+        A.fired(A.Run(0, "", ""), "nonzro", None)
+
+
+def test_the_fired_modes_are_the_cli_choices():
+    assert {m.value for m in A.FiredWhen} == set(A.FIRED_MODES) == {"output", "nonzero", "match"}
+
+
 # ---- driving a real subject --------------------------------------------------------------------
 
 def _fake_hook(tmp_path, body):

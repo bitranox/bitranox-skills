@@ -89,8 +89,12 @@ def read_levels(root: Path) -> dict[str, str]:
     """{canonical slug: level dir} for every pointer under `root`. A fact with a line at several
     levels (placed by topic, or a duplicate) is given its FIRST level in path order;
     `read_copies` has the rest."""
+    return _levels_of(_pointers(root))
+
+
+def _levels_of(walked) -> dict[str, str]:
     levels: dict[str, str] = {}
-    for level, pointers in _pointers(root):
+    for level, pointers in walked:
         for p in pointers:
             levels.setdefault(canon(p.slug), str(level))
     return levels
@@ -99,31 +103,42 @@ def read_levels(root: Path) -> dict[str, str]:
 def read_copies(root: Path) -> dict[str, list[str]]:
     """{canonical slug: [every level dir holding a line of it]} for the slugs held at more than
     one level, in path order."""
+    return _copies_of(_pointers(root))
+
+
+def _copies_of(walked) -> dict[str, list[str]]:
     held: dict[str, list[str]] = {}
-    for level, pointers in _pointers(root):
+    for level, pointers in walked:
         for p in pointers:
             held.setdefault(canon(p.slug), []).append(str(level))
     return {slug: levels for slug, levels in held.items() if len(levels) > 1}
 
 
-def read_placed(root: Path, slugs) -> set[str]:
+def read_placed(root: Path, slugs, level_dirs=None) -> set[str]:
     """The members of `slugs` the engine places by topic (reconcile's test, the engine's rule): a
     topic-bound body with a title and description, with no pinned or legacy line at any level. Its
     lines stand where the levels' topics put them, and a ref to it resolves through the central
     body wherever they are. Callers pass slugs that have a line (the engine's rule needs one); a slug with one line
-    is judged like one with several. One body head per member of `slugs`."""
+    is judged like one with several. One body head per member of `slugs`. `level_dirs`, when the
+    caller already walked the tree, is that walk's level list, so the tree is not walked again."""
     if not slugs:
         return set()
     # `_pointers` leaves legacy lines out, and a legacy line keeps a fact unplaced just as a pin
     # does: the engine's own set, from the engine's walk.
-    fixed = ME._unplaceable_slugs(ME.curated_levels_under(root))  # noqa: SLF001
+    if level_dirs is None:
+        level_dirs = ME.curated_levels_under(root)
+    fixed = ME._unplaceable_slugs(level_dirs)  # noqa: SLF001
     return {slug for slug in slugs
             if _rmi._placed_by_topic(root, slug, lambda _anchor: fixed)}  # noqa: SLF001
 
 
 def read_hooks(root: Path) -> dict[str, str]:
     """{canonical slug: pointer hook text} for every pointer under `root`."""
-    return {canon(p.slug): p.hook or "" for _level, pointers in _pointers(root) for p in pointers}
+    return _hooks_of(_pointers(root))
+
+
+def _hooks_of(walked) -> dict[str, str]:
+    return {canon(p.slug): p.hook or "" for _level, pointers in walked for p in pointers}
 
 
 def _fact_texts(root: Path, hooks: dict[str, str]) -> dict[str, str]:
@@ -175,9 +190,10 @@ def build(root: Path, slugs):
     """[{slug, level, inbound, outbound, unknown}] plus a flag for whether anything is wrong.
     Raises the engine's TreeWalkError when a level file or a fact body cannot be read or is not
     UTF-8, or a directory under the root cannot be listed."""
-    levels = read_levels(root)
-    copies = read_copies(root)
-    texts = _fact_texts(root, read_hooks(root))
+    walked = _pointers(root)  # one walk of the tree feeds every reader below
+    levels = _levels_of(walked)
+    copies = _copies_of(walked)
+    texts = _fact_texts(root, _hooks_of(walked))
     outbound, inbound = read_refs(root, texts=texts)
     prose = _rmi.prose_mentions(texts, set(levels))
     entries, problems = [], False
@@ -246,13 +262,15 @@ def judge_moves(root: Path, moves: list[dict]):
     engine's TreeWalkError like `build`."""
     # read_moves resolves every target, so the levels must be resolved too: compared as given, a
     # relative or symlinked --root put every citer outside every resolved target.
-    levels = {slug: str(Path(level).resolve()) for slug, level in read_levels(root).items()}
+    walked = _pointers(root)  # one walk of the tree feeds every reader below
+    levels = {slug: str(Path(level).resolve()) for slug, level in _levels_of(walked).items()}
     copies = {slug: [str(Path(level).resolve()) for level in held]
-              for slug, held in read_copies(root).items()}
+              for slug, held in _copies_of(walked).items()}
     # every moved slug is tested, not only one with several lines: the engine's move refuses a
     # placed fact whatever its line count, so a one-line one reported clean here was then refused
-    placed = read_placed(root, set(copies) | {mv["slug"] for mv in moves if mv["slug"] in levels})
-    outbound, inbound = read_refs(root)
+    placed = read_placed(root, set(copies) | {mv["slug"] for mv in moves if mv["slug"] in levels},
+                         level_dirs=[level for level, _pointers_at in walked])
+    outbound, inbound = read_refs(root, hooks=_hooks_of(walked))
     final = dict(levels)
     conflicts = []
     for mv in moves:

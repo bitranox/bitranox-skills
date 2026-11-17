@@ -70,8 +70,16 @@ import sys
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, asdict
 from datetime import datetime
+from enum import StrEnum
 from pathlib import Path
 from urllib.parse import urlparse
+
+_DTD_RE = re.compile(r"<!DOCTYPE|<!ENTITY", re.I)
+_DIGITS_RE = re.compile(r"[0-9]+")
+_NON_HEX_RE = re.compile(r"[^0-9a-fA-F]")
+_NAMESERVER_RE = re.compile(r"^\s*nameserver\s+(\S+)", re.M)
+_TRACK_RE = re.compile(r"\btrack\s+([^,\s]+)")
+_TRACK_IP_RE = re.compile(r"\bip\s+(\[[^\]]*\]|[^,\s]+)")
 
 SNORT_TABLE = "snort2c"
 MAGICDNS = "100.100.100.100"          # Tailscale's fixed MagicDNS address, the same on every tailnet
@@ -121,7 +129,7 @@ def parse_xml(text: str) -> ET.Element:
     legitimate DOCTYPE, so refusing one closes that without a dependency and without weakening the
     parse of anything real.
     """
-    if re.search(r"<!DOCTYPE|<!ENTITY", text, re.I):
+    if _DTD_RE.search(text):
         raise PfsenseError("the document declares a DOCTYPE or ENTITY; a pfSense config.xml has "
                            "neither, so this is refused rather than expanded")
     try:
@@ -188,14 +196,26 @@ class Alert:
         return SignatureId(gid=int(self.gid), sid=int(self.sid))
 
 
+class Severity(StrEnum):
+    """A `doctor` finding's weight. `warn` means act on it (doctor exits 1); `info` is context."""
+
+    WARN = "warn"
+    INFO = "info"
+
+
 @dataclass(frozen=True)
 class Finding:
     """One `doctor` result. `warn` means act on it; `info` is context."""
 
     check: str
-    severity: str
+    severity: Severity
     subject: str
     detail: str
+
+    def __post_init__(self) -> None:
+        # The exit code counts only WARN, so a misspelled severity would be filed as context and
+        # doctor would exit 0 over it; parsing refuses it where the finding is built.
+        object.__setattr__(self, "severity", Severity(self.severity))
 
 
 # ---- target resolution --------------------------------------------------------------------------
@@ -399,7 +419,7 @@ def parse_alerts(text: str, ip: str | None = None) -> list[Alert]:
 
 
 def _is_ascii_number(field: str) -> bool:
-    return re.fullmatch(r"[0-9]+", field.strip()) is not None
+    return _DIGITS_RE.fullmatch(field.strip()) is not None
 
 
 def parse_sid_spec(text: str) -> SignatureId:
@@ -502,7 +522,7 @@ def resolve_ips(target: str) -> list[str]:
 
 def normalize_mac(mac: str) -> str:
     """Lowercase colon-separated form, so `00-11-22-33-44-55` and `00:11:22:33:44:55` match."""
-    cleaned = re.sub(r"[^0-9a-fA-F]", "", mac).lower()
+    cleaned = _NON_HEX_RE.sub("", mac).lower()
     if len(cleaned) != 12:
         raise PfsenseError(f"not a MAC address: {mac}")
     return ":".join(cleaned[i:i + 2] for i in range(0, 12, 2))
@@ -650,7 +670,7 @@ def _reservations_in_pools(reservations: list[dict], pools: list[dict]) -> list[
             continue
         name = res.get("hostname") or res.get("descr") or "(no hostname)"
         findings.append(Finding(
-            check="static_map_in_dynamic_pool", severity="warn",
+            check="static_map_in_dynamic_pool", severity=Severity.WARN,
             subject=f"{res['ip']} {res.get('mac', '?')} {name} on {res.get('interface', '?')}, "
                     f"inside the pool {pool['from']}-{pool['to']}",
             detail="ISC dhcpd, pfSense's default DHCP backend, does not keep a reserved address out "
@@ -689,7 +709,7 @@ def doctor_findings(*, reservations: list[dict], overrides: list[dict],
             extra = (f" This address is reserved for {shared} MACs, which is exactly the case that "
                      f"breaks: the firewall pins one of them permanently." if shared > 1 else "")
             findings.append(Finding(
-                check="static_arp_armed", severity="warn",
+                check="static_arp_armed", severity=Severity.WARN,
                 subject=f"{res.get('ip','?')} {res.get('mac','?')} {res.get('hostname') or res.get('descr') or ''}".strip(),
                 detail="ARP Table Static Entry is ticked. On a device with more than one interface "
                        "the firewall answers for whichever one is down: reachable inside its subnet, "
@@ -699,7 +719,7 @@ def doctor_findings(*, reservations: list[dict], overrides: list[dict],
     for ip, group in sorted(by_ip.items()):
         if len(group) > 1:
             findings.append(Finding(
-                check="shared_ip_multi_mac", severity="info", subject=ip,
+                check="shared_ip_multi_mac", severity=Severity.INFO, subject=ip,
                 detail="reserved for " + str(len(group)) + " MACs (" +
                        ", ".join(r.get("mac", "?") for r in group) +
                        "). Normal for a device with wired and wireless interfaces; only a problem "
@@ -723,7 +743,7 @@ def doctor_findings(*, reservations: list[dict], overrides: list[dict],
             reserved_macs = macs_for_ip.get(entry["ip"])
             if entry.get("mac") and reserved_macs and entry["mac"] not in reserved_macs:
                 findings.append(Finding(
-                    check="reservation_mac_mismatch", severity="warn",
+                    check="reservation_mac_mismatch", severity=Severity.WARN,
                     subject=f"{entry['ip']} reserved for {', '.join(sorted(reserved_macs))}, held by {entry['mac']}",
                     detail="the address is in use by hardware no reservation for it names. If the "
                            "reserved device reappears, DHCP hands it an address something else "
@@ -735,10 +755,10 @@ def doctor_findings(*, reservations: list[dict], overrides: list[dict],
     # upstream servers as fallbacks, so "every entry is loopback" is the wrong test - it flags a
     # correct box. The fault has two distinct signatures, checked separately.
     if resolv_conf is not None:
-        servers = re.findall(r"^\s*nameserver\s+(\S+)", resolv_conf, re.M)
+        servers = _NAMESERVER_RE.findall(resolv_conf)
         if MAGICDNS in servers:
             findings.append(Finding(
-                check="magicdns_in_resolv_conf", severity="warn", subject=MAGICDNS,
+                check="magicdns_in_resolv_conf", severity=Severity.WARN, subject=MAGICDNS,
                 detail="Tailscale's 'Accept DNS' has rewritten /etc/resolv.conf to MagicDNS. When "
                        "the tailnet has no global nameservers the box then resolves no public name "
                        "at all, so pkg and system upgrades fail while LAN clients stay fine because "
@@ -752,7 +772,7 @@ def doctor_findings(*, reservations: list[dict], overrides: list[dict],
             ))
         elif servers and not _is_loopback(servers[0]):
             findings.append(Finding(
-                check="resolver_not_first", severity="warn", subject=servers[0],
+                check="resolver_not_first", severity=Severity.WARN, subject=servers[0],
                 detail="the first nameserver is not this firewall's own resolver, so the box does "
                        "not answer its own queries from unbound. Upstream servers listed AFTER "
                        "loopback are normal fallbacks and are not a fault.",
@@ -760,7 +780,7 @@ def doctor_findings(*, reservations: list[dict], overrides: list[dict],
 
     if upgrade_locks:
         findings.append(Finding(
-            check="upgrade_lock_present", severity="warn", subject=", ".join(upgrade_locks),
+            check="upgrade_lock_present", severity=Severity.WARN, subject=", ".join(upgrade_locks),
             detail="a pfSense-upgrade lock is present, so every package operation reports "
                    "'Another instance of pfSense-upgrade is running'. Usually a background "
                    "pfSense-upgrade is hung on a repository the box cannot resolve: fix the box's "
@@ -1777,8 +1797,8 @@ def _scope_networks(ip_value: str) -> tuple[Network, ...] | None:
 
 def _parse_scope(rest: str) -> SuppressScope:
     """The scope of one statement, from the text after its `sig_id <n>`."""
-    track = re.search(r"\btrack\s+([^,\s]+)", rest)
-    ip = re.search(r"\bip\s+(\[[^\]]*\]|[^,\s]+)", rest)
+    track = _TRACK_RE.search(rest)
+    ip = _TRACK_IP_RE.search(rest)
     if track is None and ip is None:
         return SuppressScope(track=None, ip=None)
     track_value = track.group(1) if track else None
@@ -2020,7 +2040,7 @@ def cmd_doctor(args) -> int:
                                    pools=pools)
         source = target.host
 
-    warns = [f for f in findings if f.severity == "warn"]
+    warns = [f for f in findings if f.severity == Severity.WARN]
     lines = [f"  {source}:"]
     for finding in findings:
         lines.append(f"  [{finding.severity.upper():<4}] {finding.check}: {finding.subject}")

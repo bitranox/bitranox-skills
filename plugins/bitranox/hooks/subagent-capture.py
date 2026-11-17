@@ -35,8 +35,10 @@ appended to the shadow log, naming the path and each asked message's decision.
 Pure standard library. ALWAYS exits 0 and never emits a decision: a subagent finishing must never be
 blocked or wedged by this.
 """
+import enum
 import json
 import sys
+from dataclasses import dataclass
 
 import classifier
 import self_improve_signals as sig
@@ -48,6 +50,14 @@ SITE = "subagent_signal"
 # at the end. Measured over 30 days of transcripts: 16,089 assistant messages in 2,998 subagent
 # runs, about 5.4 a run, so the cap binds only on long runs and bounds what one run can cost.
 SHADOW_MAX_MESSAGES = 12
+
+
+class Verdict(enum.StrEnum):
+    """What the capture's patterns say about one message. The values are what the shadow log
+    records, so a member written into a row serialises as the same string."""
+    STRICT = "strict"
+    BROAD_ONLY = "broad_only"
+    NONE = "none"
 
 
 def _text(content):
@@ -98,15 +108,44 @@ def _messages(path):
     return out
 
 
-def find_signals(event):
-    """Learning-signal hits in this subagent's transcript + its final message. [] when none."""
-    hits = []
-    seen = set()
+@dataclass(frozen=True)
+class Hit:
+    """One buffered learning: an assistant message of the subagent and what it was buffered for.
+
+    `to_record` is the one place the buffer file's record shape is written."""
+
+    agent_id: str
+    agent_type: str
+    matched: list[str]
+    snippet: str
+    escaped: bool
+
+    def to_record(self):
+        return {"agent_id": self.agent_id, "agent_type": self.agent_type,
+                "role": "assistant", "matched": list(self.matched), "snippet": self.snippet,
+                # control signal, kept OUT of the snippet
+                "escaped": self.escaped}
+
+
+def event_messages(event):
+    """(role, text) for the subagent transcript tail, then its final message when it has one.
+
+    Read once per hook call and handed to every consumer: the capture and the shadow hand-off
+    judge the same messages, and the transcript is the hook's whole I/O cost."""
     msgs = _messages(event.get("agent_transcript_path") or "")
     final = event.get("last_assistant_message")
     if isinstance(final, str) and final.strip():
         msgs.append(("assistant", final))
-    for role, text in msgs:
+    return msgs
+
+
+def find_signals(event, msgs=None):
+    """Learning-signal hits in this subagent's transcript + its final message. [] when none.
+
+    `msgs` is `event_messages(event)` when the caller already read it."""
+    hits = []
+    seen = set()
+    for role, text in event_messages(event) if msgs is None else msgs:
         # A subagent's OWN discovery lives only in its ASSISTANT output. Its user-role messages are
         # the PARENT's dispatch prompt (and tool results) - the main agent's own text, already in its
         # context - whose instruction phrasing ("always use ...", "do not ...") spuriously matches the
@@ -141,32 +180,27 @@ def _strict_hit(text):
 
 
 def _hit(event, text, matched):
-    """The buffer record for one assistant message and the signals it was buffered for."""
+    """The Hit for one assistant message and the signals it was buffered for."""
     normalised = " ".join(text.split())
     # Window the snippet on the learning itself. A head cap kept the first 200 characters, so a
     # learning stated after a long preamble was buffered with the learning cut away. A message
     # only Jev fired on has no pattern offset, and keeps the head. A quoted admission ahead of the
     # real one does not take the window (asst_said_offset).
     snippet = sig.inert_snippet(normalised, _SNIPPET, around=sig.asst_said_offset(text))
-    return {"agent_id": event.get("agent_id") or "",
-            "agent_type": event.get("agent_type") or "",
-            "role": "assistant", "matched": matched, "snippet": snippet,
-            # control signal, kept OUT of the snippet
-            "escaped": sig.snippet_was_escaped(text)}
+    return Hit(agent_id=str(event.get("agent_id") or ""),
+               agent_type=str(event.get("agent_type") or ""),
+               matched=list(matched), snippet=snippet,
+               escaped=bool(sig.snippet_was_escaped(text)))
 
 
-def _assistant_texts(event):
+def _assistant_texts(event, msgs=None):
     """Every distinct non-empty assistant message of the subagent, in order, the final one last.
 
     Distinct by the same containment rule `find_signals` dedups by, so the final message that
     repeats the transcript's last one is asked about once.
     """
-    msgs = _messages(event.get("agent_transcript_path") or "")
-    final = event.get("last_assistant_message")
-    if isinstance(final, str) and final.strip():
-        msgs.append(("assistant", final))
     texts, seen = [], []
-    for role, text in msgs:
+    for role, text in event_messages(event) if msgs is None else msgs:
         if role != "assistant" or not text.strip():
             continue
         normalised = " ".join(text.split())
@@ -181,22 +215,22 @@ def _verdict(text):
     """What the capture's patterns say about one message, as `find_signals` judges it."""
     broad = sig.broad_matches("assistant", text)
     if _strict_hit(text):
-        kind = "strict"
+        kind = Verdict.STRICT
     elif broad:
-        kind = "broad_only"
+        kind = Verdict.BROAD_ONLY
     else:
-        kind = "none"
-    return {"kind": kind, "buffered": kind != "none", "broad": broad}
+        kind = Verdict.NONE
+    return {"kind": kind, "buffered": kind != Verdict.NONE, "broad": broad}
 
 
-def shadow_request(event):
+def shadow_request(event, msgs=None):
     """(regex, requests) for the classifier shadow: one request per message, newest kept.
 
     `regex["messages"][i]` is the patterns' verdict on the text of `requests[i]`, `fires` is
     whether this subagent buffered anything at all, `dropped` how many earlier messages the cap
-    left out.
+    left out. `msgs` is `event_messages(event)` when the caller already read it.
     """
-    return _requests_for(_assistant_texts(event))
+    return _requests_for(_assistant_texts(event, msgs))
 
 
 def _requests_for(texts):
@@ -210,12 +244,12 @@ def _requests_for(texts):
     return regex, [{"fields": {"assistant_reply": t}, "questions": questions} for t in kept]
 
 
-def _shadow(event, session):
+def _shadow(event, session, msgs=None):
     """Hand the subagent's messages to the detached shadow child. Never raises, never decides."""
     with classifier.shadow_guard(SITE, session):
         if not classifier.shadow_enabled(sig.load_config(), SITE):
             return
-        regex, requests = shadow_request(event)
+        regex, requests = shadow_request(event, msgs)
         if requests:
             classifier.spawn_shadow(SITE, session, regex, requests,
                                     transcript=event.get("agent_transcript_path") or "")
@@ -263,7 +297,7 @@ def _decide(event, session, cfg):
         if i >= first_asked:
             decided.append(how)
         if matched:
-            sig.buffer_subagent_learning(session, _hit(event, text, matched))
+            sig.buffer_subagent_learning(session, _hit(event, text, matched).to_record())
     if not requests:
         return
     if all(r is None for r in results):
@@ -288,12 +322,13 @@ def main() -> int:
         if not session:
             return 0
         cfg = sig.load_config()
-        if classifier.site_mode(cfg, SITE) == "decide":
+        if classifier.site_mode(cfg, SITE) is classifier.SiteMode.DECIDE:
             _decide(event, session, cfg)
             return 0
-        for hit in find_signals(event):
-            sig.buffer_subagent_learning(session, hit)
-        _shadow(event, session)
+        msgs = event_messages(event)
+        for hit in find_signals(event, msgs):
+            sig.buffer_subagent_learning(session, hit.to_record())
+        _shadow(event, session, msgs)
     except Exception:                                     # noqa: BLE001 - fail open, always
         return 0
     return 0

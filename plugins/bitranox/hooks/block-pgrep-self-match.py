@@ -100,6 +100,11 @@ from shell_text import (
 # taken whole, so `pgrep -f "foo)"` keeps its `)`; an unterminated quote (the call sits inside an
 # outer quote, as in `ssh host 'pgrep -f x'`) ends the call where it opens.
 _PROGRAM = r"(?<![\w-])(?:pgrep|pkill)(?![\w.-])"
+_NONBLANK_RUN = re.compile(r"\S+")
+_OUTPUT_FLAG_CLUSTER = re.compile(r"-[a-zA-Z]*o")
+_SHELL_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_FD_INPUT_PREFIX = re.compile(r"^\d*<")
+_GREP_VW_OWN_PID = re.compile(r"grep\s+-vw\s+[\"']?\$\$")
 _INVOCATION = re.compile(_PROGRAM + r"""(?:[^|;&\n)`'"]|'[^'\n]*'|"[^"\n]*")*""")
 
 _BRACKET_TOKEN = re.compile(r"\[[^\]]\][A-Za-z0-9_./@:+-]+")
@@ -205,7 +210,7 @@ def blank_search_operands(text, tool_name=None):
         index = _search_program_index(tokens, tool)
         if index is None or any(_EXECUTING_SEARCH_OPTION.match(t) for t in tokens[index + 1:]):
             continue
-        words = list(re.finditer(r"\S+", segment))
+        words = list(_NONBLANK_RUN.finditer(segment))
         if len(words) <= index:
             continue
         for position in range(at + words[index].end(), at + len(segment)):
@@ -452,7 +457,7 @@ def _ps_shows_cmdline(args):
             formats.append(args[index + 1])
         elif word.startswith("--format="):
             formats.append(word.partition("=")[2])
-        elif re.match(r"-[a-zA-Z]*o", word) and not word.startswith("--"):
+        elif _OUTPUT_FLAG_CLUSTER.match(word) and not word.startswith("--"):
             tail = word[word.index("o") + 1:]
             formats.append(tail if tail else (args[index + 1] if index + 1 < len(args) else ""))
     if formats:
@@ -584,7 +589,7 @@ def _read_names(words, tool_name):
             skip = False
         elif word.startswith("-"):
             skip = word[-1] in value_letters
-        elif re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", word):
+        elif _SHELL_NAME.fullmatch(word):
             names.append(word)
     return names
 
@@ -661,7 +666,7 @@ def _reads_file(words, path):
     """
     previous = ""
     for word in words:
-        if re.sub(r"^\d*<", "", word) == path and not _WRITE_REDIRECTION.match(previous):
+        if _FD_INPUT_PREFIX.sub("", word) == path and not _WRITE_REDIRECTION.match(previous):
             return True
         previous = word
     return False
@@ -775,7 +780,7 @@ def main() -> int:
 
     # An explicit self-exclusion means the caller already handled it. Read before the search
     # operands are blanked: the exclusion IS a grep, and its `$$` is one of those operands.
-    if re.search(r"grep\s+-vw\s+[\"']?\$\$", executed):
+    if _GREP_VW_OWN_PID.search(executed):
         return 0
 
     leaked = bracket_leaks(commands, haystack)

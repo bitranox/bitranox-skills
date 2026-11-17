@@ -80,22 +80,39 @@ def _lines(path):
         text = _source(path)
     except OSError:
         return []
+    return _split_lines(text)
+
+
+def _split_lines(text):
     lines = _LINE_BREAK.split(text)
     if lines and lines[-1] == "":
         lines.pop()
     return lines
 
 
+def _read_once(rel, path):
+    """One read and one parse of a target: (syntax hits, AST or None, physical lines).
+
+    `run_prepass` hands the same tree and lines to every per-file check, so a corpus costs one
+    read and one parse per file instead of one per check, and only the current file is held."""
+    try:
+        text = _source(path)
+    except OSError as exc:
+        return [(rel, 0, "unreadable: %s" % exc)], None, []
+    lines = _split_lines(text)
+    try:
+        return [], ast.parse(text), lines
+    except SyntaxError as exc:
+        return [(rel, exc.lineno or 0, "does not parse: %s" % exc.msg)], None, lines
+    except ValueError as exc:
+        return [(rel, 0, "unreadable: %s" % exc)], None, lines
+
+
 def syntax_errors(paths):
     """Every shipped example must at least parse. Returns [(rel, line, message)]."""
     out = []
     for rel, path in paths:
-        try:
-            ast.parse(_source(path))
-        except SyntaxError as exc:
-            out.append((rel, exc.lineno or 0, "does not parse: %s" % exc.msg))
-        except (OSError, ValueError) as exc:
-            out.append((rel, 0, "unreadable: %s" % exc))
+        out.extend(_read_once(rel, path)[0])
     return out
 
 
@@ -256,27 +273,36 @@ def unguarded_third_party_imports(paths, siblings=()):
 
     AST, never grep: a line-prefix grep over this tree matches docstring prose that merely starts
     with the word `from`."""
-    siblings = {str(s).replace("-", "_") for s in siblings}
+    siblings = _sibling_names(siblings)
     out = []
     for rel, path in paths:
         tree = _parse(path)
-        if tree is None:
+        if tree is not None:
+            out.extend(_unguarded_imports_in(rel, tree, siblings))
+    return out
+
+
+def _sibling_names(siblings):
+    return {str(s).replace("-", "_") for s in siblings}
+
+
+def _unguarded_imports_in(rel, tree, siblings):
+    out = []
+    guarded = _guarded_nodes(tree)
+    for node in ast.walk(tree):
+        if id(node) in guarded:
             continue
-        guarded = _guarded_nodes(tree)
-        for node in ast.walk(tree):
-            if id(node) in guarded:
-                continue
-            if isinstance(node, ast.Import):
-                names = [a.name.split(".")[0] for a in node.names]
-            elif isinstance(node, ast.ImportFrom):
-                names = [] if node.level else [(node.module or "").split(".")[0]]
-            else:
-                continue
-            for name in names:
-                if name and name not in _STDLIB and name.replace("-", "_") not in siblings:
-                    out.append((rel, node.lineno,
-                                "module-level import of non-stdlib '%s' with no ImportError "
-                                "fallback" % name))
+        if isinstance(node, ast.Import):
+            names = [a.name.split(".")[0] for a in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            names = [] if node.level else [(node.module or "").split(".")[0]]
+        else:
+            continue
+        for name in names:
+            if name and name not in _STDLIB and name.replace("-", "_") not in siblings:
+                out.append((rel, node.lineno,
+                            "module-level import of non-stdlib '%s' with no ImportError "
+                            "fallback" % name))
     return out
 
 
@@ -294,22 +320,29 @@ def subprocess_text_without_encoding(paths):
 
     Fails differently on each platform and never on the author's: Windows decodes in a reader thread
     so stdout comes back None, POSIX raises past handlers that only catch OSError."""
-    wanted = {"run", "Popen", "check_output", "subprocess.run", "subprocess.Popen",
-              "subprocess.check_output"}
     out = []
     for rel, path in paths:
         tree = _parse(path)
-        if tree is None:
+        if tree is not None:
+            out.extend(_text_without_encoding_in(rel, tree))
+    return out
+
+
+_SUBPROCESS_CALLS = frozenset({"run", "Popen", "check_output", "subprocess.run",
+                               "subprocess.Popen", "subprocess.check_output"})
+
+
+def _text_without_encoding_in(rel, tree):
+    out = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or _call_name(node) not in _SUBPROCESS_CALLS:
             continue
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call) or _call_name(node) not in wanted:
-                continue
-            kw = {k.arg for k in node.keywords if k.arg}
-            textish = {"text", "universal_newlines"} & kw
-            if textish and "encoding" not in kw:
-                out.append((rel, node.lineno,
-                            "subprocess with %s and no encoding= (locale-codec decode)"
-                            % sorted(textish)[0]))
+        kw = {k.arg for k in node.keywords if k.arg}
+        textish = {"text", "universal_newlines"} & kw
+        if textish and "encoding" not in kw:
+            out.append((rel, node.lineno,
+                        "subprocess with %s and no encoding= (locale-codec decode)"
+                        % sorted(textish)[0]))
     return out
 
 
@@ -479,17 +512,22 @@ def os_access_x_ok(paths, allow=()):
         if rel in allow:
             continue
         tree = _parse(path)
-        if tree is None:
+        if tree is not None:
+            out.extend(_x_ok_in(rel, tree))
+    return out
+
+
+def _x_ok_in(rel, tree):
+    out = []
+    guarded = _platform_guarded_nodes(tree)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or _call_name(node) not in ("os.access", "access"):
             continue
-        guarded = _platform_guarded_nodes(tree)
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call) or _call_name(node) not in ("os.access", "access"):
-                continue
-            if id(node) in guarded:
-                continue
-            if any(_names_x_ok(arg) for arg in node.args[1:]):
-                out.append((rel, node.lineno,
-                            "unguarded os.access(..., os.X_OK) is always True on Windows"))
+        if id(node) in guarded:
+            continue
+        if any(_names_x_ok(arg) for arg in node.args[1:]):
+            out.append((rel, node.lineno,
+                        "unguarded os.access(..., os.X_OK) is always True on Windows"))
     return out
 
 
@@ -512,30 +550,42 @@ def shlex_on_paths(paths, allow=()):
         if rel in allow:
             continue
         tree = _parse(path)
-        if tree is None:
-            continue
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Call) and _call_name(node) in ("shlex.split", "shlex.quote"):
-                out.append((rel, node.lineno,
-                            "shlex in POSIX mode eats backslashes in a Windows path (lead)"))
+        if tree is not None:
+            out.extend(_shlex_in(rel, tree))
     return out
+
+
+def _shlex_in(rel, tree):
+    return [(rel, node.lineno, "shlex in POSIX mode eats backslashes in a Windows path (lead)")
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and _call_name(node) in ("shlex.split", "shlex.quote")]
 
 
 def hardcoded_tmp(paths):
     """A literal /tmp or /var path is drive-relative on Windows."""
     out = []
     for rel, path in paths:
-        for n, line in enumerate(_lines(path), 1):
-            if line.lstrip().startswith("#"):
-                continue
-            if _TMP_LITERAL.search(line):
-                out.append((rel, n, "hard-coded POSIX path literal (drive-relative on Windows)"))
+        out.extend(_tmp_literals_in(rel, _lines(path)))
+    return out
+
+
+def _tmp_literals_in(rel, lines):
+    out = []
+    for n, line in enumerate(lines, 1):
+        if line.lstrip().startswith("#"):
+            continue
+        if _TMP_LITERAL.search(line):
+            out.append((rel, n, "hard-coded POSIX path literal (drive-relative on Windows)"))
     return out
 
 
 def pep723_block(path):
     """The text of a script's PEP 723 inline metadata block, or ''."""
-    text = "\n".join(_lines(path))
+    return _pep723_block_of(_lines(path))
+
+
+def _pep723_block_of(lines):
+    text = "\n".join(lines)
     opened = _PEP723_OPEN.search(text)
     if not opened:
         return ""
@@ -552,24 +602,34 @@ def pep723_problems(paths, ci_min=CI_MIN, hook_kinds=()):
     On floors: ci.yml states CI_MIN is the supported minimum and that shipped scripts declare their
     own floors, so a floor BELOW that is a deliberate, wider promise and is correct. Only a floor
     ABOVE ci_min is a defect - that script cannot run on the oldest cell CI tests."""
-    minimum = tuple(int(p) for p in ci_min.split("."))
+    minimum = _ci_floor(ci_min)
     hook_rels = set(hook_kinds)
     out = []
     for rel, path in paths:
-        block = pep723_block(path)
-        if not block:
-            continue
-        if rel in hook_rels:
-            out.append((rel, 1, "a hook carries PEP 723 metadata, but run-python.sh resolves none"))
-            continue
-        found = _REQUIRES_PY.search(block)
-        if not found:
-            continue
-        floor = _FLOOR.search(found.group(1))
-        if floor and (int(floor.group(1)), int(floor.group(2))) > minimum:
-            out.append((rel, 1, "requires-python floor %s is ABOVE the CI minimum %s, so the "
-                                "oldest cell cannot run it" % (found.group(1), ci_min)))
+        out.extend(_pep723_in(rel, _lines(path), (ci_min, minimum), hook_rels))
     return out
+
+
+def _ci_floor(ci_min):
+    return tuple(int(p) for p in ci_min.split("."))
+
+
+def _pep723_in(rel, lines, ci, hook_rels):
+    """`ci` is (ci_min as written, ci_min as a version tuple)."""
+    ci_min, minimum = ci
+    block = _pep723_block_of(lines)
+    if not block:
+        return []
+    if rel in hook_rels:
+        return [(rel, 1, "a hook carries PEP 723 metadata, but run-python.sh resolves none")]
+    found = _REQUIRES_PY.search(block)
+    if not found:
+        return []
+    floor = _FLOOR.search(found.group(1))
+    if floor and (int(floor.group(1)), int(floor.group(2))) > minimum:
+        return [(rel, 1, "requires-python floor %s is ABOVE the CI minimum %s, so the "
+                         "oldest cell cannot run it" % (found.group(1), ci_min))]
+    return []
 
 
 def per_file_test_module(paths, test_roots=()):
@@ -756,6 +816,31 @@ def group_by_file(hits):
     return out
 
 
+def _per_file_hits(py, hooks, siblings, ci_min):
+    """The per-file checks' hits over `py`, each file read and parsed ONCE.
+
+    File-major on purpose: a check-major loop re-read and re-parsed every file once per check,
+    and holding every tree to avoid that would grow with the corpus. Only the current file's text
+    and tree are alive at a time; each list keeps the file order its own check would produce."""
+    names = ("syntax_errors", "unguarded_third_party_imports", "subprocess_text_without_encoding",
+             "os_access_x_ok", "shlex_on_paths", "hardcoded_tmp", "pep723_problems")
+    hits = {name: [] for name in names}
+    ci = (ci_min, _ci_floor(ci_min))
+    for rel, path in py:
+        syntax, tree, lines = _read_once(rel, path)
+        hits["syntax_errors"].extend(syntax)
+        if tree is not None:
+            if rel in hooks:
+                hits["unguarded_third_party_imports"].extend(
+                    _unguarded_imports_in(rel, tree, siblings))
+            hits["subprocess_text_without_encoding"].extend(_text_without_encoding_in(rel, tree))
+            hits["os_access_x_ok"].extend(_x_ok_in(rel, tree))
+            hits["shlex_on_paths"].extend(_shlex_in(rel, tree))
+        hits["hardcoded_tmp"].extend(_tmp_literals_in(rel, lines))
+        hits["pep723_problems"].extend(_pep723_in(rel, lines, ci, hooks))
+    return hits
+
+
 def run_prepass(room, targets, ci_min=CI_MIN, vendored=(), run=_run, unmeasured=None):
     """Every deterministic check over the enumerated corpus.
 
@@ -779,26 +864,27 @@ def run_prepass(room, targets, ci_min=CI_MIN, vendored=(), run=_run, unmeasured=
     room = Path(room)
     py = [(rel, room / rel) for rel, _k in targets if rel.endswith(".py")]
     js = [(rel, room / rel) for rel, _k in targets if rel.endswith(".js")]
-    hooks = [rel for rel, kind in targets if kind in ("hook", "hook-lib")]
-    hook_py = [(rel, path) for rel, path in py if rel in set(hooks)]
+    hooks = frozenset(rel for rel, kind in targets if kind in ("hook", "hook-lib"))
     siblings = [p.stem for p in room.rglob("*.py")]
     test_roots = [d for d in room.rglob("tests") if d.is_dir()]
     vendored_py = [(rel, room / rel) for rel, _k in vendored if rel.endswith(".py")]
+    per_file = _per_file_hits(py, hooks, _sibling_names(siblings), ci_min)
+    per_file["syntax_errors"].extend(syntax_errors(vendored_py))
 
     facts, leads, summary = [], [], []
     unmeasured = {} if unmeasured is None else unmeasured
     unmeasured.setdefault("js_parse", [])
-    for name, fn in (("syntax_errors", lambda: syntax_errors(py + vendored_py)),
+    for name, fn in (("syntax_errors", lambda: per_file["syntax_errors"]),
                      ("fenced_python_syntax",
                       lambda: fenced_python_syntax(markdown_targets(room))),
                      ("unguarded_third_party_imports",
-                      lambda: unguarded_third_party_imports(hook_py, siblings)),
+                      lambda: per_file["unguarded_third_party_imports"]),
                      ("subprocess_text_without_encoding",
-                      lambda: subprocess_text_without_encoding(py)),
-                     ("os_access_x_ok", lambda: os_access_x_ok(py)),
-                     ("shlex_on_paths", lambda: shlex_on_paths(py)),
-                     ("hardcoded_tmp", lambda: hardcoded_tmp(py)),
-                     ("pep723_problems", lambda: pep723_problems(py, ci_min, hooks)),
+                      lambda: per_file["subprocess_text_without_encoding"]),
+                     ("os_access_x_ok", lambda: per_file["os_access_x_ok"]),
+                     ("shlex_on_paths", lambda: per_file["shlex_on_paths"]),
+                     ("hardcoded_tmp", lambda: per_file["hardcoded_tmp"]),
+                     ("pep723_problems", lambda: per_file["pep723_problems"]),
                      ("per_file_test_module", lambda: per_file_test_module(py, test_roots)),
                      ("js_parse", lambda: js_parse(js, run=run, room=room,
                                                    unmeasured=unmeasured["js_parse"]))):

@@ -233,6 +233,25 @@ def test_an_explicit_tag_push_is_recorded_as_the_tag(repo, capsys):
     assert tag_sha[:12] in text
 
 
+@pytest.mark.parametrize(("command", "recorded"), [
+    ("git push origin v1.2.3", "tag v1.2.3"),
+    ("git push origin master", "branch master"),
+    ("git push", "master"),
+])
+def test_the_recorded_branch_field_keeps_its_written_form(repo, command, recorded):
+    """The Stop gate prints this field as it stands on disk ("You pushed X on <branch>"), so the
+    entry a named ref writes keeps its `<kind> <name>` form and a bare push keeps the bare name."""
+    _tag(repo, "v1.2.3")
+    assert hook.main(_event(command, repo)) == 0
+    assert [e["branch"] for e in state.pending_for(str(repo), "sess-1")] == [recorded]
+
+
+def test_notice_returns_a_named_record(repo):
+    found = hook.notice("git push origin master", str(repo))
+    assert type(found) is hook.Notice
+    assert (found.branch, found.repo, found.owed) == ("branch master", str(repo), True)
+
+
 def test_a_bulk_tags_push_uses_the_newest_tag(repo, capsys):
     _tag(repo, "v1.0.0")
     newest = _tag(repo, "v2.0.0")
@@ -764,4 +783,4 @@ def test_one_workflow_that_runs_outweighs_one_that_cannot_be_judged(repo, capsys
     (repo / "f.txt").write_text("two\n", encoding="utf-8")
     _git(repo, "commit", "-q", "-am", "two")
     _git(repo, "push", "-q")
-    assert hook.push_trigger_state(str(repo), "master") == hook.RUNS
+    assert hook.push_trigger_state(str(repo), "master") == hook.TriggerState.RUNS

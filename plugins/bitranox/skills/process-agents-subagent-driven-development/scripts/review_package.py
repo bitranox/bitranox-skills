@@ -13,8 +13,10 @@ exits 2 naming that rather than the refs. Any git failure while building the pac
 exits 2 and writes nothing, as does a workspace or OUTFILE that cannot be written.
 The diff is kept byte-exact, so a line-ending change shows as one.
 """
+import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import sdd_workspace
@@ -60,26 +62,74 @@ def _is_ancestor(base, head):
     return _git("merge-base", "--is-ancestor", base, head).returncode == 0
 
 
-def build(base, head):
-    """The review-package bytes for base..head. Raises GitError when any git call fails.
+def build(base, head, fh):
+    """Write the review package for base..head to `fh`, a binary file opened for reading and
+    writing. Raises GitError when any git call fails, leaving `fh` partly written.
 
-    Bytes end to end: git's output is copied as written, so a non-UTF-8 byte in a changed line
-    reaches the reviewer as that byte, not as a U+FFFD that reads like an ordinary character.
+    Bytes end to end: git writes each section into the file itself, so a non-UTF-8 byte in a
+    changed line reaches the reviewer as that byte, not as a U+FFFD that reads like an ordinary
+    character, and the package is never held in memory: its size follows the branch.
     """
     span = "%s..%s" % (base, head)
-    return b"\n".join([
-        ("# Review package: %s" % span).encode("utf-8"),
-        b"",
-        b"## Commits",
-        _git_bytes("log", "--oneline", span).rstrip(b"\n"),
-        b"",
-        b"## Files changed",
-        _git_bytes("diff", "--stat", span).rstrip(b"\n"),
-        b"",
-        b"## Diff",
-        _git_bytes("diff", "-U10", span).rstrip(b"\n"),
-        b"",
-    ])
+    fh.write(("# Review package: %s\n\n## Commits\n" % span).encode("utf-8"))
+    _git_into(fh, "log", "--oneline", span)
+    fh.write(b"\n\n## Files changed\n")
+    _git_into(fh, "diff", "--stat", span)
+    fh.write(b"\n\n## Diff\n")
+    _git_into(fh, "diff", "-U10", span)
+    fh.write(b"\n")
+
+
+def _git_into(fh, *args):
+    """Append the stdout of a git command that must succeed to `fh`, trailing newlines dropped.
+
+    Raises GitError, never OSError, when git cannot be started or exits non-zero.
+    """
+    fh.flush()  # the child writes through the shared descriptor, after what is buffered here
+    start = fh.tell()
+    try:
+        proc = subprocess.run(["git", *args], stdout=fh, stderr=subprocess.PIPE, check=False)
+    except OSError as exc:
+        raise GitError(f"could not run git: {exc}") from exc
+    if proc.returncode != 0:
+        err = proc.stderr.decode("utf-8", "replace").strip()
+        raise GitError(f"git {' '.join(args)} failed (exit {proc.returncode}): {err}")
+    _trim_newlines(fh, start)
+
+
+def _trim_newlines(fh, start):
+    """Drop the newlines ending the section that began at `start`, and stay at the new end."""
+    pos = fh.seek(0, os.SEEK_END)
+    while pos > start:
+        fh.seek(pos - 1)
+        if fh.read(1) != b"\n":
+            break
+        pos -= 1
+    fh.seek(pos)
+    fh.truncate()
+
+
+def _write_package(base, head, out):
+    """Build the package beside `out` and move it into place; nothing is left on a failure.
+
+    Returns the package size. Raises GitError or OSError; `out` is then untouched.
+    """
+    with tempfile.NamedTemporaryFile(dir=out.parent, prefix=out.name + ".", suffix=".tmp",
+                                     delete=False) as fh:
+        tmp = Path(fh.name)
+        try:
+            build(base, head, fh)
+            size = fh.tell()
+        except BaseException:
+            fh.close()
+            tmp.unlink(missing_ok=True)
+            raise
+    try:
+        os.replace(tmp, out)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+        raise
+    return size
 
 
 def _tolerate_unencodable_output():
@@ -139,22 +189,21 @@ def main(argv=None):
         print(problem, file=sys.stderr)
         return 2
     try:
-        data = build(base, head)
         commits = _git_text("rev-list", "--count", "%s..%s" % (base, head)).strip()
         if len(argv) == 3:
             out = Path(argv[2])
         else:
             short = lambda r: _git_text("rev-parse", "--short", r).strip()  # noqa: E731
             out = sdd_workspace.workspace_dir() / ("review-%s..%s.diff" % (short(base), short(head)))
+        # Binary, so Windows does not rewrite every "\n" as "\r\n".
+        size = _write_package(base, head, out)
     except (GitError, sdd_workspace.WorkspaceError) as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    try:
-        out.write_bytes(data)  # bytes, so Windows does not rewrite every "\n" as "\r\n"
     except OSError as exc:
         print("cannot write the review package: %s" % exc, file=sys.stderr)
         return 2
-    print("wrote %s: %s commit(s), %d bytes" % (out, commits, len(data)))
+    print("wrote %s: %s commit(s), %d bytes" % (out, commits, size))
     return 0
 
 

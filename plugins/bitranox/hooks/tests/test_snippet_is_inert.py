@@ -92,7 +92,7 @@ def test_the_subagent_producer_stores_an_inert_snippet(home, tmp_path):
     assert hits, "the payload did not even reach the snippet - this test would assert nothing"
     for h in hits:
         for ch in STRUCTURAL:
-            assert ch not in h["snippet"], "%r survived into a stored snippet: %r" % (ch, h["snippet"])
+            assert ch not in h.snippet, "%r survived into a stored snippet: %r" % (ch, h.snippet)
 
 
 def test_the_audit_envelope_cannot_be_closed_early(home):
@@ -258,9 +258,9 @@ def test_a_producer_records_whether_it_substituted(home, tmp_path):
         "agent_type": "general-purpose", "agent_transcript_path": str(empty),
         "last_assistant_message": "I misread it. The venv was stale."})
 
-    assert dirty and dirty[0]["escaped"] is True
-    assert clean and clean[0]["escaped"] is False
-    assert "[escaped]" not in dirty[0]["snippet"], "the marker is still in the stored text"
+    assert dirty and dirty[0].escaped is True
+    assert clean and clean[0].escaped is False
+    assert "[escaped]" not in dirty[0].snippet, "the marker is still in the stored text"
 
 
 def test_the_render_marks_from_the_flag_and_from_its_own_substitution(home):

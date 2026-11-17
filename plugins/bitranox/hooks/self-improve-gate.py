@@ -455,7 +455,7 @@ def main():
     # After the once-per-message dedup, so a message already blocked is never asked about again;
     # a turn a hint already blocks needs no answer to decide it.
     cfg = _sig.load_config()
-    if not (nap_hint or sub_hint) and _classifier.site_mode(cfg, "stop_signal") == "decide":
+    if not (nap_hint or sub_hint) and _classifier.site_mode(cfg, "stop_signal") is _classifier.SiteMode.DECIDE:
         fires = _decide_stop_signal(event, regex, _request(last_user, last_asst,
                                                            turn.reply_before_prompt), cfg) or fires
     if fires:

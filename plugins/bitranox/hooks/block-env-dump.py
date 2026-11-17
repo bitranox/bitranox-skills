@@ -99,6 +99,7 @@ _WRAPPERS = {
     "stdbuf": frozenset({"-i", "-o", "-e", "--input", "--output", "--error"}),
     "timeout": frozenset({"-s", "-k", "--signal", "--kill-after"}),
 }
+_INVERT_FLAG_CLUSTER = re.compile(r"^-[a-zA-Z]*v")
 # `command -v NAME` / `-V NAME` looks NAME up and prints where it is; it runs nothing.
 _LOOKUP_ONLY = re.compile(r"^-[pvV]*[vV][pvV]*$")
 # Value-taking options of `uv run` and `uvx` (from their --help): the value is a package, a path
@@ -320,7 +321,7 @@ def _passes_everything(words, tool_name):
     if name in _PASS_THROUGH:
         return True
     if name in ("grep", "egrep", "fgrep", "rg"):
-        return any(w in ("-v", "--invert-match") or re.match(r"^-[a-zA-Z]*v", w) for w in args)
+        return any(w in ("-v", "--invert-match") or _INVERT_FLAG_CLUSTER.match(w) for w in args)
     if name == "jq":
         filters = [w for w in args if not w.startswith("-")]
         return not filters or filters[0] == "."

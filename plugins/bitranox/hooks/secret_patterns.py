@@ -109,6 +109,10 @@ UNTERMINATED_PRIVATE_KEY_RX = re.compile(
 FLATTENED_PRIVATE_KEY_RX = re.compile(_KEY_BEGIN + r"((?:[ \t]+[A-Za-z0-9+/=]{16,})+)")
 _BASE64_LINE_RX = re.compile(r"[ \t]*([A-Za-z0-9+/=]+)[ \t]*")
 _KEY_LINE_SPLIT_RX = re.compile(_KEY_LINE_BREAK)
+_NOT_BASE64_RX = re.compile(r"[^A-Za-z0-9+/=]")
+_WHITESPACE_RX = re.compile(r"\s")
+#: what separates the words of a variable or key name: `api_key`, `api-key`, `api.key`
+_NAME_SEPARATOR_RX = re.compile(r"[ _.-]+")
 
 # The base64 characters a block must carry before detection calls it real key material.
 _MIN_KEY_MATERIAL = 64
@@ -331,7 +335,7 @@ def _is_real_body(body):
     A body with a "..." truncation marker or too little base64 is an illustrative example (a
     tutorial's elided key), which the commit gate must not block on.
     """
-    return "..." not in body and len(re.sub(r"[^A-Za-z0-9+/=]", "", body)) > _MIN_KEY_MATERIAL
+    return "..." not in body and len(_NOT_BASE64_RX.sub("", body)) > _MIN_KEY_MATERIAL
 
 
 def _mask_complete_blocks(text):
@@ -357,7 +361,7 @@ def real_private_key_blocks(text):
         if _key_material(m.group(1)) > _MIN_KEY_MATERIAL:
             yield m
     for m in FLATTENED_PRIVATE_KEY_RX.finditer(rest):
-        if len(re.sub(r"\s", "", m.group(1))) > _MIN_KEY_MATERIAL:
+        if len(_WHITESPACE_RX.sub("", m.group(1))) > _MIN_KEY_MATERIAL:
             yield m
 
 
@@ -369,7 +373,7 @@ def find_secret_labels(text):
 def _name_words(name):
     """Split a variable or label name into lowercase words at separators and camelCase humps."""
     words = []
-    for part in re.split(r"[ _.-]+", name):
+    for part in _NAME_SEPARATOR_RX.split(name):
         if part.isupper() or not any(c.isalpha() for c in part):
             words.append(part.lower())
         else:
@@ -385,7 +389,7 @@ def _secret_words(name):
     variable (`export PWD`); the variable is the last space-separated part.
     """
     variable = name.rsplit(" ", 1)[-1]
-    parts = [p for p in re.split(r"[ _.-]+", name) if p]
+    parts = [p for p in _NAME_SEPARATOR_RX.split(name) if p]
     if not parts or variable in _NOT_SECRET_NAMES:
         return []
     words = _name_words(name)

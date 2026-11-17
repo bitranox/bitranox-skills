@@ -579,6 +579,42 @@ def _rejection(why, topic="per-project-env"):
     return entry
 
 
+_OPENED: list[str] | None = None
+
+
+def _record_open(event, args):
+    if event == "open" and _OPENED is not None and isinstance(args[0], str):
+        _OPENED.append(args[0])
+
+
+sys.addaudithook(_record_open)       # audit hooks cannot be removed; it records only while armed
+
+
+def _opens_during(call):
+    """The file paths opened while `call` runs, as the interpreter's own audit events report them."""
+    global _OPENED
+    _OPENED = []
+    try:
+        call()
+        return list(_OPENED)
+    finally:
+        _OPENED = None
+
+
+def test_an_edit_after_the_one_refusal_reads_neither_the_ledger_nor_the_transcript_for_show(
+        tmp_path, armed):
+    """Once refused, every later edit of that skill is let through whatever the ledger or the
+    transcript hold, so parsing the ledger and scanning a transcript of hundreds of MB for a
+    `show` call is wasted work on every edit. Only the load check still reads the transcript."""
+    path = _skill_with_rejection(tmp_path)
+    main = _session(tmp_path, [_LOAD])
+    assert G.decide(_brief_edit(main, path), {}) is not None
+    opened = _opens_during(lambda: G.decide(_brief_edit(main, path), {}))
+    ledger = str(SD.ledger_path(path.parent))
+    assert opened.count(ledger) == 0
+    assert opened.count(str(main)) == 1
+
+
 def test_the_main_agent_and_a_subagent_are_each_refused_on_the_same_skill(tmp_path, armed):
     """The flag is keyed by agent: the main agent's refusal must not spend the subagent's."""
     path = _skill_with_rejection(tmp_path)

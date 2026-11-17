@@ -182,6 +182,8 @@ BLOCK_KEYWORDS = frozenset(
 FUNCTION_DEFINITION = re.compile(r"[\w.-]\s*\(\s*\)")
 # An escaped character is data to the shell, a bracket included.
 ESCAPED = re.compile(r"\\.", re.DOTALL)
+#: a bare duration operand of timeout(1): `60`, `1.5m`
+_DURATION = re.compile(r"[0-9.]+[smhd]?")
 
 # Group delimiters as they appear among the separators `_parts` yields. The walk reports a subshell
 # and a substitution by their own spellings; a brace group is recognised by `_parts` from its
@@ -241,7 +243,7 @@ def _skip_wrappers(tokens: list[str], index: int) -> int:
                     index += 1
                 index += 1
             # `timeout 60 git push` - a bare duration before the wrapped command.
-            if name == "timeout" and index < len(tokens) and re.fullmatch(r"[0-9.]+[smhd]?", tokens[index]):
+            if name == "timeout" and index < len(tokens) and _DURATION.fullmatch(tokens[index]):
                 index += 1
             continue
         return index

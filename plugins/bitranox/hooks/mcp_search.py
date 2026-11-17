@@ -18,11 +18,20 @@ import json
 import os
 import shutil
 import subprocess
+import sys
+from enum import StrEnum
 from pathlib import Path
 
 import self_improve_signals as sig
 
 _CLI = "basic-memory"
+
+
+class SearchMode(StrEnum):
+    """The `mcp_search` knob; the values are the strings the settings CLI writes."""
+
+    OFF = "off"
+    AUTO = "auto"
 
 # A batch-file shim runs under cmd.exe, which re-parses its command line: `&`, `|` and `%VAR%` in
 # the free-text query would be read by cmd rather than handed to the CLI. No quoting makes that
@@ -48,9 +57,23 @@ def available():
     return _executable() is not None
 
 
+def search_mode():
+    """The `mcp_search` knob as a SearchMode. A value naming no mode is reported on stderr and
+    read as OFF: only a hand edit can write one (the settings CLI accepts off and auto alone),
+    and an unreadable intent must not start an external program the user may have meant to
+    disable. Never raises, so a caller inside a hook cannot wedge a turn over it."""
+    raw = sig.load_config().get("mcp_search", SearchMode.AUTO.value)
+    try:
+        return SearchMode(raw)
+    except ValueError:
+        print("mcp_search: config value %r is neither %s; using off (keyword scan only)"
+              % (raw, " nor ".join(repr(m.value) for m in SearchMode)), file=sys.stderr)
+        return SearchMode.OFF
+
+
 def enabled():
     """True if the `mcp_search` knob is `auto` AND the CLI is available. `off` -> keyword scan only."""
-    return sig.load_config().get("mcp_search", "auto") == "auto" and available()
+    return search_mode() == SearchMode.AUTO and available()
 
 
 def _config():

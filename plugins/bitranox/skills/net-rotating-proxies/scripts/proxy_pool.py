@@ -80,6 +80,8 @@ import time
 import chunked_fetch as cfetch
 import httpx2
 
+_SHA256_HEX_RE = re.compile(r"[0-9a-fA-F]{64}")
+
 DEAD_DEFAULT = r"connection refused|connection reset|timed out|cannot connect|unreachable|EOF occurred|proxy|tunnel|ProxyError"
 
 IPPORT = re.compile(r"(?:\d{1,3}\.){3}\d{1,3}:\d{1,5}")
@@ -859,7 +861,7 @@ def _fetch(a):
         chunk_size = cfetch.parse_size(a.chunk_size)
     except ValueError as exc:
         raise BadInput(f"--chunk-size: {exc}") from exc
-    if a.sha256 is not None and not re.fullmatch(r"[0-9a-fA-F]{64}", a.sha256):
+    if a.sha256 is not None and not _SHA256_HEX_RE.fullmatch(a.sha256):
         raise BadInput("--sha256 must be 64 hex digits")
     # A zero timeout makes every connect time out, which the probe reads as a dead proxy and
     # bans: one typo would poison the whole store. The comparison also refuses nan.

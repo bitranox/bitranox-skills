@@ -64,6 +64,7 @@ _SHELLS = {"bash", "sh", "shell", "zsh"}
 _MARKER = "unchained-ok"
 _MAX_BYTES = 2_000_000
 
+_LINE_CONTINUATION = re.compile(r"\\\n")
 _FENCE_OPEN = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})[ \t]*([^\s`]*)")
 _SPLIT = re.compile(r"\s*(?:" + LIST_SEP.pattern + r")\s*")
 _CONDITION_WORDS = {"if", "elif", "while", "until", "!"}
@@ -101,7 +102,7 @@ def _statements(block):
     Cut on the masked text, so a separator inside quotes, a substitution, a comment or a heredoc
     body is none; a newline reads as an unconditional separator, which is the whole point here.
     """
-    joined = re.sub(r"\\\n", "  ", block)              # same length: offsets still map to lines
+    joined = _LINE_CONTINUATION.sub("  ", block)  # same length: offsets still map to lines
     raw = blank_heredoc_bodies(joined)
     masked = mask_data_regions(raw)
     out, start = [], 0

@@ -463,3 +463,34 @@ def test_a_quoted_admission_does_not_hide_a_broad_signal_the_gate_missed(tmp_pat
 def test_an_unquoted_admission_still_counts_as_caught(tmp_path):
     text = 'The old note said "fine". My mistake - let me double-check the venv path.'
     assert A.find_candidates(make_transcript(tmp_path, [("assistant", text)])) == []
+
+
+# ---- one read of the transcript tail feeds both the candidates and the skill tally -------------
+
+_OPENED: list[str] | None = None
+
+
+def _record_open(event, args):
+    if event == "open" and _OPENED is not None and isinstance(args[0], str):
+        _OPENED.append(args[0])
+
+
+sys.addaudithook(_record_open)       # audit hooks cannot be removed; it records only while armed
+
+
+def test_one_event_opens_the_transcript_once(tmp_path, monkeypatch):
+    """The tail is up to 10 MiB; reading and decoding it once per consumer doubled that work."""
+    global _OPENED
+    tp = make_transcript(tmp_path, [
+        ("assistant", [{"type": "tool_use", "name": "Skill", "input": {"skill": "bitranox:x"}}]),
+        ("assistant", "let me reconsider the parser approach"),
+    ])
+    _OPENED = []
+    try:
+        assert run_audit(monkeypatch, tp, "/proj/once") == 0
+        opened = list(_OPENED)
+    finally:
+        _OPENED = None
+    assert opened.count(tp) == 1
+    body = S.audit_file("/proj/once").read_text(encoding="utf-8")
+    assert "reconsider" in body.lower() and "bitranox:x" in body

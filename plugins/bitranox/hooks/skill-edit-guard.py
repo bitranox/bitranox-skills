@@ -225,13 +225,30 @@ def ran_show(transcript, skill):
     return False
 
 
-def _refuse_once(session, agent, skill):
-    """True the first time for (session, agent, skill), recording it; False after, or if unstorable."""
+def _refusal_flag(session, agent, skill):
+    """The session-state file recording (session, agent, skill)'s one refusal, or None if unnamable."""
     try:
         from self_improve_signals import session_state_path  # noqa: PLC0415 - optional state store
         key = hashlib.sha1(("%s/%s" % (agent, skill)).encode("utf-8")).hexdigest()[:16]
-        flag = session_state_path(session, _BRIEF_FLAG + key)
-        if flag.exists():
+        return session_state_path(session, _BRIEF_FLAG + key)
+    except Exception:  # noqa: BLE001 - an unnamable flag lets the edit through, as an unstorable one
+        return None
+
+
+def _already_refused(session, agent, skill):
+    """True once (session, agent, skill) has had its refusal, or when no flag can be kept for it."""
+    flag = _refusal_flag(session, agent, skill)
+    try:
+        return flag is None or flag.exists()
+    except OSError:
+        return True
+
+
+def _refuse_once(session, agent, skill):
+    """True the first time for (session, agent, skill), recording it; False after, or if unstorable."""
+    try:
+        flag = _refusal_flag(session, agent, skill)
+        if flag is None or flag.exists():
             return False
         flag.parent.mkdir(parents=True, exist_ok=True)
         flag.write_text("refused\n", encoding="utf-8")
@@ -282,9 +299,14 @@ def _brief_refusal(event, path):
     if not isinstance(session, str) or not session.strip():
         return None
     edited = Path(path).parent
+    agent = event.get("agent_id") or "main"
     try:
         import skill_decisions  # noqa: PLC0415 - a missing module must not wedge the guard
         skill_dir = ledger_dir(edited, skill_decisions.ledger_path)
+        # Checked before the ledger is parsed and the transcript scanned: after the one refusal
+        # every edit is let through whatever they hold, and that scan runs to hundreds of MB.
+        if _already_refused(session, agent, skill_dir.name):
+            return None
         command = show_command(skill_dir)
         ledger = skill_decisions.ledger_path(skill_dir)
         brief = skill_decisions.render_brief(lambda: skill_decisions.file_lines(ledger),
@@ -299,7 +321,7 @@ def _brief_refusal(event, path):
             return None
     except OSError:
         pass                                           # unreadable: one refusal costs one re-send
-    if not _refuse_once(session, event.get("agent_id") or "main", skill_dir.name):
+    if not _refuse_once(session, agent, skill_dir.name):
         return None
     # When entries were left out, the brief's own trailer already names the command; say it once.
     full_list = "" if command in brief else _FULL_LIST % command

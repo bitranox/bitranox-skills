@@ -65,6 +65,7 @@ import sys
 import tempfile
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path, PurePosixPath
 
 from _cli_envelope import EXIT_ERROR, EXIT_NO, EXIT_YES, EnvelopeArgumentParser, emit, guarded
@@ -101,14 +102,29 @@ class Block:
     path: str | None = None
 
 
+class CheckStatus(StrEnum):
+    """The outcome of one check. The values are the wire form (`status` in JSON; upper-cased in
+    the text report)."""
+
+    PASS = "pass"
+    FAIL = "fail"
+    ERROR = "error"  # the check could not run
+    SKIPPED = "skipped"
+
+
 @dataclass
 class CheckResult:
     """The outcome of one check: pass, fail, error (could not run) or skipped."""
 
     check: str
-    status: str
+    status: CheckStatus
     detail: str = ""
     argv: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        # _verdict tests for ERROR and FAIL only, so an unknown status would read as a pass:
+        # parse it where the result is made.
+        self.status = CheckStatus(self.status)
 
 
 def _split_lines(text: str) -> list[str]:
@@ -345,12 +361,12 @@ def _check_pytest(copy: Path, files: list[str], python: str, run: Runner,
                   timeout: float) -> CheckResult:
     tests = [f for f in files if _is_test(f)]
     if not tests:
-        return CheckResult("pytest", "skipped", "no placed path is a test file")
+        return CheckResult("pytest", CheckStatus.SKIPPED, "no placed path is a test file")
     # An interpreter without pytest fails every run with exit 1, which would read as the PLAN's
     # failure; under `uv run` with no ./.venv this interpreter is uv's throwaway one, which has none.
     probe = _run(run, [python, "-c", "import pytest"], cwd=copy, timeout=timeout)
     if probe.returncode != 0:
-        return CheckResult("pytest", "error",
+        return CheckResult("pytest", CheckStatus.ERROR,
                            f"{python} has no pytest; pass --python with the project's interpreter",
                            [python, "-c", "import pytest"])
     paths = [str(copy / "src"), str(copy)] + [p for p in [os.environ.get("PYTHONPATH")] if p]
@@ -359,16 +375,17 @@ def _check_pytest(copy: Path, files: list[str], python: str, run: Runner,
     proc = _run(run, argv, cwd=copy, env=env, timeout=timeout)
     out = (proc.stdout or "") + (proc.stderr or "")
     if proc.returncode == 0:
-        return CheckResult("pytest", "pass", _tail(out, 3), argv)
+        return CheckResult("pytest", CheckStatus.PASS, _tail(out, 3), argv)
     if proc.returncode in (1, 2, 5):            # failed, collection error, collected nothing
-        return CheckResult("pytest", "fail", _tail(out), argv)
-    return CheckResult("pytest", "error", f"pytest exited {proc.returncode}: {_tail(out)}", argv)
+        return CheckResult("pytest", CheckStatus.FAIL, _tail(out), argv)
+    return CheckResult("pytest", CheckStatus.ERROR,
+                       f"pytest exited {proc.returncode}: {_tail(out)}", argv)
 
 
 def _check_pyright(copy: Path, files: list[str], python: str, tool: list[str] | None, run: Runner,
                    timeout: float) -> CheckResult:
     if tool is None:
-        return CheckResult("pyright", "error", "pyright not found (on PATH, or via uv)")
+        return CheckResult("pyright", CheckStatus.ERROR, "pyright not found (on PATH, or via uv)")
     config = {"include": files, "typeCheckingMode": "strict",
               "extraPaths": ["src"] if (copy / "src").is_dir() else []}
     cfg = copy / "pyrightconfig.json"
@@ -379,24 +396,24 @@ def _check_pyright(copy: Path, files: list[str], python: str, tool: list[str] | 
         report = json.loads(proc.stdout or "")
         summary = report["summary"]
     except (ValueError, KeyError, TypeError):
-        return CheckResult("pyright", "error",
+        return CheckResult("pyright", CheckStatus.ERROR,
                            f"pyright exited {proc.returncode} without a report: "
                            f"{_tail((proc.stdout or '') + (proc.stderr or ''))}", argv)
     analysed = int(summary.get("filesAnalyzed", 0))
     if analysed < len(files):
-        return CheckResult("pyright", "error",
+        return CheckResult("pyright", CheckStatus.ERROR,
                            f"pyright analysed {analysed} of {len(files)} placed files", argv)
     errors = [f"{Path(d.get('file', '')).name}:{d['range']['start']['line'] + 1}: {d.get('message')}"
               for d in report.get("generalDiagnostics", []) if d.get("severity") == "error"]
     if errors:
-        return CheckResult("pyright", "fail", "\n".join(errors[:25]), argv)
-    return CheckResult("pyright", "pass", f"{analysed} files, 0 errors", argv)
+        return CheckResult("pyright", CheckStatus.FAIL, "\n".join(errors[:25]), argv)
+    return CheckResult("pyright", CheckStatus.PASS, f"{analysed} files, 0 errors", argv)
 
 
 def _check_ruff(repo: Path, placed: dict[str, str], tool: list[str] | None, run: Runner,
                 timeout: float) -> CheckResult:
     if tool is None:
-        return CheckResult("ruff", "error", "ruff not found (on PATH, or via uv)")
+        return CheckResult("ruff", CheckStatus.ERROR, "ruff not found (on PATH, or via uv)")
     findings = []
     for rel, text in placed.items():
         argv = [*tool, "check", "--stdin-filename", rel, "-"]
@@ -404,12 +421,12 @@ def _check_ruff(repo: Path, placed: dict[str, str], tool: list[str] | None, run:
         if proc.returncode == 1:
             findings.append(f"{rel}:\n{_tail(proc.stdout or '')}")
         elif proc.returncode != 0:
-            return CheckResult("ruff", "error",
+            return CheckResult("ruff", CheckStatus.ERROR,
                                f"ruff exited {proc.returncode} on {rel}: {_tail(proc.stderr or '')}",
                                argv)
     if findings:
-        return CheckResult("ruff", "fail", "\n".join(findings))
-    return CheckResult("ruff", "pass", f"{len(placed)} files clean")
+        return CheckResult("ruff", CheckStatus.FAIL, "\n".join(findings))
+    return CheckResult("ruff", CheckStatus.PASS, f"{len(placed)} files clean")
 
 
 def run_checks(repo: Path, placed: dict[str, str], checks: Sequence[str], *, python: str | None = None,
@@ -438,14 +455,15 @@ def run_checks(repo: Path, placed: dict[str, str], checks: Sequence[str], *, pyt
                     results.append(_check_ruff(repo, placed, _tool_argv("ruff", ruff), run,
                                                timeout))
             except (OSError, subprocess.SubprocessError) as exc:
-                results.append(CheckResult(check, "error", f"{type(exc).__name__}: {exc}"))
+                results.append(CheckResult(check, CheckStatus.ERROR,
+                                           f"{type(exc).__name__}: {exc}"))
     return results
 
 
 def _verdict(results: list[CheckResult], unplaced: list[Block], allow_unplaced: bool) -> int:
-    if any(r.status == "error" for r in results):
+    if any(r.status == CheckStatus.ERROR for r in results):
         return EXIT_ERROR
-    if any(r.status == "fail" for r in results) or (unplaced and not allow_unplaced):
+    if any(r.status == CheckStatus.FAIL for r in results) or (unplaced and not allow_unplaced):
         return EXIT_NO
     return EXIT_YES
 
@@ -458,7 +476,7 @@ def _report(results: list[CheckResult], placed: dict[str, str], unplaced: list[B
               f"backticked .py above it)")
     for r in results:
         print(f"{r.status.upper():8} {r.check}")
-        if r.detail and r.status != "pass":
+        if r.detail and r.status != CheckStatus.PASS:
             print("    " + r.detail.replace("\n", "\n    "))
 
 
@@ -507,11 +525,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                          pyright=args.pyright, timeout=args.timeout)
     code = _verdict(results, unplaced, args.allow_unplaced)
     skipped = [f"block at line {b.line}: no path" for b in unplaced]
-    skipped += [f"{r.check}: {r.detail}" for r in results if r.status == "skipped"]
+    skipped += [f"{r.check}: {r.detail}" for r in results if r.status == CheckStatus.SKIPPED]
     if args.json:
         data = {"placed": sorted(placed), "unplaced": [b.line for b in unplaced],
                 "checks": [r.__dict__ for r in results]}
-        error = next((r.detail for r in results if r.status == "error"), None)
+        error = next((r.detail for r in results if r.status == CheckStatus.ERROR), None)
         return emit(code, "plan_codecheck", data, skipped=skipped, error=error)
     _report(results, placed, unplaced)
     return code

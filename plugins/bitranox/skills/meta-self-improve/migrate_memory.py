@@ -52,6 +52,8 @@ import self_improve_signals as sig       # noqa: E402
 import memory_engine as ME               # noqa: E402
 import reconcile_memory_index as R       # noqa: E402
 
+_NON_ALNUM_RUN_RE = re.compile(r"[^A-Za-z0-9]+")
+
 def _projects_dir():
     return claude_paths.config_dir() / "projects"
 
@@ -290,7 +292,7 @@ def _receipt_path(proj):
 def _path_encoded_receipt_name(proj):
     """The name receipts carried before they were hashed; still read, so a finished migration is
     not re-run."""
-    return re.sub(r"[^A-Za-z0-9]+", "-", str(proj)).strip("-") + ".json"
+    return _NON_ALNUM_RUN_RE.sub("-", str(proj)).strip("-") + ".json"
 
 
 def _legacy_receipt_path(proj):

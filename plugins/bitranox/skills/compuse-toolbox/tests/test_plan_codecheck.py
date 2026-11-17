@@ -326,3 +326,17 @@ def test_a_directory_that_is_not_a_git_checkout_is_still_copied_whole(tmp_path, 
     _write(repo / ".venv" / "bin" / "python", "")
     copy = pc.copy_repo(repo, tmp_path / "dest")
     assert _copied(copy) == {"src/pkg/__init__.py", "src/pkg/core.py", "build/out.txt"}
+
+
+def test_a_misspelt_check_status_is_refused_not_counted_as_a_pass():
+    # _verdict tests only for "error" and "fail", so a status nobody defined fell through to
+    # exit 0: a check that never passed read as one that did.
+    with pytest.raises(ValueError, match="pased"):
+        pc.CheckResult("pytest", "pased")
+
+
+def test_a_check_status_keeps_its_wire_string():
+    result = pc.CheckResult("ruff", "skipped", "why")
+    assert result.status is pc.CheckStatus.SKIPPED
+    assert json.dumps(result.__dict__) == ('{"check": "ruff", "status": "skipped", "detail": "why", '
+                                           '"argv": []}')

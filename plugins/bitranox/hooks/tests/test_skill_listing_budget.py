@@ -352,19 +352,19 @@ class TestNewestListing:
         config = make_config(tmp_path)
         write_listing(config, "s1", "- a:one: has a description\n- b:two\n- c:three")
         found = budget.newest_listing(config)
-        assert found["bare"] == ["b:two", "c:three"]
-        assert found["total"] == len("- a:one: has a description\n- b:two\n- c:three")
+        assert found.bare == ["b:two", "c:three"]
+        assert found.total == len("- a:one: has a description\n- b:two\n- c:three")
 
     def test_reads_the_newest_transcript_not_the_first(self, tmp_path):
         config = make_config(tmp_path)
         write_listing(config, "old", "- x:stale\n- y:stale", mtime=1_000_000)
         write_listing(config, "new", "- z:fresh", mtime=2_000_000)
-        assert budget.newest_listing(config)["bare"] == ["z:fresh"]
+        assert budget.newest_listing(config).bare == ["z:fresh"]
 
     def test_accepts_content_delivered_as_a_list(self, tmp_path):
         config = make_config(tmp_path)
         write_listing(config, "s1", ["- a:one: described\n- b:two"])
-        assert budget.newest_listing(config)["bare"] == ["b:two"]
+        assert budget.newest_listing(config).bare == ["b:two"]
 
     def test_returns_none_when_no_transcript_has_a_listing(self, tmp_path):
         config = make_config(tmp_path)
@@ -378,39 +378,39 @@ class TestNewestListing:
 
 class TestObservedRequirement:
     def test_scales_the_current_fraction_by_what_was_owed(self):
-        listing = {"total": 10_000, "bare": ["x"]}   # >= DENOMINATOR_FLOOR * 0.01, so not stale
+        listing = budget.Listing(total=10_000, bare=["x"])   # >= DENOMINATOR_FLOOR * 0.01, so not stale
         got = budget.observed_requirement(listing, {"x": "d" * 998}, 0.01)
         assert got == pytest.approx(0.01 * 11_000 / 10_000 * budget.SAFETY)
 
     def test_a_listing_from_before_the_last_raise_is_ignored(self):
         # the real case this guard exists for: a 29,998-char listing produced at 0.01, read back
         # when the setting has since become 0.13. Scaling 0.13 by that shortfall gave 0.29.
-        listing = {"total": 29_998, "bare": ["x"]}
+        listing = budget.Listing(total=29_998, bare=["x"])
         assert budget.observed_requirement(listing, {"x": "d" * 400}, 0.13) is None
 
     def test_the_same_listing_is_trusted_at_the_fraction_that_produced_it(self):
-        listing = {"total": 29_998, "bare": ["x"]}
+        listing = budget.Listing(total=29_998, bare=["x"])
         assert budget.observed_requirement(listing, {"x": "d" * 400}, 0.01) is not None
 
     def test_a_listing_with_nothing_bare_asks_for_no_correction(self):
-        assert budget.observed_requirement({"total": 1000, "bare": []}, {"x": "d"}, 0.10) is None
+        assert budget.observed_requirement(budget.Listing(total=1000, bare=[]), {"x": "d"}, 0.10) is None
 
     def test_no_listing_at_all_asks_for_no_correction(self):
         assert budget.observed_requirement(None, {"x": "d"}, 0.10) is None
 
     def test_a_bare_entry_we_cannot_resolve_is_treated_as_bundled(self):
         # a bundled skill has no SKILL.md on disk, and is exempt from the rationing anyway
-        assert budget.observed_requirement({"total": 10_000, "bare": ["mystery"]}, {}, 0.01) is None
+        assert budget.observed_requirement(budget.Listing(total=10_000, bare=["mystery"]), {}, 0.01) is None
 
     def test_the_correction_does_not_depend_on_context_size_or_chars_per_token(self):
         # both cancel in the ratio, which is the whole point: it holds on any model
-        listing = {"total": 20_000, "bare": ["x"]}
+        listing = budget.Listing(total=20_000, bare=["x"])
         assert budget.observed_requirement(listing, {"x": "d" * 998}, 0.01) == pytest.approx(
             0.01 * 21_000 / 20_000 * budget.SAFETY
         )
 
     def test_an_owed_description_over_the_cap_is_charged_at_the_cap(self):
-        listing = {"total": 20_000, "bare": ["x"]}
+        listing = budget.Listing(total=20_000, bare=["x"])
         owed = 2 + budget.MAX_DESC_CHARS
         assert budget.observed_requirement(listing, {"x": "d" * 5_000}, 0.01) == pytest.approx(
             0.01 * (20_000 + owed) / 20_000 * budget.SAFETY
@@ -478,43 +478,43 @@ class TestListingReader:
         assert '"skill_listing"' in json.dumps(noise)  # it passes the substring filter
         config = make_config(tmp_path)
         write_transcript(config, "s1", [noise, listing_record(GOOD)])
-        assert budget.newest_listing(config)["bare"] == ["z:fresh"]
+        assert budget.newest_listing(config).bare == ["z:fresh"]
 
     def test_a_truncated_listing_line_is_skipped_and_the_later_listing_read(self, tmp_path):
         config = make_config(tmp_path)
         cut = json.dumps(listing_record("- cut:off"))[:120]
         assert '"skill_listing"' in cut  # it passes the substring filter and must fail the decode
         write_transcript(config, "s1", [cut, listing_record(GOOD)])
-        assert budget.newest_listing(config)["bare"] == ["z:fresh"]
+        assert budget.newest_listing(config).bare == ["z:fresh"]
 
     def test_a_json_line_that_is_not_an_object_is_skipped(self, tmp_path):
         config = make_config(tmp_path)
         write_transcript(config, "s1", ['["skill_listing"]', HOOK_NOTE_NAMING_THE_MARKER, listing_record(GOOD)])
-        assert budget.newest_listing(config)["bare"] == ["z:fresh"]
+        assert budget.newest_listing(config).bare == ["z:fresh"]
 
     def test_a_skipped_line_does_not_send_the_scan_to_an_older_transcript(self, tmp_path):
         config = make_config(tmp_path)
         write_listing(config, "old", "- OLD:stale", mtime=1_000_000)
         write_transcript(config, "new", [TOOL_USE_NAMING_THE_MARKER, listing_record(GOOD)], mtime=2_000_000)
-        assert budget.newest_listing(config)["bare"] == ["z:fresh"]
+        assert budget.newest_listing(config).bare == ["z:fresh"]
 
     def test_the_last_listing_in_a_transcript_wins(self, tmp_path):
         # /reload-plugins writes a second full listing; the first no longer describes the session
         config = make_config(tmp_path)
         write_transcript(config, "s1", [listing_record("- FIRST:one"), listing_record("- LAST:two")])
-        assert budget.newest_listing(config)["bare"] == ["LAST:two"]
+        assert budget.newest_listing(config).bare == ["LAST:two"]
 
     def test_a_delta_listing_does_not_replace_the_full_one(self, tmp_path):
         # a delta carries only the skills added since, so it is not the listing the budget packed
         config = make_config(tmp_path)
         write_transcript(config, "s1", [listing_record("- full:bare"), listing_record("- new:x: d", initial=False)])
-        assert budget.newest_listing(config)["bare"] == ["full:bare"]
+        assert budget.newest_listing(config).bare == ["full:bare"]
 
     @pytest.mark.parametrize("empty", ["", [], None])
     def test_a_later_listing_with_no_content_does_not_hide_an_earlier_one(self, tmp_path, empty):
         config = make_config(tmp_path)
         write_transcript(config, "s1", [listing_record(GOOD), listing_record(empty)])
-        assert budget.newest_listing(config)["bare"] == ["z:fresh"]
+        assert budget.newest_listing(config).bare == ["z:fresh"]
 
     def test_only_the_newest_transcripts_are_opened(self, tmp_path):
         config = make_config(tmp_path)
@@ -522,7 +522,7 @@ class TestListingReader:
         for i in range(5):
             write_transcript(config, f"s{i}", [{"type": "other"}], mtime=2_000_000 + i)
         assert budget.newest_listing(config, max_files=5) is None
-        assert budget.newest_listing(config, max_files=6)["bare"] == ["a:b"]
+        assert budget.newest_listing(config, max_files=6).bare == ["a:b"]
 
     def test_a_description_line_that_reads_like_an_entry_is_not_a_bare_name(self, tmp_path):
         # `names` is the installed set; a description continuing on a line that starts "- " and
@@ -532,19 +532,19 @@ class TestListingReader:
         record = listing_record(content)
         record["attachment"]["names"] = ["a:one", "b:two"]
         write_transcript(config, "s1", [record])
-        assert budget.newest_listing(config)["bare"] == ["b:two"]
+        assert budget.newest_listing(config).bare == ["b:two"]
 
     def test_without_names_the_lines_decide(self, tmp_path):
         config = make_config(tmp_path)
         write_listing(config, "s1", "- a:one: Use when X\n- b:two")
-        assert budget.newest_listing(config)["bare"] == ["b:two"]
+        assert budget.newest_listing(config).bare == ["b:two"]
 
     def test_it_reports_when_and_where_the_listing_was_produced(self, tmp_path):
         config = make_config(tmp_path)
         write_listing(config, "s1", GOOD, timestamp=1_700_000_000, cwd=tmp_path / "proj")
         found = budget.newest_listing(config)
-        assert found["timestamp"] == pytest.approx(1_700_000_000, abs=0.001)
-        assert found["cwd"] == str(tmp_path / "proj")
+        assert found.timestamp == pytest.approx(1_700_000_000, abs=0.001)
+        assert found.cwd == str(tmp_path / "proj")
 
 
 def big_skill_config(tmp_path, fraction, **kwargs):
@@ -605,7 +605,7 @@ class TestStaleListing:
         assert budget.wanted_fraction(config, entries, 0.10) == (budget.required_fraction(budget.listing_demand(entries)), 0)
 
     def test_with_no_settings_file_a_listing_is_current(self, tmp_path):
-        assert budget.listing_is_current({"timestamp": 1.0}, tmp_path / "settings.json") is True
+        assert budget.listing_is_current(budget.Listing(total=1, bare=[], timestamp=1.0), tmp_path / "settings.json") is True
 
     def test_a_fresh_listing_with_nothing_bare_asks_for_no_correction(self, tmp_path):
         config = big_skill_config(tmp_path, 0.10)

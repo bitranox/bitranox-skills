@@ -30,6 +30,44 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.10.6]
+
+### Fixed
+
+- An empty `.git` directory above a project (one appeared in `/tmp`) no longer makes every
+  project below it one repository: the contribution queue's home (`queue_home`) and the
+  toolbox's `git_state` ancestor walk accept only a `.git` git itself would (a directory holding
+  `HEAD`, or a `gitdir: ` file). A new test fails when any shipped script walks up and tests a
+  `.git` path for bare existence; the two sites where that is the safe answer are listed with
+  their reason.
+- `block-or-echo-verdict`: a long heredoc made the guard quadratic (2000 lines took 2.4 s per
+  Bash call). The blanks after a command start no longer cross a newline; its verdicts on 1,224
+  real commands are unchanged.
+- `recovery-retry-gate`: the script-name pattern was quadratic in one long token (a 4000-character
+  token took 14.8 ms per call). It now starts only where a path token starts; its matches on
+  27,129 real commands are unchanged.
+- `tmp-prune-hook`: a `tmp_prune` value outside `on`, `dry-run`, `off` used to start nothing
+  without a word. It is now named on stderr and pruning stays off, so a typo meant as dry-run
+  never deletes files.
+- `subagent-capture` reads the subagent transcript once per call instead of twice;
+  `harness_checks` reads each SKILL.md once for every front-matter check, and walks the graveyard
+  once without entering virtualenvs; `tooling-detour-nudge` resolves the plugin root once.
+- `shell_text`: `mask_data_regions` copies plain text in runs instead of probing every character
+  (a 121 KB command: 13.3 to 0.2 ms), and the whole-command views the Bash hooks share are derived
+  once per long command (16 hooks on one 121 KB command: 523 to 398 ms).
+
+### Changed
+
+- Data architecture and performance review of the shipped hooks and jigs, its low-severity half:
+  closed vocabularies are enums whose values are the strings already written (`ClaimState`,
+  `Mode`, `Verdict`, `Action` and others; output is byte-identical), fixed-shape records are
+  frozen dataclasses, regexes compiled per call are compiled once, and reads repeated in one run
+  are done once. `grep_all` and `conflict_scan` share one vendored-directory set
+  (`_vendored_dirs.py`), which also recognises `.venv-*` names and a `pyvenv.cfg` marker.
+- `dedup_scan`: in a store of more than 500 facts, a word shared by more than 100 of them no
+  longer forms candidate pairs. On 2,002 facts this removes 1.19 million comparisons, and no
+  dropped pair scores above 0.19 against the 0.45 threshold.
+
 ## [11.10.5]
 
 ### Changed

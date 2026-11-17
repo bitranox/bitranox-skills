@@ -676,7 +676,7 @@ def check_skills_index(root):
             in_section = line.startswith("## Skills Span Every Domain")
             continue
         if in_section and line.lstrip().startswith("- "):
-            listed.update(re.findall(r"`([a-z][a-z0-9-]+)`", line))
+            listed.update(_BACKTICKED_NAME_RX.findall(line))
     dirs = {d.name for d in skills_dir.iterdir() if d.is_dir() and (d / "SKILL.md").is_file()}
     dirs.discard("meta-using-bitranox-skills")
     stale = sorted(listed - dirs)
@@ -686,6 +686,8 @@ def check_skills_index(root):
     return []
 
 
+#: a backtick-quoted skill name on a roster bullet line
+_BACKTICKED_NAME_RX = re.compile(r"`([a-z][a-z0-9-]+)`")
 _CREDIT_RX = re.compile(r"(?m)^>\s*Adapted from .+\(.+\)\.")
 _NOTICE_HEADING_RX = re.compile(r"(?m)^###\s+([a-z][a-z0-9-]+)\s*$")
 
@@ -800,6 +802,26 @@ def _denylist_terms(root):
     return []
 
 
+#: the largest tracked file the secret scan reads; a bigger one is skipped unscanned
+_SECRET_SCAN_CAP = 2_000_000
+
+
+def _read_capped(path, cap):
+    """The bytes of `path`, or None when it cannot be read or holds more than `cap` bytes.
+
+    The size is decided before the content is loaded: a skipped file must not cost its whole
+    size in memory first, and reading cap + 1 bytes still catches a file that grew after the
+    stat."""
+    try:
+        with open(path, "rb") as fh:
+            if os.fstat(fh.fileno()).st_size > cap:
+                return None
+            raw = fh.read(cap + 1)
+    except OSError:
+        return None
+    return None if len(raw) > cap else raw
+
+
 def check_secrets(root):
     """Block credentials, private keys, sensitive files, and (locally) denylisted infra terms.
     Runs on every commit and PR, so the credential class of leak can never land. The judgment
@@ -812,13 +834,9 @@ def check_secrets(root):
     for rel in paths:
         if _SENSITIVE_NAME_RX.search(rel):
             findings.append(f"  {rel}: sensitive filename")
-        fp = root / rel
-        try:
-            raw = fp.read_bytes()
-        except OSError:
-            continue
-        if b"\x00" in raw[:4096] or len(raw) > 2_000_000:
-            continue  # binary or oversized
+        raw = _read_capped(root / rel, _SECRET_SCAN_CAP)
+        if raw is None or b"\x00" in raw[:4096]:
+            continue  # unreadable, oversized or binary
         text = raw.decode("utf-8", "replace")
         # The credential formats and the real-key-block rule live in secret_patterns, shared
         # with recall and the classifier's egress redaction.
@@ -1749,6 +1767,8 @@ MIRRORED_SKILLS = mirrored_skills.MIRRORED_SKILLS
 #: against a whole blockquote rather than one line, because it wraps over several and a
 #: line-at-a-time rule leaves the continuation behind and reports it as drift.
 _SELF_INSTALL_RX = re.compile(r"/plugin marketplace add|/plugin install", re.I)
+#: a trailing parenthetical on an H1, the per-repo part of a mirrored skill's title
+_H1_PAREN_RX = re.compile(r"\s*\([^()]*\)\s*$")
 
 
 def _public_tree(root):
@@ -1802,7 +1822,7 @@ def normalise_mirror(text):
         if line.startswith("name:"):
             lines.append("name: <per-repo>")
         elif line.startswith("# "):
-            lines.append(re.sub(r"\s*\([^()]*\)\s*$", " (<per-repo>)", line))
+            lines.append(_H1_PAREN_RX.sub(" (<per-repo>)", line))
         else:
             lines.append(line)
     # A dropped blockquote leaves a blank line behind on the side that carried it.

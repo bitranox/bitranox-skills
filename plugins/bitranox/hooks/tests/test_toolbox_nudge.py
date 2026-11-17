@@ -240,6 +240,44 @@ def test_main_dedup_second_time_is_silent(home, monkeypatch, capsys):
     assert capsys.readouterr().out.strip() == ""
 
 
+def test_a_repeat_match_resolves_and_parses_no_tool(home, monkeypatch, capsys):
+    """A tool already nudged this session is answered by the dedup alone: finding the tool and
+    parsing its source for the launch line is work whose only use is the message never sent."""
+    _with_tool(home)
+    _feed(monkeypatch, _ev("git rev-parse --abbrev-ref HEAD", "s4r"))
+    N.main()
+    assert "git_state" in capsys.readouterr().out
+    watched = {N._tool_invocation.__code__, N.launch_command.__code__}
+    calls = []
+
+    def observe(frame, event, _arg):
+        if event == "call" and frame.f_code in watched:
+            calls.append(frame.f_code.co_name)
+
+    _feed(monkeypatch, _ev("git rev-parse --abbrev-ref HEAD", "s4r"))
+    sys.setprofile(observe)
+    try:
+        N.main()
+    finally:
+        sys.setprofile(None)
+    assert capsys.readouterr().out.strip() == ""
+    assert calls == []
+
+
+def test_a_match_with_no_tool_anywhere_does_not_spend_the_nudge(home, monkeypatch, capsys):
+    """No tool to point at says nothing and records nothing: once the tool exists, the first
+    matching call still nudges."""
+    _feed(monkeypatch, _ev("git rev-parse --abbrev-ref HEAD", "s4n"))
+    # the plugin's install location is the one seam the module offers for "not shipped"
+    monkeypatch.setattr(N, "_shipped_dir", lambda: _no_shipped_tree(home))
+    N.main()
+    assert capsys.readouterr().out.strip() == ""
+    _with_tool(home)
+    _feed(monkeypatch, _ev("git rev-parse --abbrev-ref HEAD", "s4n"))
+    N.main()
+    assert "git_state" in capsys.readouterr().out
+
+
 def _monitor(cmd, session):
     return {"tool_name": "Monitor", "session_id": session, "tool_input": {"command": cmd}}
 

@@ -39,7 +39,9 @@ import argparse
 import json
 import re
 import sys
+from collections.abc import Iterable, Iterator
 from dataclasses import asdict, dataclass, field
+from enum import Enum
 from functools import partial
 from pathlib import Path
 from typing import Any, NoReturn
@@ -54,19 +56,41 @@ class UsageError(Exception):
     """The run could not start or examined nothing (exit 2)."""
 
 
+class QuoteVerdict(str, Enum):
+    """One quote's outcome. The values are the wire form (JSON `verdict`, the tally keys, the text
+    report). The floor is 3.10, which has no StrEnum, and this mixin formats as `QuoteVerdict.OK`
+    under an f-string on 3.11+, so every string built from a member takes `.value`."""
+
+    OK = "OK"
+    MISMATCH = "MISMATCH"
+    NONE = "NONE"
+    TOO_SHORT = "TOO-SHORT"
+    UNKNOWN_KEY = "UNKNOWN-KEY"
+
+
+#: The verdicts that do not fail the run.
+_PASSING = frozenset({QuoteVerdict.OK, QuoteVerdict.NONE})
+
+
 @dataclass
 class Verdict:
     """One quote's outcome."""
 
-    verdict: str
+    verdict: QuoteVerdict
     missing: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        # Parsed here so a misspelt verdict raises where it is made, never reaches failed().
+        self.verdict = QuoteVerdict(self.verdict)
 
 
 def normalise(text: str) -> str:
     """Normalise text for a substring match: markup out, whitespace collapsed, case-folded.
 
-    >>> normalise('  Use `x`   **now**\\n"done" ')
-    'use x now "done"'
+    Quotes around the whole text are stripped, so a quote-back pasted in quotes still matches:
+
+    >>> normalise('  "Use `x`   **now**\\n then done" ')
+    'use x now then done'
     """
     text = text.replace("`", "").replace("**", "").replace('\\"', '"')
     return WHITESPACE.sub(" ", text).strip().strip('"').strip().casefold()
@@ -94,43 +118,60 @@ def quote_parts(quote: str, min_part: int) -> list[str]:
 def check_quote(quote: str, text: str, min_part: int = DEFAULT_MIN_PART) -> Verdict:
     """Check one quote against already-normalised text."""
     if quote.strip().upper() == "NONE":
-        return Verdict("NONE")
+        return Verdict(QuoteVerdict.NONE)
     parts = quote_parts(quote, min_part)
     if not parts:
-        return Verdict("TOO-SHORT")
+        return Verdict(QuoteVerdict.TOO_SHORT)
     missing = [p for p in parts if p not in text]
-    return Verdict("MISMATCH", missing) if missing else Verdict("OK")
+    return Verdict(QuoteVerdict.MISMATCH, missing) if missing else Verdict(QuoteVerdict.OK)
 
 
-def load_journal(path: Path) -> list[dict[str, object]]:
-    """Every JSON record of a journal.jsonl (blank and non-JSON lines skipped)."""
+def load_journal(path: Path) -> Iterator[dict[str, object]]:
+    """Each JSON record of a journal.jsonl, one line at a time (blank and non-JSON lines skipped).
+
+    Streamed rather than read whole: a journal holds every agent's full result, and the caller
+    keeps only the few whose label matches.
+    """
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        with path.open(encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(rec, dict):
+                    yield rec
     except OSError as exc:
         raise UsageError(f"cannot read journal {path}: {exc}") from exc
-    records = []
-    for line in lines:
-        try:
-            rec = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(rec, dict):
-            records.append(rec)
-    return records
 
 
-def labelled_results(records: list[dict[str, object]], label: re.Pattern[str]) -> list[tuple[str, list[object]]]:
-    """[(label, rows)] for each result whose agent's started-label matches."""
-    labels = {r.get("agentId"): str(r.get("label", "")) for r in records if r.get("type") == "started"}
-    out = []
+def labelled_results(records: Iterable[dict[str, object]],
+                     label: re.Pattern[str]) -> list[tuple[str, list[object]]]:
+    """[(label, rows)] for each result whose agent's started-label matches, in journal order.
+
+    One pass. A result is judged as soon as its agent's label is known and dropped unless it
+    matches; only a result logged BEFORE its agent's started line waits, so what is held is the
+    matching rows plus those early ones, never the whole journal.
+    """
+    labels: dict[object, str] = {}
+    kept: list[tuple[object, list[object]]] = []
     for rec in records:
-        if rec.get("type") != "result":
+        agent = rec.get("agentId")
+        if rec.get("type") == "started":
+            labels[agent] = str(rec.get("label", ""))
             continue
-        name = labels.get(rec.get("agentId"), "")
-        result = rec.get("result")
-        if label.search(name) and isinstance(result, dict) and isinstance(result.get("rows"), list):
-            out.append((name, result["rows"]))
-    return out
+        rows = _result_rows(rec) if rec.get("type") == "result" else None
+        if rows is not None and (agent not in labels or label.search(labels[agent])):
+            kept.append((agent, rows))
+    return [(labels.get(agent, ""), rows) for agent, rows in kept
+            if label.search(labels.get(agent, ""))]
+
+
+def _result_rows(rec: dict[str, object]) -> list[object] | None:
+    result = rec.get("result")
+    if isinstance(result, dict) and isinstance(result.get("rows"), list):
+        return result["rows"]
+    return None
 
 
 def load_dir_map(rows_files: list[Path], key: str, dir_field: str) -> dict[str, Path]:
@@ -167,8 +208,11 @@ class ReportRow:
 
     label: str
     key: str
-    verdict: str
+    verdict: QuoteVerdict
     missing: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self.verdict = QuoteVerdict(self.verdict)
 
 
 def check_journal(args: argparse.Namespace) -> list[ReportRow]:
@@ -192,7 +236,7 @@ def _check_row(row: dict[str, object], name: str, args: argparse.Namespace,
     key = str(row.get(args.key, ""))
     base = Path(args.dir) if args.dir else dir_map.get(key)
     if base is None:
-        return ReportRow(name, key, "UNKNOWN-KEY")
+        return ReportRow(name, key, QuoteVerdict.UNKNOWN_KEY)
     verdict = check_quote(str(row.get(args.quote_field, "")), texts.get(base), args.min_part)
     return ReportRow(name, key, verdict.verdict, verdict.missing)
 
@@ -201,22 +245,22 @@ def tally(report: list[ReportRow]) -> dict[str, int]:
     """Count of each verdict."""
     counts: dict[str, int] = {}
     for row in report:
-        counts[row.verdict] = counts.get(row.verdict, 0) + 1
+        counts[row.verdict.value] = counts.get(row.verdict.value, 0) + 1
     return counts
 
 
 def failed(report: list[ReportRow]) -> bool:
     """True when any row is neither OK nor NONE."""
-    return any(row.verdict not in ("OK", "NONE") for row in report)
+    return any(row.verdict not in _PASSING for row in report)
 
 
 def render_text(report: list[ReportRow]) -> str:
     """Human report: the tally, then every row that is not OK."""
     lines = [f"rows checked: {len(report)}  {tally(report)}"]
     for row in report:
-        if row.verdict == "OK":
+        if row.verdict is QuoteVerdict.OK:
             continue
-        lines.append(f"{row.verdict:11} {row.label}  {row.key}")
+        lines.append(f"{row.verdict.value:11} {row.label}  {row.key}")
         lines.extend(f"    missing: {part}" for part in row.missing)
     return "\n".join(lines)
 

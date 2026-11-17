@@ -125,6 +125,10 @@ MIN_QUOTE_WORDS = 3
 TOPIC_OVERLAP = 6                    # see relayed_reading
 
 MARKER = re.compile(r"\bmust[\s-]*not\b|\bmustn['\u2019]?t\b", re.IGNORECASE)
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s")
+_CHOSEN_PREFIX = re.compile(r"^chosen\s*:\s*", re.IGNORECASE)
+_MUST_NOT_PREFIX = re.compile(r"^must[\s-]*not\s*(?:\([^)]*\))?\s*:\s*", re.IGNORECASE)
+_CLAUSE_SEP = re.compile(r"[;,]")
 # The label that marks the controller's own inference. The house spelling is "(my reading)", but
 # a brief also writes "My reading:" or "Coordinator's reading:" (the replay found a relay labelled
 # that way and flagged as unlabelled), so any of those counts.
@@ -272,11 +276,10 @@ def negative_readings(paras):
             if any(a < hit.start() < b for a, b in quoted):
                 continue                # a quoted mention of someone else's note, not a note
             rest = line[hit.end():]
-            sentence = re.split(r"(?<=[.!?])\s", rest.lstrip(" :"), maxsplit=1)[0]
-            sentence = re.sub(r"^chosen\s*:\s*", "", sentence.strip(), flags=re.IGNORECASE)
-            sentence = re.sub(r"^must[\s-]*not\s*(?:\([^)]*\))?\s*:\s*", "must not ", sentence,
-                              flags=re.IGNORECASE)
-            for clause in re.split(r"[;,]", sentence):
+            sentence = _SENTENCE_END.split(rest.lstrip(" :"), maxsplit=1)[0]
+            sentence = _CHOSEN_PREFIX.sub("", sentence.strip())
+            sentence = _MUST_NOT_PREFIX.sub("must not ", sentence)
+            for clause in _CLAUSE_SEP.split(sentence):
                 clause = norm(clause).strip(" .:")
                 if (NEGATIVE.match(clause) and len(clause.split()) >= 3 and '"' not in clause
                         and len(content_words(clause)) >= 2):

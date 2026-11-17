@@ -306,7 +306,16 @@ def parse_rules(text: str) -> RuleList:
 
 def scan_text(text: str, path: str, denylist: tuple[str, ...] | list[str] = ()) -> list[Finding]:
     """Every private-looking value in `text`, with 1-based line numbers. PURE."""
-    terms = [fold_case(t.strip()) for t in denylist if t.strip()]
+    return _scan_folded(text, path, _folded_terms(denylist))
+
+
+def _folded_terms(denylist: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+    """The denylist as a line is compared against it: stripped, case-folded, blanks dropped."""
+    return tuple(fold_case(t.strip()) for t in denylist if t.strip())
+
+
+def _scan_folded(text: str, path: str, terms: tuple[str, ...]) -> list[Finding]:
+    """`scan_text` over an already folded denylist: a caller scanning many texts folds it once."""
     found: list[Finding] = []
     for n, line in enumerate(split_lines(text), start=1):
         for hit in _abs_path_hits(line):
@@ -403,9 +412,10 @@ def scan_diff(diff: str, denylist: tuple[str, ...] | list[str] = ()) -> list[Fin
     place (a merge's first-parent diff repeats its side branch's commits) is reported once.
     """
     found: list[Finding] = []
+    terms = _folded_terms(denylist)
     for path, lineno, text in added_lines(diff):
         found.extend(Finding(f.kind, path, lineno, f.text_excerpt)
-                     for f in scan_text(text, path, denylist))
+                     for f in _scan_folded(text, path, terms))
     return list(dict.fromkeys(found))
 
 
@@ -449,8 +459,9 @@ def scan_messages(messages: list[tuple[str, str]],
     A push publishes every message in the range as surely as its diff, and a message is where a
     local path or host is most often pasted ("port the fix from /home/...")."""
     found: list[Finding] = []
+    terms = _folded_terms(denylist)
     for sha, message in messages:
-        found.extend(scan_text(message, f"commit {sha[:12]} message", denylist))
+        found.extend(_scan_folded(message, f"commit {sha[:12]} message", terms))
     return list(dict.fromkeys(found))
 
 

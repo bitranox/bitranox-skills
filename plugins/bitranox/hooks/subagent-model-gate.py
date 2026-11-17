@@ -50,6 +50,7 @@ Contract: reads a PreToolUse event JSON on stdin. Fail-open: any parse/IO error 
 broken gate must never wedge a turn). Pure standard library; launched via run-python.sh so it
 works on Windows too. ASCII only.
 """
+import enum
 import json
 import os
 import re
@@ -60,6 +61,12 @@ import claude_paths
 import skill_receipt
 
 SUBAGENT_TOOLS = {"Task", "Agent"}
+
+
+class Action(enum.StrEnum):
+    """What the gate does with a dispatch; None (not a member) lets it pass silently."""
+    DENY = "deny"
+    WARN = "warn"
 PLAN_RECEIPT = "plan-execution"
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 # Bounds for reading definitions: an agents dir is a handful of small files, so these only stop a
@@ -260,17 +267,17 @@ def _tier_verdict(tool_input, plan_armed, definition_model):
     """The pin and sonnet verdict alone, as (action, message); see assess."""
     model = tool_input.get("model")
     if isinstance(model, str) and model.strip():
-        return ("warn", _SONNET_MESSAGE) if _is_sonnet(model) else (None, "")
+        return (Action.WARN, _SONNET_MESSAGE) if _is_sonnet(model) else (None, "")
     if _pins(definition_model):
         # the agent type pins its own model, which the dispatch then uses
-        return ("warn", _SONNET_MESSAGE) if _is_sonnet(definition_model) else (None, "")
+        return (Action.WARN, _SONNET_MESSAGE) if _is_sonnet(definition_model) else (None, "")
     if plan_armed:
-        return ("deny", _DENY_MESSAGE)
-    return ("warn", _WARN_MESSAGE)
+        return (Action.DENY, _DENY_MESSAGE)
+    return (Action.WARN, _WARN_MESSAGE)
 
 
 def assess(tool_name, tool_input, plan_armed=False, definition_model=None):
-    """Pure: return (action, message) with action in {'deny', 'warn', None}.
+    """Pure: return (action, message) with action an Action member or None.
 
     A non-fork subagent dispatch with no `model`, whose agent type's definition pins none
     (`definition_model`, resolved by the caller), warns - or denies while a plan execution is
@@ -288,13 +295,13 @@ def assess(tool_name, tool_input, plan_armed=False, definition_model=None):
     if subagent_type == "fork":
         # A fork inherits the parent's model and effort and ignores both fields, so the pin rule
         # cannot bind it; only a review sent as one is worth a word, and never a deny.
-        return ("warn", _FORK_REVIEW_MESSAGE) if review_shaped(tool_input) else (None, "")
+        return (Action.WARN, _FORK_REVIEW_MESSAGE) if review_shaped(tool_input) else (None, "")
     action, message = _tier_verdict(tool_input, plan_armed, definition_model)
     if not review_shaped(tool_input) or _review_compliant(tool_input, definition_model):
         return (action, message)
-    if action == "deny":
-        return ("deny", message + " " + _REVIEW_MESSAGE)
-    return ("warn", (message + " " if message else "") + _REVIEW_MESSAGE)
+    if action == Action.DENY:
+        return (Action.DENY, message + " " + _REVIEW_MESSAGE)
+    return (Action.WARN, (message + " " if message else "") + _REVIEW_MESSAGE)
 
 
 def main():
@@ -317,13 +324,13 @@ def main():
     except Exception:  # noqa: BLE001 - an unreadable definition leaves the dispatch unpinned
         definition_model = None
     action, message = assess(event.get("tool_name"), tool_input, plan_armed, definition_model)
-    if action == "deny":
+    if action == Action.DENY:
         sys.stdout.write(json.dumps({"hookSpecificOutput": {
             "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
+            "permissionDecision": Action.DENY.value,
             "permissionDecisionReason": message,
         }}) + "\n")
-    elif action == "warn":
+    elif action == Action.WARN:
         sys.stdout.write(json.dumps({"hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "additionalContext": "SUBAGENT-MODEL GATE: " + message,

@@ -70,6 +70,7 @@ import tempfile
 import tomllib
 from collections.abc import Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
 try:
@@ -82,6 +83,7 @@ __all__ = [
     "BACKUP_REF",
     "BumpRefused",
     "CouldNotRun",
+    "Part",
     "main",
     "next_version",
     "set_pyproject_version",
@@ -96,6 +98,14 @@ _RELEASE_HEADING = re.compile(r"^## \[", re.M)
 _ANY_H2 = re.compile(r"^## ", re.M)
 BACKUP_REF = "refs/bump-version/pre-rebase"
 _VERSION_FILES = (PLUGIN_JSON, PYPROJECT, CHANGELOG)
+
+
+class Part(StrEnum):
+    """Which part of MAJOR.MINOR.PATCH a bump raises; the values are the `--part` spellings."""
+
+    PATCH = "patch"
+    MINOR = "minor"
+    MAJOR = "major"
 
 
 class BumpRefused(Exception):
@@ -123,12 +133,17 @@ def _parse(version: str) -> tuple[int, int, int]:
     return int(match[1]), int(match[2]), int(match[3])
 
 
-def next_version(current: str, part: str) -> str:
-    """`current` raised by one `part` (patch, minor or major), lower parts reset to 0."""
+def next_version(current: str, part: Part) -> str:
+    """`current` raised by one `part` (patch, minor or major), lower parts reset to 0.
+
+    Raises ValueError for a `part` naming no Part: a public function is a boundary, and a raw
+    typo would otherwise fall through to the patch branch and bump the wrong part.
+    """
+    part = Part(part)
     major, minor, patch = _parse(current)
-    if part == "major":
+    if part == Part.MAJOR:
         return "%d.0.0" % (major + 1)
-    if part == "minor":
+    if part == Part.MINOR:
         return "%d.%d.0" % (major, minor + 1)
     return "%d.%d.%d" % (major, minor, patch + 1)
 
@@ -346,7 +361,7 @@ def rebase_bump(root: Path, args: argparse.Namespace) -> Plan:
     body = changelog_section(_git(root, "show", "%s:%s" % (head, CHANGELOG.as_posix())), mine)
     message = _git(root, "log", "-1", "--format=%B", head).rstrip("\n") + "\n"
     patch = _content_patch(root, base, head)
-    new = next_version(origin, args.part or "patch")
+    new = next_version(origin, args.part or Part.PATCH)
     _git(root, "update-ref", BACKUP_REF, head)
     _git(root, "reset", "-q", "--keep", args.ref)
     _apply_or_restore(root, patch, head)
@@ -439,7 +454,7 @@ def merge_bump(root: Path, args: argparse.Namespace) -> Plan:
                           "merge will do" % (mine, args.ref, origin))
     if mine == _version_at(root, base):
         raise BumpRefused("this branch does not bump the version (it stays %s); nothing to renumber" % mine)
-    new = next_version(origin, args.part or "patch")
+    new = next_version(origin, args.part or Part.PATCH)
     texts = _merged_texts(root, {"ours": head, "base": base, "theirs": theirs}, mine, new)
     _git(root, "update-ref", BACKUP_REF, head)
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
@@ -517,7 +532,7 @@ def _assert_agree(root: Path, version: str) -> None:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     target = parser.add_mutually_exclusive_group()
-    target.add_argument("--part", choices=("patch", "minor", "major"), help="raise this part of origin's version")
+    target.add_argument("--part", type=Part, choices=tuple(Part), help="raise this part of origin's version")
     target.add_argument("--to", help="the exact new version (must be above origin's)")
     parser.add_argument("--changelog", help="file holding the new section's body (required without --rebase)")
     mode = parser.add_mutually_exclusive_group()

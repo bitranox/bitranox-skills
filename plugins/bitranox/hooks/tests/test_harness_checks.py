@@ -1387,3 +1387,80 @@ def test_control_a_missing_module_with_no_declared_deps_is_still_a_finding(tmp_p
     problems = hc.uncollectable_tests(tests, run=run, resolve_uv=lambda: "/usr/bin/uv")
     assert len(problems) == 1 and problems[0][2] is False
     assert len(run.calls) == 1
+
+
+# --- graveyards: one pruned walk -----------------------------------------------------------------
+
+def test_graveyard_never_walks_a_virtualenv(tmp_path):
+    """PRUNE_DIRS says a virtualenv holds no first-party artifact; the graveyard walk descended it
+    anyway, so a skills dir holding a .venv was walked whole and its vendored backups reported."""
+    vendored = tmp_path / ".venv" / "lib" / "pkg.py.orig-20260801"
+    vendored.parent.mkdir(parents=True)
+    vendored.write_text("x\n", encoding="utf-8")
+    ours = tmp_path / "hook.py.orig-20260801"
+    ours.write_text("x\n", encoding="utf-8")
+    paths = [p for p, _why in hc.graveyard_entries(tmp_path)]
+    assert ours in paths            # the control: the walk did run and does report a backup
+    assert vendored not in paths
+
+
+_LIST_DIRS = r"""
+import json, sys
+sys.path.insert(0, sys.argv[1])
+import harness_checks as hc
+seen = []
+sys.addaudithook(lambda ev, args: seen.append(str(args[0])) if ev == "os.scandir" else None)
+hc.graveyard_entries(sys.argv[2])
+print(json.dumps(seen))
+"""
+
+
+def test_graveyard_lists_each_directory_once_however_many_pytest_caches(tmp_path):
+    """Each graveyard check ran its own rglob, and the node-id check one more per .pytest_cache
+    found, so the walks grew with the number of caches under the root."""
+    for i in range(6):
+        proj = tmp_path / f"proj{i}"
+        (proj / "tests").mkdir(parents=True)
+        (proj / "tests" / "test_here.py").write_text("def test_x(): pass\n", encoding="utf-8")
+        _nodeid_cache(proj, ["tests/test_here.py::test_x", "tests/test_gone.py::test_y"])
+    proc = subprocess.run([sys.executable, "-c", _LIST_DIRS, str(Path(hc.__file__).parent),
+                           str(tmp_path)], capture_output=True, text=True, encoding="utf-8",
+                          timeout=60, check=False)
+    assert proc.returncode == 0, proc.stderr
+    # Normalised: one walker passes `dir/`, another `dir`, and both list the same directory.
+    listed = [str(Path(p)) for p in json.loads(proc.stdout) if Path(p).is_relative_to(tmp_path)]
+    assert listed                                           # the audit hook saw the walk at all
+    repeated = sorted({p for p in listed if listed.count(p) > 1})
+    assert repeated == []
+    found = [why for _p, why in hc.graveyard_entries(tmp_path) if "node ids" in why]
+    assert len(found) == 6                                  # every cache still checked
+
+
+# --- one read of a SKILL.md per front-matter check -----------------------------------------------
+
+_COUNT_MD_OPENS = r"""
+import json, sys
+sys.path.insert(0, sys.argv[1])
+import harness_checks as hc
+md = sys.argv[2]
+opens = []
+sys.addaudithook(lambda ev, args: opens.append(1) if ev == "open" and str(args[0]) == md else None)
+problems = hc.frontmatter_file_problems(md, "s", expect_name="s")
+print(json.dumps({"opens": len(opens), "problems": problems}))
+"""
+
+
+def test_the_front_matter_checks_read_a_skill_md_once(tmp_path):
+    """Each check opened the file itself - the UTF-8 test, three structural scans, the YAML pass,
+    then the name and the description - so the reads grew with every field the gate looks at."""
+    md = tmp_path / "s" / "SKILL.md"
+    md.parent.mkdir()
+    md.write_text("---\nname: s\ndescription: Use when testing reads: twice\n---\n# S\n",
+                  encoding="utf-8")
+    proc = subprocess.run([sys.executable, "-c", _COUNT_MD_OPENS, str(Path(hc.__file__).parent),
+                           str(md)], capture_output=True, text=True, encoding="utf-8", timeout=60,
+                          check=False)
+    assert proc.returncode == 0, proc.stderr
+    got = json.loads(proc.stdout)
+    assert got["opens"] == 1
+    assert any("`description:` holds a `: `" in p for p in got["problems"])  # the checks still ran

@@ -2391,3 +2391,42 @@ def test_an_owed_nap_is_consumed_once_the_review_reaches_its_compaction_point(ho
     S.set_watermark("/p/umbrella", str(tp), S.DREAM_REVIEWER, len("before-compaction\n"))
     assert S.unsatisfiable_nap_owed("/p/umbrella/child", "sid-current") == (
         str(tp), S.NAP_OWED_TRANSCRIPT_CONSUMED)
+
+
+# ---- has_any_facts answers from the first fact, without reading every body ---------------------
+
+_OPENED: list[str] | None = None
+
+
+def _record_open(event, args):
+    if event == "open" and _OPENED is not None and isinstance(args[0], str):
+        _OPENED.append(args[0])
+
+
+sys.addaudithook(_record_open)       # audit hooks cannot be removed; it records only while armed
+
+
+def test_has_any_facts_opens_one_native_fact_however_many_there_are(home):
+    global _OPENED
+    d = S.memory_dir("/p/many")
+    d.mkdir(parents=True)
+    (d / "MEMORY.md").write_text("# index\n", encoding="utf-8")
+    for i in range(20):
+        (d / ("fact-%02d.md" % i)).write_text("body %d\n" % i, encoding="utf-8")
+    _OPENED = []
+    try:
+        assert S.has_any_facts("/p/many") is True
+        opened = [p for p in _OPENED if Path(p).parent == d]
+    finally:
+        _OPENED = None
+    assert len(opened) <= 1, opened
+
+
+def test_has_any_facts_does_not_count_the_index_or_an_unreadable_entry(home):
+    d = S.memory_dir("/p/few")
+    d.mkdir(parents=True)
+    (d / "MEMORY.md").write_text("# index\n", encoding="utf-8")
+    (d / "not-a-fact.md").mkdir()                 # a directory named like a fact cannot be read
+    assert S.has_any_facts("/p/few") is False
+    (d / "real.md").write_text("", encoding="utf-8")   # an empty fact still exists
+    assert S.has_any_facts("/p/few") is True

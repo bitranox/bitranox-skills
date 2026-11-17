@@ -54,12 +54,34 @@ import shutil
 import subprocess
 import sys
 from collections import Counter
+from dataclasses import asdict, dataclass
+from enum import StrEnum
 from pathlib import Path
 
 __all__ = ["added_lines", "main", "versions_in"]
 
 DEFAULT_INTO = ("origin/HEAD", "origin/main", "origin/master", "main", "master")
-LANDED_FILE_STATES = frozenset({"in_target", "in_history", "deleted_in_target"})
+
+
+class FileStatus(StrEnum):
+    """Where one uncommitted worktree file stands against the target; the values are the wire form."""
+
+    IN_TARGET = "in_target"
+    IN_HISTORY = "in_history"
+    DELETED_IN_TARGET = "deleted_in_target"
+    DELETED_HERE_ONLY = "deleted_here_only"
+    DIFFERS = "differs"
+    ABSENT_IN_TARGET = "absent_in_target"
+
+
+LANDED_FILE_STATES = frozenset({FileStatus.IN_TARGET, FileStatus.IN_HISTORY,
+                                FileStatus.DELETED_IN_TARGET})
+
+
+@dataclass(frozen=True)
+class WorktreeFile:
+    path: str
+    status: FileStatus
 _SCOPING_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR")
 # Not part of a longer dotted number on either side; a sentence's closing period is allowed.
 _VERSION = re.compile(r"(?<![\d.])\d+\.\d+\.\d+(?!\.?\d)")
@@ -218,27 +240,27 @@ def _history_has(cwd: Path, base: str, into: str, path: str, sha: str | None) ->
     return any(_blob(cwd, rev, path) == sha for rev in revs)
 
 
-def _file_status(cwd: Path, xy: str, path: str, base: str, into: str) -> str:
+def _file_status(cwd: Path, xy: str, path: str, base: str, into: str) -> FileStatus:
     target_sha = _blob(cwd, into, path)
     if "D" in xy:
-        return "deleted_in_target" if target_sha is None else "deleted_here_only"
+        return FileStatus.DELETED_IN_TARGET if target_sha is None else FileStatus.DELETED_HERE_ONLY
     sha = _text(git(cwd, "hash-object", f"--path={path}", "--", path)).strip()
     if sha == target_sha:
-        return "in_target"
+        return FileStatus.IN_TARGET
     if _history_has(cwd, base, into, path, sha):
-        return "in_history"
-    return "differs" if target_sha is not None else "absent_in_target"
+        return FileStatus.IN_HISTORY
+    return FileStatus.DIFFERS if target_sha is not None else FileStatus.ABSENT_IN_TARGET
 
 
-def _first_look(xy: str, sha: str | None, target_sha: str | None) -> str | None:
+def _first_look(xy: str, sha: str | None, target_sha: str | None) -> FileStatus | None:
     """The status decided without history, or None when the target's history must be asked."""
     if "D" in xy:
-        return "deleted_in_target" if target_sha is None else "deleted_here_only"
-    return "in_target" if sha == target_sha else None
+        return FileStatus.DELETED_IN_TARGET if target_sha is None else FileStatus.DELETED_HERE_ONLY
+    return FileStatus.IN_TARGET if sha == target_sha else None
 
 
 def _batched_statuses(cwd: Path, entries: list[tuple[str, str]], base: str,
-                      into: str) -> list[str]:
+                      into: str) -> list[FileStatus]:
     """`_file_status` for every entry, with a fixed number of git processes per batch plus one
     rev-list per file that differs: never one process per (file, target commit) pair."""
     targets = _blobs(cwd, [f"{into}:{path}" for _xy, path in entries])
@@ -255,18 +277,18 @@ def _batched_statuses(cwd: Path, entries: list[tuple[str, str]], base: str,
     in_history = {i for (i, _spec), blob in zip(asks, blobs, strict=True)
                   if blob == hashed[entries[i][1]]}
     return [status if status is not None
-            else "in_history" if i in in_history
-            else "differs" if targets[i] is not None
-            else "absent_in_target"
+            else FileStatus.IN_HISTORY if i in in_history
+            else FileStatus.DIFFERS if targets[i] is not None
+            else FileStatus.ABSENT_IN_TARGET
             for i, status in enumerate(first)]
 
 
-def worktree_files(cwd: Path, base: str, into: str) -> list[dict[str, str]]:
+def worktree_files(cwd: Path, base: str, into: str) -> list[WorktreeFile]:
     entries = _porcelain_entries(cwd)
     batch = [entry for entry in entries if _batchable(entry[1])]
     found = dict(zip(batch, _batched_statuses(cwd, batch, base, into), strict=True))
     return [
-        {"path": path, "status": found.get((xy, path)) or _file_status(cwd, xy, path, base, into)}
+        WorktreeFile(path, found.get((xy, path)) or _file_status(cwd, xy, path, base, into))
         for xy, path in entries
     ]
 
@@ -377,9 +399,9 @@ def report(target: str, into_ref: str | None, also_into: list[str] | None = None
     files = worktree_files(cwd, base, into) if mode == "worktree" else []
     branch = branch_report(cwd, base, head, into)
     branch_landed = branch.pop("landed") or any(c["contains"] for c in containers)
-    landed = branch_landed and all(f["status"] in LANDED_FILE_STATES for f in files)
+    landed = branch_landed and all(f.status in LANDED_FILE_STATES for f in files)
     return {"target": target, "mode": mode, "into": into,
-            "verdict": "landed" if landed else "not_landed", "files": files,
+            "verdict": "landed" if landed else "not_landed", "files": [asdict(f) for f in files],
             "also_into": containers, **branch}
 
 

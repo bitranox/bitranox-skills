@@ -27,11 +27,28 @@ import socket
 import sys
 from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass
+from enum import StrEnum
 from html.parser import HTMLParser
 from typing import NoReturn
 from urllib.parse import urlsplit, urlunsplit
 
-SEVERITIES = ("SEVERE", "MEDIUM", "MINOR", "OK")
+_MAX_AGE_RE = re.compile(r'max-age\s*=\s*"?(\d+)', re.I)
+_CSP_NONCE_OR_HASH_RE = re.compile(r"'(?:nonce-|sha256-|sha384-|sha512-)")
+_VERSION_NUMBER_RE = re.compile(r"v?\d+\.\d+")
+_SRCSET_SPLIT_RE = re.compile(r"[,\s]+")
+
+
+
+class Severity(StrEnum):
+    """A finding's weight. The gate is 0 SEVERE and 0 MEDIUM; MINOR and OK never fail it."""
+
+    SEVERE = "SEVERE"
+    MEDIUM = "MEDIUM"
+    MINOR = "MINOR"
+    OK = "OK"
+
+
+SEVERITIES = tuple(Severity)
 
 # How much of an HTML body the mixed-content scan reads. The grade needs only the headers plus
 # the page's markup; a download or an endless body would otherwise be buffered whole.
@@ -100,26 +117,31 @@ class Finding:
     """One graded check: ``check`` is the header/aspect, ``severity`` drives the gate."""
 
     check: str
-    severity: str
+    severity: Severity
     detail: str
     fix: str = ""
+
+    def __post_init__(self) -> None:
+        # The gate counts SEVERE and MEDIUM only, so a misspelled severity would pass it silently;
+        # parsing refuses it where the finding is built.
+        object.__setattr__(self, "severity", Severity(self.severity))
 
 
 def _hsts(value: str | None, *, https: bool) -> Finding:
     """Grade Strict-Transport-Security. Missing on an HTTPS site is SEVERE."""
     if not https:
-        return Finding("hsts", "OK", "not applicable on plain HTTP")
+        return Finding("hsts", Severity.OK, "not applicable on plain HTTP")
     if not value:
-        return Finding("hsts", "SEVERE", "no Strict-Transport-Security header",
+        return Finding("hsts", Severity.SEVERE, "no Strict-Transport-Security header",
                        'set "max-age=31536000; includeSubDomains" (stage a short max-age first)')
-    age = re.search(r'max-age\s*=\s*"?(\d+)', value, re.I)  # RFC 6797 allows a quoted value
+    age = _MAX_AGE_RE.search(value)  # RFC 6797 allows a quoted value
     seconds = int(age.group(1)) if age else 0
     if seconds < 15552000:  # 180 days
-        return Finding("hsts", "MEDIUM", f"max-age={seconds} is below 6 months",
+        return Finding("hsts", Severity.MEDIUM, f"max-age={seconds} is below 6 months",
                        "raise to max-age=31536000 once stable")
     if "includesubdomains" not in value.lower():
-        return Finding("hsts", "MINOR", "no includeSubDomains", "add includeSubDomains if all subdomains are HTTPS")
-    return Finding("hsts", "OK", value)
+        return Finding("hsts", Severity.MINOR, "no includeSubDomains", "add includeSubDomains if all subdomains are HTTPS")
+    return Finding("hsts", Severity.OK, value)
 
 
 def _csp_directives(value: str) -> dict[str, str]:
@@ -168,7 +190,7 @@ def _effective_sources(directives: dict[str, str], name: str) -> str | None:
 
 def _has_nonce_or_hash(sources: str) -> bool:
     """A nonce or hash source makes browsers IGNORE 'unsafe-inline' in the same list."""
-    return bool(re.search(r"'(?:nonce-|sha256-|sha384-|sha512-)", sources))
+    return bool(_CSP_NONCE_OR_HASH_RE.search(sources))
 
 
 def _allows_inline(sources: str) -> bool:
@@ -193,10 +215,10 @@ def _csp(value: str | None, *, enforced: bool = True) -> Finding:
     """Grade Content-Security-Policy. Missing is SEVERE; report-only is MINOR (not enforced =
     not protection, only a rollout phase); unsafe-inline/eval in scripts is MEDIUM."""
     if not value:
-        return Finding("csp", "SEVERE", "no Content-Security-Policy",
+        return Finding("csp", Severity.SEVERE, "no Content-Security-Policy",
                        "add a policy starting from default-src 'self'; object-src 'none'; frame-ancestors 'none'")
     if not enforced:
-        return Finding("csp", "MINOR", "CSP is report-only (a rollout phase, not enforced - it protects nothing yet)",
+        return Finding("csp", Severity.MINOR, "CSP is report-only (a rollout phase, not enforced - it protects nothing yet)",
                        "promote to an enforced Content-Security-Policy once violations are clear")
     policies = _csp_policies(value)
     # No policy holds script-src or default-src: scripts are not restricted at all, which is
@@ -205,18 +227,18 @@ def _csp(value: str | None, *, enforced: bool = True) -> Finding:
     # only when it is, and a policy with only script-src-elem still leaves inline handlers
     # (script-src-attr) and every CSP 2 browser unrestricted.
     if all(_effective_sources(p, "script-src") is None for p in policies):
-        return Finding("csp", "MEDIUM", "no script-src or default-src: scripts are unrestricted "
+        return Finding("csp", Severity.MEDIUM, "no script-src or default-src: scripts are unrestricted "
                        "(XSS not mitigated)", "add default-src 'self' (or a script-src)")
     for name in _INLINE_SCRIPT_DIRECTIVES:
         if _every_policy_allows(policies, name, _allows_inline):
-            return Finding("csp", "MEDIUM", f"{name} allows 'unsafe-inline' (XSS not mitigated)",
+            return Finding("csp", Severity.MEDIUM, f"{name} allows 'unsafe-inline' (XSS not mitigated)",
                            "drop 'unsafe-inline'; use nonces or hashes for any inline script")
     # String compilation (eval) consults script-src only, never script-src-elem/-attr (CSP 3).
     if _every_policy_allows(policies, "script-src", _allows_eval):
-        return Finding("csp", "MEDIUM", "script-src allows 'unsafe-eval'", "remove 'unsafe-eval'")
+        return Finding("csp", Severity.MEDIUM, "script-src allows 'unsafe-eval'", "remove 'unsafe-eval'")
     if not any("object-src" in p or "default-src" in p for p in policies):
-        return Finding("csp", "MINOR", "no object-src/default-src fallback", "add default-src 'self'; object-src 'none'")
-    return Finding("csp", "OK", "present, no unsafe-inline/eval in scripts")
+        return Finding("csp", Severity.MINOR, "no object-src/default-src fallback", "add default-src 'self'; object-src 'none'")
+    return Finding("csp", Severity.OK, "present, no unsafe-inline/eval in scripts")
 
 
 def _header_tokens(value: str | None) -> list[str]:
@@ -232,8 +254,8 @@ def _header_tokens(value: str | None) -> list[str]:
 def _nosniff(value: str | None) -> Finding:
     tokens = _header_tokens(value)
     if tokens and tokens[0] == "nosniff":  # Fetch: only the FIRST value is consulted
-        return Finding("x-content-type-options", "OK", "nosniff")
-    return Finding("x-content-type-options", "MEDIUM", "missing or not 'nosniff'", 'set X-Content-Type-Options: nosniff')
+        return Finding("x-content-type-options", Severity.OK, "nosniff")
+    return Finding("x-content-type-options", Severity.MEDIUM, "missing or not 'nosniff'", 'set X-Content-Type-Options: nosniff')
 
 
 # The two CSP 3 source-expression shapes that let ANY site frame the page:
@@ -285,16 +307,16 @@ def _frame_ancestors_finding(source_lists: list[str]) -> Finding:
     rank = _frame_list_rank(tightest)
     if rank == 0:
         # An empty source list means 'none' in CSP.
-        return Finding("clickjacking", "OK", "CSP frame-ancestors " + (tightest or "(empty list = 'none')"))
+        return Finding("clickjacking", Severity.OK, "CSP frame-ancestors " + (tightest or "(empty list = 'none')"))
     if rank == 1:
         broad = " ".join(s.lower() for s in _single_label_frame_sources(tightest))
-        return Finding("clickjacking", "MINOR",
+        return Finding("clickjacking", Severity.MINOR,
                        f"CSP frame-ancestors {broad} lets every site under a whole top-level "
                        "domain frame the page; only a one-label wildcard is detected, so a "
                        "two-label public suffix such as *.co.uk still grades OK (no Public "
                        "Suffix List check)", _FRAME_ANCESTORS_FIX)
     permissive = [s for sources in source_lists for s in _permissive_frame_sources(sources)]
-    return Finding("clickjacking", "MEDIUM",
+    return Finding("clickjacking", Severity.MEDIUM,
                    f"CSP frame-ancestors allows any site to frame the page ({' '.join(permissive)})",
                    _FRAME_ANCESTORS_FIX)
 
@@ -312,14 +334,14 @@ def _x_frame_options(xfo: str | None) -> Finding:
     or a lone value other than deny / sameorigin, allows it."""
     values = sorted(set(_header_tokens(xfo)))
     if len(values) > 1 and _XFO_KNOWN.intersection(values):
-        return Finding("clickjacking", "OK",
+        return Finding("clickjacking", Severity.OK,
                        f"X-Frame-Options has conflicting values ({', '.join(values)}) - browsers block "
                        "all framing, as for DENY; send one value")
     if len(values) == 1 and values[0] in ("deny", "sameorigin"):
-        return Finding("clickjacking", "OK", f"X-Frame-Options: {values[0].upper()}")
+        return Finding("clickjacking", Severity.OK, f"X-Frame-Options: {values[0].upper()}")
     if not values:
-        return Finding("clickjacking", "MEDIUM", "no enforced frame-ancestors and no X-Frame-Options", _XFO_FIX)
-    return Finding("clickjacking", "MEDIUM",
+        return Finding("clickjacking", Severity.MEDIUM, "no enforced frame-ancestors and no X-Frame-Options", _XFO_FIX)
+    return Finding("clickjacking", Severity.MEDIUM,
                    f"no enforced frame-ancestors, and X-Frame-Options: {xfo} does not restrict framing", _XFO_FIX)
 
 
@@ -347,43 +369,43 @@ def _referrer_policy(value: str | None) -> Finding:
     # The header is a comma list and the LAST recognised token wins (Referrer Policy spec).
     known = [t for t in _header_tokens(value) if t in _REFERRER_POLICIES]
     if known and known[-1] in safe:
-        return Finding("referrer-policy", "OK", value or "")
-    return Finding("referrer-policy", "MINOR", "missing or weak", 'set Referrer-Policy: strict-origin-when-cross-origin')
+        return Finding("referrer-policy", Severity.OK, value or "")
+    return Finding("referrer-policy", Severity.MINOR, "missing or weak", 'set Referrer-Policy: strict-origin-when-cross-origin')
 
 
 def _permissions_policy(value: str | None) -> Finding:
     if value:
-        return Finding("permissions-policy", "OK", "present")
-    return Finding("permissions-policy", "MINOR", "missing",
+        return Finding("permissions-policy", Severity.OK, "present")
+    return Finding("permissions-policy", Severity.MINOR, "missing",
                    'set Permissions-Policy revoking unused features, e.g. geolocation=(), camera=(), microphone=()')
 
 
 def _coop(value: str | None) -> Finding:
     """Cross-Origin-Opener-Policy isolates the browsing context from cross-origin openers."""
     if value and value.strip().lower() in ("same-origin", "same-origin-allow-popups"):
-        return Finding("coop", "OK", value)
-    return Finding("coop", "MINOR", "no Cross-Origin-Opener-Policy",
+        return Finding("coop", Severity.OK, value)
+    return Finding("coop", Severity.MINOR, "no Cross-Origin-Opener-Policy",
                    "set Cross-Origin-Opener-Policy: same-origin-allow-popups (a safe baseline)")
 
 
 def _xss_auditor(value: str | None) -> Finding:
     """The legacy XSS auditor should be OFF (0) or absent - '1'/'1; mode=block' can introduce bugs."""
     if value and value.strip().startswith("1"):
-        return Finding("x-xss-protection", "MEDIUM", "X-XSS-Protection enabled (removed from browsers; can add bugs)",
+        return Finding("x-xss-protection", Severity.MEDIUM, "X-XSS-Protection enabled (removed from browsers; can add bugs)",
                        "set X-XSS-Protection: 0 (or remove it); rely on CSP")
-    return Finding("x-xss-protection", "OK", "off or absent")
+    return Finding("x-xss-protection", Severity.OK, "off or absent")
 
 
 def _leaks_version(value: str | None) -> bool:
     # A version looks like 1.2 / 2.4.7 / v3 - a bare product name with a digit (AmazonS3) is not.
-    return bool(value and re.search(r"v?\d+\.\d+", value))
+    return bool(value and _VERSION_NUMBER_RE.search(value))
 
 
 def _server_token(value: str | None) -> Finding:
     if _leaks_version(value):
-        return Finding("server-token", "MINOR", f"Server header leaks version: {value}",
+        return Finding("server-token", Severity.MINOR, f"Server header leaks version: {value}",
                        "nginx: server_tokens off; strip upstream X-Powered-By")
-    return Finding("server-token", "OK", value or "absent")
+    return Finding("server-token", Severity.OK, value or "absent")
 
 
 # Framework headers that name the stack behind the server, graded only when present.
@@ -398,10 +420,10 @@ def _framework_tokens(h: dict[str, str]) -> list[Finding]:
         if value is None:
             continue
         if _leaks_version(value):
-            out.append(Finding(f"{header}-token", "MINOR", f"{header} header leaks version: {value}",
+            out.append(Finding(f"{header}-token", Severity.MINOR, f"{header} header leaks version: {value}",
                                f"strip or blank the {header} header at the proxy/app"))
         else:
-            out.append(Finding(f"{header}-token", "OK", value))
+            out.append(Finding(f"{header}-token", Severity.OK, value))
     return out
 
 
@@ -420,25 +442,25 @@ def _cookies(set_cookies: list[str], *, https: bool) -> list[Finding]:
         name = raw.split("=", 1)[0].strip()
         attrs = _cookie_attribute_names(raw)
         if https and "secure" not in attrs:
-            out.append(Finding(f"cookie:{name}", "SEVERE", "Set-Cookie without Secure on HTTPS", "add the Secure attribute"))
+            out.append(Finding(f"cookie:{name}", Severity.SEVERE, "Set-Cookie without Secure on HTTPS", "add the Secure attribute"))
         if "httponly" not in attrs:
-            out.append(Finding(f"cookie:{name}", "MEDIUM", "Set-Cookie without HttpOnly", "add HttpOnly (unless JS must read it)"))
+            out.append(Finding(f"cookie:{name}", Severity.MEDIUM, "Set-Cookie without HttpOnly", "add HttpOnly (unless JS must read it)"))
         if "samesite" not in attrs:
-            out.append(Finding(f"cookie:{name}", "MINOR", "Set-Cookie without SameSite", "add SameSite=Lax (or Strict)"))
+            out.append(Finding(f"cookie:{name}", Severity.MINOR, "Set-Cookie without SameSite", "add SameSite=Lax (or Strict)"))
     return out
 
 
 def _redirect(http_status: int | None, location: str | None) -> Finding:
     """Plain HTTP must redirect to https://. 301/308 is best; 302/307 works but is temporary."""
     if http_status is None:
-        return Finding("https-redirect", "MINOR", "plain-HTTP probe failed (could not connect)")
+        return Finding("https-redirect", Severity.MINOR, "plain-HTTP probe failed (could not connect)")
     to_https = bool(location and location.lower().startswith("https://"))
     if http_status in (301, 308) and to_https:
-        return Finding("https-redirect", "OK", f"{http_status} -> {location}")
+        return Finding("https-redirect", Severity.OK, f"{http_status} -> {location}")
     if http_status in (302, 307) and to_https:
-        return Finding("https-redirect", "MEDIUM", f"redirects to HTTPS but with a temporary {http_status}",
+        return Finding("https-redirect", Severity.MEDIUM, f"redirects to HTTPS but with a temporary {http_status}",
                        "use a permanent 301/308 so the redirect is cached")
-    return Finding("https-redirect", "SEVERE", f"HTTP did not redirect to HTTPS (got {http_status})",
+    return Finding("https-redirect", Severity.SEVERE, f"HTTP did not redirect to HTTPS (got {http_status})",
                    "redirect all :80 to https:// with 301")
 
 
@@ -450,11 +472,11 @@ def _mixed_content(html: str, *, https: bool) -> list[Finding]:
         return []
     seen: list[str] = []
     for attr_val in _subresource_urls(html):
-        for piece in re.split(r"[,\s]+", attr_val.strip()):
+        for piece in _SRCSET_SPLIT_RE.split(attr_val.strip()):
             if piece.lower().startswith("http://") and piece not in seen:
                 seen.append(piece)
     if seen:
-        return [Finding("mixed-content", "SEVERE", f"{len(seen)} http:// subresource(s), e.g. {seen[0]}",
+        return [Finding("mixed-content", Severity.SEVERE, f"{len(seen)} http:// subresource(s), e.g. {seen[0]}",
                         "serve every subresource over https (and add CSP upgrade-insecure-requests)")]
     return []
 
@@ -556,7 +578,7 @@ def _read_capped(chunks: Iterable[bytes], cap: int) -> bytes:
 def summarize(findings: list[Finding]) -> dict[str, int]:
     counts = {s: 0 for s in SEVERITIES}
     for f in findings:
-        counts[f.severity] = counts.get(f.severity, 0) + 1
+        counts[f.severity] += 1
     return counts
 
 
@@ -683,11 +705,11 @@ def main(argv: list[str] | None = None, *, fetcher: Callable[..., list[Finding]]
         if warning:
             sys.stderr.write("WARNING: " + warning + "\n")
         for f in findings:
-            if f.severity != "OK":
+            if f.severity != Severity.OK:
                 print(f"  [{f.severity}] {f.check}: {f.detail}" + (f"  -> {f.fix}" if f.fix else ""))
         print(f"\n{args.url}: " + " ".join(f"{k}={counts[k]}" for k in SEVERITIES))
     # exit non-zero if the gate (0 SEVERE / 0 MEDIUM) is not met
-    return 1 if counts["SEVERE"] or counts["MEDIUM"] else 0
+    return 1 if counts[Severity.SEVERE] or counts[Severity.MEDIUM] else 0
 
 
 if __name__ == "__main__":

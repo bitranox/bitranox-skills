@@ -38,7 +38,7 @@ import re
 import subprocess
 import sys
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from _cli_envelope import (
@@ -68,6 +68,21 @@ class Target:
     allowed: set[str] = field(default_factory=set)
     files: int = 0
     added: int = 0
+
+
+@dataclass(frozen=True)
+class Finding:
+    """One added line of `target` that holds `token`, an identifier of target `foreign`.
+
+    The field order is the key order of the JSON findings, which `asdict` keeps.
+    """
+
+    target: str
+    file: str
+    line: int
+    foreign: str
+    token: str
+    text: str
 
 
 def normalise(token: str) -> str:
@@ -158,7 +173,7 @@ def declared_dependencies(path: Path) -> tuple[set[str], str | None]:
     for group in list(project.get("optional-dependencies", {}).values()) + list(
             doc.get("dependency-groups", {}).values()):
         specs += [s for s in group if isinstance(s, str)]
-    names = {_DEP_NAME.match(s).group(1) for s in specs if _DEP_NAME.match(s)}
+    names = {m.group(1) for s in specs if (m := _DEP_NAME.match(s))}
     return {normalise(n) for n in names}, None
 
 
@@ -204,23 +219,29 @@ def _known(targets, name, flag) -> Target:
     return targets[name]
 
 
-def crosscheck(targets: list[Target]) -> list[dict]:
+def crosscheck(targets: list[Target]) -> list[Finding]:
     """Every added line in one target that holds another target's identifier."""
-    patterns = {t.name: [(tok, _token_pattern(tok)) for tok in t.tokens] for t in targets}
+    # Every name and token normalised once, here: each is fixed per target, and normalising it
+    # again for every added line of every target pair multiplied a regex sub by the lines read.
+    names = {t.name: normalise(t.name) for t in targets}
+    patterns = {t.name: [(tok, normalise(tok), _token_pattern(tok)) for tok in t.tokens]
+                for t in targets}
     findings = []
     for scanned in targets:
+        # What `scanned` may hold is fixed too: the other targets it does not allow, each with
+        # only its tokens that are not allowed, in their declared order.
+        foreign = [(other, [(tok, pat) for tok, norm, pat in patterns[other.name]
+                            if norm not in scanned.allowed])
+                   for other in targets
+                   if other is not scanned and names[other.name] not in scanned.allowed]
         files = set()
         for rel, number, text in target_lines(scanned):
             files.add(rel)
             scanned.added += 1
-            for other in targets:
-                if other is scanned or normalise(other.name) in scanned.allowed:
-                    continue
-                hit = next((tok for tok, pat in patterns[other.name]
-                            if pat.search(text) and normalise(tok) not in scanned.allowed), None)
+            for other, candidates in foreign:
+                hit = next((tok for tok, pat in candidates if pat.search(text)), None)
                 if hit:
-                    findings.append({"target": scanned.name, "file": rel, "line": number,
-                                     "foreign": other.name, "token": hit, "text": text})
+                    findings.append(Finding(scanned.name, rel, number, other.name, hit, text))
         scanned.files = len(files)
     return findings
 
@@ -262,7 +283,7 @@ def main(argv=None) -> int:
         return emit(EXIT_ERROR, COMMAND, error=str(exc)) if args.json else EXIT_ERROR
     examined = {"targets": len(targets), "files": sum(t.files for t in targets),
                 "added_lines": sum(t.added for t in targets)}
-    data = {"examined": examined, "findings": findings,
+    data = {"examined": examined, "findings": [asdict(f) for f in findings],
             "targets": [{"name": t.name, "path": str(t.path), "since": t.since or "HEAD",
                          "files": t.files, "added_lines": t.added} for t in targets]}
     for note in skipped:
@@ -277,8 +298,7 @@ def main(argv=None) -> int:
     if args.json:
         return emit(code, COMMAND, data, skipped=skipped)
     for f in findings:
-        print(f"{f['target']}: {f['file']}:{f['line']}: {f['foreign']} ({f['token']}) | "
-              f"{f['text'].strip()[:200]}")
+        print(f"{f.target}: {f.file}:{f.line}: {f.foreign} ({f.token}) | {f.text.strip()[:200]}")
     print(f"examined {examined['targets']} targets, {examined['files']} files, "
           f"{examined['added_lines']} added lines: {len(findings)} finding(s)")
     return code

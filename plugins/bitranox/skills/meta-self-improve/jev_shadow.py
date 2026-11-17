@@ -158,12 +158,15 @@ def check_key(uvx: str) -> tuple[bool | None, str]:
     return None, f"jev-judge check-key failed (exit {proc.returncode})"
 
 
+_VERSION_RE = re.compile(r"version\s+(\S+)")
+
+
 def jev_judge_version(uvx: str) -> str | None:
     """The jev-judge version uvx resolved, or None."""
     proc = _jev(uvx, "--version", timeout=_CHECK_TIMEOUT)
     if proc is None or proc.returncode != 0:
         return None
-    m = re.search(r"version\s+(\S+)", proc.stdout)
+    m = _VERSION_RE.search(proc.stdout)
     return m.group(1) if m else None
 
 
@@ -725,21 +728,33 @@ def _skips(pairs: list[str], asked: list[str]) -> dict[str, str]:
 
 
 def _dream_rows(dream_id: str) -> Counter[str]:
-    """How many shadow records each site logged for `dream_id`."""
+    """How many shadow records each site logged for `dream_id`.
+
+    Each log is read a line at a time: a monthly log holds every dream's rows and may reach
+    100 MiB, while the receipt counts one dream. Lines are split on b"\\n" only, because a raw
+    U+2028 inside a string is not a line end, and a line that is not UTF-8 is skipped like any
+    other unparsable line. A file that fails to read part-way adds nothing, as before.
+    """
     rows: Counter[str] = Counter()
     for path in slog.log_files(slog.audit_dir()):
+        in_file: Counter[str] = Counter()
         try:
-            lines = path.read_text(encoding="utf-8").split("\n")
+            with path.open("rb") as fh:
+                for raw in fh:
+                    _count_dream_row(raw, dream_id, in_file)
         except OSError:
             continue
-        for line in lines:
-            try:
-                rec = json.loads(line)
-            except ValueError:
-                continue
-            if isinstance(rec, dict) and rec.get("dream_id") == dream_id:
-                rows[str(rec.get("site"))] += 1
+        rows.update(in_file)
     return rows
+
+
+def _count_dream_row(raw: bytes, dream_id: str, rows: Counter[str]) -> None:
+    try:
+        rec = json.loads(raw.decode("utf-8"))
+    except ValueError:  # UnicodeDecodeError is a ValueError too
+        return
+    if isinstance(rec, dict) and rec.get("dream_id") == dream_id:
+        rows[str(rec.get("site"))] += 1
 
 
 def receipt(

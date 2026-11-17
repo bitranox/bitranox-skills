@@ -54,6 +54,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "hooks"))
@@ -70,7 +71,9 @@ from statusrot import (  # noqa: E402
 )
 from tree_support import store_anchor, utf8_stdio  # noqa: E402
 
-__all__ = ["Claim", "Known", "Registry", "compare", "discover", "find_claims", "main", "normalize"]
+_NAME_SEP_RE = re.compile(r"[-_.]+")
+
+__all__ = ["Claim", "ClaimStatus", "Known", "Registry", "compare", "discover", "find_claims", "main", "normalize"]
 
 # A version: two or three dotted parts, the third may be the wildcard x. Never part of a longer
 # dotted run, so an IPv4 address (four parts) yields nothing rather than its first three.
@@ -105,7 +108,7 @@ _NOT_PYPI = frozenset({"python", "cpython", "kernel", "linux", "windows", "git",
 
 def normalize(name: str) -> str:
     """PEP 503 spelling: lower case, every run of - _ . collapsed to one hyphen."""
-    return re.sub(r"[-_.]+", "-", name.strip().lower())
+    return _NAME_SEP_RE.sub("-", name.strip().lower())
 
 
 @dataclass(frozen=True)
@@ -133,8 +136,18 @@ class Registry:
         """Record `name` at `version`, keeping the newest when two copies disagree."""
         key = normalize(name)
         prior = self.known.get(key)
-        if prior is None or compare(prior.version, version) == "superseded":
+        if prior is None or compare(prior.version, version) == ClaimStatus.SUPERSEDED:
             self.known[key] = Known(version, source)
+
+
+class ClaimStatus(StrEnum):
+    """How a named version stands against the package's current one; the values are the wire form."""
+
+    SUPERSEDED = "superseded"
+    DATED = "dated"
+    CURRENT = "current"
+    AHEAD = "ahead"
+    UNRESOLVED = "unresolved"
 
 
 @dataclass(frozen=True)
@@ -142,9 +155,13 @@ class Claim:
     pkg: str | None
     named: str
     current: str | None
-    status: str  # superseded | dated | current | ahead | unresolved
+    status: ClaimStatus
     context: str
     where: str = ""
+
+    def __post_init__(self) -> None:
+        # Every report branch tests one status; a misspelled one would match none and vanish.
+        object.__setattr__(self, "status", ClaimStatus(self.status))
 
 
 def _parts(version: str) -> list[int]:
@@ -156,20 +173,21 @@ def _parts(version: str) -> list[int]:
     return out
 
 
-def compare(named: str, current: str) -> str:
+def compare(named: str, current: str) -> ClaimStatus:
     """How `named` stands against `current`, compared over the parts `named` spells out.
 
     "3.20.x" and "2.13" say nothing below their last number, so only that prefix is compared.
 
     Examples:
-        >>> compare("3.13.0", "3.21.1"), compare("3.21.x", "3.21.1"), compare("4.0", "3.9.9")
-        ('superseded', 'current', 'ahead')
+        >>> [str(s) for s in (compare("3.13.0", "3.21.1"), compare("3.21.x", "3.21.1"),
+        ...                   compare("4.0", "3.9.9"))]
+        ['superseded', 'current', 'ahead']
     """
     n = _parts(named)
     c = (_parts(current) + [0] * len(n))[: len(n)]
     if c > n:
-        return "superseded"
-    return "current" if c == n else "ahead"
+        return ClaimStatus.SUPERSEDED
+    return ClaimStatus.CURRENT if c == n else ClaimStatus.AHEAD
 
 
 def _sentence_prefix(text: str, start: int) -> str:
@@ -247,11 +265,11 @@ def find_claims(text: str, reg: Registry, where: str = "") -> list[Claim]:
             continue
         context = " ".join(text[max(0, m.start() - 60): m.end() + 30].split())
         if known is None:
-            claims.append(Claim(pkg, named, None, "unresolved", context, where))
+            claims.append(Claim(pkg, named, None, ClaimStatus.UNRESOLVED, context, where))
         else:
             status = compare(named, known.version)
-            if status == "superseded" and _is_evidence(text, m, sentence):
-                status = "dated"
+            if status == ClaimStatus.SUPERSEDED and _is_evidence(text, m, sentence):
+                status = ClaimStatus.DATED
             claims.append(Claim(pkg, named, known.version, status, context, where))
     return claims
 
@@ -394,7 +412,7 @@ def _resolve_online(texts: list[str], reg: Registry, fetch: Callable[[str], str 
     for text in texts:
         for claim in find_claims(text, reg):
             name = claim.pkg
-            if claim.status not in ("unresolved", "superseded"):
+            if claim.status not in (ClaimStatus.UNRESOLVED, ClaimStatus.SUPERSEDED):
                 continue
             if not name or name in _NOT_PYPI or name in asked:
                 continue
@@ -427,7 +445,7 @@ def _claim_dict(c: Claim) -> dict:
             "where": c.where, "context": c.context}
 
 
-def _render(reports: list[FactReport], stale: list[FactReport], counts: dict[str, int],
+def _render(reports: list[FactReport], stale: list[FactReport], counts: dict[ClaimStatus, int],
             missing: list[str]) -> str:
     lines = [f"scanned {len(reports)} fact(s); claims by status: "
              + ", ".join(f"{k} {v}" for k, v in sorted(counts.items())), ""]
@@ -435,7 +453,7 @@ def _render(reports: list[FactReport], stale: list[FactReport], counts: dict[str
     for rep in stale:
         lines.append(f"   {rep.slug}   [{rep.level}]")
         for c in rep.claims:
-            if c.status == "superseded":
+            if c.status == ClaimStatus.SUPERSEDED:
                 lines.append(f"        {c.pkg} {c.named} -> {c.current} ({c.where}): {c.context}")
     if missing:
         lines += ["", f"bodies not readable ({len(missing)}): " + ", ".join(missing)]
@@ -516,20 +534,20 @@ def main(argv: list[str] | None = None) -> int:
     if not reports:
         return _fail(args, "scanned 0 facts - the levels hold no pointers, so nothing was checked")
 
-    counts: dict[str, int] = {}
+    counts: dict[ClaimStatus, int] = {}
     for rep in reports:
         for c in rep.claims:
             counts[c.status] = counts.get(c.status, 0) + 1
-    stale = [r for r in reports if any(c.status == "superseded" for c in r.claims)]
+    stale = [r for r in reports if any(c.status == ClaimStatus.SUPERSEDED for c in r.claims)]
     if args.json:
         print(_envelope(True, {
             "facts_scanned": len(reports),
             "claims_by_status": counts,
             "superseded": [{"level": r.level, "slug": r.slug,
                             "claims": [_claim_dict(c) for c in r.claims
-                                       if c.status == "superseded"]} for r in stale],
+                                       if c.status == ClaimStatus.SUPERSEDED]} for r in stale],
             "unresolved_packages": sorted({c.pkg for r in reports for c in r.claims
-                                           if c.status == "unresolved" and c.pkg}),
+                                           if c.status == ClaimStatus.UNRESOLVED and c.pkg}),
             "unreadable_bodies": missing,
             "packages_known": len(reg.known),
         }))

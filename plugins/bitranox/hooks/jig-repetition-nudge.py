@@ -89,6 +89,9 @@ PURPOSE_WIDTH = 100
 # three, so what it drops the topic and numbered-stem channels almost always still catch.
 SHINGLE_LIMIT = 120
 
+_PATH_SEP = re.compile(r"[\\/]")
+_PATH_SEPS = re.compile(r"[\\/]+")
+_NON_ALNUM_RUN = re.compile(r"[^A-Za-z0-9]+")
 # `cat > x.ps1 <<'EOS'` / `cat >> x.py <<EOF` - the redirect target on a heredoc opener line.
 _REDIRECT = re.compile(r">>?\s*(['\"]?)([^\s'\";|&<>]+)\1")
 
@@ -247,7 +250,7 @@ def basename(path):
     topic - and every script written into one scratch directory would share a token with every
     other one, on Windows only.
     """
-    return re.split(r"[\\/]", str(path or ""))[-1]
+    return _PATH_SEP.split(str(path or ""))[-1]
 
 
 def _file_stem(path):
@@ -264,8 +267,8 @@ def same_file(a, b):
     real script writes in 97 sessions: 110 respell a path already in the ledger, and without this
     rule 4 nudges name one file twice as though it were two attempts at a job.
     """
-    parts_a = [p for p in re.split(r"[\\/]+", str(a or "")) if p not in ("", ".")]
-    parts_b = [p for p in re.split(r"[\\/]+", str(b or "")) if p not in ("", ".")]
+    parts_a = [p for p in _PATH_SEPS.split(str(a or "")) if p not in ("", ".")]
+    parts_b = [p for p in _PATH_SEPS.split(str(b or "")) if p not in ("", ".")]
     if not parts_a or not parts_b:
         return False
     short, long_ = (parts_a, parts_b) if len(parts_a) <= len(parts_b) else (parts_b, parts_a)
@@ -300,7 +303,7 @@ def is_test_suite_file(path):
     name = basename(path)
     if not name.lower().endswith(".py"):
         return False
-    parts = [p for p in re.split(r"[\\/]+", str(path or "")) if p]
+    parts = [p for p in _PATH_SEPS.split(str(path or "")) if p]
     return (name.startswith("test_") or name == "conftest.py"
             or any(p in ("tests", "test") for p in parts[:-1]))
 
@@ -337,8 +340,8 @@ def name_tokens(name):
     in the name nor a purpose line, and it costs no false positives in the whole corpus.
     """
     out = set()
-    for part in re.split(r"[^A-Za-z0-9]+", Path(basename(name)).stem):
-        part = re.sub(r"\d+$", "", part)          # delsafe2 is the same topic as delsafe
+    for part in _NON_ALNUM_RUN.split(Path(basename(name)).stem):
+        part = _TRAILING_DIGITS.sub("", part)  # delsafe2 is the same topic as delsafe
         if len(part) >= 3:
             out.add(_stem(part))
         if len(part) >= 5:

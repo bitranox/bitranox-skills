@@ -13,6 +13,7 @@ It prints nothing: SessionStart stdout would be injected into the session's cont
 exits 0, because a cleanup chore must never wedge a turn.
 """
 
+import enum
 import json
 import os
 import subprocess
@@ -26,12 +27,39 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import tmp_prune  # noqa: E402 - needs the sys.path line above
 
 WORKER = Path(__file__).resolve().with_name("tmp_prune.py")
-MODES = ("on", "dry-run", "off")
 
 
-def worker_argv(*, mode: str, state_dir: Path, session_id: str | None) -> list[str]:
+class Mode(enum.StrEnum):
+    """The `tmp_prune` knob. The values are the strings the config file holds."""
+    ON = "on"
+    DRY_RUN = "dry-run"
+    OFF = "off"
+
+
+DEFAULT_MODE = Mode.ON  # DEFAULT_CONFIG["tmp_prune"] in self_improve_signals
+# What a value outside the vocabulary runs as: the mode that deletes nothing. The documented
+# default would turn a typo meant as dry-run ("dry_run") into deletion.
+UNKNOWN_MODE = Mode.OFF
+
+
+def parse_mode(raw: object) -> Mode:
+    """`raw` as a Mode. A value outside the vocabulary (a hand-edited "On" or "dry_run") is named
+    on stderr and runs as OFF: it used to stop pruning with no word to anyone, and a hook must
+    never refuse a turn over a knob."""
+    try:
+        return Mode(raw)
+    except ValueError:
+        print(
+            "tmp-prune-hook: unknown tmp_prune mode %r (expected one of %s); pruning is off"
+            % (raw, ", ".join(m.value for m in Mode)),
+            file=sys.stderr,
+        )
+        return UNKNOWN_MODE
+
+
+def worker_argv(*, mode: Mode, state_dir: Path, session_id: str | None) -> list[str]:
     argv = [sys.executable, str(WORKER), "--release-slot", "--state-dir", str(state_dir)]
-    if mode == "on":
+    if mode == Mode.ON:
         argv.append("--apply")
     if session_id:
         argv += ["--keep-session", session_id]
@@ -65,13 +93,14 @@ def _session_id(payload: str) -> str | None:
 def run(
     payload: str,
     *,
-    mode: str,
+    mode: Mode | str,
     state_dir: Path,
     now: float,
     spawn: Callable[[list[str]], None] = spawn_detached,
 ) -> None:
     """Start one prune when the mode allows it and the machine-wide slot is free."""
-    if mode not in MODES or mode == "off":
+    mode = parse_mode(mode)
+    if mode == Mode.OFF:
         return
     if not tmp_prune.claim_slot(state_dir, now=now):
         return
@@ -81,10 +110,10 @@ def run(
         tmp_prune.release_slot(state_dir)  # nothing started, so nothing will release it
 
 
-def _configured_mode() -> str:
+def _configured_mode() -> Mode:
     import self_improve_signals  # noqa: PLC0415 - large module, only needed once a hook actually runs
 
-    return str(self_improve_signals.load_config().get("tmp_prune", "on"))
+    return parse_mode(self_improve_signals.load_config().get("tmp_prune", DEFAULT_MODE.value))
 
 
 def main() -> int:

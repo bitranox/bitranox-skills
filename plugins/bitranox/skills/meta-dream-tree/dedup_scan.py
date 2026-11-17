@@ -265,14 +265,24 @@ def _plant_control(facts: list[Fact]) -> tuple[list[Fact], Fact, Fact]:
     return facts + [planted], source, planted
 
 
+# The most facts a token may be carried by and still link a pair. Sized on the real store
+# against the fraction-only ceiling: 100 dropped no pair scoring 0.2 or more (the highest pair
+# it dropped scored 0.18, the reporting threshold is 0.45 to 0.5), while 50 began dropping
+# pairs scoring 0.2 to 0.23.
+_DF_CEILING_CAP = 100
+
+
 def _candidate_pairs(token_sets: list[set[str]]) -> Iterator[tuple[int, int]]:
     """Index-pairs (i < j) worth scoring: those sharing at least two reasonably rare content words.
 
     Scoring every pair is quadratic and a real store holds ~2000 facts. The index keeps the work
-    proportional to actual overlap; a token carried by more than a fifth of the corpus is
-    dropped, since it separates nothing. On a real store that still keeps most pairs (1.76M of
-    1.98M measured), so the shared-word counts are built one row at a time and yielded: a count
-    held for every pair at once was 1.76M keys and 167 MB. Memory follows the facts.
+    proportional to actual overlap; a token carried by more than a fifth of the corpus, or by
+    more than _DF_CEILING_CAP facts, is dropped, since it separates nothing. The fraction alone
+    let a word in 19% of the facts through at any store size, so the pairs grew with the square
+    of the store (1.77M of 1.98M on a real store, every one of them scoring under 0.35); the cap
+    makes them grow with the facts once the store passes 5 * _DF_CEILING_CAP. A real duplicate
+    shares many words, rare ones among them, so it keeps two shared words under the cap.
+    The shared-word counts are built one row at a time and yielded, so memory follows the facts.
     """
     n = len(token_sets)
     if n < 2:
@@ -284,7 +294,7 @@ def _candidate_pairs(token_sets: list[set[str]]) -> Iterator[tuple[int, int]]:
     # A floor of 5 as well as a fraction: on a small corpus every shared word is also carried by
     # the planted control, so a pure fraction drops exactly the tokens that link the pair the
     # scan exists to find - and the tool reports a clean tree of three facts.
-    ceiling = max(5, n // 5)
+    ceiling = max(5, min(n // 5, _DF_CEILING_CAP))
     rare = {tok: idxs for tok, idxs in postings.items() if len(idxs) <= ceiling}
     for i, toks in enumerate(token_sets):
         shared: dict[int, int] = defaultdict(int)

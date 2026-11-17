@@ -44,12 +44,27 @@ Run: uv run scripts/claim_check.py FILE... --pattern REGEX --control REGEX [--js
 
 import re
 import sys
+from collections.abc import Mapping
+from enum import StrEnum
 from pathlib import Path
+from types import MappingProxyType
+from typing import Final
 
 from _cli_envelope import EnvelopeArgumentParser, emit, wants_json
 
-PRESENT, ABSENT, BROKEN = "PRESENT", "ABSENT", "BROKEN"
-_EXIT = {PRESENT: 0, ABSENT: 1, BROKEN: 2}
+
+
+class Verdict(StrEnum):
+    """The three answers. The values are the wire form (`data.verdict` in JSON, the stderr word)."""
+
+    PRESENT = "PRESENT"
+    ABSENT = "ABSENT"
+    BROKEN = "BROKEN"
+
+
+PRESENT, ABSENT, BROKEN = Verdict.PRESENT, Verdict.ABSENT, Verdict.BROKEN
+#: Total over Verdict (pinned by a test), so no verdict can reach an exit code by a default.
+_EXIT: Final[Mapping[Verdict, int]] = MappingProxyType({PRESENT: 0, ABSENT: 1, BROKEN: 2})
 _UTF16_BOMS = (b"\xff\xfe", b"\xfe\xff")
 
 
@@ -83,7 +98,8 @@ def _lines(text: str):
         yield n, line[:-1] if line.endswith("\r") else line
 
 
-def _result(verdict, reason, hits, control_hits, files_read, unreadable, no_control) -> dict:
+def _result(verdict: Verdict, reason, hits, control_hits, files_read, unreadable,
+            no_control) -> dict:
     return {"verdict": verdict, "reason": reason, "hits": hits, "control_hits": control_hits,
             "files_read": files_read, "unreadable": unreadable, "no_control": no_control}
 

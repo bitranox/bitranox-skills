@@ -110,6 +110,18 @@ def test_a_part_bump_raises_all_three_files_together(repo: Path, notes: Path, pa
     assert "## [%s]\n\n### Fixed\n\n- the thing that broke.\n\n## [1.2.3]" % expected in text
 
 
+@pytest.mark.parametrize("part", ["majro", "MAJOR", "", "Minor"])
+def test_next_version_refuses_a_part_that_names_no_member(part: str) -> None:
+    # A public function: a typo must not fall through to the patch branch and bump the wrong part.
+    with pytest.raises(ValueError, match="Part"):
+        bump_version.next_version("1.2.3", part)  # pyright: ignore[reportArgumentType] - the raw typo is the subject
+
+
+@pytest.mark.parametrize(("part", "expected"), [("patch", "1.2.4"), ("minor", "1.3.0"), ("major", "2.0.0")])
+def test_next_version_takes_the_raw_string_a_caller_holds(part: str, expected: str) -> None:
+    assert bump_version.next_version("1.2.3", part) == expected  # pyright: ignore[reportArgumentType] - raw value parsed at entry
+
+
 def test_an_explicit_target_is_used_as_given(repo: Path, notes: Path) -> None:
     assert bump_version.main(["--root", str(repo), "--to", "1.10.0", "--changelog", str(notes)]) == 0
     assert _versions(repo) == ("1.10.0", "1.10.0")

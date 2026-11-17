@@ -237,3 +237,37 @@ def test_quoted_syntax_in_a_code_span_is_not_an_outbound_ref(tmp_path):
     code, out, _ = _run(["--root", str(root), "a"])
     assert code == 0, out
     assert "importlinter" not in out
+
+
+_LISTED = []
+_WATCHING = []
+
+
+def _count_listings(event, args):
+    # An audit hook observes the interpreter's own directory listings, so nothing in ref_map or the
+    # engine is patched; it cannot be removed once added, so it records only while a test watches.
+    if _WATCHING and event == "os.scandir" and args:
+        _LISTED.append(os.fspath(args[0]))
+
+
+sys.addaudithook(_count_listings)
+
+
+def _listings_of(root, fn):
+    _LISTED.clear()
+    _WATCHING.append(True)
+    try:
+        fn()
+    finally:
+        _WATCHING.clear()
+    return _LISTED.count(str(root))
+
+
+def test_judging_a_move_plan_walks_the_tree_once(tree):
+    """Each reader used to walk every curated level again: one walk per reader, per process."""
+    moves = [{"slug": "leaf-plain", "to": str((tree / "other").resolve()), "from": None}]
+    assert _listings_of(tree, lambda: ref_map.judge_moves(tree, moves)) == 1
+
+
+def test_building_a_ref_map_walks_the_tree_once(tree):
+    assert _listings_of(tree, lambda: ref_map.build(tree, ["leaf-plain"])) == 1

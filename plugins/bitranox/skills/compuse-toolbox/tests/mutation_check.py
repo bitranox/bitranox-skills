@@ -85,7 +85,8 @@ MUTANTS: tuple[Mutant, ...] = (
     ),
     Mutant(
         name="cachedir-validator-always-accepts",
-        find="        return path.read_bytes()[: len(_CACHEDIR_SIGNATURE)] == _CACHEDIR_SIGNATURE",
+        find=("        with open(path, \"rb\") as handle:\n"
+              "            return handle.read(len(_CACHEDIR_SIGNATURE)) == _CACHEDIR_SIGNATURE"),
         replace="        return True",
         must_kill=frozenset({
             "test_a_cachedir_tag_without_the_signature_does_not_exclude",

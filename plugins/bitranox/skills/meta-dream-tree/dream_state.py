@@ -163,6 +163,7 @@ USAGE = ("usage: dream_state.py [due|done|mode|session-review|session-reviewed] 
 
 
 _REMINDER_RX = re.compile(r"<system-reminder>.*?</system-reminder>", re.S)
+_DIGITS_RX = re.compile(r"[0-9]+")
 _SKILL_BODY_PREFIX = "Base directory for this skill:"
 
 
@@ -707,7 +708,7 @@ def _take_to(argv):
             return "--to needs a value"
         if to is not None:
             return "--to given twice"
-        if not re.fullmatch(r"[0-9]+", value):
+        if not _DIGITS_RX.fullmatch(value):
             return "--to needs a byte offset (a non-negative integer)"
         to = int(value)
     return rest, to

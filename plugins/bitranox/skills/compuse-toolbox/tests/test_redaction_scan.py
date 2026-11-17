@@ -324,3 +324,32 @@ def test_a_bom_does_not_glue_onto_the_first_pattern(tmp_path, bom):
     path = tmp_path / "bom.txt"
     path.write_bytes(bom + b"Zorblax\n")
     assert [r.pattern for r in R.parse_rules(R.read_list(str(path))).rules] == ["Zorblax"]
+
+
+class _CountingPattern(str):
+    """A pattern that counts how often it is case-folded."""
+
+    folds = 0
+
+    def casefold(self) -> str:
+        type(self).folds += 1
+        return str(self).casefold()
+
+
+def test_each_pattern_is_folded_once_per_scan_not_once_per_line():
+    # Folding every rule again for every scanned line made the scan cost lines x rules folds.
+    rules = tuple(R.Rule(i, i, _CountingPattern(f"Term{i}")) for i in range(1, 21))
+    lines = [("f.py", n, f"line {n} mentions TERM3") for n in range(1, 401)]
+    _CountingPattern.folds = 0
+    hits, count = R.scan_added(lines, rules)
+    assert count == 400 and len(hits) == 400 and {h.rule.index for h in hits} == {3}
+    assert _CountingPattern.folds <= len(rules), _CountingPattern.folds
+
+
+def test_a_second_rule_list_is_matched_by_its_own_patterns():
+    # The folded patterns are kept between lines; a scan with another list must not reuse them.
+    first = (R.Rule(1, 1, "Alpha"),)
+    second = (R.Rule(1, 1, "Beta"),)
+    assert R.match_rules("an alpha line", first) == [first[0]]
+    assert R.match_rules("an alpha line", second) == []
+    assert R.match_rules("a BETA line", second) == [second[0]]

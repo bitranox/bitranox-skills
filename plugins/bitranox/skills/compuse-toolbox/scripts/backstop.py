@@ -46,6 +46,7 @@ import re
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -311,8 +312,8 @@ def wait(
     base: str | None,
     label: str,
     settle: float | None = None,
-    now: object = time.monotonic,
-    sleep: object = time.sleep,
+    now: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> tuple[Outcome, float]:
     """Poll until the work finishes, the controller cancels, the deadline expires, or the repo
     signal is lost.
@@ -338,23 +339,21 @@ def _wait_with_probe(
     repo: Path | None,
     base: str | None,
     settle: float | None,
-    now: object,
-    sleep: object,
+    now: Callable[[], float],
+    sleep: Callable[[float], None],
 ) -> tuple[Outcome, float, Probe]:
     """wait(), also returning the last probe so the caller can say WHY a signal was lost."""
-    clock = now  # type: ignore[assignment]
-    napper = sleep  # type: ignore[assignment]
-    start = clock()  # type: ignore[operator]
+    start = now()
     watch = DoneFileWatch(done_file, settle=interval if settle is None else settle)
     while True:
-        elapsed = clock() - start  # type: ignore[operator]
+        elapsed = now() - start
         probe = probe_now(
             done_watch=watch, cancel_file=cancel_file, repo=repo, base=base, now=elapsed
         )
         outcome = decide(probe, elapsed=elapsed, deadline=deadline)
         if outcome is not Outcome.WAIT:
             return outcome, elapsed, probe
-        napper(interval)  # type: ignore[operator]
+        sleep(interval)
 
 
 def _report(outcome: Outcome, elapsed: float, label: str, lost: str | None = None) -> int:
@@ -388,8 +387,8 @@ def _reconfigure_streams() -> None:
 def main(
     argv: list[str] | None = None,
     *,
-    now: object = time.monotonic,
-    sleep: object = time.sleep,
+    now: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> int:
     """CLI entry point. ``now`` and ``sleep`` are the clock seam, injected by tests."""
     _reconfigure_streams()

@@ -41,12 +41,14 @@ from shell_text import (  # noqa: F401
 
 # NAME=value at a command position. The value is optional (`VAR= cmd` is legal).
 ASSIGNMENT = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=")
+_SINGLE_QUOTED = re.compile(r"'[^']*'")
+_NONBLANK_RUN = re.compile(r"\S+")
 
 
 def strip_single_quoted(segment: str) -> str:
     """Blank out single-quoted spans, which the outer shell never expands."""
 
-    return re.sub(r"'[^']*'", "''", segment)
+    return _SINGLE_QUOTED.sub("''", segment)
 
 
 def _prefix_assignments(masked: str) -> tuple[list[str], int]:
@@ -65,7 +67,7 @@ def _prefix_assignments(masked: str) -> tuple[list[str], int]:
     """
 
     names: list[str] = []
-    for word in re.finditer(r"\S+", masked):
+    for word in _NONBLANK_RUN.finditer(masked):
         match = ASSIGNMENT.match(word.group(0))
         if not match:
             return (names, word.start()) if names else ([], -1)

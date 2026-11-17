@@ -48,7 +48,8 @@ import sys
 import tempfile
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
+from enum import StrEnum
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -61,9 +62,12 @@ __all__ = [
     "LOCK_NAME",
     "LOG_NAME",
     "ApplyResult",
+    "CandidateKind",
     "Decision",
     "HolderIndex",
+    "HolderMethod",
     "PruneConfig",
+    "RemovedDir",
     "apply",
     "claim_slot",
     "device_of_stat",
@@ -83,8 +87,22 @@ LAST_NAME = "tmp-prune.last"
 LOG_NAME = "tmp-prune.log.jsonl"
 LOG_KEEP_LINES = 500
 
-SCRATCH = "scratch"
-ONEOFF = "oneoff"
+
+
+class CandidateKind(StrEnum):
+    """Which rule judges a candidate directory; the values are what the JSON output writes."""
+
+    SCRATCH = "scratch"
+    ONEOFF = "oneoff"
+
+
+class HolderMethod(StrEnum):
+    """How `HolderIndex` learned which paths processes hold; written as `holder_check`."""
+
+    PROCFS = "procfs"
+    LSOF = "lsof"
+    RENAME = "rename"  # Windows: probed at delete time, when the rename of a held dir fails
+    NONE = "none"
 
 _SESSION_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 # Never one-offs: pytest prunes its own basetemp, and the rest are Claude Code's own runtime dirs.
@@ -145,8 +163,9 @@ class PruneConfig:
             keep_sessions=keep_sessions,
         )
 
-    def max_age(self, kind: str) -> float:
-        return self.scratch_max_age if kind == SCRATCH else self.oneoff_max_age
+    def max_age(self, kind: CandidateKind) -> float:
+        # Parsed, not compared: a misspelt kind would otherwise get the one-off week.
+        return self.scratch_max_age if CandidateKind(kind) == CandidateKind.SCRATCH else self.oneoff_max_age
 
 
 # ---- what a directory holds -----------------------------------------------------------------
@@ -221,26 +240,29 @@ class HolderIndex:
     cost every fd, cwd and maps line of every process, most of them repeats of one path.
     """
 
-    method: str
+    method: HolderMethod
     paths: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        # A public constructor is a boundary: a misspelt method that held() could not recognise
+        # would answer "held by nobody" for every path.
+        object.__setattr__(self, "method", HolderMethod(self.method))
         object.__setattr__(self, "paths", tuple(sorted(set(self.paths))))
 
     @classmethod
     def build(cls, cfg: PruneConfig) -> HolderIndex:
         if os.name == "nt":
-            return cls("rename")
+            return cls(HolderMethod.RENAME)
         if Path("/proc/self/fd").is_dir():
             # A set first: the stream repeats a path once per fd, map and process holding it.
-            return cls("procfs", tuple(set(_procfs_held_paths())))
+            return cls(HolderMethod.PROCFS, tuple(set(_procfs_held_paths())))
         held = _lsof_held_paths(cfg.uid)
         if held is None:
-            return cls("none")
-        return cls("lsof", tuple(held))
+            return cls(HolderMethod.NONE)
+        return cls(HolderMethod.LSOF, tuple(held))
 
     def held(self, path: Path) -> bool | None:
-        if self.method in ("rename", "none"):
+        if self.method in (HolderMethod.RENAME, HolderMethod.NONE):
             return None
         target = os.path.realpath(path)
         prefix = target.rstrip(os.sep) + os.sep
@@ -314,11 +336,14 @@ def _lsof_held_paths(uid: int | None) -> list[str] | None:
 @dataclass(frozen=True)
 class Decision:
     path: Path
-    kind: str
+    kind: CandidateKind
     prune: bool
     reason: str
     inodes: int
     transcript: Path | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "kind", CandidateKind(self.kind))
 
 
 def plan(cfg: PruneConfig) -> list[Decision]:
@@ -328,15 +353,15 @@ def plan(cfg: PruneConfig) -> list[Decision]:
     return [_decide(cfg, path, kind, transcript, live, holders) for path, kind, transcript in _candidates(cfg)]
 
 
-def _candidates(cfg: PruneConfig) -> Iterator[tuple[Path, str, Path | None]]:
+def _candidates(cfg: PruneConfig) -> Iterator[tuple[Path, CandidateKind, Path | None]]:
     for root in _scratch_roots(cfg):
         for project in _child_dirs(root):
             for session in _child_dirs(project):
                 if _SESSION_ID.match(session.name):
-                    yield session, SCRATCH, cfg.projects_dir / project.name / f"{session.name}.jsonl"
+                    yield session, CandidateKind.SCRATCH, cfg.projects_dir / project.name / f"{session.name}.jsonl"
     for child in _child_dirs(cfg.oneoff_base):
         if _is_oneoff(cfg, child):
-            yield child, ONEOFF, None
+            yield child, CandidateKind.ONEOFF, None
 
 
 def _scratch_roots(cfg: PruneConfig) -> list[Path]:
@@ -366,7 +391,7 @@ def _is_oneoff(cfg: PruneConfig, path: Path) -> bool:
 
 
 def _decide(
-    cfg: PruneConfig, path: Path, kind: str, transcript: Path | None, live: LiveSessions, holders: HolderIndex
+    cfg: PruneConfig, path: Path, kind: CandidateKind, transcript: Path | None, live: LiveSessions, holders: HolderIndex
 ) -> Decision:
     try:
         scan = scan_tree(path, cfg.device_of)
@@ -379,14 +404,14 @@ def _decide(
 def _keep_reason(
     cfg: PruneConfig,
     path: Path,
-    kind: str,
+    kind: CandidateKind,
     scan: TreeScan,
     transcript: Path | None,
     live: LiveSessions,
     holders: HolderIndex,
 ) -> str | None:
     """Why this directory must stay, or None when nothing can still use it."""
-    if kind == SCRATCH:
+    if kind == CandidateKind.SCRATCH:
         session_reason = _session_keep_reason(cfg, path, transcript, live)
         if session_reason:
             return session_reason
@@ -396,7 +421,7 @@ def _keep_reason(
     held = holders.held(path)
     if held:
         return "held open by a running process"
-    if held is None and kind == ONEOFF and holders.method == "none":
+    if held is None and kind == CandidateKind.ONEOFF and holders.method == HolderMethod.NONE:
         return "no way to check which files processes hold on this platform"
     return None
 
@@ -411,14 +436,14 @@ def _session_keep_reason(cfg: PruneConfig, path: Path, transcript: Path | None, 
     return None
 
 
-def _content_keep_reason(cfg: PruneConfig, kind: str, scan: TreeScan) -> str | None:
+def _content_keep_reason(cfg: PruneConfig, kind: CandidateKind, scan: TreeScan) -> str | None:
     if scan.foreign_mount:
         return "another filesystem is mounted inside it"
     if cfg.now - scan.newest < cfg.max_age(kind):
         return "something inside changed recently"
     if scan.has_ipc:
         return "holds a socket or fifo something may still connect to"
-    if scan.unreadable and kind == ONEOFF:
+    if scan.unreadable and kind == CandidateKind.ONEOFF:
         return "some entries could not be read, so its age is unknown"
     return None
 
@@ -433,15 +458,24 @@ def _changed_within(path: Path, now: float, window: float) -> bool:
 # ---- applying -------------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class RemovedDir:
+    """One directory `apply` removed (or, in a dry run, would remove); one `removed` JSON entry."""
+
+    path: str
+    kind: CandidateKind
+    inodes: int
+
+
 @dataclass
 class ApplyResult:
     examined_dirs: int = 0
     removed_dirs: int = 0
     removed_inodes: int = 0
     kept_dirs: int = 0
-    holder_check: str = ""
-    failures: list[str] = field(default_factory=list)
-    removed: list[dict[str, object]] = field(default_factory=list)
+    holder_check: HolderMethod | None = None
+    failures: list[str] = field(default_factory=list[str])
+    removed: list[RemovedDir] = field(default_factory=list[RemovedDir])
 
 
 def apply(cfg: PruneConfig, decisions: Sequence[Decision], *, dry_run: bool = False) -> ApplyResult:
@@ -463,7 +497,7 @@ def apply(cfg: PruneConfig, decisions: Sequence[Decision], *, dry_run: bool = Fa
         if dry_run or _remove(decision.path, result):
             result.removed_dirs += 1
             result.removed_inodes += current.inodes
-            result.removed.append({"path": str(decision.path), "kind": decision.kind, "inodes": current.inodes})
+            result.removed.append(RemovedDir(str(decision.path), decision.kind, current.inodes))
     if not dry_run:
         _remove_empty_projects(cfg, project_mtimes)
     return result
@@ -663,7 +697,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = apply(cfg, plan(cfg), dry_run=not args.apply)
         summary = _summary(cfg, result, dry_run=not args.apply)
         _append_log(state_dir, summary)
-        listed = {**summary, "removed": result.removed}  # the log stays counts-only
+        listed = {**summary, "removed": [asdict(entry) for entry in result.removed]}  # the log stays counts-only
     except Exception as exc:  # noqa: BLE001 - a detached worker has no one to raise to; report it
         _emit(args.json, {"ok": False, "command": "tmp_prune", "data": {"error": repr(exc)}, "skipped": []})
         return 2

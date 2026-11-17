@@ -9,6 +9,9 @@ All content ASCII.
 """
 import io
 import json
+import os
+import subprocess
+import sys
 
 import pytest
 
@@ -303,3 +306,41 @@ def test_an_unquoted_admission_beside_a_quoted_one_is_still_buffered(tmp_path, m
     got = S.read_subagent_learnings("s1")
     assert len(got) == 1 and "strict" in got[0]["matched"]
     assert "I was wrong" in got[0]["snippet"]
+
+
+# ---- one read of the subagent transcript per hook call ------------------------------------------
+
+_COUNT_OPENS = r"""
+import json, pathlib, runpy, sys
+hook, transcript = sys.argv[1], sys.argv[2]
+opens = []
+
+def audit(event, args):
+    if event == "open" and args and str(args[0]) == transcript:
+        opens.append(1)
+    if event == "subprocess.Popen":
+        raise RuntimeError("no shadow child in this test")   # spawn_shadow swallows it
+
+sys.addaudithook(audit)
+sys.path.insert(0, str(pathlib.Path(hook).parent))
+sys.argv = [hook]
+try:
+    runpy.run_path(hook, run_name="__main__")
+except SystemExit:
+    pass
+print(json.dumps({"opens": len(opens)}))
+"""
+
+
+def test_the_default_mode_reads_the_subagent_transcript_once_with_the_shadow_on(tmp_path, _home):
+    """find_signals and the shadow hand-off judge the same messages: reading the transcript once
+    for each doubled the hook's I/O and parse on every SubagentStop."""
+    S.save_config({"classifier_backend": "jev", "classifier_subagent_signal": "shadow"})
+    ev = _event(tmp_path, agent_msgs=[("assistant", "I was wrong - the real cause is the stale venv")])
+    proc = subprocess.run(
+        [sys.executable, "-c", _COUNT_OPENS, C.__file__, ev["agent_transcript_path"]],
+        input=json.dumps(ev), capture_output=True, text=True, encoding="utf-8", timeout=60,
+        env={**os.environ, "HOME": str(_home), "USERPROFILE": str(_home)}, check=False)
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout.strip().splitlines()[-1]) == {"opens": 1}
+    assert len(S.read_subagent_learnings("s1")) == 1    # the run really buffered: not a no-op arm

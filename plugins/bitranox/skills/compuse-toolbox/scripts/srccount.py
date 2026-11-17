@@ -136,7 +136,9 @@ _CACHEDIR_SIGNATURE = b"Signature: 8a477f597d28d172789f06886806bc55"
 def _is_cachedir_tag(path: Path) -> bool:
     """The bford.info/cachedir spec: the file BEGINS with the signature line. PURE-ish (reads)."""
     try:
-        return path.read_bytes()[: len(_CACHEDIR_SIGNATURE)] == _CACHEDIR_SIGNATURE
+        # Only the prefix is compared, so only the prefix is read: the file may be any size.
+        with open(path, "rb") as handle:
+            return handle.read(len(_CACHEDIR_SIGNATURE)) == _CACHEDIR_SIGNATURE
     except OSError:
         return False
 

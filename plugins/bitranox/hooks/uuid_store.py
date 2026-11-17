@@ -81,7 +81,7 @@ def slugify(title, type_=None):
     topic-file convention (e.g. 'feedback-no-em-dashes'). Lowercase, hyphen-separated, deduped.
     THE one slug algorithm (memory_engine aliases it; the pointer parser derives back-compat slugs
     from titles with it)."""
-    base = re.sub(r"[^a-z0-9]+", "-", (title or "").strip().lower()).strip("-")
+    base = _NON_SLUG_RUN.sub("-", (title or "").strip().lower()).strip("-")
     base = base or "note"
     if type_ and type_ in TYPE_PREFIXES and not base.startswith(type_ + "-"):
         base = "%s-%s" % (type_, base)
@@ -90,6 +90,8 @@ def slugify(title, type_=None):
     return base
 
 
+_NON_SLUG_RUN = re.compile(r"[^a-z0-9]+")
+_TOPICS_LINE = re.compile(r"(?m)^TOPICS:")
 # A slug names a FILE (`facts/<slug>.md`), so it may carry no path: lowercase letters, digits,
 # hyphens and dots, starting and ending with a letter or digit. Dots are allowed because real stores
 # carry version numbers in slugs (`starlette-1.2-httpx2-testclient`); a leading dot would hide the
@@ -657,7 +659,7 @@ def add_pointer(altitude_dir, slug, title, hook, pin=False, scope_default=""):
     with sig.memory_lock(local):
         text = read_store_text(local)
         scope, pointers = parse_pointer_index(text)
-        if not scope and re.search(r"(?m)^TOPICS:", scope_default or ""):
+        if not scope and _TOPICS_LINE.search(scope_default or ""):
             raise TopicRefusal(["a scope_default may not carry a TOPICS line; a level's topics "
                                 "change only through set-level-topics"])
         by_slug = {p.slug: p for p in pointers}

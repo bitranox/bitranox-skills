@@ -75,6 +75,7 @@ import json
 import os
 import subprocess
 import sys
+from enum import StrEnum
 from pathlib import Path
 
 from _cli_envelope import EnvelopeArgumentParser, run_guarded
@@ -270,7 +271,17 @@ def repo_relative(path, repo_root) -> str:
 # from `git ls-files --error-unmatch` (tracked) and `git check-ignore` (ignored) instead, batched
 # ONE call of each per repo (not per file) via `--` pathspecs and `--stdin`.
 
-FILE_STATES = ("tracked-clean", "tracked-modified", "ignored", "untracked", "no-repo")
+
+
+class FileState(StrEnum):
+    """What git says about one file. The values are the wire form (`state` in JSON, the first
+    column of the text listing)."""
+
+    TRACKED_CLEAN = "tracked-clean"
+    TRACKED_MODIFIED = "tracked-modified"
+    IGNORED = "ignored"
+    UNTRACKED = "untracked"
+    NO_REPO = "no-repo"
 
 
 class _GitBatchError(Exception):
@@ -311,11 +322,25 @@ def _ancestor_repo_root(start: Path):
     only the filesystem - no subprocess. Seeds the enclosing repo for the common case where
     `--root` is itself a subdirectory of a repo rather than a repo (or many repos') parent."""
     for p in (start, *start.parents):
-        # os.path.exists, not Path.exists: before Python 3.14 the latter RAISES PermissionError
-        # for a path under an unreadable directory instead of answering False.
-        if os.path.exists(p / ".git"):
+        if _is_work_tree_marker(p / ".git"):
             return p
     return None
+
+
+def _is_work_tree_marker(marker: Path) -> bool:
+    """A `.git` git itself accepts: a directory holding HEAD, or a file starting `gitdir: `.
+
+    A bare existence test also took an empty `.git` directory, and one left in /tmp seeded /tmp
+    as the enclosing repo of everything under it. os.path, not Path: before Python 3.14 the
+    Path methods RAISE PermissionError under an unreadable directory instead of answering False.
+    """
+    if os.path.isdir(marker):
+        return os.path.isfile(os.path.join(marker, "HEAD"))
+    try:
+        with open(marker, encoding="utf-8", errors="ignore") as handle:
+            return handle.read(8) == "gitdir: "
+    except OSError:
+        return False
 
 
 def _repo_roots_for(root: Path) -> list[Path]:
@@ -402,7 +427,7 @@ def _batch_modified(repo_root, rel_paths: list[str]) -> set[str]:
 
 def classify_files(pattern, root=".") -> dict:
     """Find every file under `root` matching `pattern` and classify each as tracked-clean,
-    tracked-modified, ignored, untracked, or no-repo (see FILE_STATES; mutually exclusive and
+    tracked-modified, ignored, untracked, or no-repo (see FileState; mutually exclusive and
     exhaustive for any hit).
 
     Bounded git-process count: at most 4 subprocess calls PER REPO (`ls-files`, `check-ignore`
@@ -426,7 +451,8 @@ def classify_files(pattern, root=".") -> dict:
     skipped = list(walk_errors)
     for repo_root, group in by_repo.items():
         if repo_root is None:
-            results.extend({"path": str(f), "repo": None, "state": "no-repo"} for f in group)
+            results.extend({"path": str(f), "repo": None, "state": FileState.NO_REPO}
+                           for f in group)
             continue
         rel = {f: repo_relative(f, repo_root) for f in group}
         try:
@@ -441,11 +467,12 @@ def classify_files(pattern, root=".") -> dict:
         for f in group:
             r = rel[f]
             if r in tracked:
-                state = "tracked-modified" if r in modified else "tracked-clean"
+                state = (FileState.TRACKED_MODIFIED if r in modified
+                         else FileState.TRACKED_CLEAN)
             elif r in ignored:
-                state = "ignored"
+                state = FileState.IGNORED
             else:
-                state = "untracked"
+                state = FileState.UNTRACKED
             results.append({"path": str(f), "repo": str(repo_root), "state": state})
 
     results.sort(key=lambda d: d["path"])

@@ -753,6 +753,8 @@ def _fact_data(fact: Fact, verdict: Verdict, rules: EngineRules) -> dict:
 # whole output, and storing it would write the metadata header into the fact's prose.
 BODY_MARKER = "---- body ----"
 _SHOW_HEADER_RX = re.compile(r"\Aslug {2,}\S")
+_LEADING_BLANK_LINES_RX = re.compile(r"\A(?:[ \t]*\r?\n)+")
+_TRAILING_BLANK_LINES_RX = re.compile(r"(?:\r?\n[ \t]*)+\Z")
 
 
 def clean_body(text: str) -> str:
@@ -766,8 +768,8 @@ def clean_body(text: str) -> str:
         raise BadInput(f"the body file carries factedit show's header (a '{BODY_MARKER}' line or a "
                        "leading 'slug ...' line), which would be stored as the fact's prose; "
                        "write the file from `show --body` stdout alone, or cut the header out")
-    trimmed = re.sub(r"\A(?:[ \t]*\r?\n)+", "", text)
-    trimmed = re.sub(r"(?:\r?\n[ \t]*)+\Z", "", trimmed)
+    trimmed = _LEADING_BLANK_LINES_RX.sub("", text)
+    trimmed = _TRAILING_BLANK_LINES_RX.sub("", trimmed)
     return trimmed + "\n" if trimmed else ""
 
 
@@ -1214,8 +1216,11 @@ def cmd_apply_batch(args, rules: EngineRules) -> int:
     return 0 if ok else 2
 
 
+_LINE_NO_RX = re.compile(r"line (\d+)")
+
+
 def _line_of(problem: str) -> int:
-    m = re.match(r"line (\d+)", problem)
+    m = _LINE_NO_RX.match(problem)
     return int(m.group(1)) if m else 0
 
 

@@ -809,3 +809,34 @@ def test_a_refusal_under_json_carries_the_reason_as_error(tmp_path):
     env = json.loads(r.stdout)
     assert r.returncode == 2 and env["ok"] is False and env["error"] == env["data"]["reason"]
     assert env["data"]["safe"] is False
+
+
+class _CountingTerm(str):
+    """A denylist term that counts how often it is prepared: the work scan_diff must not repeat."""
+
+    calls = 0
+
+    def strip(self, chars=None):
+        type(self).calls += 1
+        return str.strip(self, chars)
+
+
+def _added_diff(lines: int) -> str:
+    body = "".join(f"+plain added line {i}\n" for i in range(lines))
+    return f"diff --git a/x.txt b/x.txt\n--- a/x.txt\n+++ b/x.txt\n@@ -0,0 +1,{lines} @@\n" + body
+
+
+def test_scan_diff_prepares_the_denylist_once_however_many_lines_are_added():
+    # Folding every term again for each added line made a 50k-line range with 200 terms cost
+    # about 3x the scan itself; the preparation must not grow with the diff.
+    counts = []
+    for lines in (10, 80):
+        _CountingTerm.calls = 0
+        PC.scan_diff(_added_diff(lines), [_CountingTerm("secretterm"), _CountingTerm("other")])
+        counts.append(_CountingTerm.calls)
+    assert counts[0] == counts[1]
+
+
+def test_scan_diff_still_finds_a_denylist_term_after_folding_once():
+    found = PC.scan_diff(_added_diff(3).replace("line 1", "line STRASSE 1"), ["  Strasse "])
+    assert [(f.kind, f.line) for f in found] == [("denylist", 2)]

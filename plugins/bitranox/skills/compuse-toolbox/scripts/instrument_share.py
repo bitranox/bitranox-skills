@@ -54,6 +54,7 @@ from collections import defaultdict
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, UTC
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -71,8 +72,8 @@ except ImportError:                                      # a bare interpreter pr
         return json.loads(raw)
 
 __all__ = [
-    "CATEGORIES", "Event", "RULES", "UsageError", "classify", "events_of", "main", "measure",
-    "stop_signature",
+    "CATEGORIES", "Event", "EventKind", "RULES", "UsageError", "classify", "events_of", "main",
+    "measure", "stop_signature",
 ]
 
 DEFAULT_EXCLUDE_CWD = r"[/\\]bitranox-skills(?:[/\\]|$)"
@@ -108,20 +109,39 @@ RULES: list[tuple[str, frozenset[str] | None, re.Pattern[str]]] = [
 ]
 
 _STOP_PREFIX = "Stop hook feedback:"
+# Compiled once: stop_signature runs for every Stop record of the corpus.
+_SHA_RE = re.compile(r"\b[0-9a-f]{7,40}\b")
+_NUMBER_RE = re.compile(r"\d[\d,.]*")
+_WORD_RE = re.compile(r"[A-Za-z#'-]+")
 
 
 class UsageError(Exception):
     """A bad option or an unusable --root: exit 2, never a traceback."""
 
 
+class EventKind(StrEnum):
+    """What one Event is: `_charge_session` charges a CALL; the other two set the trigger."""
+
+    CALL = "call"
+    PROMPT = "prompt"
+    TRIGGER = "trigger"
+
+
 @dataclass
 class Event:
-    """One moment in a session: a tool call, a typed prompt, or a hook trigger."""
+    """One moment in a session: a tool call, a typed prompt, or a hook trigger.
+
+    `kind` is parsed into an EventKind on construction, so a misspelt kind raises ValueError
+    rather than becoming an event that is neither charged nor counted as a trigger.
+    """
 
     when: datetime
-    kind: str                       # "call" | "prompt" | "trigger"
+    kind: EventKind
     label: str = ""                 # category for a call, trigger name for a trigger
     call_id: str | None = None
+
+    def __post_init__(self) -> None:
+        self.kind = EventKind(self.kind)
 
 
 @dataclass
@@ -162,9 +182,9 @@ def stop_signature(text: str, words: int = 6) -> str:
     record names only the event, so the words are the one handle that tells two Stop hooks apart.
     """
     body = text[len(_STOP_PREFIX):] if text.startswith(_STOP_PREFIX) else text
-    body = re.sub(r"\b[0-9a-f]{7,40}\b", "#", body)      # a commit sha, before digits fold
-    body = re.sub(r"\d[\d,.]*", "#", body)
-    return "stop:" + " ".join(re.findall(r"[A-Za-z#'-]+", body)[:words]).lower()
+    body = _SHA_RE.sub("#", body)                        # a commit sha, before digits fold
+    body = _NUMBER_RE.sub("#", body)
+    return "stop:" + " ".join(_WORD_RE.findall(body)[:words]).lower()
 
 
 def _when(raw: Any) -> datetime | None:
@@ -195,21 +215,21 @@ def _record_events(rec: dict[str, Any], when: datetime) -> Iterable[Event]:
     if kind == "assistant":
         for block in (rec.get("message") or {}).get("content") or []:
             if isinstance(block, dict) and block.get("type") == "tool_use":
-                yield Event(when, "call", classify(str(block.get("name")), block.get("input")),
-                            block.get("id"))
+                yield Event(when, EventKind.CALL,
+                            classify(str(block.get("name")), block.get("input")), block.get("id"))
     elif kind == "user":
         text = _user_text(rec.get("message"))
         if text is None:
             return
         if rec.get("isMeta"):
             if text.startswith(_STOP_PREFIX):
-                yield Event(when, "trigger", stop_signature(text))
+                yield Event(when, EventKind.TRIGGER, stop_signature(text))
             return
-        yield Event(when, "prompt", "prompt")
+        yield Event(when, EventKind.PROMPT, "prompt")
     elif kind == "attachment":
         att = rec.get("attachment") or {}
         if att.get("hookEvent") == "SessionStart" and att.get("type") == "hook_additional_context":
-            yield Event(when, "trigger", "session-start")
+            yield Event(when, EventKind.TRIGGER, "session-start")
 
 
 def events_of(text: str) -> tuple[list[Event], str | None]:
@@ -261,9 +281,8 @@ def _charge_session(events: list[Event], report: Report, seen: set[str], max_gap
     trigger = "session-start"
     episode_trigger: str | None = None
     for i, ev in enumerate(events):
-        if ev.kind != "call":
-            if ev.kind in ("trigger", "prompt"):
-                trigger = ev.label
+        if ev.kind != EventKind.CALL:
+            trigger = ev.label
             continue
         if ev.call_id and ev.call_id in seen:
             report.duplicates_skipped += 1
@@ -323,7 +342,7 @@ def measure(root: Path, *, since: date | None = None, until: date | None = None,
             skipped.append(f"{path}: {exc}")
             continue
         read += 1
-        if not any(e.kind == "call" for e in events):
+        if not any(e.kind == EventKind.CALL for e in events):
             continue
         if exclude is not None and cwd and exclude.search(cwd):
             report.sessions_excluded += 1

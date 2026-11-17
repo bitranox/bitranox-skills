@@ -468,7 +468,8 @@ def test_files_mode_tracked_file_in_a_subdirectory(tmp_path):
     (repo / "docs" / "CLAUDE.md").write_text("x\n", encoding="utf-8")
     _commit(repo, "docs/CLAUDE.md")
     [f] = G.classify_files("CLAUDE.md", root=repo)["files"]
-    assert f["state"] == "tracked-clean"
+    assert f["state"] is G.FileState.TRACKED_CLEAN
+    assert json.dumps(f["state"]) == '"tracked-clean"'
     assert G.repo_relative(repo / "docs" / "CLAUDE.md", repo) == "docs/CLAUDE.md"
     # The Windows spelling, checkable on any platform through the pure path flavour.
     from pathlib import PureWindowsPath
@@ -658,3 +659,19 @@ def test_json_says_whether_it_fetched(tmp_path, capsys):
     _origin, clone = _origin_and_clone(tmp_path)
     G.main([str(clone), "--json"])
     assert json.loads(capsys.readouterr().out)["data"]["fetched"] is False
+
+
+def test_an_empty_git_directory_above_the_root_is_not_its_enclosing_repo(tmp_path):
+    # An empty `.git` directory appeared in /tmp while other sessions ran; git needs HEAD in a
+    # `.git` directory, so it marks no repository and must not seed one.
+    (tmp_path / ".git").mkdir()
+    work = tmp_path / "work"
+    work.mkdir()
+    assert G._ancestor_repo_root(work) is None
+
+
+def test_a_linked_worktree_gitfile_still_seeds_its_enclosing_repo(tmp_path):
+    linked = tmp_path / "linked"
+    (linked / "sub").mkdir(parents=True)
+    (linked / ".git").write_text("gitdir: /elsewhere/.git/worktrees/linked\n", encoding="utf-8")
+    assert G._ancestor_repo_root(linked / "sub") == linked

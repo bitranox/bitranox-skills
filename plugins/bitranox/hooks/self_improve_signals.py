@@ -25,12 +25,14 @@ import subprocess
 import tempfile
 import time
 from collections.abc import Mapping
+from enum import StrEnum
 from pathlib import Path
 from types import MappingProxyType
 from typing import NamedTuple
 
 import claude_paths
 import process_liveness
+import shell_text
 
 # ---- Audit-file location (shared by self-improve-audit.py writer + session-start reader) --
 
@@ -552,9 +554,29 @@ def store_signature(proj):
     return hashlib.sha1("\x00".join(parts).encode("utf-8", "replace")).hexdigest()
 
 
+def _has_native_fact(proj):
+    """True at the first topic `*.md` (not the MEMORY.md index) that can be opened.
+
+    Opened, never read: a fact counts as soon as it exists readably, and reading every body of a
+    large native store only to test it for emptiness was the whole cost of this question. Same set
+    as `_native_fact_parts`, so an unreadable entry still does not count."""
+    try:
+        for p in memory_dir(proj).glob("*.md"):
+            if p.name == "MEMORY.md":
+                continue
+            try:
+                with p.open("rb"):
+                    return True
+            except OSError:
+                continue
+    except OSError:
+        pass
+    return False
+
+
 def has_any_facts(proj):
     """True if the project holds at least one real fact in either tier (native or curated)."""
-    return bool(_native_fact_parts(proj) or _curated_fact_parts(proj))
+    return _has_native_fact(proj) or bool(_curated_fact_parts(proj))
 
 
 def _read_dream_record(proj):
@@ -689,14 +711,17 @@ def queue_home(proj):
     except (TypeError, ValueError):
         return proj
     for directory in (start, *start.parents):
+        # Only a marker git itself accepts: an empty `.git` directory left in /tmp otherwise made
+        # every project under it share the queue of /tmp.
+        if not shell_text.is_work_tree_root(str(directory)):
+            continue
         dotgit = directory / ".git"
         try:
-            if dotgit.is_dir():
-                return str(directory)
             if dotgit.is_file():
                 return str(_main_root_from_gitfile(directory, dotgit))
         except OSError:
             return str(start)
+        return str(directory)
     return str(start)
 
 
@@ -1068,15 +1093,23 @@ class ClaimHeld(Exception):
         self.claim = claim
 
 
+class ClaimState(StrEnum):
+    """The state of a claim on a queue entry. The values are the strings listings have always shown,
+    so a comparison against a misspelt member fails at import rather than silently never matching."""
+
+    LIVE = "live"
+    EXPIRED = "expired"
+
+
 def claim_state(rec, now=None):
-    """'live' or 'expired' for a record carrying a claim, None for one without."""
+    """ClaimState.LIVE or .EXPIRED for a record carrying a claim, None for one without."""
     claim = rec.get("claim") if isinstance(rec, dict) else None
     if not isinstance(claim, dict):
         return None
     until = claim.get("until")
     if not isinstance(until, (int, float)):
-        return "expired"
-    return "live" if until > (time.time() if now is None else now) else "expired"
+        return ClaimState.EXPIRED
+    return ClaimState.LIVE if until > (time.time() if now is None else now) else ClaimState.EXPIRED
 
 
 _SESSION_ID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
@@ -1096,7 +1129,7 @@ def claim_label(rec, now=None):
     if state is None:
         return ""
     claim = rec["claim"]
-    if state == "expired":
+    if state is ClaimState.EXPIRED:
         return "[expired claim by %s] " % claim_holder(claim.get("session"))
     left = (claim["until"] - (time.time() if now is None else now)) / 60
     return "[claimed by %s, %dm left] " % (claim_holder(claim.get("session")), left)
@@ -1121,7 +1154,7 @@ def claim_contribution(proj, match, holder, hours, now=None):
         cur = _load_queue(f)
         rec = cur[_resolve_in(cur, match=match)]
         held = rec.get("claim")
-        if claim_state(rec, stamp) == "live" and held.get("session") != holder:
+        if claim_state(rec, stamp) is ClaimState.LIVE and held.get("session") != holder:
             raise ClaimHeld(held)
         rec["claim"] = {"session": str(holder), "cwd": os.getcwd(), "ts": stamp,
                         "until": stamp + float(hours) * 3600}

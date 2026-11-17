@@ -17,6 +17,7 @@ Import it directly (`import shell_text`); the hooks directory is on `sys.path` f
 """
 
 import bisect
+import functools
 import os
 import re
 import shlex
@@ -33,6 +34,38 @@ from pathlib import PurePosixPath, PureWindowsPath
 # The lookarounds exclude the HERE-STRING `<<< word`, which feeds one word on stdin and opens no
 # body. Unguarded, its last two `<` read as `<< word`, and since a body runs to its delimiter every
 # later line of the command was dropped as data - a `git push` on the next line included.
+# Whole-command views. Every Bash hook asks several helpers about one command, and each helper
+# derived the view it needs (heredocs blanked, data regions masked, statements split) from the raw
+# text again, so a large heredoc script was walked char by char once per helper. These views are
+# pure functions of their arguments, so each is kept for the last few inputs it saw. Only inputs
+# of _VIEW_MIN_CHARS or more are kept: a short one is cheap to derive, and the per-statement calls
+# on short segments would otherwise push the whole-command entries out. Memory per view is at most
+# _VIEW_SLOTS inputs plus their results, all of them strings the hook already holds or derives.
+_VIEW_SLOTS = 4
+_VIEW_MIN_CHARS = 4096
+_VIEWS = []
+
+
+def _whole_command_view(fn):
+    """Keep `fn`'s results for its last _VIEW_SLOTS large `command` arguments (see above)."""
+    cached = functools.lru_cache(maxsize=_VIEW_SLOTS)(fn)
+    _VIEWS.append(cached)
+
+    @functools.wraps(fn)
+    def cached_view(command, *args, **kwargs):
+        if type(command) is str and len(command) >= _VIEW_MIN_CHARS:
+            return cached(command, *args, **kwargs)
+        return fn(command, *args, **kwargs)
+
+    return cached_view
+
+
+def clear_view_caches():
+    """Forget every kept whole-command view (a test asking for the cost of a fresh derivation)."""
+    for cached in _VIEWS:
+        cached.cache_clear()
+
+
 _HEREDOC_WORD = r"""(?:[^\s;&|()<>'"\\`]|\\.|'[^'\n]*'|"(?:[^"\\\n]|\\.)*")+"""
 HEREDOC_OPEN = re.compile(r"(?<!<)<<(?!<)-?[ \t]*(" + _HEREDOC_WORD + ")")
 
@@ -468,6 +501,9 @@ def is_git_verb(segment, verbs, tool_name="Bash"):
     return git_verb_operands(argv_for_match(segment, tool_name), verbs, tool_name) is not None
 
 
+_GLOB_OR_TILDE = re.compile(r"[~\[\]{}]")
+_WHITESPACE = re.compile(r"\s")
+_NONBLANK_RUN = re.compile(r"\S+")
 # A redirection operator at the START of a word, after an optional fd number, `&` or PowerShell's
 # `*`: `2>&1`, `>f`, `&>f`, `>>f`, `<f`, `>|f`, `<>f`, `<<<w`, `*>f`. Anchored, so a word that merely
 # CONTAINS `>` is not taken for one.
@@ -667,7 +703,7 @@ def _leading_assignments(raw, gap_before, gap_after):
     found = {}
     for name, value in _ONE_ASSIGNMENT.findall(statement):
         value = value[1:-1] if value[:1] in "\"'" else value
-        if not is_rooted(value) or _UNKNOWABLE_DIR.search(value) or re.search(r"[~\[\]{}]", value):
+        if not is_rooted(value) or _UNKNOWABLE_DIR.search(value) or _GLOB_OR_TILDE.search(value):
             return None
         found[name] = value
     return found
@@ -687,7 +723,7 @@ def _expansions(raw, known):
     for name, value in known.items():
         hits = [m.start() for m in re.finditer(r"\$(?:\{%s\}|%s(?![A-Za-z0-9_]))" % (name, name), raw)]
         before = [raw[i - 1] if i else " " for i in hits]
-        if hits and all(c == '"' or (c in " \t" and not re.search(r"\s", value)) for c in before):
+        if hits and all(c == '"' or (c in " \t" and not _WHITESPACE.search(value)) for c in before):
             usable[name] = value
     return usable
 
@@ -1162,11 +1198,18 @@ def iter_segments(text, tool_name=None):
     caller that must know whether a write happened BEFORE the gated verb. Without this such a
     caller keeps its own second splitter, and the two drift on exactly the shapes that matter.
     """
-    pos = 0
+    return iter(_segments(text, tool_name))
+
+
+@_whole_command_view
+def _segments(text, tool_name=None):
+    """`iter_segments` as a tuple, so a large command is split once however many ask."""
+    out, pos = [], 0
     for start, end in _iter_separators(text, tool_name):
-        yield pos, text[pos:start]
+        out.append((pos, text[pos:start]))
         pos = end
-    yield pos, text[pos:]
+    out.append((pos, text[pos:]))
+    return tuple(out)
 
 
 
@@ -1459,7 +1502,7 @@ def gate_program_in(text, tool_name="Bash", pattern=GATE_RE, start=0, end=None):
     `match.start()` cuts it where the gate runs.
     """
     end = len(text) if end is None else end
-    tokens = [(start + m.start(), start + m.end()) for m in re.finditer(r"\S+", text[start:end])]
+    tokens = [(start + m.start(), start + m.end()) for m in _NONBLANK_RUN.finditer(text[start:end])]
     while tokens and text[tokens[0][0]:tokens[0][1]] in _GROUP_OPENERS:
         tokens = tokens[1:]
     if tokens:
@@ -1614,8 +1657,14 @@ def iter_heredocs(command: str):
     """
     command = command or ""
     if "<<" not in command:
-        return
-    yield from _HeredocScan(command).run()
+        return iter(())
+    return iter(_heredocs(command))
+
+
+@_whole_command_view
+def _heredocs(command):
+    """`iter_heredocs` as a tuple, so a large command is scanned once however many ask."""
+    return tuple(_HeredocScan(command).run())
 
 
 class _HeredocScan:
@@ -1762,6 +1811,7 @@ def find_heredoc_opener(line: str):
     return None
 
 
+@_whole_command_view
 def _split_heredocs(command: str):
     """(command lines, body lines) for `command`, split at every heredoc the shell would open.
 
@@ -1778,9 +1828,10 @@ def _split_heredocs(command: str):
         bodies.extend(lines[start:end])
         index = end + 1                               # drop the terminator line itself
     kept.extend(lines[index:])
-    return kept, bodies
+    return tuple(kept), tuple(bodies)
 
 
+@_whole_command_view
 def strip_heredoc_bodies(command: str) -> str:
     """Drop heredoc bodies, keeping the command lines around them.
 
@@ -1814,7 +1865,12 @@ def blank_heredoc_bodies(command: str) -> str:
     whitespace to it, so an apostrophe or `(` that was in the body can no longer open a region.
     `commands_only_aligned` is that pairing in one call.
     """
-    command = command or ""
+    return _blanked_heredocs(command or "")
+
+
+@_whole_command_view
+def _blanked_heredocs(command):
+    """The body of `blank_heredoc_bodies`, kept for the last few large commands."""
     lines = command.split("\n")
     for _at, _opener, (start, end) in iter_heredocs(command):
         for index in range(start, min(end + 1, len(lines))):   # end is the terminator, if any
@@ -1866,7 +1922,13 @@ def blank_unexpanded_text(command: str, *, tool_name="Bash") -> str:
     rules; toggling on every `"` instead read the inner quote as closing the string, and the
     apostrophe after it then blanked a real `$?` further on.
     """
-    return _blank_unexpanded(command, tool_name == "PowerShell", 0)
+    return _unexpanded_view(command, tool_name == "PowerShell")
+
+
+@_whole_command_view
+def _unexpanded_view(command, powershell):
+    """`blank_unexpanded_text` at the top level, kept for the last few large commands."""
+    return _blank_unexpanded(command, powershell, 0)
 
 
 #: How many `"$(` levels `blank_unexpanded_text` reads as nested shells before copying the rest of a
@@ -2046,6 +2108,15 @@ def _paren_step(text, index, stack):
     return index + 1
 
 
+def _mask_special(escape):
+    """The characters `mask_data_regions` must stop at: every branch's first character."""
+    return re.compile(f"[{re.escape("$'\"`@#" + escape)}]")
+
+
+# Keyed by the escape character a tool reading picks; see mask_data_regions.
+_MASK_SPECIAL = {escape: _mask_special(escape) for escape in ("\\", "`", "")}
+
+
 def mask_data_regions(command: str, fill: str = "Q", tool_name="Bash") -> str:
     """Replace every region that cannot affect STATEMENT STRUCTURE with a filler character.
 
@@ -2085,12 +2156,29 @@ def mask_data_regions(command: str, fill: str = "Q", tool_name="Bash") -> str:
     both directions at once: the `\\"` of `"a\\" > b.md; c"` closed the string, so a redirection
     appeared inside it, and `echo \\"; git push; echo \\"` masked a push that really runs.
     """
+    return _masked_view(command, fill, tool_name)
+
+
+@_whole_command_view
+def _masked_view(command, fill, tool_name):
+    """The body of `mask_data_regions`, kept for the last few large commands."""
     escape = {"Bash": "\\", "PowerShell": "`", None: "\\"}.get(tool_name, "")
     bash_quoting = tool_name != "PowerShell"
     out: list[str] = []
     index, size = 0, len(command)
     cont_at, cont_prev = -1, ""                # see blank_unexpanded_text: `a\<nl>#b` is one word
+    special = _MASK_SPECIAL.get(escape) or _mask_special(escape)
     while index < size:
+        # A run with none of the characters a branch below acts on is copied in one step; testing
+        # every branch per character cost about 33 string probes per byte of a heredoc script.
+        found = special.search(command, index)
+        stop = size if found is None else found.start()
+        if stop > index:
+            if stop - index > 1:
+                out.append(command[index:stop - 1])
+            out.append(command[stop - 1])          # the walk's `out[-1]` checks read one char
+            index = stop
+            continue
         char = command[index]
         if escape and char == escape and index + 1 < size:
             # An escaped NEWLINE is a line continuation: it must become whitespace, not filler,
@@ -2329,7 +2417,7 @@ def strip_data_sink_statements(command: str, tool_name=None) -> str:
         keep = _sink_keep_words(segment, tool_name)
         if not keep:
             continue
-        words = list(re.finditer(r"\S+", segment))
+        words = list(_NONBLANK_RUN.finditer(segment))
         if len(words) < keep:
             continue
         for index in range(at + words[keep - 1].end(), min(at + len(segment), len(out))):

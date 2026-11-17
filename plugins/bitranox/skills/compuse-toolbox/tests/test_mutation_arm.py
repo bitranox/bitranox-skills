@@ -1596,3 +1596,19 @@ def test_the_text_report_names_the_log_it_wrote(tmp_path):
     proc = run(p, "--mutate", "src.py", "old.txt", "new.txt", "--test", "test_src.py::test_zero",
                "--log-dir", str(logs))
     assert f"log: {logs}" in proc.stdout, proc.stdout
+
+
+def test_a_misspelt_verdict_is_refused_not_scored_as_inconclusive():
+    # The verdict decides the exit code; a typo silently folding to 2 would hide a broken branch.
+    with pytest.raises(ValueError):
+        M.exit_code_for("kiled")
+
+
+def test_every_verdict_has_its_own_exit_code_and_keeps_its_string():
+    assert {v.value: M.exit_code_for(v) for v in M.Verdict} == {
+        "killed": 0, "survived": 1, "inconclusive": 2, "timeout": 2, "error": 2}
+    for verdict in (M.verdict_for(0), M.verdict_for(None), M.command_verdict(3, "x")[0]):
+        assert type(verdict) is M.Verdict
+    summary = "=== short test summary info ===\nFAILED t.py::x - AssertionError: boom\n"
+    assert json.dumps(M.verdict_for(1, summary)) == '"killed"'
+    assert M.verdict_for(1, summary).upper() == "KILLED"

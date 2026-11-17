@@ -607,6 +607,22 @@ def _warn_dropped_invalid_pointers(local, text):
 
 
 _FRONTMATTER_BLOCK_RX = re.compile(r"---[ \t]*\r?\n(.*?\r?\n)?---[ \t]*(?:\r?\n|\Z)", re.S)
+# One key of a front-matter block each, read or rewritten by the editors below.
+_NAME_KEY_RX = re.compile(r"(?m)^name:")
+_NAME_LINE_RX = re.compile(r"(?m)^(name:)[ \t]*[^\r\n]*")
+_DESCRIPTION_VALUE_RX = re.compile(r"(?m)^description:[ \t]*([^\r\n]*)")
+_DESCRIPTION_LINE_RX = re.compile(r"(?m)^(description:)[ \t]*[^\r\n]*")
+_TITLE_VALUE_RX = re.compile(r"(?m)^title:[ \t]*([^\r\n]*)")
+_TITLE_LINE_RX = re.compile(r"(?m)^(title:)[ \t]*[^\r\n]*")
+_TOPICS_VALUE_RX = re.compile(r"(?m)^topics:[ \t]*([^\r\n]*)")
+_TOPICS_LINE_RX = re.compile(r"(?m)^topics:[^\r\n]*")
+_METADATA_HEADER_RX = re.compile(r"(?m)^(metadata:)[ \t]*(?=\r?$)")
+_METADATA_INDENT_RX = re.compile(r"(?m)^metadata:[ \t]*\r?\n([ \t]+)[A-Za-z_]")
+_TYPE_VALUE_RX = re.compile(r"(?m)^[ \t]+type:[ \t]*(\S+)[ \t]*\r?$")
+_TYPE_LINE_RX = re.compile(r"(?m)^([ \t]+type:)[ \t]*[^\s]*[ \t]*(?=\r?$)")
+_TYPE_LINE_AND_INDENT_RX = re.compile(r"(?m)^(([ \t]+)type:[^\r\n]*)(?=\r?$)")
+_SKILL_VALUE_RX = re.compile(r"(?m)^[ \t]+skill:[ \t]*(\S+)[ \t]*\r?$")
+_SKILL_LINE_RX = re.compile(r"(?m)^([ \t]+skill:)[ \t]*[^\s]*[ \t]*(?=\r?$)")
 
 
 def _frontmatter(body):
@@ -619,7 +635,7 @@ def _frontmatter(body):
     `startswith("---")` wrote a `metadata:` block onto the end of such a body's prose."""
     head = (body or "").lstrip()
     m = _FRONTMATTER_BLOCK_RX.match(head)
-    if m and re.search(r"(?m)^name:", m.group(1) or ""):
+    if m and _NAME_KEY_RX.search(m.group(1) or ""):
         return head, m
     return head, None
 
@@ -675,8 +691,7 @@ def _synced_frame(slug, hook, type_, text):
     if m is None:
         return text
     inner = m.group(1)
-    inner, _n = re.subn(r"(?m)^(name:)[ \t]*[^\r\n]*", lambda d: "%s %s" % (d.group(1), slug),
-                        inner, count=1)
+    inner, _n = _NAME_LINE_RX.subn(lambda d: "%s %s" % (d.group(1), slug), inner, count=1)
     text = _reframe_description(_with_frame(head, m, inner), hook)
     if type_ and _body_type(text) != type_:
         text = _retype_body(slug, hook, type_, text)
@@ -1059,7 +1074,7 @@ def _body_description(text):
     _head, m = _frontmatter(text)
     if m is None:
         return ""
-    d = re.search(r"(?m)^description:[ \t]*([^\r\n]*)", m.group(1))
+    d = _DESCRIPTION_VALUE_RX.search(m.group(1))
     return d.group(1).strip() if d else ""
 
 
@@ -1075,7 +1090,7 @@ def _body_type(text):
     _head, m = _frontmatter(text)
     if m is None:
         return ""
-    t = re.search(r"(?m)^[ \t]+type:[ \t]*(\S+)[ \t]*\r?$", m.group(1))
+    t = _TYPE_VALUE_RX.search(m.group(1))
     return t.group(1) if t else ""
 
 
@@ -1086,7 +1101,7 @@ def _body_skill(text):
     _head, m = _frontmatter(text)
     if m is None:
         return ""
-    s = re.search(r"(?m)^[ \t]+skill:[ \t]*(\S+)[ \t]*\r?$", m.group(1))
+    s = _SKILL_VALUE_RX.search(m.group(1))
     return s.group(1) if s else ""
 
 
@@ -1102,18 +1117,15 @@ def _with_skill(text, skill):
         return text
     inner = m.group(1)
     nl = "\r\n" if inner.endswith("\r\n") else "\n"
-    new_inner, n = re.subn(r"(?m)^([ \t]+skill:)[ \t]*[^\s]*[ \t]*(?=\r?$)",
-                           lambda s: "%s %s" % (s.group(1), skill), inner, count=1)
+    new_inner, n = _SKILL_LINE_RX.subn(lambda s: "%s %s" % (s.group(1), skill), inner, count=1)
     if n == 0:
         # At the `type:` line's own indent: a frame handed in may indent its sub-keys by four.
-        new_inner, n = re.subn(r"(?m)^(([ \t]+)type:[^\r\n]*)(?=\r?$)",
-                               lambda s: "%s%s%sskill: %s" % (s.group(1), nl, s.group(2), skill),
-                               inner, count=1)
+        new_inner, n = _TYPE_LINE_AND_INDENT_RX.subn(
+            lambda s: "%s%s%sskill: %s" % (s.group(1), nl, s.group(2), skill), inner, count=1)
     if n == 0:
         indent = _metadata_indent(inner)
-        new_inner, n = re.subn(r"(?m)^(metadata:)[ \t]*(?=\r?$)",
-                               lambda s: "%s%s%sskill: %s" % (s.group(1), nl, indent, skill),
-                               inner, count=1)
+        new_inner, n = _METADATA_HEADER_RX.subn(
+            lambda s: "%s%s%sskill: %s" % (s.group(1), nl, indent, skill), inner, count=1)
     if n == 0:
         new_inner = inner + "metadata:%s  skill: %s%s" % (nl, skill, nl)
     return _with_frame(head, m, new_inner)
@@ -1123,7 +1135,7 @@ def _metadata_indent(inner):
     """The indent of the first sub-key under `metadata:` in frontmatter `inner`, or two spaces
     when it has none. A sub-key inserted at any other indent than its siblings' makes the frame
     invalid YAML, and a frame handed in by a writer may indent them by four."""
-    m = re.search(r"(?m)^metadata:[ \t]*\r?\n([ \t]+)[A-Za-z_]", inner)
+    m = _METADATA_INDENT_RX.search(inner)
     return m.group(1) if m else "  "
 
 
@@ -1143,8 +1155,7 @@ def _reframe_description(text, hook):
     if m is None:
         return text
     desc = " ".join((hook or "").split())
-    inner, n = re.subn(r"(?m)^(description:)[ \t]*[^\r\n]*",
-                       lambda d: "%s %s" % (d.group(1), desc), m.group(1), count=1)
+    inner, n = _DESCRIPTION_LINE_RX.subn(lambda d: "%s %s" % (d.group(1), desc), m.group(1), count=1)
     return _with_frame(head, m, inner) if n else text
 
 
@@ -1154,7 +1165,7 @@ def _body_title(text):
     _head, m = _frontmatter(text)
     if m is None:
         return ""
-    t = re.search(r"(?m)^title:[ \t]*([^\r\n]*)", m.group(1))
+    t = _TITLE_VALUE_RX.search(m.group(1))
     return t.group(1).strip() if t else ""
 
 
@@ -1172,8 +1183,7 @@ def _with_title(text, title):
         return text
     inner = m.group(1)
     nl = "\r\n" if inner.endswith("\r\n") else "\n"
-    new_inner, n = re.subn(r"(?m)^(title:)[ \t]*[^\r\n]*", lambda t: "%s %s" % (t.group(1), title),
-                           inner, count=1)
+    new_inner, n = _TITLE_LINE_RX.subn(lambda t: "%s %s" % (t.group(1), title), inner, count=1)
     for key in ("description", "name"):
         if n:
             break
@@ -1191,7 +1201,7 @@ def _body_topics(text):
     _head, m = _frontmatter(text)
     if m is None:
         return None
-    t = re.search(r"(?m)^topics:[ \t]*([^\r\n]*)", m.group(1))
+    t = _TOPICS_VALUE_RX.search(m.group(1))
     if t is None:
         return None
     try:
@@ -1207,7 +1217,7 @@ def _body_topics_line(text):
     _head, m = _frontmatter(text)
     if m is None:
         return None
-    t = re.search(r"(?m)^topics:[^\r\n]*", m.group(1))
+    t = _TOPICS_LINE_RX.search(m.group(1))
     return t.group(0) if t else None
 
 
@@ -1348,7 +1358,7 @@ def _with_topics_line(text, line):
     every_line = r"(?m)^topics:[^\r\n]*\r?\n"         # inner ends in a line break, so each has one
     if line is None:
         return _with_frame(head, m, re.sub(every_line, "", inner))
-    first = re.search(r"(?m)^topics:[^\r\n]*", inner)
+    first = _TOPICS_LINE_RX.search(inner)
     n = first is not None
     if n:
         new_inner = inner[:first.start()] + line + re.sub(every_line, "", inner[first.end():])
@@ -1372,13 +1382,11 @@ def _retype_body(slug, hook, type_, text):
         return _framed_body(slug, hook, type_, text)
     inner = m.group(1)
     nl = "\r\n" if inner.endswith("\r\n") else "\n"
-    new_inner, n = re.subn(r"(?m)^([ \t]+type:)[ \t]*[^\s]*[ \t]*(?=\r?$)",
-                           lambda t: "%s %s" % (t.group(1), type_), inner, count=1)
+    new_inner, n = _TYPE_LINE_RX.subn(lambda t: "%s %s" % (t.group(1), type_), inner, count=1)
     if n == 0:
         indent = _metadata_indent(inner)
-        new_inner, n = re.subn(r"(?m)^(metadata:)[ \t]*(?=\r?$)",
-                               lambda t: "%s%s%stype: %s" % (t.group(1), nl, indent, type_),
-                               inner, count=1)
+        new_inner, n = _METADATA_HEADER_RX.subn(
+            lambda t: "%s%s%stype: %s" % (t.group(1), nl, indent, type_), inner, count=1)
     if n == 0:
         new_inner = inner + "metadata:%s  type: %s%s" % (nl, type_, nl)
     return _with_frame(head, m, new_inner)
@@ -1417,11 +1425,12 @@ def _archive_legacy_body(anchor, entry):
 # ---- move: the dream's re-leveling primitive -----------------------------------------------------
 
 _WIKILINK_RX = re.compile(r"\[\[([^\]]+)\]\]")
+_SLUG_SEPARATORS_RX = re.compile(r"[\s_]+")
 
 
 def _canon_slug(s):
     """Separator-insensitive canonical slug form (matches reconcile's semantics)."""
-    return re.sub(r"[\s_]+", "-", (s or "").strip().lower())
+    return _SLUG_SEPARATORS_RX.sub("-", (s or "").strip().lower())
 
 
 def _ref_slug(raw):

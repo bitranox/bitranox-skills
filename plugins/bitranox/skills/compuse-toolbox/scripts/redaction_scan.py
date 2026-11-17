@@ -70,7 +70,7 @@ from collections import Counter
 from dataclasses import dataclass, replace
 from collections.abc import Callable, Iterable
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from _cli_envelope import EXIT_ERROR, EXIT_NO, EXIT_YES, EnvelopeArgumentParser, emit, guarded
 from pushcheck import (
@@ -123,10 +123,38 @@ class Hit:
 Matcher = Callable[[str, tuple[Rule, ...]], list[Rule]]
 
 
+class _FoldedRules(NamedTuple):
+    """One rule tuple with each pattern already case-folded."""
+
+    rules: tuple[Rule, ...]
+    folded: tuple[tuple[Rule, str], ...]
+
+
+_last_folded: _FoldedRules | None = None
+
+
+def _folded_patterns(rules: tuple[Rule, ...]) -> tuple[tuple[Rule, str], ...]:
+    """Each rule with its folded pattern, folded once per rule tuple rather than once per line.
+
+    One slot keyed by identity: a scan hands the same tuple to every line, and a tuple of frozen
+    Rules over str patterns cannot change, so the stored folding is valid for as long as that
+    object is the argument. Keyed by `is`, not a hash: hashing the tuple costs a walk over every
+    rule on every line, which is the work being removed. The pair is read once into a local so a
+    concurrent caller never sees one tuple's rules beside another's foldings.
+    """
+    global _last_folded
+    slot = _last_folded
+    if slot is not None and slot.rules is rules:
+        return slot.folded
+    folded = tuple((r, fold_case(r.pattern)) for r in rules)
+    _last_folded = _FoldedRules(rules, folded)
+    return folded
+
+
 def match_rules(text: str, rules: tuple[Rule, ...]) -> list[Rule]:
     """The rules whose pattern is a case-insensitive literal substring of `text`. PURE."""
     folded = fold_case(text)
-    return [r for r in rules if fold_case(r.pattern) in folded]
+    return [r for r, pattern in _folded_patterns(rules) if pattern in folded]
 
 
 def scan_added(lines: Iterable[tuple[str, int, str]], rules: tuple[Rule, ...],

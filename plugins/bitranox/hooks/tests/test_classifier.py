@@ -366,6 +366,39 @@ def test_site_mode_reads_the_knob_only_under_the_jev_backend(backend, knob, mode
     assert cl.shadow_enabled(cfg, "skill_router") is (mode == "shadow")
 
 
+@pytest.mark.parametrize("knob,member", [
+    ("off", "OFF"), ("shadow", "SHADOW"), ("decide", "DECIDE"), ("decided", "OFF"),
+])
+def test_site_mode_answers_a_site_mode_member(knob, member):
+    """A member, so a call site comparing against `SiteMode.DECIDED` fails at import, where a
+    misspelt string literal compared false forever without a word."""
+    cfg = {"classifier_backend": "jev", "classifier_skill_router": knob}
+    assert cl.site_mode(cfg, "skill_router") is getattr(cl.SiteMode, member)
+
+
+def test_an_unknown_site_mode_in_the_config_is_reported_and_read_as_off(capsys):
+    cfg = {"classifier_backend": "jev", "classifier_skill_router": "decided"}
+    assert cl.site_mode(cfg, "skill_router") == "off"
+    err = capsys.readouterr().err
+    assert "classifier_skill_router" in err and "'decided'" in err
+
+
+def test_an_absent_or_valid_site_mode_reports_nothing(capsys):
+    cl.site_mode({"classifier_backend": "jev"}, "skill_router")
+    cl.site_mode({"classifier_backend": "jev", "classifier_skill_router": "shadow"}, "skill_router")
+    cl.site_mode({"classifier_backend": "off", "classifier_skill_router": "bogus"}, "skill_router")
+    assert capsys.readouterr().err == ""
+
+
+def test_a_question_of_an_unknown_type_is_refused_where_it_is_built():
+    """`nul` for `noul` used to build, and only the server's reply (or none) showed it."""
+    with pytest.raises(ValueError):
+        cl.Question("x", "nul", "Is it?")
+    q = cl.Question("x", "noul", "Is it?")
+    assert q.type is cl.QuestionType.NOUL
+    assert json.dumps(q.to_api()) == '{"type": "noul", "instructions": "Is it?"}'
+
+
 def test_get_classifier_builds_jev_for_a_site_in_decide_mode(tmp_path):
     cfg = {"classifier_backend": "jev", "classifier_skill_router": "decide"}
     c = cl.get_classifier(cfg, "skill_router", env={"TYPESAFE_API_KEY": "abc"}, home=tmp_path)

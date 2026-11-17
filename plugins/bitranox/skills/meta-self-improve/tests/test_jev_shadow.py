@@ -13,6 +13,7 @@ import os
 import re
 import stat
 import sys
+import tracemalloc
 from datetime import datetime, timedelta, UTC
 from pathlib import Path
 
@@ -1812,3 +1813,38 @@ def test_receipt_refuses_an_unknown_site(home, capsys):
     rc, env = _receipt(capsys, "--dream", "d1", "--site", "no-such-site")
     assert rc == 2
     assert "no-such-site" in env["data"]["error"]
+
+
+# The receipt counts one dream's rows in logs capped at 100 MiB a month and holding every
+# dream: holding a whole file to count a handful of rows would make memory follow the log.
+
+
+def _peak_dream_rows(home, other):
+    d = audit(home)
+    d.mkdir(parents=True, exist_ok=True)
+    rows = [{"dream_id": "d1", "site": "dream-prune"}] * 5
+    rows += [{"dream_id": "other", "site": "dream-prune", "pad": "x" * 200}] * other
+    write_jsonl(d / "jev-skill-shadow-2026-01.jsonl", rows)
+    tracemalloc.start()
+    try:
+        counted = js._dream_rows("d1")
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    return peak, counted
+
+
+def test_counting_a_dreams_rows_does_not_hold_the_whole_log(home):
+    small_peak, small = _peak_dream_rows(home, other=500)
+    large_peak, large = _peak_dream_rows(home, other=4000)
+    assert small == large == {"dream-prune": 5}
+    assert large_peak < 2 * small_peak, \
+        f"8x the other dreams' rows raised the peak from {small_peak} to {large_peak} bytes"
+
+
+def test_a_non_utf8_line_in_the_log_is_skipped_not_fatal(home):
+    d = audit(home)
+    d.mkdir(parents=True)
+    good = json.dumps({"dream_id": "d1", "site": "dream-prune"}).encode() + b"\n"
+    (d / "jev-skill-shadow-2026-01.jsonl").write_bytes(good + b"\xff\xfe not utf-8\n" + good)
+    assert js._dream_rows("d1") == {"dream-prune": 2}

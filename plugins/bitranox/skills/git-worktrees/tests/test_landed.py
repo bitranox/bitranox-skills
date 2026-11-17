@@ -132,6 +132,20 @@ def test_edit_that_main_changed_again_afterwards_counts_as_landed(repo):
     assert {f["path"]: f["status"] for f in env["data"]["files"]} == {"a.txt": "in_history"}
 
 
+def test_worktree_files_are_typed_records_with_a_closed_status(repo):
+    """The verdict compares each status against LANDED_FILE_STATES: a status outside the
+    vocabulary would read as "not landed" without a word, so every one must be a FileStatus."""
+    wt = repo.worktree("topic")
+    repo.write("a.txt", "one\nmine\nthree\n", where=wt)
+    base = repo.git("merge-base", "HEAD", "main", cwd=wt).strip()
+
+    files = L.worktree_files(wt, base, "main")
+
+    assert [(type(f), f.path, f.status) for f in files] == [
+        (L.WorktreeFile, "a.txt", L.FileStatus.DIFFERS)]
+    assert type(files[0].status) is L.FileStatus
+
+
 def test_untracked_file_main_does_not_have_is_not_landed(repo):
     wt = repo.worktree("topic")
     repo.write("new/b.txt", "fresh\n", where=wt)

@@ -827,6 +827,38 @@ def test_a_path_outside_any_repo_keeps_its_own_key(tmp_path):
     assert S._queue_file_key(str(plain)) == S.proj_key(str(plain))
 
 
+def test_claim_state_answers_a_member_that_keeps_its_listed_string():
+    live = {"claim": {"session": "s", "until": 2_000_000_000}}
+    gone = {"claim": {"session": "s", "until": 1}}
+    torn = {"claim": {"session": "s", "until": "soon"}}
+    assert S.claim_state(live, now=1_000) is S.ClaimState.LIVE
+    assert S.claim_state(gone, now=1_000) is S.ClaimState.EXPIRED
+    assert S.claim_state(torn, now=1_000) is S.ClaimState.EXPIRED
+    assert S.claim_state({"what": "x"}) is None
+    assert [str(m) for m in S.ClaimState] == ["live", "expired"]
+
+
+def test_an_empty_git_directory_above_a_project_is_not_its_repository(tmp_path):
+    # An empty `.git` directory appeared in /tmp while other sessions ran, and every tmp_path
+    # project then resolved to the queue of /tmp. git needs HEAD in a `.git` directory, so this
+    # one marks no repository and each project below keeps its own queue.
+    (tmp_path / ".git").mkdir()
+    one, two = tmp_path / "one", tmp_path / "two"
+    one.mkdir()
+    two.mkdir()
+    assert S.queue_home(str(one)) == str(one)
+    assert S._queue_file_key(str(one)) != S._queue_file_key(str(two))
+
+
+def test_a_real_repository_above_an_empty_git_directory_is_still_found(tmp_path):
+    main = tmp_path / "main"
+    main.mkdir()
+    _git(main, "init", "-q")
+    inner = main / "pkg"
+    (inner / ".git").mkdir(parents=True)
+    assert S.queue_home(str(inner)) == str(main)
+
+
 def test_a_relative_gitdir_in_a_gitfile_still_finds_the_main_checkout(tmp_path):
     main = tmp_path / "main"
     (main / ".git" / "worktrees" / "w").mkdir(parents=True)

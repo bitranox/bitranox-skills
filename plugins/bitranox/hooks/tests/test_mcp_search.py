@@ -44,6 +44,22 @@ def test_enabled_honors_knob(home, monkeypatch):
     assert X.enabled() is False                          # auto but CLI absent
 
 
+@pytest.mark.parametrize("raw", ["Auto", "on", True, "", None, 1])
+def test_a_knob_value_naming_no_mode_is_reported_and_searches_nothing(home, monkeypatch, capsys, raw):
+    # A hand-edited config can hold anything; the settings CLI only ever writes off or auto.
+    monkeypatch.setattr(X, "available", lambda: True)
+    sig.save_config({"mcp_search": raw})
+    assert X.enabled() is False
+    err = capsys.readouterr().err
+    assert "mcp_search" in err and repr(raw) in err and "off" in err
+
+
+@pytest.mark.parametrize(("raw", "expected"), [("auto", X.SearchMode.AUTO), ("off", X.SearchMode.OFF)])
+def test_the_knob_parses_into_its_mode(home, raw, expected):
+    sig.save_config({"mcp_search": raw})
+    assert X.search_mode() is expected
+
+
 # The PATH lookup is the seam these patch, not `available()`: search resolves the program itself,
 # so patching `available` alone left these running whatever `basic-memory` the test machine has.
 def _cli_on_path(monkeypatch, path="/usr/bin/basic-memory"):

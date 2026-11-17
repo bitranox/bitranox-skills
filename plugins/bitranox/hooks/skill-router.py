@@ -213,7 +213,7 @@ def _router_request(prompt, sid, triggers, transcript, cwd):
 def _decides(cfg, prompt):
     """True when decide mode acts on this turn: a typed prompt, or the notification of a failed
     background command. Every other turn goes the way it does with the site off."""
-    return (classifier.site_mode(cfg, "skill_router") == "decide"
+    return (classifier.site_mode(cfg, "skill_router") is classifier.SiteMode.DECIDE
             and (prompt_text.typed_by_a_person(prompt)
                  or prompt_text.failed_background_command(prompt)))
 
@@ -224,8 +224,9 @@ def _shadows(cfg, prompt):
     act on those kinds can rest on - with decide switching the shadow off, it would stop growing
     the day decide was turned on."""
     mode = classifier.site_mode(cfg, "skill_router")
-    return mode == "shadow" or (mode == "decide" and bool(prompt_text.notification_fields(prompt))
-                                and not prompt_text.failed_background_command(prompt))
+    return mode is classifier.SiteMode.SHADOW or (
+        mode is classifier.SiteMode.DECIDE and bool(prompt_text.notification_fields(prompt))
+        and not prompt_text.failed_background_command(prompt))
 
 
 def _shadow_skill_router(prompt, sid, triggers, transcript="", cwd=""):

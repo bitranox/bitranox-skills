@@ -58,6 +58,8 @@ for _d in (str(_HOOKS), str(_JIGS)):
 import claude_paths  # noqa: E402 - the sys.path setup above makes the hooks dir importable
 from classifier import Question, get_classifier, prepare_state  # noqa: E402
 
+_DOCSTRING_RE = re.compile(r'"""(.*?)"""', re.S)
+
 __all__ = [
     "CHOICE_ID", "CONTROLS", "ClassifierFailed", "ClassifierUnavailable", "ControlFailed",
     "NothingToReport", "ORDINARY_KEY", "UNCOVERED_KEY", "check_controls", "choice_question",
@@ -114,7 +116,7 @@ def jig_catalogue(scripts_dir=None):
             text = path.read_text(encoding="utf-8")
         except OSError:
             continue
-        doc = re.search(r'"""(.*?)"""', text, re.S)
+        doc = _DOCSTRING_RE.search(text)
         if not doc:
             continue
         body = doc.group(1).strip()

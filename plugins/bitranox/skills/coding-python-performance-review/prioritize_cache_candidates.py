@@ -14,6 +14,8 @@ import argparse
 import re
 import sys
 
+_PATH_SEP_RE = re.compile(r'[\\/]')
+
 # One report line: "<path>:<line> - <function>()", optionally wrapped in markdown bold.
 # The path is greedy so a drive letter ("C:\\...") stays part of it: the anchor is the
 # LAST ":<digits> - " on the line, never the first colon.
@@ -39,7 +41,7 @@ def parse_hotspots(hotspot_file):
 
 
 def _components(path):
-    return [part for part in re.split(r'[\\/]', path) if part not in ('', '.')]
+    return [part for part in _PATH_SEP_RE.split(path) if part not in ('', '.')]
 
 
 def same_file(a, b):

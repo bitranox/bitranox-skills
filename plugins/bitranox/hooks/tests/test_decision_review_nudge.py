@@ -67,7 +67,7 @@ def run_main(payload, monkeypatch, capsys):
     return rc, capsys.readouterr().out
 
 
-def signals(commands=(), goal_state=DRN.GOAL_NONE, offset=0, tool="Bash"):
+def signals(commands=(), goal_state=DRN.GoalState.NONE, offset=0, tool="Bash"):
     return DRN.Signals([DRN.ShellCall(c, tool) for c in commands], goal_state, offset)
 
 
@@ -119,27 +119,27 @@ def test_talking_about_a_commit_is_not_committing():
 
 
 def test_nothing_concluded_says_nothing():
-    assert DRN.decide(score=0, last_score=0) == DRN.ASK_NONE
+    assert DRN.decide(score=0, last_score=0) == DRN.Ask.NONE
 
 
 def test_the_first_conclusion_blocks():
     """An ask that can be scrolled past is one that gets scrolled past - stop the session once."""
-    assert DRN.decide(score=1, last_score=0) == DRN.ASK_BLOCK
+    assert DRN.decide(score=1, last_score=0) == DRN.Ask.BLOCK
 
 
 def test_the_same_conclusion_seen_again_says_nothing():
     """A commit never leaves the transcript, so without this every later turn would re-fire."""
-    assert DRN.decide(score=1, last_score=1) == DRN.ASK_NONE
+    assert DRN.decide(score=1, last_score=1) == DRN.Ask.NONE
 
 
 def test_a_further_conclusion_reminds_without_blocking():
     """A second block would nag, and repeated blocks hit the cap that ends a turn by override."""
-    assert DRN.decide(score=2, last_score=1) == DRN.ASK_REMIND
+    assert DRN.decide(score=2, last_score=1) == DRN.Ask.REMIND
 
 
 def test_a_goal_going_from_running_to_met_counts_as_new():
-    assert DRN.conclusion_score(signals([], DRN.GOAL_MET)) > DRN.conclusion_score(
-        signals([], DRN.GOAL_ACTIVE))
+    assert DRN.conclusion_score(signals([], DRN.GoalState.MET)) > DRN.conclusion_score(
+        signals([], DRN.GoalState.ACTIVE))
 
 
 def test_each_further_pr_raises_the_score():
@@ -168,19 +168,19 @@ def test_ordinary_commands_never_raise_the_score():
 
 
 def test_a_met_goal_concludes_the_work():
-    assert DRN.reached_a_conclusion(signals(goal_state=DRN.GOAL_MET)) is True
+    assert DRN.reached_a_conclusion(signals(goal_state=DRN.GoalState.MET)) is True
 
 
 def test_a_running_goal_is_not_a_conclusion():
     """Measured over every goal session on record: 13 of 16 blocks fired on a running goal were
     early - 3 to 160 minutes into it and up to 583 minutes before it was met - and told the model a
     goal had been met when it had not. A running goal gets a reminder, never the block."""
-    assert DRN.reached_a_conclusion(signals([], DRN.GOAL_ACTIVE)) is False
+    assert DRN.reached_a_conclusion(signals([], DRN.GoalState.ACTIVE)) is False
 
 
 def test_a_met_goal_fires_even_with_no_commit_at_all():
     """A goal can be met by work that never touched git - the objective is the conclusion."""
-    assert DRN.reached_a_conclusion(signals([], DRN.GOAL_MET)) is True
+    assert DRN.reached_a_conclusion(signals([], DRN.GoalState.MET)) is True
 
 
 # --------------------------------------------------------------------------
@@ -195,23 +195,23 @@ def test_every_bash_command_is_read_in_order(tmp_path):
 
 def test_a_transcript_without_a_goal_reports_none(tmp_path):
     path = transcript(tmp_path, bash_line("ls"))
-    assert DRN.transcript_signals(path).goal_state == DRN.GOAL_NONE
+    assert DRN.transcript_signals(path).goal_state == DRN.GoalState.NONE
 
 
 def test_a_running_goal_is_read_as_active(tmp_path):
     path = transcript(tmp_path, goal_line(met=False), bash_line("git commit -m wip"))
-    assert DRN.transcript_signals(path).goal_state == DRN.GOAL_ACTIVE
+    assert DRN.transcript_signals(path).goal_state == DRN.GoalState.ACTIVE
 
 
 def test_the_last_goal_record_wins(tmp_path):
     """A goal reports met=false on every turn it runs, then once with met=true."""
     path = transcript(tmp_path, goal_line(met=False), goal_line(met=False), goal_line(met=True))
-    assert DRN.transcript_signals(path).goal_state == DRN.GOAL_MET
+    assert DRN.transcript_signals(path).goal_state == DRN.GoalState.MET
 
 
 def test_a_goal_that_went_back_to_running_is_active_again(tmp_path):
     path = transcript(tmp_path, goal_line(met=True), goal_line(met=False))
-    assert DRN.transcript_signals(path).goal_state == DRN.GOAL_ACTIVE
+    assert DRN.transcript_signals(path).goal_state == DRN.GoalState.ACTIVE
 
 
 def test_a_half_written_last_line_is_tolerated(tmp_path):
@@ -222,7 +222,7 @@ def test_a_half_written_last_line_is_tolerated(tmp_path):
 
 def test_a_missing_transcript_reads_as_nothing(tmp_path):
     s = DRN.transcript_signals(str(tmp_path / "nope.jsonl"))
-    assert texts(s) == [] and s.goal_state == DRN.GOAL_NONE
+    assert texts(s) == [] and s.goal_state == DRN.GoalState.NONE
 
 
 # --------------------------------------------------------------------------
@@ -288,7 +288,7 @@ def test_a_scan_that_starts_late_sees_only_what_follows(tmp_path):
 def test_a_window_without_a_goal_record_keeps_the_goal_it_was_given(tmp_path):
     """Absence of a record means the goal did not change, not that it went away."""
     path = transcript(tmp_path, bash_line("ls"))
-    assert DRN.transcript_signals(path, goal_state=DRN.GOAL_MET).goal_state == DRN.GOAL_MET
+    assert DRN.transcript_signals(path, goal_state=DRN.GoalState.MET).goal_state == DRN.GoalState.MET
 
 
 def test_a_commit_past_the_size_cap_is_still_reached_on_a_later_run(tmp_path):
@@ -317,8 +317,8 @@ def test_the_score_accumulates_across_windows():
 
 
 def test_a_goal_already_counted_is_not_counted_again():
-    already_met = signals([], DRN.GOAL_MET)
-    assert DRN.conclusion_score(already_met, previous=2, previous_goal=DRN.GOAL_MET) == 2
+    already_met = signals([], DRN.GoalState.MET)
+    assert DRN.conclusion_score(already_met, previous=2, previous_goal=DRN.GoalState.MET) == 2
 
 
 def test_non_bash_tool_uses_are_ignored(tmp_path):
@@ -418,7 +418,7 @@ def test_a_later_pr_reminds_without_blocking(scratch_home, monkeypatch, capsys):
 
 def test_another_sessions_flag_does_not_suppress_this_one(scratch_home, monkeypatch, capsys):
     """A per-PROJECT flag outlives its session and silences the next one; a session-keyed flag cannot."""
-    DRN.write_state("an-older-session", DRN.State(0, 99, DRN.GOAL_NONE))
+    DRN.write_state("an-older-session", DRN.State(0, 99, DRN.GoalState.NONE))
     path = transcript(scratch_home, bash_line("gh pr create --fill"))
     _, out = run_main({"session_id": "s6", "transcript_path": path}, monkeypatch, capsys)
     assert json.loads(out)["decision"] == "block"
@@ -426,6 +426,30 @@ def test_another_sessions_flag_does_not_suppress_this_one(scratch_home, monkeypa
 
 def test_the_flag_path_is_keyed_by_session(scratch_home):
     assert DRN.asked_flag("one") != DRN.asked_flag("two")
+
+
+def test_the_state_file_keeps_the_goal_as_its_plain_string(scratch_home):
+    DRN.write_state("wire", DRN.State(7, 2, DRN.GoalState.MET))
+    assert DRN.asked_flag("wire").read_text(encoding="utf-8") == '{"offset": 7, "score": 2, "goal": "met"}\n'
+    assert DRN.read_state("wire").goal is DRN.GoalState.MET
+
+
+@pytest.mark.parametrize("goal", ["metx", "MET", 1, None])
+def test_a_goal_on_disk_naming_no_state_is_reported_and_read_as_none(scratch_home, capsys, goal):
+    flag = DRN.asked_flag("bad-goal")
+    flag.parent.mkdir(parents=True, exist_ok=True)
+    flag.write_text(json.dumps({"offset": 3, "score": 1, "goal": goal}), encoding="utf-8")
+    assert DRN.read_state("bad-goal") == DRN.State(3, 1, DRN.GoalState.NONE)
+    err = capsys.readouterr().err
+    assert repr(goal) in err and "goal" in err
+
+
+def test_a_state_file_without_a_goal_key_reads_as_none_quietly(scratch_home, capsys):
+    flag = DRN.asked_flag("no-goal")
+    flag.parent.mkdir(parents=True, exist_ok=True)
+    flag.write_text(json.dumps({"offset": 3, "score": 1}), encoding="utf-8")
+    assert DRN.read_state("no-goal") == DRN.State(3, 1, DRN.GoalState.NONE)
+    assert capsys.readouterr().err == ""
 
 
 # --------------------------------------------------------------------------

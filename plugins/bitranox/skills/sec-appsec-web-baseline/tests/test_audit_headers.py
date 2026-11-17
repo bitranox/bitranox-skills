@@ -1,5 +1,7 @@
 """Behaviour tests for the pure graders in audit_headers (no network)."""
 
+import json
+
 import audit_headers as a
 import pytest
 
@@ -631,3 +633,16 @@ def test_joined_csp_unsafe_inline_is_blocked_by_a_second_policy():
 def test_joined_csp_unsafe_eval_is_medium_when_every_policy_allows_it():
     policy = "default-src 'self' 'unsafe-eval', script-src 'unsafe-eval'"
     assert sev(a._csp(policy)) == "MEDIUM"
+
+
+# ---- severity vocabulary ----
+def test_a_finding_with_a_misspelled_severity_is_refused():
+    """The gate counts only SEVERE and MEDIUM: a misspelled severity would pass it silently."""
+    with pytest.raises(ValueError):
+        a.Finding("hsts", "SEVER", "no Strict-Transport-Security header")
+
+
+def test_summary_counts_keep_their_wire_strings():
+    counts = a.summarize([a.Finding("hsts", "SEVERE", "d"), a.Finding("csp", "OK", "d")])
+    assert json.dumps(counts) == '{"SEVERE": 1, "MEDIUM": 0, "MINOR": 0, "OK": 1}'
+    assert a.Finding("hsts", "MEDIUM", "d").severity is a.Severity.MEDIUM

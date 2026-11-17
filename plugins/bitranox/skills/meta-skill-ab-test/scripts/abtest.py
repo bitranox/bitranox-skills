@@ -278,10 +278,21 @@ def load_journal(run_dir: Path) -> list[dict[str, Any]]:
 def record(run_dir: Path, **row: Any) -> None:
     """Append one journal row stamped with `at`, on a line of its own even after a torn write."""
     path = run_dir / JOURNAL
-    if path.is_file() and path.stat().st_size and not path.read_bytes().endswith(b"\n"):
+    if _ends_mid_line(path):
         with path.open("a", encoding="utf-8", newline="\n") as fh:
             fh.write("\n")
     append_jsonl(path, dict(row, at=utc_now()))
+
+
+def _ends_mid_line(path: Path) -> bool:
+    """Whether a non-empty file's last byte is not a newline; only that byte is read."""
+    if not path.is_file():
+        return False
+    with path.open("rb") as fh:
+        if fh.seek(0, os.SEEK_END) == 0:
+            return False
+        fh.seek(-1, os.SEEK_END)
+        return fh.read(1) != b"\n"
 
 
 def _sealed(run_dir: Path) -> bool:
@@ -293,9 +304,14 @@ def _require_sealed(run_dir: Path) -> None:
         raise RunRefused(f"{run_dir} is not sealed; run `abtest.py seal` first")
 
 
-def _done(run_dir: Path, round_no: int, arm: str, statuses: tuple[str, ...]) -> bool:
-    return any(r.get("step") == "arm" and r.get("round") == round_no and r.get("arm") == arm
-               and r.get("status") in statuses for r in load_journal(run_dir))
+def _done_arms(run_dir: Path, statuses: tuple[str, ...]) -> set[tuple[object, object]]:
+    """(round, arm) of every arm row whose status is in `statuses`, from one journal read.
+
+    Read once per run rather than once per scheduled arm: the schedule never names a
+    (round, arm) twice, so a row the loop appends cannot change a later skip decision.
+    """
+    return {(r.get("round"), r.get("arm")) for r in load_journal(run_dir)
+            if r.get("step") == "arm" and r.get("status") in statuses}
 
 
 def _run_dir(raw: str) -> Path:
@@ -785,18 +801,27 @@ def _set_aside(ctx: RunContext, label: str) -> str | None:
 
 
 def _auth_failed_in(stream: Path) -> bool:
-    """Whether a stream record carries the CLI's authentication_failed error."""
+    """Whether a stream record carries the CLI's authentication_failed error.
+
+    The stream is read a line at a time (a session's stream-json can be tens of MB), split on
+    b"\\n" only: a raw U+2028 inside a JSON string is not a line end, and splitlines() broke such
+    a record in two so its error was never seen.
+    """
     if not stream.is_file():
         return False
-    for line in stream.read_text(encoding="utf-8", errors="replace").splitlines():
-        try:
-            rec = json.loads(line)
-        except ValueError:
-            continue
-        msg = rec.get("message") if isinstance(rec, dict) else None
-        if isinstance(rec, dict) and (rec.get("error") == AUTH_FAILED or (isinstance(msg, dict) and msg.get("error") == AUTH_FAILED)):
-            return True
-    return False
+    with stream.open("rb") as fh:
+        return any(_carries_auth_failed(raw.decode("utf-8", errors="replace")) for raw in fh)
+
+
+def _carries_auth_failed(line: str) -> bool:
+    try:
+        rec = json.loads(line)
+    except ValueError:
+        return False
+    if not isinstance(rec, dict):
+        return False
+    msg = rec.get("message")
+    return rec.get("error") == AUTH_FAILED or (isinstance(msg, dict) and msg.get("error") == AUTH_FAILED)
 
 
 def _pause_trigger(result: dict[str, Any], stream: Path) -> str | None:
@@ -1090,8 +1115,9 @@ def _run_locked(args: argparse.Namespace, run_dir: Path) -> int:
               "its transcripts are kept beside it")
     done: list[dict[str, Any]] = []
     skipped: list[str] = []
+    already = _done_arms(run_dir, DONE_DRY if ctx.dry_run else DONE_LIVE)
     for round_no, name in _schedule(ctx.profile, args.only):
-        if _done(run_dir, round_no, name, DONE_DRY if ctx.dry_run else DONE_LIVE):
+        if (round_no, name) in already:
             skipped.append(f"r{round_no}-{name} already ran")
             continue
         if not ctx.dry_run and _login_lapses(ctx):

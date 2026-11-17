@@ -116,3 +116,30 @@ def test_cli_passes_a_clean_command_silently() -> None:
 def test_cli_never_wedges_on_garbage_input() -> None:
     assert _run("not json").returncode == 0
     assert _run({"tool_input": None}).returncode == 0
+
+
+def _best_refusal_seconds(command, rounds=3):
+    import time
+    best = None
+    for _ in range(rounds):
+        start = time.perf_counter()
+        mod.refused_shape(command)
+        spent = time.perf_counter() - start
+        best = spent if best is None else min(best, spent)
+    return best
+
+
+def _heredoc_command(lines):
+    return "cat > f <<'EOF'\n" + "some text line here\n" * lines + "EOF\ntrue || echo x\n"
+
+
+def test_a_long_heredoc_costs_linear_time_not_quadratic():
+    # Blanked heredoc lines are all whitespace, and a start anchor followed by \s* crossed every
+    # newline after it, so each line rescanned the rest: 2000 lines took 2.4 s per Bash call.
+    small = _best_refusal_seconds(_heredoc_command(500))
+    large = _best_refusal_seconds(_heredoc_command(4000))
+    assert large / small < 24, (small, large)
+
+
+def test_a_verdict_echo_on_an_indented_line_after_a_keyword_is_still_refused():
+    assert mod.refused_shape("if true; then\n\t  grep -q x f || echo none\nfi") is not None

@@ -239,3 +239,15 @@ def test_measure_reads_a_bom_and_a_crlf_line_as_records(tmp_path):
                      + b"\r\n" + json.dumps(call(1, "Bash", {"command": "b"}, "c2")).encode()
                      + b"\n")
     assert ish.measure(path, exclude_cwd=None)[0].calls == 2
+
+
+def test_an_event_with_a_kind_outside_the_vocabulary_is_refused():
+    # A misspelt kind is neither a call nor a trigger, so _charge_session would skip it silently.
+    with pytest.raises(ValueError):
+        ish.Event(T0, "cal")
+
+
+def test_an_event_kind_is_parsed_into_the_enum_and_keeps_its_string():
+    ev = ish.Event(T0, "trigger", "session-start")
+    assert type(ev.kind) is ish.EventKind and ev.kind == "trigger" and str(ev.kind) == "trigger"
+    assert {k.value for k in ish.EventKind} == {"call", "prompt", "trigger"}

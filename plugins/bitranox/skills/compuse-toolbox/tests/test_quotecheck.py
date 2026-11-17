@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import re
+import tracemalloc
 from pathlib import Path
 
 import pytest
@@ -160,3 +162,67 @@ def test_every_repeated_quote_is_checked_not_only_the_last(skill_dir: Path,
     assert rc == 1
     assert data["tally"] == {"MISMATCH": 1, "OK": 1}
     assert [r["key"] for r in data["rows"]] == ["1", "2"]
+
+
+def test_a_misspelt_verdict_is_refused_not_read_as_a_failure() -> None:
+    # failed() tested `not in ("OK", "NONE")`, so a verdict string nobody defined counted as a
+    # failed quote instead of being caught where it was made.
+    with pytest.raises(ValueError, match="OKK"):
+        quotecheck.Verdict("OKK")
+    with pytest.raises(ValueError, match="OKK"):
+        quotecheck.ReportRow("label", "key", "OKK")
+
+
+def test_the_verdict_keeps_its_wire_string(skill_dir: Path) -> None:
+    v = _check("the gate", skill_dir)
+    assert v.verdict is quotecheck.QuoteVerdict.TOO_SHORT
+    assert json.dumps({"verdict": v.verdict}) == '{"verdict": "TOO-SHORT"}'
+    row = quotecheck.ReportRow("lab", "k", v.verdict)
+    assert quotecheck.tally([row]) == {"TOO-SHORT": 1}
+    assert quotecheck.render_text([row]).splitlines()[1] == "TOO-SHORT   lab  k"
+
+
+def _traced_peak_loading(journal: Path) -> int:
+    tracemalloc.start()
+    try:
+        quotecheck.labelled_results(quotecheck.load_journal(journal), re.compile("^RED"))
+        return tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+
+def test_reading_a_journal_does_not_hold_the_records_it_does_not_report(tmp_path: Path) -> None:
+    # Results of agents whose label does not match are dropped as they are read, so the journal's
+    # size alone must not move the peak.
+    def write(path: Path, n: int) -> Path:
+        with path.open("w", encoding="utf-8") as fh:
+            fh.write(json.dumps({"type": "started", "agentId": "r", "label": "RED x"}) + "\n")
+            fh.write(json.dumps({"type": "result", "agentId": "r",
+                                 "result": {"rows": [{"slug": "s", "quote": "q" * 20}]}}) + "\n")
+            for i in range(n):
+                fh.write(json.dumps({"type": "started", "agentId": f"g{i}", "label": "GREEN"}) + "\n")
+                fh.write(json.dumps({"type": "result", "agentId": f"g{i}",
+                                     "result": {"rows": [{"slug": "s", "quote": "z" * 2000}]}}) + "\n")
+        return path
+
+    small = _traced_peak_loading(write(tmp_path / "small.jsonl", 500))
+    big = _traced_peak_loading(write(tmp_path / "big.jsonl", 4000))
+    assert big - small < 1_000_000, f"peak grew {(big - small) / 1e6:.1f} MB for 8x the journal"
+
+
+def test_a_result_logged_before_its_started_line_is_still_reported(tmp_path: Path,
+                                                                   skill_dir: Path) -> None:
+    lines = [{"type": "result", "agentId": "a", "result": {"rows": [
+        {"slug": "s", "quote": "Run the gate after every edit"}]}},
+             {"type": "started", "agentId": "a", "label": "RED late"}]
+    journal = tmp_path / "j.jsonl"
+    journal.write_text("\n".join(json.dumps(x) for x in lines) + "\n", encoding="utf-8")
+    assert quotecheck.main(["journal", str(journal), "--label", "RED", "--dir", str(skill_dir)]) == 0
+
+
+def test_an_unreadable_journal_is_a_usage_error(tmp_path: Path,
+                                                capsys: pytest.CaptureFixture[str]) -> None:
+    rc = quotecheck.main(["journal", str(tmp_path / "gone.jsonl"), "--label", "RED",
+                          "--dir", str(tmp_path)])
+    assert rc == 2
+    assert "cannot read journal" in capsys.readouterr().err

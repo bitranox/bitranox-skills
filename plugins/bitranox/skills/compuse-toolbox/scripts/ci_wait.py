@@ -135,7 +135,10 @@ import time
 import traceback
 from datetime import datetime
 from dataclasses import dataclass, replace
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from enum import StrEnum
+from types import MappingProxyType
+from typing import Final
 
 from _cli_envelope import EnvelopeArgumentParser, emit
 
@@ -185,8 +188,31 @@ _JOB_STARTED = frozenset({"in_progress", "completed"})
 _JOB_FAILED = frozenset({"failure", "timed_out"})
 #: `--repo` as gh takes it: OWNER/NAME, or HOST/OWNER/NAME for an enterprise host.
 _REPO_NAME_RE = re.compile(r"(?:[A-Za-z0-9.-]+/)?[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
-_EXIT_CODES = {"success": 0, "failed": 1, "timeout": 2, "no-runs": 2, "error": 2,
-               "pending-approval": 2, "stuck-queued": 2, "billing-blocked": 2}
+
+
+class CiState(StrEnum):
+    """What one look at the run list, or the whole wait, concluded. The values are the wire form
+    (`data.state` in JSON, the prefix of the stderr line), so they stay these exact strings."""
+
+    SUCCESS = "success"
+    FAILED = "failed"
+    BILLING_BLOCKED = "billing-blocked"
+    PENDING = "pending"
+    PENDING_APPROVAL = "pending-approval"
+    STUCK_QUEUED = "stuck-queued"
+    NO_RUNS = "no-runs"
+    TIMEOUT = "timeout"
+    ERROR = "error"
+
+
+#: Every state's exit code, total over CiState (pinned by a test): a state with no entry would
+#: otherwise have to fall back to some default, which is how a misspelt state used to exit 2
+#: without a word.
+_EXIT_CODES: Final[Mapping[CiState, int]] = MappingProxyType({
+    CiState.SUCCESS: 0, CiState.FAILED: 1, CiState.BILLING_BLOCKED: 2, CiState.PENDING: 2,
+    CiState.PENDING_APPROVAL: 2, CiState.STUCK_QUEUED: 2, CiState.NO_RUNS: 2,
+    CiState.TIMEOUT: 2, CiState.ERROR: 2,
+})
 #: GitHub's annotation on a job it refused to start for billing. Matched on the text because
 #: nothing else separates it: the run concludes `failure` exactly like a real one, and the only
 #: structural sign, zero steps, is shared with jobs cancelled before a runner took them.
@@ -241,9 +267,14 @@ class Verdict:
         runs: The rows the verdict was computed from.
     """
 
-    state: str
+    state: CiState
     summary: str
     runs: tuple[dict[str, object], ...] = ()
+
+    def __post_init__(self) -> None:
+        # The constructor is the boundary: a plain string (a caller, a test) is parsed here, so a
+        # misspelt state raises ValueError instead of reaching exit_code_for as an unknown key.
+        object.__setattr__(self, "state", CiState(self.state))
 
 
 @dataclass(frozen=True)
@@ -537,17 +568,19 @@ def verdict(runs: Sequence[dict[str, object]], *, event: str | None = None,
         beside one still reads ``failed``.
     """
     if not runs and workflow is not None:
-        return Verdict("no-runs", f"no runs of workflow {workflow!r} found for that sha (only that "
-                                  f"workflow is counted)")
+        return Verdict(CiState.NO_RUNS, f"no runs of workflow {workflow!r} found for that sha "
+                                        f"(only that workflow is counted)")
     if not runs:
         if event is None:
             excluded = ", ".join(sorted(_EXCLUDED_BY_DEFAULT))
-            return Verdict("no-runs", f"no runs found for that sha ({excluded} runs are not "
-                                      f"counted by default: pass --event any to see every run)")
+            return Verdict(CiState.NO_RUNS, f"no runs found for that sha ({excluded} runs are "
+                                            f"not counted by default: pass --event any to see "
+                                            f"every run)")
         if event != ANY_EVENT:
-            return Verdict("no-runs", f"no {event} runs found for that sha (runs of another event "
-                                      f"are not counted: pass --event any to see every run)")
-        return Verdict("no-runs", "no runs found for that sha")
+            return Verdict(CiState.NO_RUNS, f"no {event} runs found for that sha (runs of "
+                                            f"another event are not counted: pass --event any to "
+                                            f"see every run)")
+        return Verdict(CiState.NO_RUNS, "no runs found for that sha")
     unfinished = [r for r in runs if r.get("status") != _TERMINAL]
     bad = [r for r in runs if r.get("status") == _TERMINAL and r.get("conclusion") not in _PASSING]
     failed = [r for r in bad if r.get("conclusion") != _AWAITING_APPROVAL]
@@ -555,15 +588,15 @@ def verdict(runs: Sequence[dict[str, object]], *, event: str | None = None,
         # Before the pending check: a completed run's failure is final, so waiting for the runs
         # still going only turned a certain red into a timeout (exit 2) at the deadline.
         still = f" (still going: {_named(unfinished, 'status')})" if unfinished else ""
-        return Verdict("failed", _named(failed, "conclusion") + still, tuple(runs))
+        return Verdict(CiState.FAILED, _named(failed, "conclusion") + still, tuple(runs))
     if unfinished:
-        return Verdict("pending", _named(unfinished, "status"), tuple(runs))
+        return Verdict(CiState.PENDING, _named(unfinished, "status"), tuple(runs))
     if bad:
-        return Verdict("pending-approval", _named(bad, "conclusion")
+        return Verdict(CiState.PENDING_APPROVAL, _named(bad, "conclusion")
                        + " (awaiting a maintainer's approval; no wait resolves it)", tuple(runs))
     if not any(r.get("conclusion") == "success" for r in runs):
-        return Verdict("failed", _named(runs, "conclusion") + " (nothing ran)", tuple(runs))
-    return Verdict("success", _named(runs, "conclusion"), tuple(runs))
+        return Verdict(CiState.FAILED, _named(runs, "conclusion") + " (nothing ran)", tuple(runs))
+    return Verdict(CiState.SUCCESS, _named(runs, "conclusion"), tuple(runs))
 
 
 def _run_key(row: dict[str, object]) -> tuple[object, object]:
@@ -761,12 +794,12 @@ def wait_for(
         _track_queued(queued_since, rows, timer.now())
         current = verdict(rows, event=event, workflow=workflow)
         last_summary = current.summary
-        if current.state == "no-runs":
+        if current.state == CiState.NO_RUNS:
             empty_since = timer.now() if empty_since is None else empty_since
             if timer.now() - empty_since >= appear_grace_s:
                 return current
             report(f"{label(poll)}: no runs yet for that sha")
-        elif current.state == "success" and run_jobs is not None and (
+        elif current.state == CiState.SUCCESS and run_jobs is not None and (
                 unfinished_jobs := _jobs_not_finished(rows, run_jobs)):
             # GitHub can report a run completed/success while its jobs endpoint still shows jobs
             # queued or running (measured, 9 of 18). That is not a green to confirm yet.
@@ -775,7 +808,7 @@ def wait_for(
             last_success = None
             last_summary = f"{current.summary}; {unfinished_jobs}"
             report(f"{label(poll)}: {last_summary}")
-        elif current.state == "success":
+        elif current.state == CiState.SUCCESS:
             empty_since = None
             last_success = current
             seen = frozenset(_run_key(r) for r in rows)
@@ -791,9 +824,9 @@ def wait_for(
                 break
             pause(settle_s)
             continue
-        elif current.state == "failed":
+        elif current.state == CiState.FAILED:
             return _billing_blocked(current, run_billing_blocked)
-        elif current.state != "pending":
+        elif current.state != CiState.PENDING:
             return current
         else:
             empty_since = None
@@ -805,8 +838,9 @@ def wait_for(
             note, failed_jobs = ("", ()) if run_jobs is None else _job_progress(
                 rows, run_jobs, job_queued_since, timer.now())
             if fail_on_failed_job and failed_jobs:
-                return Verdict("failed", f"{current.summary}; job(s) already failed while the run "
-                                         f"is still going: {', '.join(failed_jobs)}", tuple(rows))
+                return Verdict(CiState.FAILED, f"{current.summary}; job(s) already failed while "
+                                               f"the run is still going: {', '.join(failed_jobs)}",
+                               tuple(rows))
             last_summary = current.summary + note
             report(f"{label(poll)}: {last_summary}")
         if not may_poll_again(poll):
@@ -825,11 +859,12 @@ def wait_for(
     if errors_seen and answered:
         # The deadline, not the error budget, ended this wait: the calls failing at the end were
         # often bounded by the seconds left, so the verdict is the timeout the last answer shows.
-        return Verdict("timeout", f"{last_summary} (deadline reached while gh was failing: "
-                                  f"{errors_seen} call(s), last: {last_error})", tuple(last_rows))
+        return Verdict(CiState.TIMEOUT, f"{last_summary} (deadline reached while gh was failing: "
+                                        f"{errors_seen} call(s), last: {last_error})",
+                       tuple(last_rows))
     if errors_seen:
         return _gh_gave_up(errors_seen, last_error)
-    return Verdict("timeout", last_summary, tuple(last_rows))
+    return Verdict(CiState.TIMEOUT, last_summary, tuple(last_rows))
 
 
 def _job_progress(rows: Sequence[dict[str, object]],
@@ -909,7 +944,7 @@ def _billing_blocked(failed: Verdict,
     if not bad or not all(ask(r.get("databaseId")) is True for r in bad):
         return failed
     ids = ", ".join(str(r.get("databaseId")) for r in bad)
-    return Verdict("billing-blocked",
+    return Verdict(CiState.BILLING_BLOCKED,
                    f"no job ran: GitHub refused to start run(s) {ids} for account billing "
                    f"(recent account payments have failed or the spending limit is reached). No "
                    f"wait or retry fixes it; once billing is fixed, re-run with `gh run rerun <id>`",
@@ -970,7 +1005,7 @@ def _stuck_queued(rows: Sequence[dict[str, object]], since: dict[tuple[object, o
     finished = [r for r in rows if r.get("status") == _TERMINAL]
     if finished:
         parts.append("the other runs: " + _named(finished, "conclusion"))
-    return Verdict("stuck-queued", "; ".join(parts), tuple(rows))
+    return Verdict(CiState.STUCK_QUEUED, "; ".join(parts), tuple(rows))
 
 
 def _cut_settle_said(confirmed: Verdict, waited: float, settle_s: float) -> Verdict:
@@ -1008,12 +1043,16 @@ class _Timer:
 
 def _gh_gave_up(polls: int, message: str) -> Verdict:
     """The verdict for gh failing on every poll of its budget, naming gh's own last words."""
-    return Verdict("error", f"gh failed {polls} polls running: {message}")
+    return Verdict(CiState.ERROR, f"gh failed {polls} polls running: {message}")
 
 
-def exit_code_for(state: str) -> int:
-    """Map a verdict state to a POSIX exit code: 0 yes, 1 no, 2 could not tell."""
-    return _EXIT_CODES.get(state, 2)
+def exit_code_for(state: CiState | str) -> int:
+    """Map a verdict state to a POSIX exit code: 0 yes, 1 no, 2 could not tell.
+
+    Raises:
+        ValueError: ``state`` names no :class:`CiState`.
+    """
+    return _EXIT_CODES[CiState(state)]
 
 
 def gh_runs(
@@ -1102,22 +1141,55 @@ def gh_run_started(run_id: object, *, repo: str | None = None,
     answered something that is not a job list - an unknown, which the stuck check reads as
     "keep waiting", never as "nothing started".
     """
-    argv = ["gh", "run", "view", str(run_id), "--json", "jobs"]
-    if repo:
-        argv += ["--repo", repo]
-    try:
-        answer = _gh_json(argv, timeout_s)
-    except (GhFailed, GhUnavailable):
+    return jobs_started(_read_jobs(run_id, repo=repo, timeout_s=timeout_s))
+
+
+def jobs_started(jobs: list[dict[str, object]] | None) -> bool | None:
+    """Whether any of ``jobs`` was taken by a runner; ``None`` for a job list that was not read."""
+    if jobs is None:
         return None
-    jobs = answer.get("jobs") if isinstance(answer, dict) else None
-    if not isinstance(jobs, list):
-        return None
-    return any(isinstance(j, dict) and j.get("status") in _JOB_STARTED for j in jobs)
+    return any(j.get("status") in _JOB_STARTED for j in jobs)
+
+
+class _JobsPerPoll:
+    """One `gh run view <id> --json jobs` per run per poll, shared by every reader of the jobs.
+
+    The stuck check and the progress note both ask about the same run in the same poll; each asking
+    gh on its own spent two calls of the account-wide API budget on one answer. The memo is dropped
+    when the next poll's listing is fetched, so no answer outlives the poll it describes.
+    """
+
+    def __init__(self, read: Callable[[object], list[dict[str, object]] | None]) -> None:
+        self._read = read
+        self._answers: dict[object, list[dict[str, object]] | None] = {}
+
+    def jobs(self, run_id: object) -> list[dict[str, object]] | None:
+        if run_id not in self._answers:
+            self._answers[run_id] = self._read(run_id)
+        return self._answers[run_id]
+
+    def started(self, run_id: object) -> bool | None:
+        return jobs_started(self.jobs(run_id))
+
+    def clearing_on(self, fetch: Callable[[], list[dict[str, object]]]
+                    ) -> Callable[[], list[dict[str, object]]]:
+        """``fetch``, forgetting every job list first: each listing starts a new poll."""
+        def fresh() -> list[dict[str, object]]:
+            self._answers.clear()
+            return fetch()
+        return fresh
 
 
 def gh_run_jobs(run_id: object, *, repo: str | None = None,
                 timeout_s: float = GH_CALL_TIMEOUT_S) -> list[dict[str, object]] | None:
     """The jobs of run ``run_id`` (`gh run view <id> --json jobs`); ``None`` when not readable."""
+    return _read_jobs(run_id, repo=repo, timeout_s=timeout_s)
+
+
+def _read_jobs(run_id: object, *, repo: str | None,
+               timeout_s: float) -> list[dict[str, object]] | None:
+    """The one `gh run view <id> --json jobs` reader behind :func:`gh_run_jobs` and
+    :func:`gh_run_started`, so the two cannot drift apart in what they count as readable."""
     argv = ["gh", "run", "view", str(run_id), "--json", "jobs"]
     if repo:
         argv += ["--repo", repo]
@@ -1449,7 +1521,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run(args)
     except Exception as exc:  # noqa: BLE001 - the boundary that keeps a crash off exit code 1
         traceback.print_exc(file=sys.stderr)
-        return _emit(Verdict("error", f"unexpected {type(exc).__name__}: {exc}"), as_json=args.json)
+        return _emit(Verdict(CiState.ERROR, f"unexpected {type(exc).__name__}: {exc}"),
+                     as_json=args.json)
 
 
 def _tolerant_streams() -> None:
@@ -1503,12 +1576,12 @@ def _run(args: argparse.Namespace) -> int:
     try:
         sha = _target_sha(args)
     except (BadRef, BadSha) as exc:
-        return _emit(Verdict("error", str(exc)), as_json=args.json)
+        return _emit(Verdict(CiState.ERROR, str(exc)), as_json=args.json)
     deadline = _Deadline(args.timeout)
     try:
         repo, local_dir = _repo_target(args.repo, args.timeout)
     except (BadRepo, GhFailed, GhUnavailable) as exc:
-        return _emit(Verdict("error", str(exc)), as_json=args.json, sha=sha)
+        return _emit(Verdict(CiState.ERROR, str(exc)), as_json=args.json, sha=sha)
     # One entry per ANSWERED poll, so the last one belongs to the rows the verdict was computed
     # from. Collected only under the default filter: that is the filter that drops runs silently.
     not_counted: list[int] = []
@@ -1540,6 +1613,8 @@ def _run(args: argparse.Namespace) -> int:
 
         def fetch() -> list[dict[str, object]]:
             return hold_older_attempts(seen_fetch(), args.min_attempt)
+    jobs_now = _JobsPerPoll(side_call(gh_run_jobs))
+    fetch = jobs_now.clearing_on(fetch)
     try:
         result = wait_for(
             fetch,
@@ -1555,19 +1630,19 @@ def _run(args: argparse.Namespace) -> int:
             deadline_s=max(0.0, deadline.left()),
             clock=time.monotonic,
             event=args.event,
-            run_started=side_call(gh_run_started),
-            run_jobs=side_call(gh_run_jobs),
+            run_started=jobs_now.started,
+            run_jobs=jobs_now.jobs,
             fail_on_failed_job=args.fail_on_failed_job,
             workflow=args.workflow,
             run_billing_blocked=lambda run_id: gh_run_billing_blocked(
                 run_id, repo=repo, bound=deadline.side_bound),
         )
     except (GhFailed, GhUnavailable) as exc:
-        return _emit(Verdict("error", str(exc)), as_json=args.json, sha=sha)
-    if result.state == "no-runs":
+        return _emit(Verdict(CiState.ERROR, str(exc)), as_json=args.json, sha=sha)
+    if result.state == CiState.NO_RUNS:
         on_remote = sha_on_a_remote(sha, cwd=local_dir) if args.repo is None or local_dir else None
         result = replace(result, summary=result.summary + no_runs_hint(on_remote))
-    elif result.state == "timeout":
+    elif result.state == CiState.TIMEOUT:
         result = replace(result, summary=result.summary
                          + _usual_durations(result.runs, repo, deadline.side_bound))
     return _emit(result, as_json=args.json, sha=sha,
@@ -1705,7 +1780,7 @@ def _emit(result: Verdict, *, as_json: bool, sha: str | None = None,
     return code
 
 
-def _not_counted_note(not_counted: int | None, state: str) -> str:
+def _not_counted_note(not_counted: int | None, state: CiState) -> str:
     """`` (N scheduled run(s) not counted; --event any counts it/them)``, or ``""``. PURE.
 
     Measured: "CodeQL=success CI=success" and exit 0, while a scheduled CI run on the same sha was
@@ -1713,7 +1788,7 @@ def _not_counted_note(not_counted: int | None, state: str) -> str:
     Skipped for ``no-runs``, whose summary already says scheduled runs are not counted, and for
     ``error``, whose summary is about gh or a crash rather than about the runs.
     """
-    if not not_counted or state in ("no-runs", "error"):
+    if not not_counted or state in (CiState.NO_RUNS, CiState.ERROR):
         return ""
     if not_counted == 1:
         return " (1 scheduled run not counted; --event any counts it)"

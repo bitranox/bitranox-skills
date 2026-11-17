@@ -341,3 +341,11 @@ def test_literal_on_the_command_line(tmp_path):
                           capture_output=True, text=True, encoding="utf-8")
     assert proc.returncode == 0, proc.stderr
     assert json.loads(proc.stdout)["data"]["verdict"] == cc.PRESENT
+
+
+def test_every_verdict_has_an_exit_code_and_keeps_its_wire_string(tmp_path):
+    assert set(cc._EXIT) == set(cc.Verdict)
+    (tmp_path / "a.md").write_text("hello\n", encoding="utf-8")
+    r = cc.check([tmp_path / "a.md"], pattern="nonexistent", control="hello")
+    assert r["verdict"] is cc.Verdict.ABSENT
+    assert json.dumps({"verdict": r["verdict"]}) == '{"verdict": "ABSENT"}'

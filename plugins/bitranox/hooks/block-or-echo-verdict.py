@@ -93,8 +93,11 @@ _PROGRAM = (
 # and `&>` are redirections, not separators, so they are allowed through.
 _ELEMENT = r"(?:[^;&|\n]|[0-9]?>&[0-9-]?|&>)*?"
 
+# Blanks after a start never cross a newline: every newline is a start of its own, and a
+# blanked heredoc is lines of whitespace, so \s* there rescanned the rest of the heredoc from
+# each line, quadratic in its length (2000 lines took 2.4 s per Bash call).
 _PATTERN = re.compile(
-    _START + r"\s*" + _LAUNCHER + _PROGRAM
+    _START + r"[^\S\n]*" + _LAUNCHER + _PROGRAM
     + r"(?P<args>" + _ELEMENT + r")"
     + r"(?:&&\s*(?:echo|printf)\b" + _ELEMENT + r")?"
     + r"(?P<op>\|\|)\s*[{(]?\s*(?P<echo>echo|printf)\b(?P<label>[^;&|\n)}]*)"

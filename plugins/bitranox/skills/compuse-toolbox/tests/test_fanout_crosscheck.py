@@ -217,3 +217,44 @@ def test_added_lines_parses_hunk_line_numbers():
 def test_a_deleted_file_adds_nothing():
     diff = "diff --git a/x.md b/x.md\n--- a/x.md\n+++ /dev/null\n@@ -1 +0,0 @@\n-gone\n"
     assert list(F.added_lines_from_diff(diff)) == []
+
+
+class _CountingName(str):
+    """A target name or token that counts how often it is normalised."""
+
+    calls = 0
+
+    def strip(self, chars=None):
+        type(self).calls += 1
+        return str.strip(self, chars)
+
+
+def _normalisations_for(tmp_path, lines: int) -> int:
+    files = []
+    for name in ("one", "two", "three"):
+        path = tmp_path / f"{name}-{lines}.md"
+        path.write_text("".join(f"plain line {i}\n" for i in range(lines)), encoding="utf-8")
+        files.append((name, path))
+    targets = [F.Target(_CountingName(n), p, tokens=[_CountingName(n)]) for n, p in files]
+    _CountingName.calls = 0
+    assert F.crosscheck(targets) == []
+    return _CountingName.calls
+
+
+def test_crosscheck_normalises_each_name_once_however_many_lines_are_added(tmp_path):
+    # normalise(other.name) and normalise(token) ran per added line per target pair; they are
+    # fixed per target, so the count must not grow with the lines scanned.
+    assert _normalisations_for(tmp_path, 10) == _normalisations_for(tmp_path, 80)
+
+
+def test_an_allowed_token_is_still_skipped_after_precomputing(tmp_path):
+    one, two = tmp_path / "one.md", tmp_path / "two.md"
+    one.write_text("uses beta and gamma_x here\n", encoding="utf-8")
+    two.write_text("nothing\n", encoding="utf-8")
+    targets = [F.Target("alpha", one, tokens=["alpha"], allowed={"beta"}),
+               F.Target("beta-tool", two, tokens=["beta", "gamma_x"])]
+    found = F.crosscheck(targets)
+    assert [(f.target, f.foreign, f.token) for f in found] == [
+        ("alpha", "beta-tool", "gamma_x")]
+    targets[0].allowed.add("beta-tool")             # allowing the target's NAME skips it whole
+    assert F.crosscheck(targets) == []

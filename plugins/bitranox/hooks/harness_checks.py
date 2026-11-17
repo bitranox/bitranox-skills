@@ -250,7 +250,7 @@ def cso_failures_for(label, description):
     if not description.lower().startswith("use "):
         return ["%s: description must be trigger-first ('Use when <situations>...'), "
                 "never a summary of what the skill does (CSO rule)." % label]
-    keywords = {t for t in re.findall(r"[a-z0-9][a-z0-9_-]{3,}", description.lower())
+    keywords = {t for t in _KEYWORD_TOKEN.findall(description.lower())
                 if t not in CSO_STOP}
     if len(keywords) < 3:
         return ["%s: description yields fewer than 3 distinctive keywords - the "
@@ -331,6 +331,8 @@ def discover_candidates(roots, home=None, personal=True, errors=None):
 # path yields a hook that silently never fires, which reads exactly like a hook that fires and
 # finds nothing.
 
+_KEYWORD_TOKEN = re.compile(r"[a-z0-9][a-z0-9_-]{3,}")
+_FRONTMATTER_KEY = re.compile(r"^([A-Za-z_][A-Za-z0-9_-]*):(?:\s|$)")
 # POSIX-absolute plus the two shapes an absolute path takes on Windows: a drive letter
 # ("C:\...", "C:/...") and a UNC share ("\\server\share"). Without the Windows shapes,
 # command_paths matched NOTHING there, so registration_problems reported zero problems for
@@ -859,6 +861,11 @@ def frontmatter_undecodable(path):
         data = Path(path).read_bytes()
     except OSError:
         return None
+    return _undecodable_in(data)
+
+
+def _undecodable_in(data):
+    """`frontmatter_undecodable` over bytes already read."""
     try:
         data.decode("utf-8-sig")
     except UnicodeDecodeError as exc:
@@ -874,7 +881,11 @@ def frontmatter_unterminated(path):
     so they all recover the right value and no other check here notices - the file reads as
     perfectly fine until a loader that wants the delimiter on its own line refuses it.
     """
-    lines = _skill_lines(path)
+    return _unterminated_in(_skill_lines(path))
+
+
+def _unterminated_in(lines):
+    """`frontmatter_unterminated` over lines already read (None when unreadable)."""
     if lines is None:
         return False
     if not lines or lines[0].strip() != "---":
@@ -900,7 +911,7 @@ def _top_level_keys(lines):
     """`key` names that begin a line, in order, with the index each was found at."""
     found = []
     for index, line in enumerate(lines):
-        match = re.match(r"^([A-Za-z_][A-Za-z0-9_-]*):(?:\s|$)", line)
+        match = _FRONTMATTER_KEY.match(line)
         if match:
             found.append((match.group(1), index))
     return found
@@ -918,7 +929,11 @@ def frontmatter_second_block(path):
     passes all of them. A bare `---` in the body is an ordinary horizontal rule though, so a
     delimiter alone proves nothing - what makes a later region a second FRONT MATTER is that it
     carries front-matter keys."""
-    lines = _skill_lines(path)
+    return _second_block_in(_skill_lines(path))
+
+
+def _second_block_in(lines):
+    """`frontmatter_second_block` over lines already read (None when unreadable)."""
     if not lines or lines[0].strip() != "---":
         return None
     closes = [i for i in _bare_delimiters(lines) if i > 0]
@@ -940,7 +955,11 @@ def frontmatter_scalar_colon(path):
     above is a regex that recovers the value regardless, which is why three shipped skills
     carried one. Quoted and block scalars are exempt - the colon is inside the quoting - and
     the CSO rules reject those styles separately."""
-    lines = _skill_lines(path)
+    return _scalar_colon_in(_skill_lines(path))
+
+
+def _scalar_colon_in(lines):
+    """`frontmatter_scalar_colon` over lines already read (None when unreadable)."""
     if not lines or lines[0].strip() != "---":
         return None
     closes = [i for i in _bare_delimiters(lines) if i > 0]
@@ -988,10 +1007,16 @@ def frontmatter_yaml_error(path):
 
     It does NOT catch a duplicate key: YAML permits one and the parsers here keep the last
     silently, so `frontmatter_problems` cannot see that through this route."""
+    if _load_yaml() is None:
+        return None
+    return _yaml_error_in(_skill_lines(path))
+
+
+def _yaml_error_in(lines):
+    """`frontmatter_yaml_error` over lines already read (None when unreadable)."""
     load = _load_yaml()
     if load is None:
         return None
-    lines = _skill_lines(path)
     if not lines or lines[0].strip() != "---":
         return None
     closes = [i for i in _bare_delimiters(lines) if i > 0]
@@ -1012,32 +1037,42 @@ def frontmatter_file_problems(md, label, expect_name=None):
     Split out from `frontmatter_problems` so the commit gate can run the same checks over the
     files a change touches. Two callers, one implementation: a second copy would drift, and the
     half that drifted would be the one nobody runs."""
+    # Read once: each check below used to open the file itself, seven reads per SKILL.md. The
+    # text is decoded exactly as `skill_frontmatter.read_text` decodes it (BOM dropped, bad bytes
+    # replaced), so every check still sees what the router and the catalog see.
+    try:
+        data = Path(md).read_bytes()
+    except OSError:
+        data = None
+    text = None if data is None else data.decode("utf-8-sig", errors="replace")
+    lines = None if text is None else text.lstrip("\ufeff").splitlines()
+    block = None if text is None else skill_frontmatter.frontmatter_block(text)
     problems = []
-    undecodable = frontmatter_undecodable(md)
+    undecodable = None if data is None else _undecodable_in(data)
     if undecodable is not None:
         problems.append("%s: SKILL.md is not valid UTF-8 (%s) - every reader here replaces the "
                         "bad bytes, so the name and description that ship are not the ones in "
                         "the file; re-save it as UTF-8." % (label, undecodable))
-    if frontmatter_unterminated(md):
+    if _unterminated_in(lines):
         problems.append("%s: SKILL.md front matter never closes - the `---` is glued to the "
                         "end of a value instead of standing on its own line." % label)
-    second = frontmatter_second_block(md)
+    second = _second_block_in(lines)
     if second is not None:
         problems.append("%s: SKILL.md carries a second front matter at line %d - every "
                         "reader stops at the first closing delimiter, so those keys ship "
                         "unexamined." % (label, second))
-    broken = frontmatter_yaml_error(md)
+    broken = _yaml_error_in(lines)
     if broken is not None:
         problems.append("%s: the YAML parser rejects the front matter - %s. (Skipped when no "
                         "YAML library is installed, so the stdlib checks stay the floor.)"
                         % (label, broken))
-    colon = frontmatter_scalar_colon(md)
+    colon = _scalar_colon_in(lines)
     if colon is not None:
         problems.append("%s: front-matter `%s:` holds a `: ` (or ends with `:`) in a plain "
                         "scalar, so the block is not valid YAML - reword it with ` - `. The "
                         "regex readers here recover the value and notice nothing."
                         % (label, colon))
-    name = frontmatter_name(md)
+    name = skill_frontmatter.field(block, "name")
     if name is None:
         problems.append("%s: SKILL.md has no `name:` in its front matter." % label)
     else:
@@ -1051,7 +1086,7 @@ def frontmatter_file_problems(md, label, expect_name=None):
         if expect_name is not None and name != expect_name:
             problems.append("%s: front-matter name is %r but the directory is %r - the router "
                             "keys on one and the loader on the other." % (label, name, expect_name))
-    description = frontmatter_description(md)
+    description = skill_frontmatter.field(block, "description")
     if description is None:
         problems.append("%s: SKILL.md has no `description:` - nothing can route to it." % label)
     else:
@@ -1083,8 +1118,9 @@ def graveyard_entries(root):
     root = Path(root)
     if not root.is_dir():
         return []
+    walk = _graveyard_walk(root)
     found = []
-    for path in sorted(root.rglob("*.orig-*")):
+    for path in sorted(walk.backups):
         if not path.is_file():
             continue
         live = path.parent / path.name.split(".orig-")[0]
@@ -1092,20 +1128,68 @@ def graveyard_entries(root):
             found.append((path, "retired backup is still executable"))
         elif not live.exists():
             found.append((path, "backs up %s, which no longer exists" % live.name))
-    for path in sorted(root.glob("*.bak")):
-        if path.is_dir():
-            count = sum(1 for _ in path.glob("*/SKILL.md"))
-            found.append((path, "parked dir holding %d skill(s); indistinguishable from live at a "
-                                "glance" % count))
-    found.extend(_stale_bytecode(root))
-    found.extend(_stale_nodeids(root))
+    for path, count in sorted(walk.parked.items()):
+        found.append((path, "parked dir holding %d skill(s); indistinguishable from live at a "
+                            "glance" % count))
+    found.extend(_stale_bytecode(walk))
+    found.extend(_stale_nodeids(walk))
     return found
 
 
-def _stale_bytecode(root):
+class _GraveyardWalk:
+    """What one pruned walk of a root found: `.orig-*` files, `__pycache__/*.pyc`, pytest node-id
+    caches, every `.py` source (as a `/`-separated path relative to the root), and each top-level
+    `*.bak` dir with the skills directly in it. One walk feeds every graveyard check, so a root
+    holding many `.pytest_cache` dirs is not re-walked once per cache."""
+
+    def __init__(self, root):
+        self.root = root
+        self.parked: dict[Path, int] = {}
+        self.backups: list[Path] = []
+        self.bytecode: list[Path] = []
+        self.nodeid_caches: list[Path] = []
+        self.sources: set[str] = set()
+
+
+def _graveyard_walk(root):
+    """Walk `root` once, never descending PRUNE_DIRS: a virtualenv or node_modules holds no
+    first-party artifact and can be larger than everything else together. The two caches a check
+    reads are opened at their known path rather than walked. Paths stay strings in the loop: a
+    Path per file costs more than the walk itself."""
+    walk = _GraveyardWalk(Path(root))
+    top = str(walk.root)
+    parked = {}
+    for dirpath, dirnames, filenames in os.walk(top):
+        if dirpath == top:
+            parked = {os.path.join(top, d): 0 for d in dirnames if d.endswith(".bak")}
+        elif "SKILL.md" in filenames and os.path.dirname(dirpath) in parked:
+            parked[os.path.dirname(dirpath)] += 1
+        if "__pycache__" in dirnames:
+            try:
+                walk.bytecode.extend(e for e in Path(dirpath, "__pycache__").iterdir()
+                                     if e.suffix == ".pyc")
+            except OSError:
+                pass
+        if ".pytest_cache" in dirnames:
+            cache = Path(dirpath, ".pytest_cache", "v", "cache", "nodeids")
+            if cache.is_file():
+                walk.nodeid_caches.append(cache)
+        dirnames[:] = [d for d in dirnames if d not in PRUNE_DIRS]
+        rel = dirpath[len(top):].lstrip("\\/").replace(os.sep, "/")
+        prefix = rel + "/" if rel else ""
+        for name in filenames:
+            if ".orig-" in name:
+                walk.backups.append(Path(dirpath, name))
+            if name.endswith(".py"):
+                walk.sources.add(prefix + name)
+    walk.parked = {Path(k): v for k, v in parked.items()}
+    return walk
+
+
+def _stale_bytecode(walk):
     """Compiled modules whose source is gone - the usual trace of a deleted script."""
     out = []
-    for pyc in sorted(Path(root).rglob("__pycache__/*.pyc")):
+    for pyc in sorted(walk.bytecode):
         source = pyc.parent.parent / (pyc.name.split(".")[0] + ".py")
         if not source.exists():
             out.append((pyc, "bytecode for %s, which no longer exists" % source.name))
@@ -1118,17 +1202,18 @@ def _relative_posix(path, base):
     return path.relative_to(base).as_posix()
 
 
-def _stale_nodeids(root):
+def _stale_nodeids(walk):
     """Cached pytest node ids naming a test file that is gone."""
     out = []
-    for cache in sorted(Path(root).rglob(".pytest_cache/v/cache/nodeids")):
+    for cache in sorted(walk.nodeid_caches):
         try:
             ids = json.loads(cache.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        base = cache.parents[3]
+        base = _relative_posix(cache.parents[3], walk.root)
+        prefix = "" if base == "." else base + "/"
         missing = sorted({i.split("::")[0] for i in ids if isinstance(i, str)}
-                         - {_relative_posix(p, base) for p in base.rglob("*.py")})
+                         - {p[len(prefix):] for p in walk.sources if p.startswith(prefix)})
         for name in missing:
             out.append((cache, "caches node ids for %s, which no longer exists" % name))
     return out

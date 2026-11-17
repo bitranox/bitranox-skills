@@ -94,6 +94,27 @@ def test_without_a_plugin_root_the_hook_is_silent(rooms, monkeypatch):
     assert TDN.notice_path(_hook_file(rooms), str(work)) is None
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="creating a symlink needs a privilege there")
+def test_the_plugin_root_is_resolved_once_per_value(tmp_path, monkeypatch):
+    """CLAUDE_PLUGIN_ROOT is constant for the process, yet it was resolved again for every
+    ancestor of every path token checked. Re-pointing a symlinked root after the first read shows
+    whether it is read again: a resolution per call would follow the link to the new name."""
+    first = tmp_path / "cache" / "first-mkt" / "plug" / "1.0.0"
+    second = tmp_path / "cache" / "second-mkt" / "plug" / "1.0.0"
+    first.mkdir(parents=True)
+    second.mkdir(parents=True)
+    link = tmp_path / "link"
+    link.mkdir()
+    (link / "root").symlink_to(first)
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(link / "root"))
+    assert TDN.own_marketplace_name() == "first-mkt"
+    (link / "root").unlink()
+    (link / "root").symlink_to(second)
+    assert TDN.own_marketplace_name() == "first-mkt"
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(second))   # a new value is read afresh
+    assert TDN.own_marketplace_name() == "second-mkt"
+
+
 def test_a_write_outside_any_marketplace_is_silent(rooms):
     _, work = rooms
     assert TDN.notice_path(str(work / "src" / "a.py"), str(work)) is None

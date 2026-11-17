@@ -571,6 +571,44 @@ def test_the_cli_releases_the_slot_it_was_handed(machine: Machine) -> None:
     assert not (machine.state / tmp_prune.LOCK_NAME).exists()
 
 
+def test_the_cli_writes_each_kind_and_the_holder_check_as_their_plain_strings(machine: Machine) -> None:
+    machine.scratch(days=2)
+    make_dir(machine.base / "oneoff-old", days=9)
+    _rc, envelope = run_cli(machine)
+    data = envelope["data"]  # type: ignore[index]
+    assert sorted(entry["kind"] for entry in data["removed"]) == ["oneoff", "scratch"]  # type: ignore[index]
+    assert all(set(entry) == {"path", "kind", "inodes"} for entry in data["removed"])  # type: ignore[index]
+    assert data["holder_check"] in ("procfs", "lsof", "rename", "none")  # type: ignore[index]
+
+
+# ---- closed vocabularies --------------------------------------------------------------------
+
+
+def test_a_holder_index_refuses_a_method_it_does_not_know(tmp_path: Path) -> None:
+    # A misspelt "none" would answer "held by nobody" for every path and let a held dir be pruned.
+    with pytest.raises(ValueError, match="HolderMethod"):
+        tmp_prune.HolderIndex("nnone", (str(tmp_path),))
+
+
+def test_a_holder_index_takes_the_plain_method_string(tmp_path: Path) -> None:
+    index = tmp_prune.HolderIndex("procfs", (os.path.realpath(tmp_path),))
+    assert index.method is tmp_prune.HolderMethod.PROCFS
+    assert index.held(tmp_path) is True
+    assert tmp_prune.HolderIndex("none").held(tmp_path) is None
+
+
+def test_a_decision_refuses_a_kind_it_does_not_know(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="CandidateKind"):
+        tmp_prune.Decision(tmp_path, "scratchh", False, "dead", 1)  # type: ignore[arg-type]
+
+
+def test_the_age_limit_refuses_a_kind_it_does_not_know(machine: Machine) -> None:
+    # Unparsed, a typo fell through to the one-off limit, a week where a scratch dir gets a day.
+    with pytest.raises(ValueError, match="CandidateKind"):
+        machine.config().max_age("scratchh")  # type: ignore[arg-type]
+    assert machine.config().max_age("scratch") == DAY  # type: ignore[arg-type]
+
+
 # ---- the hook -------------------------------------------------------------------------------
 
 
@@ -618,3 +656,31 @@ def test_the_hook_survives_garbage_on_stdin(tmp_path: Path) -> None:
     tmp_prune_hook.run("not json", mode="on", state_dir=tmp_path, now=NOW, spawn=spawned)
     assert spawned.argv is not None
     assert "--keep-session" not in spawned.argv
+
+
+@pytest.mark.parametrize("typo", ["On", "dry_run", "", "yes"])
+def test_an_unknown_mode_is_reported_and_deletes_nothing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], typo: str
+) -> None:
+    """A hand-edited mode outside the vocabulary is named on stderr and starts nothing: running it
+    as the documented default `on` would turn a typo meant as dry-run ('dry_run') into deletion."""
+    spawned = run_hook(tmp_path, mode=typo)
+    err = capsys.readouterr().err
+    assert repr(typo) in err and "tmp_prune" in err
+    assert spawned.argv is None
+
+
+def test_the_configured_mode_is_parsed_from_the_memory_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import self_improve_signals  # noqa: PLC0415 - imported where the hook imports it
+
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    self_improve_signals.save_config({"tmp_prune": "dry-run"})
+    assert tmp_prune_hook._configured_mode() is tmp_prune_hook.Mode.DRY_RUN
+    self_improve_signals.save_config({"tmp_prune": "Off"})
+    assert tmp_prune_hook._configured_mode() is tmp_prune_hook.Mode.OFF
+    assert "'Off'" in capsys.readouterr().err

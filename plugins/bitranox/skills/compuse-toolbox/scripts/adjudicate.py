@@ -83,11 +83,21 @@ import re
 import subprocess
 import sys
 from dataclasses import asdict, dataclass, field, replace
+from enum import StrEnum
 from pathlib import Path
 
 from _cli_envelope import emit, run_guarded
 
-FIRED_MODES = ("output", "nonzero", "match")
+
+class FiredWhen(StrEnum):
+    """What makes a run count as FIRED; the values are the `--fired-when` choices."""
+
+    OUTPUT = "output"
+    NONZERO = "nonzero"
+    MATCH = "match"
+
+
+FIRED_MODES = tuple(mode.value for mode in FiredWhen)
 
 # What hooks/run-python.sh exports before it execs a hook, so the subject decodes and encodes as it
 # does in production rather than under whatever locale codec the caller happens to have.
@@ -154,16 +164,21 @@ def verdict_for(probe_fired: bool, control_fired: bool) -> str:
     return "CONFIRMED"
 
 
-def fired(run: Run, mode: str, pattern: str | None) -> bool:
+def fired(run: Run, mode: FiredWhen | str, pattern: str | None) -> bool:
     """Did the subject FIRE on this input? What that means depends on the guard.
 
     A blocking guard fires by exiting non-zero; a nudge fires by writing additionalContext and
     exiting 0. `output` covers both and is the default. `match` is for a subject that always writes
     something, where only a particular line counts.
+
+    Raises:
+        ValueError: `mode` is not a FiredWhen value. It used to fall through to `output`, so a
+            caller's typo silently changed the firing rule every claim was scored on.
     """
-    if mode == "nonzero":
+    mode = FiredWhen(mode)
+    if mode == FiredWhen.NONZERO:
         return run.returncode != 0
-    if mode == "match":
+    if mode == FiredWhen.MATCH:
         return bool(re.search(pattern or "", run.stdout + "\n" + run.stderr))
     return bool((run.stdout + run.stderr).strip())
 
@@ -207,9 +222,14 @@ def _decoded(raw: bytes | None) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
-def adjudicate(subject: list[str], claims: list[Claim], mode: str, pattern: str | None,
-               timeout: float = 60.0) -> list[Adjudication]:
-    """Score every claim by running BOTH sides. Never one side."""
+def adjudicate(subject: list[str], claims: list[Claim], mode: FiredWhen | str,
+               pattern: str | None, timeout: float = 60.0) -> list[Adjudication]:
+    """Score every claim by running BOTH sides. Never one side.
+
+    Raises:
+        ValueError: `mode` is not a FiredWhen value, refused before any subject runs.
+    """
+    mode = FiredWhen(mode)
     results = []
     for claim in claims:
         probe_run = run_once(subject, claim.probe, claim.probe_args, timeout)
@@ -493,7 +513,7 @@ def _validate(args) -> list[Claim]:
         raise UsageError("no subject - pass --hook <path>")
     if not Path(args.hook).is_file():
         raise UsageError(f"--hook {args.hook!r} is not a file")
-    if args.fired_when == "match" and not args.fired_pattern:
+    if args.fired_when == FiredWhen.MATCH and not args.fired_pattern:
         raise UsageError("--fired-when match needs --fired-pattern")
     if args.fired_pattern is not None:
         try:

@@ -81,6 +81,7 @@ import sys
 import tempfile
 import threading
 from pathlib import Path
+from typing import NamedTuple
 
 from _cli_envelope import EXIT_ERROR, emit
 
@@ -488,9 +489,18 @@ def ssh_config_user(host: str, run=subprocess.run) -> str | None:
     return None
 
 
+class Plan(NamedTuple):
+    """What one fleet_ssh call will run: the argv, the host it reaches (None for a local-only
+    scp) and the known-hosts file a host-key heal writes to (None when none is in play)."""
+
+    argv: list[str]
+    host: str | None
+    known_hosts: str | None
+
+
 def plan(args: argparse.Namespace, *, home: str | None = None, default_user: str | None = None,
-         config_user=ssh_config_user) -> tuple[list[str], str | None, str | None]:
-    """Work out (argv, host, known_hosts) without running anything. Raises UsageError.
+         config_user=ssh_config_user) -> Plan:
+    """Work out the argv, host and known_hosts without running anything. Raises UsageError.
 
     Split from main() because this is where the wiring lives, and the scp-user trap was a wiring
     bug: both halves were right on their own and only their join was wrong.
@@ -533,7 +543,8 @@ def plan(args: argparse.Namespace, *, home: str | None = None, default_user: str
         options = build_options(key=key, timeout=args.timeout,
                                 trust_changing_host_keys=args.trust_changing_host_keys,
                                 known_hosts=known_hosts)
-        return build_scp_argv(src, dst, key=key, options=options), scp_host(src, dst), known_hosts
+        return Plan(build_scp_argv(src, dst, key=key, options=options), scp_host(src, dst),
+                    known_hosts)
 
     if not args.rest:
         raise UsageError("need a <host>")
@@ -542,7 +553,8 @@ def plan(args: argparse.Namespace, *, home: str | None = None, default_user: str
     options = build_options(key=key, timeout=args.timeout,
                             trust_changing_host_keys=args.trust_changing_host_keys,
                             known_hosts=known_hosts)
-    return build_ssh_argv(host, cmd, user=args.user, key=key, options=options), host, known_hosts
+    return Plan(build_ssh_argv(host, cmd, user=args.user, key=key, options=options), host,
+                known_hosts)
 
 
 def tolerate_unencodable_stdout(stream=None) -> None:
@@ -609,20 +621,21 @@ def main(argv: list[str] | None = None, *, run=subprocess.run) -> int:
 
 def _main(raw: list[str], run, as_json: bool) -> int:
     args = parse_args(raw)
-    built, host, known_hosts = plan(args, default_user=_local_user())
+    planned = plan(args, default_user=_local_user())
     if args.dry_run:
         if as_json:
-            return emit(0, "fleet_ssh", {"argv": built})
-        print(" ".join(built))
+            return emit(0, "fleet_ssh", {"argv": planned.argv})
+        print(" ".join(planned.argv))
         return 0
-    if known_hosts:
+    if planned.known_hosts:
         # The directory must exist or ssh cannot create the file and warns on every call.
+        folder = Path(planned.known_hosts).parent
         try:
-            Path(known_hosts).parent.mkdir(parents=True, exist_ok=True)
+            folder.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
-            raise UsageError(f"cannot create the known-hosts directory "
-                             f"{Path(known_hosts).parent}: {exc}") from exc
-    return run_with_host_key_healing(built, host=host, known_hosts=known_hosts,
+            raise UsageError(f"cannot create the known-hosts directory {folder}: {exc}") from exc
+    return run_with_host_key_healing(planned.argv, host=planned.host,
+                                     known_hosts=planned.known_hosts,
                                      heal=args.trust_changing_host_keys, run=run)
 
 

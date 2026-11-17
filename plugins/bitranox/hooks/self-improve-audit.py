@@ -94,22 +94,29 @@ def _tool_blocks(content):
     return [block for block in out if block.strip()]
 
 
-def _iter_messages(transcript_path):
-    """Yield (role, text) per message for the prose roles, then ("tool", [block, ...]) if it has
-    any.
+def _read_tail(transcript_path):
+    """The transcript's last _MAX_BYTES, from the first whole line on; b"" when it cannot be read.
 
-    "tool" carries the message's tool_use/tool_result blocks and is matched against the TOOL signal
-    set, not the prose sets - a command line is not a sentence and the prose patterns do not apply.
-    """
+    One read per event: the candidates and the skill tally both take these bytes, so the tail
+    (up to 10 MiB) is read and decoded once rather than once per consumer."""
     try:
         size = os.path.getsize(transcript_path)
         with open(transcript_path, "rb") as fh:
             if size > _MAX_BYTES:
                 fh.seek(size - _MAX_BYTES)
                 fh.readline()  # drop the partial line after the seek
-            data = fh.read()
+            return fh.read()
     except OSError:
-        return
+        return b""
+
+
+def _iter_messages(data):
+    """Yield (role, text) per message of the tail bytes `data` for the prose roles, then
+    ("tool", [block, ...]) if it has any.
+
+    "tool" carries the message's tool_use/tool_result blocks and is matched against the TOOL signal
+    set, not the prose sets - a command line is not a sentence and the prose patterns do not apply.
+    """
     for raw in data.splitlines():
         line = raw.strip()
         if not line:
@@ -167,8 +174,13 @@ def _strict_hit(role, text):
 
 def find_candidates(transcript_path):
     """Return candidate-miss dicts: a broad/tool match the strict gate did NOT catch."""
+    return _candidates_in(_read_tail(transcript_path))
+
+
+def _candidates_in(data):
+    """find_candidates over the already-read tail bytes `data`."""
     candidates = []
-    for role, payload in _iter_messages(transcript_path):
+    for role, payload in _iter_messages(data):
         if role == "tool":
             matched, text = _tool_signal(payload)
         else:
@@ -195,16 +207,12 @@ def find_candidates(transcript_path):
 
 def _skill_tally(transcript_path):
     """{skill: count} for the transcript tail; {} on any read problem (never fatal)."""
-    try:
-        size = os.path.getsize(transcript_path)
-        with open(transcript_path, "rb") as fh:
-            if size > _MAX_BYTES:
-                fh.seek(size - _MAX_BYTES)
-                fh.readline()
-            data = fh.read()
-    except OSError:
-        return {}
-    return skills_invoked(data.decode("utf-8", "replace"))
+    return _tally_of(_read_tail(transcript_path))
+
+
+def _tally_of(data):
+    """_skill_tally over the already-read tail bytes `data`."""
+    return skills_invoked(data.decode("utf-8", "replace")) if data else {}
 
 
 def render_report(candidates, skills=None, event="SessionEnd"):
@@ -263,8 +271,9 @@ def main():
     proj = event.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
     out = audit_file(proj)
 
-    candidates = find_candidates(transcript)
-    skills = _skill_tally(transcript)
+    tail = _read_tail(transcript)
+    candidates = _candidates_in(tail)
+    skills = _tally_of(tail)
     if not candidates:
         try:  # nothing to review: clear any stale report so it is not resurfaced
             out.unlink()

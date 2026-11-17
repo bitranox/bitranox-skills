@@ -5,6 +5,7 @@ from one that always fires, and the negative is what proves it could have answer
 The subprocess seams are injected, so nothing here spawns a process."""
 
 import re
+import sys
 from pathlib import Path
 
 import script_prepass as P
@@ -467,3 +468,62 @@ def test_a_vendored_file_gets_no_check_beyond_parsing(tmp_path):
     facts, leads, _summary = P.run_prepass(
         room, [], vendored=[("skills/s/demos/d.py", "vendored")])
     assert facts == {} and leads == {}
+
+
+# ---- one read per target ------------------------------------------------------------------------
+
+_OPENED = []
+_WATCHING = []
+
+
+def _count_opens(event, args):
+    # An audit hook observes the interpreter's own open() calls, so nothing in the module under test
+    # is patched; it cannot be removed once added, so it records only while a test is watching.
+    if _WATCHING and event == "open" and args and isinstance(args[0], str):
+        _OPENED.append(args[0])
+
+
+sys.addaudithook(_count_opens)
+
+
+def _room_with_scripts(tmp_path, count):
+    room = tmp_path / "plugin"
+    (room / "hooks").mkdir(parents=True)
+    targets = []
+    for i in range(count):
+        rel = "hooks/h%d.py" % i
+        (room / rel).write_text(
+            "import yaml\nimport subprocess, shlex, os\n"
+            "subprocess.run(['x'], text=True)\nshlex.split('a')\nos.access('p', os.X_OK)\n"
+            "P = '/tmp/x'\n", encoding="utf-8")
+        targets.append((rel, "hook"))
+    return room, targets
+
+
+def test_run_prepass_reads_each_target_once_whatever_the_number_of_checks(tmp_path):
+    """Every check used to re-read and re-parse every target: the work grew with checks x files."""
+    room, targets = _room_with_scripts(tmp_path, 4)
+    _OPENED.clear()
+    _WATCHING.append(True)
+    try:
+        P.run_prepass(room, targets, run=lambda *_a, **_k: None)
+    finally:
+        _WATCHING.clear()
+    for rel, _kind in targets:
+        assert _OPENED.count(str(room / rel)) == 1, (rel, _OPENED.count(str(room / rel)))
+
+
+def test_run_prepass_reports_what_the_separate_checks_report(tmp_path):
+    """Reading each file once must not change a single hit or its order."""
+    room, targets = _room_with_scripts(tmp_path, 3)
+    (room / "hooks" / "bad.py").write_text("def f(:\n", encoding="utf-8")
+    targets.append(("hooks/bad.py", "hook"))
+    py = [(rel, room / rel) for rel, _k in targets]
+    hooks = [rel for rel, _k in targets]
+    siblings = [p.stem for p in room.rglob("*.py")]
+    expected_facts = (P.syntax_errors(py) + P.unguarded_third_party_imports(py, siblings)
+                      + P.subprocess_text_without_encoding(py) + P.os_access_x_ok(py)
+                      + P.hardcoded_tmp(py) + P.pep723_problems(py, P.CI_MIN, hooks))
+    facts, leads, _summary = P.run_prepass(room, targets, run=lambda *_a, **_k: None)
+    assert facts == P.group_by_file(expected_facts)
+    assert leads == P.group_by_file(P.shlex_on_paths(py) + P.per_file_test_module(py, []))

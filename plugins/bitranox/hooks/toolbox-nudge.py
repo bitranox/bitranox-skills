@@ -880,6 +880,20 @@ def _nudge_flag(session):
     return session_state_path(session, ".toolbox-nudged")
 
 
+def _was_nudged(session, tool):
+    """True if `tool` was already nudged this session; records nothing. Best-effort.
+
+    Asked before the tool is resolved and its source parsed for the launch line: a repeat match
+    is the common case, and that work exists only for a message the dedup then withholds."""
+    if not session:
+        return False
+    try:
+        f = _nudge_flag(session)
+        return f.exists() and tool in f.read_text(encoding="utf-8").split()
+    except Exception:                                    # noqa: BLE001 - dedup must never break the hook
+        return False
+
+
 def _already_nudged(session, tool):
     """Per-session dedup: True if `tool` was already nudged this session; else record it. Best-effort.
 
@@ -925,12 +939,15 @@ def main():
     if not hit:
         return 0
     tool, why = hit
+    session = event.get("session_id") or ""
+    if _was_nudged(session, tool):
+        return 0
     found = _tool_invocation(tool)
     if not found:                                        # nowhere local, nowhere shipped -> silent
         return 0
     home, path, shown = found
     invoke, note = launch_command(path, shown)
-    if _already_nudged(event.get("session_id") or "", tool):
+    if _already_nudged(session, tool):                  # records it; True only on a race
         return 0
     msg = ("%s has a tested tool for this (%s): `%s`%s. Prefer it over hand-rolling; if it "
            "falls short, ENHANCE it (propose-first, per bitranox:meta-self-improve) rather than "

@@ -150,7 +150,7 @@ def _queue_rows(qdir):
             where = path + _home_note(path)
         else:
             where = "%s  (cwd gone)" % path
-        claimed = sum(1 for r in recs if sig.claim_state(r) == "live")
+        claimed = sum(1 for r in recs if sig.claim_state(r) is sig.ClaimState.LIVE)
         rows.append((key, len(recs), claimed, where))
     return rows
 

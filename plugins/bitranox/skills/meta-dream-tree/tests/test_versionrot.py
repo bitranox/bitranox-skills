@@ -306,3 +306,15 @@ def test_pypi_is_not_asked_about_a_version_given_on_the_command_line() -> None:
     asked: set[str] = set()
     versionrot._resolve_online(["pwshpy 1.11.0 streams output"], reg, lambda _n: "1.0.0", asked)
     assert asked == set()
+
+
+def test_a_claim_with_a_misspelled_status_is_refused() -> None:
+    """Six places branch on the status: a misspelled one would match none of them, silently."""
+    with pytest.raises(ValueError):
+        versionrot.Claim("bmk", "3.13.0", "3.21.1", "supersede", "fixed in bmk 3.13.0")
+
+
+def test_a_claim_status_keeps_its_wire_string() -> None:
+    claim = _only(versionrot.find_claims("fixed in bmk 3.13.0", _reg(bmk="3.21.1")))
+    assert claim.status is versionrot.ClaimStatus.SUPERSEDED
+    assert json.dumps(versionrot._claim_dict(claim)["status"]) == '"superseded"'

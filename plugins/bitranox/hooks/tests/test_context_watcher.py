@@ -457,6 +457,21 @@ def test_the_save_request_skips_the_overwrite_warning_when_there_is_no_handover(
     assert "OVERWRITING" not in msg and "meta-context-watcher" in msg
 
 
+def test_a_tracking_value_outside_the_vocabulary_is_refused_not_silently_unwarned():
+    """`.get(tracking)` read a misspelt value as 'no warning', so the request asking for an
+    overwrite dropped the one sentence saying what that overwrite loses."""
+    with pytest.raises(ValueError):
+        _save_text("tracekd")
+
+
+def test_every_tracking_answer_has_an_overwrite_entry():
+    assert set(W._OVERWRITE_WARNING) == set(W.HandoverTracking)
+
+
+def test_handover_tracking_answers_a_member(repo):
+    assert W.handover_tracking(repo) is W.HandoverTracking.ABSENT
+
+
 def test_decide_words_the_save_request_for_the_repo_it_is_in(tmp_path, repo, session):
     (repo / "handover.md").write_bytes(b"# handover\n")
     _git(repo, "add", "handover.md")

@@ -8,6 +8,7 @@ import os
 import stat
 import subprocess
 import sys
+import tracemalloc
 
 import pytest
 
@@ -64,6 +65,69 @@ def test_a_git_failure_while_building_is_exit_2_not_an_empty_package(repo, tmp_p
     assert rc == 2
     assert data == b""
     assert "git" in capsys.readouterr().err
+
+
+def test_a_failure_keeps_an_earlier_package_and_leaves_no_partial_file(repo, tmp_path):
+    r, base = repo
+    head = _commit(r, "a.txt", b"a\nc\n", "change")
+    blob = _git(r, "rev-parse", "HEAD:a.txt")
+    obj = r / ".git" / "objects" / blob[:2] / blob[2:]
+    obj.chmod(stat.S_IREAD | stat.S_IWRITE)
+    obj.unlink()
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    out = out_dir / "pkg.diff"
+    out.write_bytes(b"earlier package\n")
+    assert RP.main([base, head, str(out)]) == 2
+    assert out.read_bytes() == b"earlier package\n"
+    assert sorted(p.name for p in out_dir.iterdir()) == ["pkg.diff"]
+
+
+def test_the_package_is_the_three_git_sections_byte_for_byte(repo, tmp_path):
+    r, base = repo
+    _commit(r, "a.txt", b"a\nc\n", "change")
+    head = _commit(r, "b.txt", b"", "empty file")
+    span = f"{base}..{head}"
+
+    def raw(*args):
+        return subprocess.run(["git", *args], cwd=r, capture_output=True, check=True).stdout
+
+    expected = b"\n".join([
+        f"# Review package: {span}".encode(), b"", b"## Commits", raw("log", "--oneline", span).rstrip(b"\n"),
+        b"", b"## Files changed", raw("diff", "--stat", span).rstrip(b"\n"),
+        b"", b"## Diff", raw("diff", "-U10", span).rstrip(b"\n"), b"",
+    ])
+    rc, data = _package(tmp_path, base, head)
+    assert rc == 0
+    assert data == expected
+
+
+def test_an_empty_range_keeps_every_section_heading(repo, tmp_path):
+    _r, base = repo
+    rc, data = _package(tmp_path, base, base)
+    assert rc == 0
+    assert data == (f"# Review package: {base}..{base}\n\n## Commits\n\n\n## Files changed\n\n\n"
+                    "## Diff\n\n").encode()
+
+
+def test_peak_memory_does_not_grow_with_the_diff(repo, tmp_path, capsys):
+    # The diff is the large part of a package and git can write it to the file itself, so the
+    # package never needs to be held whole in memory.
+    r, base = repo
+    peaks = []
+    for n, name in ((2000, "small.txt"), (16000, "large.txt")):
+        head = _commit(r, name, b"".join(b"line %06d %s\n" % (i, b"x" * 80) for i in range(n)), name)
+        tracemalloc.start()
+        try:
+            rc = RP.main([base, head, str(tmp_path / f"{name}.diff")])
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        assert rc == 0
+        base = head
+        peaks.append(peak)
+    capsys.readouterr()
+    assert peaks[1] < 2 * peaks[0], f"8x the diff raised the peak from {peaks[0]} to {peaks[1]} bytes"
 
 
 def test_an_intact_repo_still_packages(repo, tmp_path):
