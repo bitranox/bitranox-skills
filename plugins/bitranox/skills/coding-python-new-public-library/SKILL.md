@@ -78,8 +78,9 @@ and a small library API. Replace the placeholder behaviors with your own.
 ```
 
 ```python
-import <pkg> as lib
-lib.emit_greeting()     # placeholder; swap for your real API
+import your_package as lib  # your_package: the import name of <pkg>
+
+lib.emit_greeting()  # placeholder; swap for your real API
 ```
 
 ## 4. Develop and release (bmk)

@@ -30,6 +30,21 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.10.2]
+
+### Changed
+
+- `devops-bmk`: a gate run after the commit it gates (`make test && git push`, or a gate jig with a
+  follow-up push) pushes that commit without the files the gate just rewrote, `ruff format`'s
+  reformatted fenced Python blocks in Markdown included. The skill now says to read
+  `git status --porcelain` after every gate run and commit what bmk changed; once the commit is
+  pushed, a separate chore commit is the only form.
+
+### Fixed
+
+- `coding-python-new-public-library`: the library-usage example now parses as Python
+  (`import your_package as lib` in place of `import <pkg> as lib`).
+
 ## [11.10.1]
 
 ### Changed

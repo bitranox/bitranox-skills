@@ -448,7 +448,14 @@ forwarded (e.g. `make push fix login bug`). Most have short aliases.
   output, not someone else's edit: commit them with your change, a docs-only change included, and
   name a floor bump in the commit message. Never carve them out as "not part of this change" or
   `git checkout` them away: the next `make` writes them again and leaves them for the next commit.
-  Files your TEST SUITE rewrites are different: restore those (next point).
+  `ruff format` runs over the whole tree and also reformats the fenced Python code blocks in
+  Markdown files, so docs and plans change too. A gate run AFTER the commit it gates
+  (`make test && git push`, or a gate jig with a `--then "git push"` action) pushes that commit
+  WITHOUT the rewrites the gate just made: read `git status --porcelain` after every gate run and
+  commit what bmk changed, before the push or after it. With your change already committed, a
+  separate chore commit for the churn is as good as amending it in; after the push it is the
+  only form, since amending a pushed commit needs a force-push.
+  Files your TEST SUITE rewrites are different: restore those (the `push` point below).
 - **When your push is rejected because someone else pushed bmk's churn first, regenerate yours;
   do not merge it.** Both sides wrote the Makefile, the `pyproject.toml` floors and `uv.lock`
   from a gate run, so a rebase conflicts in exactly those files and a hand merge of two lock
