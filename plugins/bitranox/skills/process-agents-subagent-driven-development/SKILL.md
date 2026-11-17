@@ -576,6 +576,8 @@ by path:
 - `.bitranox/sdd/progress.md` (or this plan's `progress-<plan>.md`), `.bitranox/sdd/decisions.md`
   when present, and `EXECUTION-USER-REVIEW.md` when present: the decisions and amendments, and
   the Minor findings the task reviews deferred to this review.
+- `USER-DECISIONS.jsonl` at the main checkout's root, when present: the user's recorded answers,
+  verbatim. If there is none, say so in the dispatch.
 
 When the branch touches several external systems (a database and a printer, a network service and
 a file format), split this review by system: one reviewer per side, each with the same inputs and
@@ -583,9 +585,9 @@ told to probe the edges the plan never named on its side, such as a different se
 the expected port, non-ASCII or out-of-codepage credentials and text, CPU or time spent before a
 size cap fires, and every exception type the system's library can raise. Every task's tests replay
 the plan's own model of each system, so a defect at an edge the plan never named passes all of
-them. Every reviewer reports DEFECTS; give the PLAN CHANGES part of instruction 2 and the Minor
-triage of instruction 3 to one of them only. Merge their DEFECTS into one list before the
-confirmation step below.
+them. Every reviewer reports DEFECTS; give the PLAN CHANGES part of instruction 2, the Minor
+triage of instruction 3 and the decision check of instruction 4 to one of them only. Merge their
+DEFECTS into one list before the confirmation step below.
 
 Its instructions, in the dispatch:
 
@@ -606,9 +608,21 @@ Its instructions, in the dispatch:
    amendment, decisions file, review log, nowhere), and whether the design supports it. A departure
    recorded nowhere is also a DEFECT.
 3. Triage the deferred Minor list: fix before merge, or keep as recorded debt, one line each.
+4. Check every decision the PLAN took (an accepted exception, a narrowed scope, a numbered
+   decision entry in the plan or the decisions file) against the user's recorded answers in
+   `USER-DECISIONS.jsonl`. A plan decision that narrows a user decision, or adds an exception the
+   user's answer does not carry, is a DEFECT however faithfully the code follows the plan; in
+   place of a failing input it quotes the plan's line and the user's answer. A plan decision on a
+   point no recorded answer covers is no DEFECT here. With no such file, report this check as not
+   made.
+   The task reviews judge code against the plan, so they approve code that follows such a
+   decision. Measured: a plan accepted one error path that named less than the user's answer
+   required, six task reviews approved the code, and only a final review that read the user's
+   answers found it.
 
 Then, before fixing anything, confirm each Critical and Important defect yourself: run its failing
-input, or read the code path it names far enough to see it fail. Dispatch ONE fix subagent with
+input, or read the code path it names far enough to see it fail (a decision defect from
+instruction 4: read its two quotes in the files they come from). Dispatch ONE fix subagent with
 the confirmed list (see the bullet above), under the same regression-test rule: each test it adds
 must fail with that defect put back. A defect the fix would resolve by changing what the plan text
 requires goes through the plan-mandated rule above. The PLAN CHANGES list goes, unchanged, into the
