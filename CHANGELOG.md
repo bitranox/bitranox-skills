@@ -30,6 +30,18 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.10.3]
+
+### Changed
+
+- `compuse-toolbox`: writing or editing a jig's Python code now requires
+  `coding-python-data-architecture` and `coding-python-performance-review` (the whole of a new jig,
+  the touched code of an edited one); a bash launcher follows the two bash skills instead.
+- `meta-skill-writer`: the same requirement for a skill's bundled Python script or hook, in a
+  subsection of its own.
+- `meta-claude-hooks`: a new question before writing a hook asks whether the handler's logic is
+  Python (a `.py` started through a launcher shim counts) and, if so, requires the same two skills.
+
 ## [11.10.2]
 
 ### Changed
