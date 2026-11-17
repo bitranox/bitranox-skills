@@ -30,6 +30,15 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.10.11]
+
+### Changed
+
+- coding-python-layered-config: the upward `.env` search passes over a searched `.env` with more than
+  one hard link on every OS (WARNING `dotenv_skipped_hard_link`, path and link count) and goes on
+  searching; `dotenv_path=` loads such a file. `is_sensitive_at`'s `not_sensitive` takes the dotted
+  paths themselves as well as a `NotSensitiveKeys`, and refuses a single `str`.
+
 ## [11.10.10]
 
 ### Fixed
