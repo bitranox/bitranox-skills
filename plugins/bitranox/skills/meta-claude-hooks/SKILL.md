@@ -107,6 +107,13 @@ Upstream, for detail beyond these files: <https://code.claude.com/docs/en/hooks.
    change settles there, each decision naming the test that pins it (or why no test can) and each
    rejected alternative as a `- Rejected:` entry. The block's form is in
    `references/authoring.md`, "Record a decision in the module docstring".
+8. **Is the handler's logic Python?** A `.py` started through a launcher shim counts. Then load
+   `bitranox:coding-python-data-architecture` (typed models at the boundaries, enums for fixed
+   values, no raw dicts passed around) and `bitranox:coding-python-performance-review` (no per-item
+   I/O in a loop, compiled regexes, bounded memory, measured claims) before you write or edit it.
+   Apply both to a new hook as a whole, and on an edit to an existing hook to the code the edit
+   touches. Handler logic written in bash follows `bitranox:coding-bash-clean-architecture` and
+   `bitranox:coding-bash-reference` instead.
 
 ## The five that bite hardest
 
