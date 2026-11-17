@@ -431,6 +431,13 @@ Each jig is one import-safe core function plus a thin `argparse` CLI, shipped wi
 When a jig is insufficient in use, ENHANCE it (add a RED regression test for the gap, then fix),
 rather than hand-rolling around it - so the tool matures and cannot silently regress.
 
+**REQUIRED SUB-SKILLS for a jig's Python code:** load `bitranox:coding-python-data-architecture`
+(typed models at the boundaries, enums for fixed values, no raw dicts passed around) and
+`bitranox:coding-python-performance-review` (no per-item I/O in a loop, compiled regexes, bounded
+memory, measured claims) before you write or edit a jig. Apply both to a new jig as a whole, and
+on an edit to an existing jig to the code the edit touches. A bash launcher follows
+`bitranox:coding-bash-clean-architecture` and `bitranox:coding-bash-reference` instead.
+
 When a hook or jig settles a choice a later editor could plausibly undo (a rule tightened or
 loosened, an alternative tried and dropped, a threshold picked from a measurement), record it in
 the module docstring, in a block headed `Decisions:`:
