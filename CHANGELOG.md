@@ -30,6 +30,28 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.10.13]
+
+### Added
+
+- `block-cmd-if-chain.py`, a PreToolUse Bash guard: it refuses an ssh one-liner whose remote
+  cmd.exe `if` is followed by `&`, `&&` or `||` without parentheses. cmd.exe makes everything
+  after the condition part of the `if`, so a "clean, then recreate" line like
+  `if exist X rmdir /s /q X & mkdir X && ...` runs nothing when X is missing and still exits 0.
+  The refusal shows the parenthesised form, `(if exist X rmdir /s /q X) & mkdir X`, and the
+  one-call-per-step alternative; the block form `if exist X ( a & b )`, a POSIX `if` and any
+  non-ssh command pass. Replayed over 222,918 recorded Bash calls: 24 firings, all real.
+
+### Changed
+
+- `infra-proxmox-bindsnap`: on a pve-container build the guard refuses
+  (`snapshot gated -- pve-container <ver> is untested`), the skill now offers a raw
+  `zfs snapshot` of every managed volume of a STOPPED container whose volumes are all on ZFS,
+  plus a copy of the CT config, with its costs (not in `pct listsnapshot` or the GUI, manual
+  rollback, and how it blocks a `pct rollback` to an older snapshot), and `vzdump` for every
+  other case. The description names that refusal, so the skill loads when it appears.
+  Mirrored in pve-bindsnap 1.4.2.
+
 ## [11.10.12]
 
 ### Fixed

@@ -751,12 +751,12 @@
   "greyed",
   "refuses",
   "container",
+  "pve-container",
   "bind-mount",
   "pve-bindsnap",
   "bindsnap-force-running",
   "bindsnap-unsupported",
-  "bindsnap-exclude",
-  "pve-container"
+  "bindsnap-exclude"
  ],
  "infra-proxmox-qemu-windows-storage": [
   "windows",

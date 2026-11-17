@@ -58,6 +58,7 @@ _HOOK_MODULES = {
     "grep-ignored-empty-nudge": "grep_ignored_empty_nudge",
     "pct-path-nudge": "pct_path_nudge",
     "shell-prefix-selfref-guard": "shell_prefix_selfref_guard",
+    "block-cmd-if-chain": "block_cmd_if_chain",
     "git-commit-branch-guard": "git_commit_branch_guard",
     "block-sed-structured-files": "block_sed_structured_files",
     "session-start": "session_start",
