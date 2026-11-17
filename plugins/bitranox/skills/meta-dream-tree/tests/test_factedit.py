@@ -14,6 +14,7 @@ Pure judging (judge_hook) still takes a fake EngineRules: that is the tool's own
 a set of predicates, not a borrowed grammar that can silently disagree with the engine.
 """
 
+import ast
 import json
 import os
 import re
@@ -64,6 +65,46 @@ def fake_rules(**over) -> FE.EngineRules:
 # factedit binds from the same dir (stdlib only).
 _PARSER_MODULES = ("uuid_store.py", "capture_constraints.py", "self_improve_signals.py",
                    "claude_paths.py", "process_liveness.py", "shell_text.py", "tell_chars.py")
+
+_REPO_HOOKS = Path(__file__).resolve().parents[3] / "hooks"
+
+
+def _sibling_closure(names, hooks_dir):
+    """Every hooks module reachable from `names` through imports of sibling hooks modules.
+
+    ast.walk, not the module body: a function-local import still has to resolve in the copied
+    dir the moment that function runs.
+    """
+    local = {p.stem for p in Path(hooks_dir).glob("*.py")}
+    seen, todo = set(), list(names)
+    while todo:
+        name = todo.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        tree = ast.parse((Path(hooks_dir) / f"{name}.py").read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                todo += [a.name.split(".")[0] for a in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                todo.append(node.module.split(".")[0])
+        todo = [t for t in todo if t in local]
+    return seen
+
+
+def test_the_copied_parser_modules_are_their_own_whole_import_closure():
+    # A listed module that gains a sibling import leaves the copied dir unimportable, and every
+    # test built on it fails with "No module named <new>": claude_paths (63 tests) and then
+    # shell_text (69 tests) did exactly that. This names the missing module at the edit instead.
+    listed = {Path(name).stem for name in _PARSER_MODULES}
+    missing = sorted(_sibling_closure(listed, _REPO_HOOKS) - listed)
+    assert missing == [], "add to _PARSER_MODULES: %s" % ", ".join(f"{m}.py" for m in missing)
+
+
+def test_the_closure_reports_an_unlisted_sibling_import(tmp_path):
+    (tmp_path / "listed.py").write_text("import os\n\ndef f():\n    import helper\n", encoding="utf-8")
+    (tmp_path / "helper.py").write_text("import json\n", encoding="utf-8")
+    assert _sibling_closure({"listed"}, tmp_path) == {"listed", "helper"}
 
 # The one deliberate stand-in: the WRITE path. It records the argv it was handed and exits 0, so a
 # test can assert WHICH verb and files factedit chose without a real engine touching a real store.

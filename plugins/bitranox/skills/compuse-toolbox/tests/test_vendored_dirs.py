@@ -56,7 +56,9 @@ def _grep_all_dirs(root: Path) -> set[str]:
 def _conflict_scan_dirs(root: Path) -> set[str]:
     proc = _run("conflict_scan.py", str(root))
     assert proc.returncode == 1, proc.stderr
-    rows = [line.split(":", 1)[0] for line in proc.stdout.splitlines() if ":1: " in line]
+    # Split at the line-number separator, never the first colon: on Windows that is the
+    # drive letter's, and "C:\...\f.txt:1: ..." became the path "C".
+    rows = [line.partition(":1: ")[0] for line in proc.stdout.splitlines() if ":1: " in line]
     return _top_dirs(rows, root)
 
 

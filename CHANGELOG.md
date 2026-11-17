@@ -30,6 +30,18 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.10.9]
+
+### Fixed
+
+- `meta-dream-tree` tests: `test_factedit.py` copies a fixed list of hook modules into a
+  throwaway engine dir, and twice a listed module gained a sibling import the list lacked
+  (`claude_paths`, then `shell_text`), failing 63 and then 69 tests with "No module named". A new
+  test computes the real import closure of the listed modules and names the module to add.
+- `compuse-toolbox` tests: `test_vendored_dirs.py` (new in 11.10.6) split each `conflict_scan`
+  row at its first colon, which on Windows is the drive letter's, so the windows-latest cell
+  failed with a path of "C". It now splits at the `:1: ` line separator.
+
 ## [11.10.8]
 
 ### Fixed
