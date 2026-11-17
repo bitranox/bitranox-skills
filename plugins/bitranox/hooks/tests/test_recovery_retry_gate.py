@@ -310,8 +310,9 @@ def test_a_line_longer_than_the_limit_is_still_read_whole(tmp_path):
     assert chunk == long_line.decode() and offset == len(long_line)
 
 
-def _peak_rss_kb(tmp_path, megabytes):
-    """ru_maxrss of one hook run with no saved state, so it reads a transcript of `megabytes`."""
+def _peak_rss_bytes(tmp_path, megabytes):
+    """Peak RSS in bytes of one hook run with no saved state, so it reads a transcript of
+    `megabytes`. ru_maxrss is bytes on macOS and KiB on Linux."""
     home = tmp_path / ("home%s" % megabytes)
     home.mkdir()
     transcript = tmp_path / ("t%s.jsonl" % megabytes)
@@ -332,16 +333,17 @@ def _peak_rss_kb(tmp_path, megabytes):
     proc.stdin.close()
     _, status, usage = os.wait4(proc.pid, 0)
     assert os.waitstatus_to_exitcode(status) == 0
-    return usage.ru_maxrss
+    scale = 1 if sys.platform == "darwin" else 1024
+    return usage.ru_maxrss * scale
 
 
 @pytest.mark.skipif(not hasattr(os, "wait4"), reason="os.wait4 rusage is POSIX-only")
 def test_a_whole_transcript_reread_does_not_grow_memory_with_its_size(tmp_path):
     """A lost or version-bumped state file restarts the read at 0. Read whole, a 50 MB transcript
     sat in memory as bytes, as text and as every tool call parsed from it at once."""
-    small = _peak_rss_kb(tmp_path, 2)
-    large = _peak_rss_kb(tmp_path, 16)
-    assert large - small < 8 * 1024, (small, large)
+    small = _peak_rss_bytes(tmp_path, 2)
+    large = _peak_rss_bytes(tmp_path, 16)
+    assert large - small < 8 * 1024 * 1024, (small, large)
 
 
 def test_a_reread_from_the_start_still_fires_across_read_chunks(tmp_path):

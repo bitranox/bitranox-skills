@@ -30,6 +30,14 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.10.8]
+
+### Fixed
+
+- `recovery-retry-gate` tests: the memory test added in 11.10.6 read `ru_maxrss` as KiB on every
+  platform, so on macOS, which reports bytes, it allowed 8 KB of growth instead of 8 MiB and
+  failed on a 0.9 MB rise. It now converts to bytes per platform, as the toolbox memory tests do.
+
 ## [11.10.7]
 
 ### Fixed
