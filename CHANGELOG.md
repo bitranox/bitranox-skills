@@ -32,6 +32,15 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 ## [11.10.1]
 
+### Changed
+
+- process-plan-writing-plans: Self-Review item 9 (run the plan's code) stays owed when a subagent
+  drafted the tasks and is the one part of the review that may be handed to a pinned `opus` agent
+  in a scratch clone; item 8 lists a moved test's imports against the target repo before dispatch.
+- process-agents-subagent-driven-development: the final whole-branch review reads
+  `USER-DECISIONS.jsonl` and reports a plan decision that narrows or excepts a user decision as a
+  defect.
+
 ### Fixed
 
 - `subagent-backstop-nudge`, `subagent-brief`, `subagent-capture` and
