@@ -49,7 +49,9 @@ Pure standard library, ASCII only; launched via run-python.sh so it works on Win
 
 import json
 import sys
+from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import NamedTuple
 
 from shell_text import (
     basename_for_tool,
@@ -77,21 +79,79 @@ def _state_path(session: str) -> Path:
     return session_state_path(session, ".retry-flag.json")
 
 
-def _load(session: str) -> dict:
+class CommandShape(NamedTuple):
+    """What a command targets: its program, its flags as a sorted set, its operands in order."""
+
+    program: str
+    flags: tuple[str, ...]
+    operands: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class RetryState:
+    """The per-session state file: nudges spent so far and the failed commands, oldest first."""
+
+    fired: int = 0
+    failed: tuple[CommandShape, ...] = ()
+
+
+def parse_state(raw: object) -> RetryState:
+    """The state file's decoded JSON as a `RetryState`, or an empty one when any field is off. PURE.
+
+    Only this hook writes the file, but a hand edit, a partial write or a later shape kept at the
+    same version reaches here too. Accepting it unchecked made every later call raise, and main's
+    blanket except turned that into silence for the rest of the session; starting fresh costs at
+    most the failures recorded so far.
+    """
+    if not isinstance(raw, dict) or raw.get("v") != STATE_VERSION:
+        return RetryState()
+    fired, entries = raw.get("fired", 0), raw.get("failed", [])
+    # bool is an int subclass, and a `true` count is a corrupt file, not one nudge.
+    if type(fired) is not int or fired < 0 or not isinstance(entries, list):
+        return RetryState()
+    failed = tuple(_parse_shape(entry) for entry in entries)
+    if None in failed:
+        return RetryState()
+    return RetryState(fired, failed)
+
+
+def _parse_shape(entry: object) -> CommandShape | None:
+    """One stored `[program, [flags], [operands]]` entry, or None unless `shape()` could make it."""
+    if not isinstance(entry, list) or len(entry) != 3:
+        return None
+    program, flags, operands = entry
+    if not isinstance(program, str) or not program:
+        return None
+    if not _all_strings(flags) or not all(f.startswith("-") for f in flags):
+        return None
+    if not _all_strings(operands) or not operands:
+        return None
+    return CommandShape(program, tuple(flags), tuple(operands))
+
+
+def _all_strings(value: object) -> bool:
+    return isinstance(value, list) and all(isinstance(item, str) for item in value)
+
+
+def state_json(state: RetryState) -> dict:
+    """The JSON object `parse_state` reads back. PURE."""
+    return {"v": STATE_VERSION, "fired": state.fired,
+            "failed": [[s.program, list(s.flags), list(s.operands)] for s in state.failed]}
+
+
+def _load(session: str) -> RetryState:
     try:
-        state = json.loads(_state_path(session).read_text(encoding="utf-8"))
+        raw = json.loads(_state_path(session).read_text(encoding="utf-8"))
     except Exception:                                     # noqa: BLE001 - absent/corrupt: start fresh
-        return {}
-    if not isinstance(state, dict) or state.get("v") != STATE_VERSION:
-        return {}
-    return state
+        return RetryState()
+    return parse_state(raw)
 
 
-def _save(session: str, state: dict) -> None:
+def _save(session: str, state: RetryState) -> None:
     try:
         path = _state_path(session)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(state), encoding="utf-8")
+        path.write_text(json.dumps(state_json(state)), encoding="utf-8")
     except Exception:                                     # noqa: BLE001 - state must never break the hook
         pass
 
@@ -191,7 +251,7 @@ class _HeadWalk:
 
 
 def shape(command, tool_name="Bash"):
-    """(program, sorted flags, operands) for the LAST statement of `command`, or None. PURE.
+    """The `CommandShape` of the LAST statement of `command`, or None. PURE.
 
     For a PENDING command the last statement is the one being re-attempted. A FAILED command is
     only recorded when it is a single statement (`_record`), because a compound's failure cannot be
@@ -219,29 +279,28 @@ def shape(command, tool_name="Bash"):
     # two invocations of the program would compare equal. A retry is about a target.
     if not operands:
         return None
-    return (program, tuple(sorted(flags)), tuple(operands))
+    return CommandShape(program, tuple(sorted(flags)), tuple(operands))
 
 
-def only_flags_added(pending, failed) -> bool:
+def only_flags_added(pending: CommandShape | None, failed: CommandShape | None) -> bool:
     """True when `pending` is `failed` with strictly more flags and nothing else changed. PURE."""
     if not pending or not failed:
         return False
-    program, flags, operands = pending
-    was_program, was_flags, was_operands = failed
-    if program != was_program or operands != was_operands:
+    if pending.program != failed.program or pending.operands != failed.operands:
         return False
-    return set(was_flags) < set(flags)
+    return set(failed.flags) < set(pending.flags)
 
 
 def notice(pending_command, recorded, tool_name="Bash"):
-    """The nudge text when this pending command re-runs a failed one with added flags, else None."""
+    """The nudge text when this pending command re-runs a failed one with added flags, else None.
+
+    `recorded` holds the failed `CommandShape`s, as `RetryState.failed` does."""
     pending = shape(pending_command, tool_name)
     if not pending:
         return None
-    for entry in recorded:
-        failed = (entry[0], tuple(entry[1]), tuple(entry[2]))
+    for failed in recorded:
         if only_flags_added(pending, failed):
-            added = " ".join(sorted(set(pending[1]) - set(failed[1])))
+            added = " ".join(sorted(set(pending.flags) - set(failed.flags)))
             return (
                 "This command is one that already FAILED this session with " + added + " added and "
                 "nothing else changed. A flag bolted onto the command that just failed is the same "
@@ -270,16 +329,14 @@ def _record(event) -> int:
     current = shape(command, event.get("tool_name"))
     if not current:
         return 0
-    # Stored as JSON reads it back - lists all the way down - so the dedup compares like with like.
-    # Comparing against `list(current)`, which still holds tuples, never matched: one command
-    # failing in a loop filled every slot and evicted the failure that mattered.
-    entry = [current[0], list(current[1]), list(current[2])]
+    # Both sides are `CommandShape`s, so the dedup compares like with like. Comparing a stored JSON
+    # list with a tuple-bearing one never matched: one command failing in a loop filled every slot
+    # and evicted the failure that mattered.
     session = str(event.get("session_id") or "")
     state = _load(session)
-    recorded = [e for e in state.get("failed", []) if e != entry]
-    recorded.append(entry)
-    state.update({"v": STATE_VERSION, "failed": recorded[-MAX_RECORDED:]})
-    _save(session, state)
+    recorded = [e for e in state.failed if e != current]
+    recorded.append(current)
+    _save(session, replace(state, failed=tuple(recorded[-MAX_RECORDED:])))
     return 0
 
 
@@ -289,14 +346,13 @@ def _judge(event) -> int:
         return 0
     session = str(event.get("session_id") or "")
     state = _load(session)
-    if state.get("fired", 0) >= FIRE_CAP:
+    if state.fired >= FIRE_CAP:
         return 0
-    message = notice((event.get("tool_input") or {}).get("command"), state.get("failed", []),
+    message = notice((event.get("tool_input") or {}).get("command"), state.failed,
                      event.get("tool_name"))
     if not message:
         return 0
-    state["fired"] = state.get("fired", 0) + 1
-    _save(session, state)
+    _save(session, replace(state, fired=state.fired + 1))
     json.dump({"hookSpecificOutput": {"hookEventName": "PreToolUse",
                                       "additionalContext": message}}, sys.stdout)
     return 0

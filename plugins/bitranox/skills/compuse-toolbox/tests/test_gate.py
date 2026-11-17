@@ -6,6 +6,9 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import threading
+import time
+import tracemalloc
 from pathlib import Path
 
 import pytest
@@ -1263,3 +1266,93 @@ class TestTheLogCarriesTheVerdictAndWhereItRan:
         lines = log.read_text(encoding="utf-8").splitlines()
         at = next(i for i, ln in enumerate(lines) if ln.startswith("=== gate:"))
         assert lines[at + 1] == f"cwd: {target.resolve()}", lines[at:at + 3]
+
+
+# --- a running gate's output reaches the log as it arrives, and is never held whole -------------
+
+_WAITS_UNTIL_ITS_LINE_IS_LOGGED = (
+    "import pathlib, sys, time\n"
+    "flag = pathlib.Path(sys.argv[1])\n"
+    "print('progress ' + 'line one', flush=True)\n"   # split: the log's header repeats argv
+    "deadline = time.monotonic() + 8\n"
+    "while not flag.exists():\n"
+    "    if time.monotonic() > deadline:\n"
+    "        sys.exit(3)\n"
+    "    time.sleep(0.02)\n"
+)
+
+
+def test_a_running_gate_s_output_is_in_the_log_before_the_gate_ends(tmp_path):
+    """A watcher polling the log of a long `make test` must see it move: the gate exits 0 only
+    when its first line reached the log while it was still running, and 3 when it waited."""
+    log, flag = tmp_path / "g.log", tmp_path / "flag"
+    gates = [("slow", [sys.executable, "-c", _WAITS_UNTIL_ITS_LINE_IS_LOGGED, str(flag)])]
+    box = {}
+    runner = threading.Thread(target=lambda: box.update(rep=gate.run_gates(gates, log)))
+    runner.start()
+    deadline = time.monotonic() + 8
+    while time.monotonic() < deadline and not flag.exists():
+        if log.exists() and "progress line one" in log.read_text(encoding="utf-8"):
+            flag.write_text("seen", encoding="utf-8")
+        time.sleep(0.02)
+    runner.join()
+    assert box["rep"].results[0].returncode == 0
+
+
+_PRINTS_MEGABYTES = ("import sys\nline = 'o' * 1023 + '\\n'\n"
+                     "for _ in range(int(sys.argv[1]) * 1024):\n    sys.stdout.write(line)\n"
+                     "print('collected 3 items')\n")
+
+
+def _peak_python_memory_of_a_gate(tmp_path, megabytes):
+    gates = [("big", [sys.executable, "-c", _PRINTS_MEGABYTES, str(megabytes)])]
+    tracemalloc.start()
+    try:
+        rep = gate.run_gates(gates, tmp_path / f"g{megabytes}.log", summary=r"collected")
+        return rep, tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+
+def test_a_gate_s_output_is_not_held_in_memory(tmp_path):
+    small, peak_small = _peak_python_memory_of_a_gate(tmp_path, 4)
+    large, peak_large = _peak_python_memory_of_a_gate(tmp_path, 32)
+    for rep in (small, large):
+        assert rep.results[0].returncode == 0
+        assert rep.results[0].test_count == 3
+        assert rep.results[0].summary_lines == ["collected 3 items"]
+    assert (tmp_path / "g32.log").stat().st_size > 32 << 20
+    growth = peak_large - peak_small
+    assert growth < 4 * (1 << 20), f"peak grew {growth >> 20} MB for 28 MB more output"
+
+
+def _small_file_limit():
+    import resource  # noqa: PLC0415 - POSIX only; runs in the child via preexec_fn
+    import signal  # noqa: PLC0415 - same
+
+    signal.signal(signal.SIGXFSZ, signal.SIG_IGN)            # a write past the limit then raises
+    resource.setrlimit(resource.RLIMIT_FSIZE, (16384, 16384))
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="RLIMIT_FSIZE is POSIX only")
+def test_a_log_that_fills_mid_gate_is_a_log_failure_not_a_gate_that_could_not_start(tmp_path):
+    """The log is written WHILE the gate runs now; a write failing there is still the runner's
+    log failing, never reported as the gate itself not starting."""
+    log = tmp_path / "g.log"
+    code = "import sys; [sys.stdout.write('y' * 1000 + '\\n') for _ in range(200)]"
+    script = Path(gate.__file__).resolve()
+    done = subprocess.run([sys.executable, str(script), "--log", str(log), "--",
+                           sys.executable, "-c", code], capture_output=True, text=True,
+                          preexec_fn=_small_file_limit, timeout=60)
+    assert done.returncode == 2
+    assert "cannot write the log" in done.stderr
+    assert "could not start" not in done.stdout
+
+
+def test_an_overlong_line_still_reaches_the_log_whole(tmp_path):
+    """Matching keeps a bounded head of each line; the log still gets every character."""
+    log = tmp_path / "g.log"
+    code = "import sys; sys.stdout.write('x' * 300000 + ' collected 2 items\\n')"
+    rep = gate.run_gates([("long", [sys.executable, "-c", code])], log)
+    assert ("x" * 300000 + " collected 2 items") in log.read_text(encoding="utf-8")
+    assert rep.results[0].returncode == 0

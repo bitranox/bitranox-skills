@@ -188,10 +188,11 @@ def _symlink(link, target):
 
 
 def test_cli_a_dangling_symlink_in_a_walked_tree_is_skipped_not_an_error(tmp_path):
-    """A stale .venv link points at nothing, so it cannot hold a marker: the tree is clean."""
+    """A stale link points at nothing, so it cannot hold a marker: the tree is clean. (Not under
+    a .venv: a walk no longer enters one.)"""
     (tmp_path / "a.txt").write_text("clean\n", encoding="utf-8")
-    (tmp_path / ".venv" / "bin").mkdir(parents=True)
-    _symlink(tmp_path / ".venv" / "bin" / "python", tmp_path / "no-such-python")
+    (tmp_path / "tools" / "bin").mkdir(parents=True)
+    _symlink(tmp_path / "tools" / "bin" / "python", tmp_path / "no-such-python")
     r = _run(tmp_path)
     assert r.returncode == 0, r.stderr
     assert r.stdout == b""
@@ -319,3 +320,88 @@ def test_an_unexpected_error_exits_2_not_the_markers_code(tmp_path, monkeypatch,
     monkeypatch.setattr(sys, "stdout", _FailingStdout())
     assert C.main([str(f)]) == 2
     assert "No space left" in capsys.readouterr().err
+
+
+# --- vendored trees, binaries and big files -------------------------------------------------------
+
+_LONE_MIDDLE = "text above\n=======\ntext below\n"
+"""A lone middle marker between text lines: a marker by the rules, and what a dist-info METADATA
+or a compiled .pyc in a venv holds by chance."""
+
+
+@pytest.mark.parametrize("vendored", [".venv/lib/pkg-1.0.dist-info", ".venv-3.12/lib",
+                                      "node_modules/pkg", "src/__pycache__", ".mypy_cache/3.14",
+                                      ".pytest_cache/v", ".ruff_cache/0.1"])
+def test_cli_a_vendored_or_cache_tree_is_not_scanned(tmp_path, vendored):
+    """git never merges into a venv or a cache, so a marker-shaped line there is not a conflict."""
+    d = tmp_path / vendored
+    d.mkdir(parents=True)
+    (d / "METADATA").write_text(_LONE_MIDDLE, encoding="utf-8")
+    (tmp_path / "ok.py").write_text("x = 1\n", encoding="utf-8")
+    r = _run(tmp_path)
+    assert (r.returncode, r.stdout) == (0, b""), r.stdout
+
+
+def test_cli_a_dir_merely_containing_venv_in_its_name_is_still_scanned(tmp_path):
+    d = tmp_path / "my.venv-notes"
+    d.mkdir()
+    (d / "c.txt").write_text("<<<<<<< HEAD\n", encoding="utf-8")
+    assert _run(tmp_path).returncode == 1
+
+
+def test_cli_a_vendored_dir_named_as_the_target_is_still_scanned(tmp_path):
+    """Control: pruning applies to what a walk meets, never to a directory the caller names."""
+    d = tmp_path / ".venv"
+    d.mkdir()
+    (d / "c.txt").write_text("<<<<<<< HEAD\n", encoding="utf-8")
+    assert _run(d).returncode == 1
+
+
+def test_cli_a_binary_file_is_skipped_and_counted_on_stderr(tmp_path):
+    """git writes no conflict markers into a file it treats as binary (a NUL in its head)."""
+    (tmp_path / "blob.bin").write_bytes(b"\x00\x01" + _LONE_MIDDLE.encode("ascii"))
+    r = _run(tmp_path)
+    assert (r.returncode, r.stdout) == (0, b"")
+    assert b"1 binary file(s) skipped" in r.stderr
+
+
+def test_a_marker_after_the_first_4kb_of_a_text_file_is_found(tmp_path):
+    f = tmp_path / "long.txt"
+    f.write_text("x\n" * 5000 + "<<<<<<< HEAD\n", encoding="utf-8")
+    assert C.scan_paths([str(f)]) == {str(f): [5001]}
+
+
+def test_scanning_a_file_gives_the_same_hits_as_scanning_its_text(tmp_path):
+    """The streamed file path and scan_text agree on every heading and marker shape."""
+    text = ("Title\n=======\n\n=======\nRST\n=======\n\nx\n=======\ny\n<<<<<<< a\n=======\n"
+            ">>>>>>> b\r\n||||||| base\nend =======\n=======")
+    f = tmp_path / "mixed.txt"
+    f.write_bytes(text.encode("utf-8"))
+    assert C.scan_files([str(f)]) == {str(f): C.scan_text(text)}
+
+
+def _peak_rss(*args):
+    """(peak RSS in bytes, exit code) of the tool run as a real process."""
+    proc = subprocess.Popen([sys.executable, str(TOOL), *map(str, args)],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    _pid, status, usage = os.wait4(proc.pid, 0)
+    scale = 1 if sys.platform == "darwin" else 1024          # macOS reports bytes, Linux KiB
+    return usage.ru_maxrss * scale, os.waitstatus_to_exitcode(status)
+
+
+def _big_text(path, megabytes):
+    line = "x" * 1000 + "\n"
+    per_mb = (1 << 20) // len(line)
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        for _ in range(megabytes):
+            fh.write(line * per_mb)
+    return path
+
+
+@pytest.mark.skipif(not hasattr(os, "wait4"), reason="os.wait4 rusage is POSIX only")
+def test_peak_memory_does_not_grow_with_the_file_size(tmp_path):
+    rss_small, rc_small = _peak_rss(_big_text(tmp_path / "small.txt", 8))
+    rss_large, rc_large = _peak_rss(_big_text(tmp_path / "large.txt", 64))
+    assert (rc_small, rc_large) == (0, 0)
+    growth = rss_large - rss_small
+    assert growth < 16 * (1 << 20), f"peak RSS grew {growth >> 20} MB for a 56 MB larger file"

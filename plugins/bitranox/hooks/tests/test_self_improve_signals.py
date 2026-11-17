@@ -1961,6 +1961,18 @@ def test_skills_loaded_since_compaction_streams_an_open_file(tmp_path):
         assert S.skills_loaded_since_compaction(fh) == {"compuse-git"}
 
 
+def test_skill_usage_gives_both_views_from_one_pass_over_a_single_use_iterator():
+    # The gate streams the transcript once: the tally counts every call by its full name, a
+    # subagent's and a pre-compaction one included, while the loaded set keeps the main agent's
+    # bare names after the last boundary. A one-shot iterator proves nothing reads the lines twice.
+    lines = iter([_skill_line("bitranox:compuse-git"), _BOUNDARY,
+                  _skill_line("bitranox:compuse-git"),
+                  _skill_line("bitranox:devops-bmk", isSidechain=True), "not json\n"])
+    usage = S.skill_usage(lines)
+    assert dict(usage.invoked) == {"bitranox:compuse-git": 2, "bitranox:devops-bmk": 1}
+    assert usage.loaded_since_compaction == {"compuse-git"}
+
+
 def test_altitude_chain_handles_a_relative_path(tmp_path, monkeypatch):
     """A relative path must yield the same chain as its absolute form.
 

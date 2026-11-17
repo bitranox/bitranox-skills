@@ -2,8 +2,10 @@
 
 import json
 import os
+import re
 import subprocess
 import sys
+import tracemalloc
 from pathlib import Path
 
 import pytest
@@ -464,9 +466,70 @@ def test_an_internal_crash_under_json_prints_the_envelope(tmp_path, capsys, monk
     def explode(*_a, **_k):
         raise RuntimeError("kaboom")
 
-    # The process boundary is under test, so the crash is injected at the decode cmd_read calls.
-    monkeypatch.setattr(winlog, "decode_windows_text", explode)
+    # The process boundary is under test, so the crash is injected at the one call cmd_read makes
+    # into the decoding once the file is read.
+    monkeypatch.setattr(winlog, "_analyze", explode)
     rc = winlog.main(["read", str(f), "--json"])
     cap = capsys.readouterr()
     assert rc == 2
     assert json.loads(cap.out)["ok"] is False and "internal error" in cap.err
+
+
+# --- memory and repeated work: one analysis, lines selected as they are decoded ---------------
+
+
+def test_read_tail_peak_memory_stays_near_the_file_size(tmp_path, capsys):
+    # describe_encoding and decode_windows_text each segmented the whole file, keeping a bytes
+    # copy of every line, then the text was normalised twice and split into a full list for a
+    # --tail of one: about 7x the file (1.2 GB RSS for a 170 MB log).
+    f = tmp_path / "big.log"
+    f.write_bytes(b"line of narrow text that a setup log would hold, give or take\r\n" * 120_000
+                  + b"DONE-OK\r\n")
+    size = f.stat().st_size
+    tracemalloc.start()
+    try:
+        rc = winlog.main(["read", str(f), "--tail", "1", "--json"])
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert rc == 0 and json.loads(capsys.readouterr().out)["data"]["lines"] == ["DONE-OK"]
+    assert peak < 2 * size, (size, peak)
+
+
+_CYRILLIC = "".join(map(chr, (0x41E, 0x448, 0x438, 0x431, 0x43A, 0x430)))
+_BOM = chr(0xFEFF)
+_SHAPES = [
+    b"",
+    b"hello\nworld\n",
+    b"no final newline",
+    b"a\r\nb\rc\r\n\r\n",
+    (chr(0xFC) + "mlaut cp1252\n").encode("cp1252") + b"x\n",
+    "hello\n".encode("utf-8-sig"),
+    "DONE-OK\r\nzwei\n".encode("utf-16"),
+    (_BOM + "DONE-OK\n").encode("utf-16-be"),
+    b"Starting install\r\n" + "Step 2\r\nDONE-OK\r\n".encode("utf-16-le"),
+    b"narrow\r" + "wide\n".encode("utf-16-le"),
+    b"head\n" + "tail\n".encode("utf-16-le") + b"\x00" * 4096,
+    b"narrow log ends\n" + b"\x00" * 512,
+    (_CYRILLIC + " 0x80070005\n").encode("utf-16-le"),
+    b"bad utf-8 \xff\xfe here\n",
+]
+
+
+@pytest.mark.parametrize("raw", _SHAPES)
+@pytest.mark.parametrize("args", [[], ["--tail", "1"], ["--tail", "0"], ["--grep", "e"],
+                                  ["--grep", "DONE", "--tail", "5"]])
+def test_read_prints_the_lines_and_encoding_the_public_decoders_give(tmp_path, capsys, raw, args):
+    f = tmp_path / "a.log"
+    f.write_bytes(raw)
+    rc = winlog.main(["read", str(f), *args, "--json"])
+    data = json.loads(capsys.readouterr().out)["data"]
+    lines = winlog._log_lines(winlog.decode_windows_text(raw))
+    if "--grep" in args:
+        rx = re.compile(args[args.index("--grep") + 1])
+        lines = [ln for ln in lines if rx.search(ln)]
+    want_rc = 1 if "--grep" in args and not lines else 0
+    if "--tail" in args:
+        n = int(args[args.index("--tail") + 1])
+        lines = lines[-n:] if n else []
+    assert (rc, data["encoding"], data["lines"]) == (want_rc, winlog.describe_encoding(raw), lines)

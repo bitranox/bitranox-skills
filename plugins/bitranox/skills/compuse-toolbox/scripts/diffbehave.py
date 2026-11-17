@@ -258,9 +258,20 @@ def _decode_case_file(raw: bytes) -> str:
     return raw.decode("utf-8-sig")
 
 
+_CASE_KEYS = frozenset({"name", "stdin", "args"})
+
+
 def _row_case(obj: dict, name: str) -> Case:
     """A {name, stdin, args} row, validated: a string args became one argv item per CHARACTER,
-    and a null stdin inherited the parent's stdin, which the first side then drained."""
+    and a null stdin inherited the parent's stdin, which the first side then drained.
+
+    Any other key is refused. A misspelt `args` ("arg") was dropped without a word, so the case
+    ran with no args on both sides and read AGREE whatever the two did with them.
+    """
+    unknown = sorted(set(obj) - _CASE_KEYS)
+    if unknown:
+        raise UsageError(f"--case-file {name}: unknown key(s) {', '.join(map(repr, unknown))}; a "
+                         f"case row takes only {', '.join(sorted(_CASE_KEYS))}")
     stdin = obj.get("stdin")
     stdin = "" if stdin is None else stdin
     if not isinstance(stdin, str):

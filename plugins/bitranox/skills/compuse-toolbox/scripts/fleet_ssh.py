@@ -72,12 +72,14 @@ written after the host belongs to the remote command, never to this script.
 """
 
 import argparse
+import collections
 import getpass
 import os
 import re
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 from _cli_envelope import EXIT_ERROR, emit
@@ -116,6 +118,12 @@ _ADDED_NOISE = re.compile(r"^Warning: Permanently added .*to the list of known h
 _CHANGED_BANNER = "REMOTE HOST IDENTIFICATION HAS CHANGED"
 _REFUSED = "Host key verification failed."
 _SSH_FAILED = 255
+_STDERR_TAIL_LINES = 256
+"""Stderr lines kept after a run for the changed-key test. ssh's refusal is its LAST burst (about
+twenty lines: banner, offending entry, advice, refusal) and nothing runs after it, so a tail holds
+it whole, while a long remote job's stderr is forwarded as it arrives and never held."""
+_STDERR_READ = 1 << 16
+"""Longest piece of one stderr line read at a time, so a line with no newline stays bounded."""
 
 
 class UsageError(Exception):
@@ -274,8 +282,10 @@ def run_with_host_key_healing(argv: list[str], *, host: str | None, known_hosts:
                               heal: bool, run=subprocess.run) -> int:
     """Run `argv`; when ssh REFUSED a changed host key, drop the stale entry and retry ONCE.
 
-    stdout is inherited so large command output still streams; only stderr is captured, so the
-    noise line can be filtered. It is decoded as UTF-8 with replacement, because what arrives
+    stdout is inherited so large command output still streams. stderr goes through a pipe of
+    ours and is forwarded line by line AS IT ARRIVES, minus the noise line, so a long remote job
+    shows its progress and its stderr is never held in memory; only the last lines are kept, for
+    the changed-key test below. It is decoded as UTF-8 with replacement, because what arrives
     there is partly the REMOTE command's stderr, in whatever encoding the remote wrote, and a
     strict locale decode would crash after the command ran.
 
@@ -317,8 +327,9 @@ def _refused_changed_key(status: int, own: str, known_hosts: str) -> bool:
 def _run_once(argv: list[str], run, *, own_log: bool) -> tuple[int, str] | None:
     """(status, ssh's own messages) for one run, both streams forwarded; None if it cannot start.
 
-    With `own_log`, ssh writes its own messages to a temp file through `-E` and the captured
-    stderr is the REMOTE command's alone; without it, the captured stderr is all there is.
+    With `own_log`, ssh writes its own messages to a temp file through `-E` and the piped stderr
+    is the REMOTE command's alone; without it, the piped stderr is all there is, and its last
+    lines are ssh's own messages for the changed-key test.
     """
     log_fd, log_path = tempfile.mkstemp(prefix="fleet_ssh-", suffix=".log") if own_log else (None, "")
     if log_fd is not None:
@@ -326,15 +337,14 @@ def _run_once(argv: list[str], run, *, own_log: bool) -> tuple[int, str] | None:
     try:
         full = [argv[0], "-E", log_path, *argv[1:]] if own_log else list(argv)
         try:
-            proc = _run_capturing_stderr(full, run)
+            proc, tail = _run_forwarding_stderr(full, run)
         except OSError as exc:
             print(f"fleet_ssh: cannot run {argv[0]}: {exc}", file=sys.stderr)
             return None
-        err = proc.stderr or ""
-        own = (_read_or_none(log_path) or b"").decode("utf-8", "replace") if own_log else err
-        if own_log:
-            forward_stderr(own)
-        forward_stderr(err)
+        if not own_log:
+            return proc.returncode, tail
+        own = (_read_or_none(log_path) or b"").decode("utf-8", "replace")
+        forward_stderr(own)
         return proc.returncode, own
     finally:
         if own_log:
@@ -401,8 +411,34 @@ def _comparable_path(path: str) -> str:
     return os.path.normcase(os.path.normpath(os.path.expanduser(path.strip())))
 
 
-def _run_capturing_stderr(argv: list[str], run):
-    return run(argv, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
+def _run_forwarding_stderr(argv: list[str], run):
+    """(the finished process, its last stderr lines joined) for `run(argv)` with stderr piped.
+
+    The child writes into an os.pipe whose read end a thread drains, forwarding each line to our
+    stderr at once (minus the noise line) and keeping only the last `_STDERR_TAIL_LINES`. Through
+    `run` (subprocess.run-shaped, as everywhere here) with an fd for stderr, so the seam stays the
+    one the rest of the jig injects; capture_output held the whole stream and showed none of it
+    until the command ended, so a hung remote job looked silent rather than stuck."""
+    read_fd, write_fd = os.pipe()
+    tail: collections.deque[str] = collections.deque(maxlen=_STDERR_TAIL_LINES)
+    pump = threading.Thread(target=_pump_stderr, args=(read_fd, tail, sys.stderr), daemon=True)
+    pump.start()
+    try:
+        proc = run(argv, stderr=write_fd)
+    finally:
+        os.close(write_fd)
+        pump.join()
+    return proc, "".join(tail)
+
+
+def _pump_stderr(read_fd: int, tail: collections.deque, stream) -> None:
+    """Forward every line from `read_fd` to `stream` as it arrives; keep the last ones in `tail`."""
+    with open(read_fd, encoding="utf-8", errors="replace") as pipe:
+        for piece in iter(lambda: pipe.readline(_STDERR_READ), ""):
+            tail.append(piece)
+            if not _ADDED_NOISE.match(piece.strip("\n")):
+                stream.write(piece)
+                stream.flush()
 
 
 class _Parser(argparse.ArgumentParser):

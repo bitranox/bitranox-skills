@@ -29,8 +29,12 @@ there); `ok` is false exactly when the exit is 2, so a --grep miss (exit 1) is `
 """
 
 import argparse
+import codecs
 import re
 import sys
+from array import array
+from collections import deque
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import NamedTuple
 
@@ -50,6 +54,10 @@ _WIDE_LF = b"\n\x00"
 # An ASCII-heavy UTF-16 line is ~50% NUL; narrow log text is 0%. A third settles it at once,
 # and a stray NUL in an otherwise narrow line stays far below it.
 _NUL_SHARE_FOR_WIDE = 3
+
+# Bytes per step when checking a whole body decodes as UTF-8, so the check holds one block of
+# text at a time rather than a copy of the file.
+_VALIDATE_BLOCK = 1 << 20
 
 
 def _strip_bom(data: bytes) -> tuple[bytes, str | None]:
@@ -84,6 +92,48 @@ def _wide_line_aligned(data: bytes, pos: int) -> bool:
     """
     first = data.find(_WIDE_LF, pos)
     return ((len(data) if first < 0 else first) - pos) % 2 == 0
+
+
+class _Chunks:
+    """The lines of one segmented body, held as end offsets and a wide flag each.
+
+    A bytes copy of every line plus its tuple cost more than the file itself (a log is mostly
+    short lines); nine bytes per line do not. Iterating yields `(bytes, is_wide)` one line at a
+    time, the shape the decoders read.
+    """
+
+    __slots__ = ("data", "ends", "wide")
+
+    def __init__(self, data: bytes) -> None:
+        self.data = data
+        self.ends = array("q")
+        self.wide = bytearray()
+
+    def add(self, end: int, wide: bool) -> None:
+        self.ends.append(end)
+        self.wide.append(wide)
+
+    def __len__(self) -> int:
+        return len(self.ends)
+
+    def __iter__(self) -> Iterator[tuple[bytes, bool]]:
+        start = 0
+        for end, wide in zip(self.ends, self.wide):
+            yield self.data[start:end], bool(wide)
+            start = end
+
+    def last(self) -> tuple[bytes, bool]:
+        """The final line; the caller has checked there is one."""
+        start = self.ends[-2] if len(self.ends) > 1 else 0
+        return self.data[start:self.ends[-1]], bool(self.wide[-1])
+
+    def any_wide(self, *, before_last: bool = False) -> bool:
+        stop = len(self.wide) - 1 if before_last else len(self.wide)
+        return self.wide.find(1, 0, max(stop, 0)) >= 0
+
+    def covered(self) -> int:
+        """How many bytes of `data` the lines span: they are contiguous from offset 0."""
+        return self.ends[-1] if self.ends else 0
 
 
 class _Segmenter:
@@ -187,8 +237,8 @@ class _Segmenter:
             k = i + 1
         return True  # the aligned terminator's own NUL is the high byte required
 
-    def chunks(self) -> list[tuple[bytes, bool]]:
-        out: list[tuple[bytes, bool]] = []
+    def chunks(self) -> _Chunks:
+        out = _Chunks(self.data)
         data, pos = self.data, 0
         while pos < len(data):
             lf = data.find(b"\n", pos)
@@ -199,11 +249,11 @@ class _Segmenter:
             else:
                 wide = lf >= 0 and self._wide_without_nul_before_lf(pos, lf)
             if not wide:
-                out.append((data[pos:narrow_end], False))
+                out.add(narrow_end, False)
                 pos = narrow_end
                 continue
             end = _aligned_wide_end(data, pos)
-            out.append((data[pos:end], True))
+            out.add(end, True)
             pos = end
         return out
 
@@ -224,7 +274,7 @@ def _reads_as_narrow_text(chunk: bytes) -> bool:
     return False
 
 
-def _segment(body: bytes) -> tuple[list[tuple[bytes, bool]], int]:
+def _segment(body: bytes) -> tuple[_Chunks, int]:
     """(chunks, padding) - cut the text into lines, with its trailing NUL run set aside.
 
     A crash or power cut leaves a log ending in zeroed clusters. That run is text in neither
@@ -238,11 +288,11 @@ def _segment(body: bytes) -> tuple[list[tuple[bytes, bool]], int]:
     if content_end == len(body):
         return _Segmenter(body).chunks(), 0
     kept = _Segmenter(body[:content_end + 1]).chunks()
-    last, wide = kept[-1]
+    last, wide = kept.last()
     high_byte = wide and len(last) % 2 == 0
-    if high_byte and (any(w for _, w in kept[:-1]) or not _reads_as_narrow_text(last[:-1])):
+    if high_byte and (kept.any_wide(before_last=True) or not _reads_as_narrow_text(last[:-1])):
         return kept, len(body) - content_end - 1
-    return (_Segmenter(body[:content_end]).chunks() if content_end else []), len(body) - content_end
+    return _Segmenter(body[:content_end]).chunks(), len(body) - content_end
 
 
 def _strip_wide_padding(body: bytes) -> tuple[bytes, int]:
@@ -268,8 +318,9 @@ def _decode_narrow(chunk: bytes) -> str:
 
 
 class _Analysis(NamedTuple):
-    """The shared front half of decode/describe."""
-    chunks: list[tuple[bytes, bool]]
+    """The shared front half of decode/describe, computed ONCE per file: segmenting is the
+    expensive part, and doing it for each of the two took a second pass over the whole file."""
+    chunks: _Chunks
     bom: str | None
     saw_wide: bool
     saw_narrow: bool
@@ -280,27 +331,60 @@ def _analyze(data: bytes) -> _Analysis:
     body, bom = _strip_bom(data)
     if bom in ("utf-16-le", "utf-16-be"):
         text, padding = _strip_wide_padding(body)
-        return _Analysis([(text, True)], bom, True, False, padding)
+        chunks = _Chunks(text)
+        chunks.add(len(text), True)
+        return _Analysis(chunks, bom, True, False, padding)
     chunks, padding = _segment(body)
-    saw_wide = any(wide for _, wide in chunks)
+    saw_wide = chunks.any_wide()
     saw_narrow = any(c.strip(b"\r\n") and not wide for c, wide in chunks)
     return _Analysis(chunks, bom, saw_wide, saw_narrow, padding)
 
 
+def _text_parts(found: _Analysis) -> Iterator[str]:
+    """Each line decoded, CR and CRLF already turned into LF, one line at a time.
+
+    The same text as normalising the joined whole: a CRLF split across two lines (one ending in
+    CR, the next opening with LF) is still one line break, because the LF that follows a carried
+    CR is dropped.
+    """
+    wide_encoding = found.bom if found.bom in ("utf-16-le", "utf-16-be") else "utf-16-le"
+    after_cr = False
+    for chunk, wide in found.chunks:
+        text = _decode_wide(chunk, wide_encoding) if wide else _decode_narrow(chunk)
+        if after_cr and text.startswith("\n"):
+            text = text[1:]
+        after_cr = text.endswith("\r")
+        yield text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _lines(found: _Analysis) -> Iterator[str]:
+    """The log's lines as `_log_lines(decode_windows_text(...))` gives them, one at a time."""
+    carry = ""
+    for part in _text_parts(found):
+        pieces = part.split("\n")
+        pieces[0] = carry + pieces[0]
+        carry = pieces.pop()
+        yield from pieces
+    if carry:
+        yield carry
+
+
 def decode_windows_text(data: bytes) -> str:
     """Decode bytes written by any Windows tool, segment by segment. PURE."""
-    found = _analyze(data)
-    wide_encoding = found.bom if found.bom in ("utf-16-le", "utf-16-be") else "utf-16-le"
-    parts = [_decode_wide(c, wide_encoding) if wide else _decode_narrow(c)
-             for c, wide in found.chunks]
-    return "".join(parts).replace("\r\n", "\n").replace("\r", "\n")
+    return "".join(_text_parts(_analyze(data)))
 
 
 def describe_encoding(data: bytes) -> str:
     """Name what was actually found, so a MIXED file gets fixed at the writer."""
     if not data:
         return "empty"
-    found = _analyze(data)
+    return _describe(data, _analyze(data))
+
+
+def _describe(data: bytes, found: _Analysis) -> str:
+    """`describe_encoding` from an analysis already made."""
+    if not data:
+        return "empty"
     base = _name_encoding(data, found)
     if not found.padding:
         return base
@@ -318,13 +402,22 @@ def _name_encoding(data: bytes, found: _Analysis) -> str:
         return "utf-16-le (no BOM)"
     if found.bom == "utf-8":
         return "utf-8 (BOM)"
-    if not any(c for c, _ in found.chunks):
+    covered = found.chunks.covered()
+    if not covered:
         return "empty"
+    return "utf-8" if _is_utf8(memoryview(found.chunks.data)[:covered]) else "cp1252/ansi"
+
+
+def _is_utf8(body: memoryview) -> bool:
+    """Does `body` decode as UTF-8? Checked a block at a time, never as one decoded copy."""
+    decoder = codecs.getincrementaldecoder("utf-8")()
     try:
-        b"".join(c for c, _ in found.chunks).decode("utf-8")
+        for start in range(0, len(body), _VALIDATE_BLOCK):
+            decoder.decode(body[start:start + _VALIDATE_BLOCK])
+        decoder.decode(b"", final=True)
     except UnicodeDecodeError:
-        return "cp1252/ansi"
-    return "utf-8"
+        return False
+    return True
 
 
 def read_windows_log(path: str | Path) -> str:
@@ -341,15 +434,19 @@ def _log_lines(text: str) -> list[str]:
     return lines
 
 
-def _select(text: str, rx: re.Pattern[str] | None, tail: int | None) -> tuple[list[str], bool]:
-    lines = _log_lines(text)
-    matched = True
-    if rx is not None:
-        lines = [ln for ln in lines if rx.search(ln)]
-        matched = bool(lines)
-    if tail is not None:
-        lines = lines[-tail:] if tail > 0 else []
-    return lines, matched
+def _select(lines: Iterable[str], rx: re.Pattern[str] | None,
+            tail: int | None) -> tuple[list[str], bool]:
+    """The lines to print and whether --grep matched; a --tail keeps only its last N lines."""
+    matched = rx is None
+    kept: deque[str] | list[str] = deque(maxlen=tail) if tail is not None else []
+    for line in lines:
+        if rx is not None:
+            if not rx.search(line):
+                continue
+            matched = True
+        if tail != 0:
+            kept.append(line)
+    return list(kept), matched
 
 
 def _fail(as_json: bool, error: str) -> int:
@@ -378,11 +475,12 @@ def cmd_read(args: argparse.Namespace) -> int:
         raw = Path(args.file).read_bytes()
     except OSError as exc:
         return _fail(args.json, f"winlog: cannot read {args.file}: {exc}")
-    encoding = describe_encoding(raw)
+    found = _analyze(raw)
+    encoding = _describe(raw, found)
     # Advisory on STDERR, never in the parsed stream: --json stdout must stay pure JSON.
     if encoding.startswith("MIXED"):
         print(f"winlog: {args.file}: {encoding}", file=sys.stderr)
-    lines, matched = _select(decode_windows_text(raw), rx, args.tail)
+    lines, matched = _select(_lines(found), rx, args.tail)
     code = EXIT_YES if matched else EXIT_NO
     _emit(args.json, code, {"path": str(args.file), "encoding": encoding, "lines": lines})
     return code

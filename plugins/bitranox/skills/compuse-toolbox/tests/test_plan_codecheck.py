@@ -4,6 +4,7 @@ pytest runs for real on this interpreter; ruff and pyright are driven through th
 `--ruff` / `--pyright` command options, with tiny stand-in programs - CI provisions neither tool.
 """
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -290,3 +291,38 @@ def test_a_section_with_no_python_block_is_exit_2(tmp_path, repo):
 def test_a_missing_plan_file_is_exit_2(tmp_path, repo):
     rc, _out, _err = _cli("--plan", tmp_path / "nope.md", "--repo", repo)
     assert rc == 2
+
+
+# --- the copy is bounded by what the repository holds, not by what its checkout has piled up -----
+
+def _git(root: Path, *args: str) -> None:
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    subprocess.run(["git", *args], cwd=root, env=env, check=True, capture_output=True, timeout=60)
+
+
+def _copied(root: Path) -> set[str]:
+    return {p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file()}
+
+
+def test_a_git_checkout_copies_its_files_but_not_its_ignored_trees(tmp_path, repo):
+    """An ignored build output or nested worktree is not the project, and copying it made every
+    run copy 22x the tracked file count; an ignored FILE beside the code (a generated
+    `_version.py`, a `.env`) can be needed by the code and is still copied."""
+    _write(repo / ".gitignore", "build/\n.claude/worktrees/\n_version.py\n")
+    _write(repo / "build" / "lib" / "huge.bin", "x" * 1000)
+    _write(repo / ".claude" / "worktrees" / "agent-1" / "src" / "pkg" / "core.py", "stale = 1\n")
+    _write(repo / "src" / "pkg" / "_version.py", "VERSION = '1'\n")
+    _write(repo / "notes_untracked.py", "x = 1\n")
+    _git(repo, "init", "-q")
+    _git(repo, "add", ".gitignore", "src/pkg/__init__.py", "src/pkg/core.py")
+    copy = pc.copy_repo(repo, tmp_path / "dest")
+    assert _copied(copy) == {".gitignore", "src/pkg/__init__.py", "src/pkg/core.py",
+                             "src/pkg/_version.py", "notes_untracked.py"}
+
+
+def test_a_directory_that_is_not_a_git_checkout_is_still_copied_whole(tmp_path, repo):
+    """Control: with no git to ask, the walk with the fixed skip list is all there is."""
+    _write(repo / "build" / "out.txt", "kept\n")
+    _write(repo / ".venv" / "bin" / "python", "")
+    copy = pc.copy_repo(repo, tmp_path / "dest")
+    assert _copied(copy) == {"src/pkg/__init__.py", "src/pkg/core.py", "build/out.txt"}

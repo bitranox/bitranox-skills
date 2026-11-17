@@ -416,3 +416,72 @@ def test_added_lines_skip_headers_and_blank_lines():
 
 def test_versions_in_subjects_are_unique_and_ordered():
     assert L.versions_in(["fix x; 8.10.3", "more 8.10.3 and 1.0.0", "none"]) == ["8.10.3", "1.0.0"]
+
+
+# ---------------------------------------------------------------------------------------------
+# Cost: the number of git processes does not grow with the target's history
+# ---------------------------------------------------------------------------------------------
+
+_SPAWNS: list[str] = []
+_COUNTING = [False]
+
+
+def _count_spawn(event, args):
+    # An interpreter audit hook: it sees every process the tool starts without changing how the
+    # tool starts it, so nothing of the code under test is patched.
+    if _COUNTING[0] and event == "subprocess.Popen":
+        _SPAWNS.append(str(args[1][2] if len(args[1]) > 2 else args[1]))
+
+
+sys.addaudithook(_count_spawn)
+
+
+def _git_spawns_for_dirty_worktree(tmp_path: Path, commits_on_main: int, capsys) -> int:
+    tmp_path.mkdir()
+    repo = Repo(tmp_path)
+    for name in ("a.txt", "b.txt", "c.txt"):
+        repo.write(name, "start\n")
+    repo.commit("init")
+    wt = repo.worktree("topic")
+    for n in range(commits_on_main):
+        for name in ("a.txt", "b.txt", "c.txt"):
+            repo.write(name, f"main {n}\n")
+        repo.commit(f"main {n}")
+    for name in ("a.txt", "b.txt", "c.txt"):
+        repo.write(name, "never on main\n", where=wt)   # differs: every target commit is checked
+    _SPAWNS.clear()
+    _COUNTING[0] = True
+    try:
+        rc = L.main([str(wt), "--into", "main", "--json"])
+    finally:
+        _COUNTING[0] = False
+    env = json.loads(capsys.readouterr().out)
+    assert rc == 1, env
+    assert {f["status"] for f in env["data"]["files"]} == {"differs"}
+    return len(_SPAWNS)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows forbids a double quote in a name")
+def test_a_name_a_batch_line_cannot_carry_is_still_judged(repo):
+    # hash-object --stdin-paths unquotes a line starting with a double quote, so such a name is
+    # compared one file at a time instead.
+    wt = repo.worktree("topic")
+    repo.write('"q.txt', "same\n", where=wt)
+    repo.write("plain.txt", "same\n", where=wt)
+    repo.write('"q.txt', "same\n")
+    repo.write("plain.txt", "other\n")
+    repo.commit("main has both")
+
+    rc, env = repo.run_json(str(wt), "--into", "main")
+
+    assert rc == 1, env
+    files = {f["path"]: f["status"] for f in env["data"]["files"]}
+    assert files == {'"q.txt': "in_target", "plain.txt": "differs"}
+
+
+def test_worktree_mode_git_calls_do_not_grow_with_target_history(tmp_path, capsys):
+    """A file that differs is compared with its blob at every target commit that touched it; one
+    git call per such commit made the cost files x commits."""
+    few = _git_spawns_for_dirty_worktree(tmp_path / "few", 2, capsys)
+    many = _git_spawns_for_dirty_worktree(tmp_path / "many", 16, capsys)
+    assert many == few

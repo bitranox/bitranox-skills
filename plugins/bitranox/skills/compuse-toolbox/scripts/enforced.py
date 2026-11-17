@@ -46,7 +46,9 @@ below --root (`.git`, `__pycache__`,
 `venv`, any `.venv*`, `.tox`, `site-packages`, `node_modules`), reads a `.env` / `.env.*` file as
 config unless it is a `.py`/`.pyi` module, and matches comments, docstrings and config lines as
 whole words, taking comments from the tokenizer so a `#` inside a string is not one. A directory
-it cannot enter is listed as UNREAD like an unparsable file.
+it cannot enter is listed as UNREAD like an unparsable file. Only a file whose text holds the
+identifier (also after NFKC folding, as Python folds names) is parsed, so an unparsable file that
+never mentions it is not UNREAD: its text was searched and it has nothing to decide on.
 
 Run: `uv run scripts/enforced.py planner_kinds --root src/`
      `uv run scripts/enforced.py on_auth_failure --root . --json`
@@ -62,6 +64,7 @@ import os
 import re
 import sys
 import tokenize
+import unicodedata
 from dataclasses import asdict, dataclass
 from enum import Enum
 from pathlib import Path
@@ -484,10 +487,23 @@ def classify_tree(root: Path, identifier: str) -> tuple[list[Hit], list[str]]:
             continue
         try:
             source = path.read_text(encoding="utf-8-sig")
-            hits.extend(classify_source(source, identifier, path=path, root=scan_root))
+            if _may_mention(source, identifier):
+                hits.extend(classify_source(source, identifier, path=path, root=scan_root))
         except (SyntaxError, UnicodeDecodeError, OSError) as exc:
             unreadable.append(f"{path}: {type(exc).__name__}")
     return hits, unreadable
+
+
+def _may_mention(source: str, identifier: str) -> bool:
+    """Whether `source` can hold any hit for `identifier`: every hit kind needs its text there.
+
+    Parsing, parent-mapping and tokenizing a file costs about 30x reading it, so a file without
+    the text is skipped - and an unparsable one with no mention is then not UNREAD, since it was
+    searched and holds nothing to decide on. Python folds identifiers by NFKC, so a non-ASCII
+    source is also checked in that form: a fullwidth letter can spell the same name."""
+    if identifier in source:
+        return True
+    return not source.isascii() and identifier in unicodedata.normalize("NFKC", source)
 
 
 def _config_hits(path: Path, identifier: str) -> list[Hit]:

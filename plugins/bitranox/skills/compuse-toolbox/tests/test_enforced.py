@@ -378,6 +378,24 @@ class TestReadingTheSource:
         (tmp_path / "admit.py").write_bytes(b"\xef\xbb\xbf" + GUARD.encode("utf-8"))
         assert run(tmp_path) == 0
 
+    def test_a_file_that_never_mentions_the_identifier_is_not_parsed(self, tmp_path: Path) -> None:
+        """Only a file holding the identifier can hold a hit, so only it is parsed: an unparsable
+        file that never mentions the name is read (its text was searched) and cannot make the
+        answer incomplete. Parsing every file cost about 30x reading it on a 916-file tree."""
+        write(tmp_path / "admit.py", GUARD)
+        write(tmp_path / "unrelated.py", "def (:\n    other_name = 1\n")
+        hits, unreadable = enforced.classify_tree(tmp_path, "planner_kinds")
+        assert unreadable == []
+        assert [h.kind for h in decisions(hits)] == [HitKind.DECISION]
+
+    def test_an_identifier_spelled_with_compatibility_characters_is_still_found(
+            self, tmp_path: Path) -> None:
+        """Python folds identifiers by NFKC, so a fullwidth first letter IS planner_kinds: the
+        text prefilter must not skip the file because the raw bytes differ."""
+        fullwidth_p = chr(0xFF50)
+        write(tmp_path / "admit.py", GUARD.replace("planner_kinds", fullwidth_p + "lanner_kinds"))
+        assert run(tmp_path) == 0
+
     def test_a_form_feed_does_not_shift_the_line_text(self) -> None:
         src = "x = 1\x0c\nif s.kind in l.planner_kinds:\n    pass\n"
         [hit] = decisions(classify_source(src, "planner_kinds", path=Path("a.py")))
@@ -431,7 +449,9 @@ class TestTheCli:
 
     def test_an_unparsable_file_without_a_decision_is_exit_2(self, tmp_path: Path, capsys) -> None:
         write(tmp_path / "policy.py", POLICY)
-        write(tmp_path / "broken.py", "def (:\n")
+        # It mentions the identifier: the unread enforcer could be in it. (A broken file that never
+        # names it is not parsed at all - see test_a_file_that_never_mentions_the_identifier...)
+        write(tmp_path / "broken.py", "def (:\n    planner_kinds\n")
         assert run(tmp_path) == 2
         assert "UNREAD" in capsys.readouterr().out
 
@@ -527,7 +547,7 @@ class TestUnifiedExitCodes:
 
     def test_incomplete_exit_2_is_ok_false(self, tmp_path: Path, capsys) -> None:
         write(tmp_path / "policy.py", POLICY)
-        write(tmp_path / "broken.py", "def (:\n")
+        write(tmp_path / "broken.py", "def (:\n    planner_kinds\n")   # mentions it: unread
         assert run(tmp_path, "planner_kinds", "--json") == 2
         payload = json.loads(capsys.readouterr().out)
         assert payload["ok"] is False and payload["skipped"]

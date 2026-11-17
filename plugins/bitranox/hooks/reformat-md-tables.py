@@ -49,7 +49,20 @@ _MD_SUFFIXES = (".md", ".markdown", ".mdown", ".mkd")
 # inside the window, only this many of them, and never inside a vendored tree.
 _BASH_WINDOW_SECONDS = 120
 _BASH_FILE_CAP = 40
-_SKIP_DIRS = frozenset({".git", ".venv", "node_modules", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"})
+_SKIP_DIRS = frozenset({".git", "node_modules", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"})
+# A virtualenv is matched by its name PREFIX (.venv-3.12, .venv-win, .venv-bmk) and by the
+# pyvenv.cfg every venv holds, never by the exact name ".venv": the walk runs after every shell
+# command, and each venv it enters costs its whole site-packages on every call.
+_VENV_PREFIX = ".venv"
+
+
+def _prune(here: Path, name: str) -> bool:
+    """True when the walk must not descend into `here / name`: a vendored or tool-cache tree, a
+    virtualenv, or a nested repository (see `_markdown_paths_from_a_command`)."""
+    if name in _SKIP_DIRS or name.startswith(_VENV_PREFIX):
+        return True
+    sub = here / name
+    return (sub / ".git").exists() or (sub / "pyvenv.cfg").is_file()
 
 # git subcommands that rewrite tracked files wholesale. Every markdown they touch
 # gets a fresh mtime and so looks just-written to the scan below, but none of it
@@ -201,7 +214,7 @@ def _markdown_paths_from_a_command(event) -> list[str]:
         if len(found) >= _BASH_FILE_CAP:
             break
         here = Path(dirpath)
-        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS and not (here / d / ".git").exists()]
+        dirnames[:] = [d for d in dirnames if not _prune(here, d)]
         for name in filenames:
             if len(found) >= _BASH_FILE_CAP:
                 break

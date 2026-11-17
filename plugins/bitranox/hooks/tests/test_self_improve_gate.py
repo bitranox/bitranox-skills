@@ -17,6 +17,7 @@ import json
 import os
 import subprocess
 import sys
+import tracemalloc
 
 import pytest
 
@@ -195,6 +196,43 @@ def test_skill_hint_is_bounded(tmp_path, monkeypatch, capsys):
     reason = _reason_of(capsys)
     assert "and 5 more" in reason
     assert sum(n in reason for n in names) == G._SKILL_HINT_MAX
+
+
+def _long_transcript_with_skill(path, filler_lines, user):
+    """A transcript of one Skill call, `filler_lines` 1 KB assistant records, then `user`."""
+    filler = json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "text", "text": "x" * 1000}]}})
+    skill = json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "name": "Skill", "input": {"skill": "bitranox:devops-bmk"}}]}})
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(skill + "\n")
+        fh.writelines(filler + "\n" for _ in range(filler_lines))
+        fh.write(json.dumps({"type": "assistant", "message": {"content": "done"}}) + "\n")
+        fh.write(json.dumps({"type": "user", "message": {"content": user}}) + "\n")
+    return str(path)
+
+
+def _blocking_peak(tmp_path, monkeypatch, capsys, name, filler_lines):
+    """Peak traced memory of one blocking gate run over a transcript of `filler_lines` KB."""
+    tp = _long_transcript_with_skill(tmp_path / (name + ".jsonl"), filler_lines,
+                                     f"No, that's wrong, the {name} path is /etc")
+    tracemalloc.start()
+    try:
+        run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path)})
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert "devops-bmk" in _reason_of(capsys)              # it blocked and read the skill hint
+    return peak
+
+
+def test_a_blocking_run_does_not_hold_the_whole_transcript_in_memory(tmp_path, monkeypatch,
+                                                                     capsys):
+    # The skill hints stream the transcript: an 8x longer session must not cost 8x the memory.
+    _blocking_peak(tmp_path, monkeypatch, capsys, "warm", 10)
+    small = _blocking_peak(tmp_path, monkeypatch, capsys, "small", 1000)
+    large = _blocking_peak(tmp_path, monkeypatch, capsys, "large", 8000)
+    assert large < 2 * small, (small, large)
 
 
 def test_block_reason_routes_capture_to_the_subject_level_not_a_tree_top_store(

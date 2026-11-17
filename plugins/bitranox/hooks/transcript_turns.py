@@ -346,10 +346,15 @@ def skills_used(transcript_path, tail_bytes=SKILLS_TAIL_BYTES):
 # earlier session and are not reachable from here.
 SCHEDULING_TOOLS = ("CronCreate", "ScheduleWakeup")
 # A cron fires long after it was created, so the WHOLE transcript is searched, not a turn tail.
-# The file is scanned for the tool name as bytes and only those lines are parsed, which keeps a
-# prompt with no scheduling call in its session (nearly all of them) at one byte search. The cap
-# bounds a pathological file; the largest transcript here was 12.6 MB.
-SCHEDULE_MAX_BYTES = 64 * 1024 * 1024
+# This runs on every typed prompt, twice (skill-router and recall-memory), and transcripts here
+# reach 154 MB, so the file is STREAMED in fixed pieces rather than read as one bytes object
+# (which cost ~140 MB of RSS per process, and a cap on it missed a cron created earlier in the
+# file). Each piece is searched for the tool names as bytes and only the lines naming one are
+# parsed, which keeps a prompt with no scheduling call in its session at one byte search per piece.
+SCHEDULE_CHUNK_BYTES = 1024 * 1024
+# A scheduling call is one small tool_use record; a line longer than this is a tool output that
+# merely mentions the tool's name, and holding it whole would make memory follow the file again.
+SCHEDULE_LINE_CAP = 4 * 1024 * 1024
 
 
 def _lines_naming(data, needle):
@@ -365,23 +370,65 @@ def _lines_naming(data, needle):
         start = data.find(needle, end)
 
 
-def scheduled_prompts(transcript_path, max_bytes=SCHEDULE_MAX_BYTES):
+def _streamed_lines_naming(fh, needles):
+    """Every line of the binary file `fh` that contains one of `needles`, read in fixed pieces.
+
+    Holds one piece plus the unfinished line it ends in; a line growing past SCHEDULE_LINE_CAP is
+    dropped up to its newline. The last line counts even without a trailing newline.
+    """
+    carry, dropping = b"", False
+    while True:
+        piece = fh.read(SCHEDULE_CHUNK_BYTES)
+        if not piece:
+            break
+        if dropping:
+            cut = piece.find(b"\n")
+            if cut == -1:
+                continue
+            piece, dropping = piece[cut + 1:], False
+        data = carry + piece
+        last = data.rfind(b"\n")
+        complete, carry = data[:last + 1], data[last + 1:]
+        if len(carry) > SCHEDULE_LINE_CAP:
+            carry, dropping = b"", True
+        yield from _lines_in(complete, needles)
+    if carry and not dropping:
+        yield from _lines_in(carry, needles)
+
+
+def _lines_in(data, needles):
+    for needle in needles:
+        yield from _lines_naming(data, needle)
+
+
+def scheduled_prompts(transcript_path):
     """The `prompt` argument of every CronCreate / ScheduleWakeup call in the transcript,
     stripped. Empty when the file is missing or unreadable."""
+    # The name as a JSON string value, quotes included: a tool_use block's `"name":"CronCreate"`
+    # carries them, while prose mentioning the tool (a Read of this module, an escaped \"name\"
+    # inside a tool output) does not, so those long lines are never decoded.
+    names = tuple(('"%s"' % tool).encode("ascii") for tool in SCHEDULING_TOOLS)
+    found = set()
     try:
-        data, _size = _tail(transcript_path, max_bytes)
+        with open(transcript_path, "rb") as fh:
+            for line in _streamed_lines_naming(fh, names):
+                found |= _scheduled_in_line(line)
     except (OSError, TypeError, ValueError):
         return set()
+    return found
+
+
+def _scheduled_in_line(line):
+    """The scheduled prompts one transcript line's CronCreate / ScheduleWakeup calls carry."""
     found = set()
-    for tool in SCHEDULING_TOOLS:
-        for obj in _records(b"\n".join(_lines_naming(data, tool.encode("ascii")))):
-            content = _content(obj) if obj.get("type") == "assistant" else None
-            for block in content if isinstance(content, list) else []:
-                if (isinstance(block, dict) and block.get("type") == "tool_use"
-                        and block.get("name") == tool and isinstance(block.get("input"), dict)):
-                    prompt = str(block["input"].get("prompt") or "").strip()
-                    if prompt:
-                        found.add(prompt)
+    for obj in _records(line):
+        content = _content(obj) if obj.get("type") == "assistant" else None
+        for block in content if isinstance(content, list) else []:
+            if (isinstance(block, dict) and block.get("type") == "tool_use"
+                    and block.get("name") in SCHEDULING_TOOLS and isinstance(block.get("input"), dict)):
+                prompt = str(block["input"].get("prompt") or "").strip()
+                if prompt:
+                    found.add(prompt)
     return found
 
 

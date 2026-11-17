@@ -185,8 +185,37 @@ def test_a_near_copy_is_still_recognised_when_it_exceeds_the_shingle_limit():
     """
     a, b = mod.shingles(_big_script(1)), mod.shingles(_big_script(2))
     assert len(a) > mod.SHINGLE_LIMIT, "fixture too small to exercise truncation"
-    stored = {"s": [list(x) for x in sorted(mod.sketch(b))]}
-    assert mod._shares_text(a, stored), "a near-copy stopped registering once it was truncated"
+    stored = mod.LedgerEntry(path="/tmp/b.ps1", purpose="", tokens=frozenset(),
+                             sketch=mod.sketch(b), mutates=False)
+    assert mod._shares_text(mod.sketch(a), stored), "a near-copy stopped registering once it was truncated"
+
+
+class _CountingShingles(set):
+    """A shingle set that counts how often it is walked in full (sorted, iterated)."""
+
+    walks = 0
+
+    def __iter__(self):
+        type(self).walks += 1
+        return super().__iter__()
+
+
+def test_find_kin_samples_the_live_script_once_whatever_the_ledger_size():
+    """sketch() sorts the WHOLE live shingle set; doing it once per ledger entry made a large
+    script write against a 200-entry ledger cost ~100x the necessary time on a PreToolUse hook.
+    The number of full walks of the live set must not grow with the number of entries."""
+    def walks_for(n_entries):
+        state = mod.Ledger()
+        for i in range(n_entries):
+            body = _big_script(100 + i)
+            state = mod._record(state, f"/scratch/other{i}.ps1", "x", set(), mod.shingles(body), False)
+        live = _CountingShingles(mod.shingles(_big_script(1)))
+        _CountingShingles.walks = 0
+        mod.find_kin("/scratch/live.ps1", set(), live, state.entries, 2)
+        return _CountingShingles.walks
+
+    small, large = walks_for(2), walks_for(16)
+    assert large == small, f"live shingle set walked {small}x for 2 entries, {large}x for 16"
 
 
 def test_sketch_is_bounded_and_deterministic():
@@ -331,10 +360,7 @@ def test_changes_state_is_false_for_a_read_only_probe():
 # ------------------------------------------------------------------------------- pure: budgets
 
 def _spent(change=0, observe=0, last_observe=None):
-    state = {"n_change": change, "n_observe": observe}
-    if last_observe is not None:
-        state["last_observe"] = last_observe
-    return state
+    return mod.Ledger(n_change=change, n_observe=observe, last_observe=last_observe)
 
 
 def test_a_spent_observe_budget_still_leaves_a_change_slot():
@@ -359,18 +385,19 @@ def test_the_observe_track_waits_for_its_cooldown():
 def test_should_nudge_needs_fresh_scripts():
     """A group that grew by one script is the SAME finding again, not a new one."""
     group = ["a.ps1", "b.ps1", "c.ps1", "d.ps1"]
-    assert mod.should_nudge(group, set(), {}, "change", 4)
-    assert not mod.should_nudge(group, {"a.ps1", "b.ps1", "c.ps1"}, {}, "change", 4)
+    assert mod.should_nudge(group, set(), mod.Ledger(), "change", 4)
+    assert not mod.should_nudge(group, {"a.ps1", "b.ps1", "c.ps1"}, mod.Ledger(), "change", 4)
 
 
 def test_should_nudge_needs_three_scripts():
-    assert not mod.should_nudge(["a.ps1", "b.ps1"], set(), {}, "change", 2)
+    assert not mod.should_nudge(["a.ps1", "b.ps1"], set(), mod.Ledger(), "change", 2)
 
 
 # ------------------------------------------------------------------------------- pure: message
 
 def _entry(name, said, mutates=False):
-    return {"p": "/scratch/" + name, "d": said, "m": mutates}
+    return mod.LedgerEntry(path="/scratch/" + name, purpose=said, tokens=frozenset(),
+                           sketch=frozenset(), mutates=mutates)
 
 
 def test_build_message_hands_over_the_ledger_with_purposes():
@@ -631,6 +658,43 @@ def test_a_corrupt_state_file_does_not_wedge_the_hook(tmp_path):
     r = _run(_write_event(sess, "/tmp/b.ps1", DELETE_V2), tmp_path)
     assert r.returncode == 0
     assert r.stdout.strip() == ""
+
+
+def _ledger_after_one_write(tmp_path, sess, stale_ledger):
+    """Seed the session ledger with `stale_ledger`, write one script, return the ledger on disk."""
+    _run(_write_event(sess, "/tmp/seed.ps1", DELETE_V1), tmp_path)
+    (state_file,) = tmp_path.rglob("*.jig-ledger.json")
+    state_file.write_text(json.dumps(stale_ledger), encoding="utf-8")
+    assert _run(_write_event(sess, "/tmp/next.ps1", DELETE_V2), tmp_path).returncode == 0
+    return json.loads(state_file.read_text(encoding="utf-8"))
+
+
+def test_a_wrong_shape_ledger_starts_fresh_instead_of_killing_the_nudge(tmp_path):
+    """Valid JSON of the wrong shape crashed the hook BEFORE it saved, so the bad file was never
+    repaired and every later script write of the session crashed the same way, silently."""
+    ledger = _ledger_after_one_write(tmp_path, "sess-shape-1", {"entries": "x"})
+    assert [e["p"] for e in ledger["entries"]] == ["/tmp/next.ps1"]
+
+
+def test_a_ledger_entry_with_a_non_iterable_shingle_starts_fresh(tmp_path):
+    stale = {"entries": [{"p": "/tmp/old.ps1", "d": "x", "t": [], "s": [5], "m": False}]}
+    ledger = _ledger_after_one_write(tmp_path, "sess-shape-2", stale)
+    assert [e["p"] for e in ledger["entries"]] == ["/tmp/next.ps1"]
+
+
+def test_a_ledger_entry_whose_tokens_are_a_string_is_not_read_as_letters(tmp_path):
+    """A string "t" used to be iterated character by character, scoring single letters as topic
+    tokens; it is not a token list, so the ledger holding it is not trusted."""
+    stale = {"entries": [{"p": "/tmp/old.ps1", "d": "x", "t": "n:dele", "s": [], "m": False}]}
+    ledger = _ledger_after_one_write(tmp_path, "sess-shape-3", stale)
+    assert [e["p"] for e in ledger["entries"]] == ["/tmp/next.ps1"]
+
+
+def test_control_a_well_formed_ledger_is_kept(tmp_path):
+    stale = {"entries": [{"p": "/tmp/old.ps1", "d": "x", "t": ["n:old"], "s": [["a", "b", "c"]],
+                          "m": False}], "covered": [], "n_change": 0, "n_observe": 0}
+    ledger = _ledger_after_one_write(tmp_path, "sess-shape-4", stale)
+    assert [e["p"] for e in ledger["entries"]] == ["/tmp/old.ps1", "/tmp/next.ps1"]
 
 
 # ------------------------------------------------------------------------------------ heredocs

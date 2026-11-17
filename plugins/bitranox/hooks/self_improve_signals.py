@@ -26,6 +26,7 @@ import tempfile
 import time
 from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
 from typing import NamedTuple
 
 import claude_paths
@@ -3202,20 +3203,55 @@ def skills_invoked(transcript_text):
     The skill-gap correlation (a bug that shipped DESPITE a skill) needs to know which skills
     actually ran. The model's in-context recall is not that data - by the time a dream asks, the
     early invocations have scrolled out. Parsed from the transcript, so no extra hook and no
-    probe of tool-event shape is required.
+    probe of tool-event shape is required. A caller holding an open transcript file passes it to
+    `skill_usage` instead, which streams it.
+    """
+    return dict(skill_usage((transcript_text or "").splitlines()).invoked)
+
+
+class SkillUsage(NamedTuple):
+    """What one pass over a transcript learned about its Skill tool calls.
+
+    `invoked` counts every call by its full name, a subagent's included; `loaded_since_compaction`
+    holds the bare names (no `bitranox:` prefix) of the main agent's calls after the last
+    compaction boundary, whose bodies are still whole in context."""
+
+    invoked: Mapping[str, int]
+    loaded_since_compaction: frozenset[str]
+
+
+def skill_usage(lines):
+    """Both Skill-call views of a transcript, from ONE pass over `lines`.
+
+    `lines` is any iterable of raw transcript lines; an open file streams it, so only the current
+    line, the name tally and the name set are held and memory does not grow with the transcript.
+    Unparsable lines are skipped, as a transcript being written can end mid-record.
     """
     tally = {}
-    for raw in (transcript_text or "").splitlines():
+    loaded = set()
+    for obj in _json_records(lines):
+        names = _skill_calls(obj)
+        for name in names:
+            tally[name] = tally.get(name, 0) + 1
+        if not isinstance(obj, dict) or obj.get("isSidechain") is True:
+            continue
+        if obj.get("type") == "system" and obj.get("subtype") == "compact_boundary":
+            loaded.clear()
+            continue
+        loaded.update(name.rsplit(":", 1)[-1] for name in names)
+    return SkillUsage(MappingProxyType(tally), frozenset(loaded))
+
+
+def _json_records(lines):
+    """Each non-blank line of `lines` that parses as JSON, decoded; the rest are skipped."""
+    for raw in lines:
         line = raw.strip()
         if not line:
             continue
         try:
-            obj = json.loads(line)
+            yield json.loads(line)
         except ValueError:
             continue
-        for name in _skill_calls(obj):
-            tally[name] = tally.get(name, 0) + 1
-    return tally
 
 
 def _skill_calls(obj):
@@ -3253,19 +3289,4 @@ def skills_loaded_since_compaction(lines):
     because callers ask by the bare name. A sidechain record is a subagent's call, which loads
     nothing into this context.
     """
-    loaded = set()
-    for raw in lines:
-        line = raw.strip()
-        if not line:
-            continue
-        try:
-            obj = json.loads(line)
-        except ValueError:
-            continue
-        if not isinstance(obj, dict) or obj.get("isSidechain") is True:
-            continue
-        if obj.get("type") == "system" and obj.get("subtype") == "compact_boundary":
-            loaded.clear()
-            continue
-        loaded.update(name.rsplit(":", 1)[-1] for name in _skill_calls(obj))
-    return frozenset(loaded)
+    return skill_usage(lines).loaded_since_compaction

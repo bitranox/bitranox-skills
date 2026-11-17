@@ -33,6 +33,7 @@ Jev's answers on those keep being logged without nudging anything. Each decide
 prompt appends one shadow-log row saying which path nudged, so `classifier_eval.py report` reads
 decide sessions like shadow ones.
 """
+import functools
 import json
 import os
 import re
@@ -93,9 +94,27 @@ def _hit_count(keywords, text):
     also "config", "package.json" also "json"), so one distinctive identifier clears MIN_HITS on
     its own. That is kept on purpose: a replay of 1,311 typed prompts found no false nudge from it,
     while counting such a token once dropped real ones ("do we have lib_layered_config implemented
-    here ?" lost coding-python-layered-config)."""
+    here ?" lost coding-python-layered-config).
+
+    A keyword the text does not contain as a substring cannot match at a word boundary either, so
+    the plain `in` test settles almost every keyword before any regex runs. The shipped map holds
+    about 950 distinct keywords against the re module's 512-pattern cache, so a bare re.search per
+    keyword compiled every pattern afresh on every prompt; `_keyword_pattern` keeps each compiled
+    pattern for the life of the process instead.
+    """
     return sum(1 for k in set(keywords)
-               if k and re.search("(?<!%s)%s(?!%s)" % (_WORD_CHAR, re.escape(k), _WORD_CHAR), text))
+               if k and k in text and _keyword_pattern(k).search(text))
+
+
+# Room for the whole shipped trigger map (about 950 keywords) several times over, yet a bound:
+# a caller scoring with a map of its own (an eval replay) cannot grow it without limit.
+_PATTERN_CACHE_SIZE = 4096
+
+
+@functools.lru_cache(maxsize=_PATTERN_CACHE_SIZE)
+def _keyword_pattern(keyword):
+    """The word-bounded pattern for one keyword, compiled once per process."""
+    return re.compile("(?<!%s)%s(?!%s)" % (_WORD_CHAR, re.escape(keyword), _WORD_CHAR))
 
 
 def match(prompt, triggers, min_hits=MIN_HITS, max_skills=MAX_SKILLS):

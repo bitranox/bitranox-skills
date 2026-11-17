@@ -292,6 +292,23 @@ def test_bash_ignores_vendored_trees(tmp_path, monkeypatch):
     assert f.read_text(encoding="utf-8") == MISALIGNED
 
 
+@pytest.mark.parametrize("venv", [".venv-3.12", ".venv-win", ".venv-bmk", "env-with-pyvenv-cfg"])
+def test_the_scan_never_enters_a_suffixed_or_renamed_virtualenv(tmp_path, venv):
+    # The walk runs after EVERY shell command, so a vendored tree it enters costs its whole size
+    # on each call: an exact-name ".venv" skip walked every site-packages dir of .venv-3.11 to
+    # .venv-3.15 (6602 dirs against 927 measured), and restyled a fresh README found inside one.
+    root = tmp_path / venv
+    if venv.startswith("env-"):
+        root.mkdir()
+        (root / "pyvenv.cfg").write_text("home = /usr/bin\n", encoding="utf-8")
+    site = root / "lib" / "python3.12" / "site-packages" / "pkg"
+    site.mkdir(parents=True)
+    (site / "README.md").write_text(MISALIGNED, encoding="utf-8")
+    ours = tmp_path / "ours.md"
+    ours.write_text(MISALIGNED, encoding="utf-8")
+    assert _scan(tmp_path) == [str(ours)]
+
+
 def test_bash_never_rewrites_a_nested_repository(tmp_path, monkeypatch):
     """Verify markdown belonging to a DIFFERENT repo checked out under cwd is left alone.
 

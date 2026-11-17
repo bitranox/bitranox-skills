@@ -7,6 +7,7 @@ record, and a tool call is a `tool_use` block inside an `assistant` record.
 import json
 import subprocess
 import sys
+import tracemalloc
 from datetime import date, datetime, timedelta, UTC
 from pathlib import Path
 
@@ -195,3 +196,46 @@ def test_a_bad_option_is_exit_2_with_the_envelope(corpus, args, needle):
 def test_a_missing_root_is_exit_2(tmp_path):
     rc, out, _ = _cli("--root", tmp_path / "nope", "--json")
     assert rc == 2 and json.loads(out)["ok"] is False
+
+
+# --- memory: a transcript is streamed line by line, never decoded whole ----------------------------
+
+
+def _bulky_session(path, filler_lines):
+    """Two calls with `filler_lines` assistant text records of about 1 KB between them."""
+    filler = json.dumps({"type": "assistant", "timestamp": _ts(1), "cwd": "/work/app",
+                         "message": {"content": [{"type": "text", "text": "x" * 1000}]}})
+    with open(path, "w", encoding="utf-8", newline="") as fh:
+        fh.write(json.dumps(call(0, "Bash", {"command": "make"}, "c1")) + "\n")
+        for _ in range(filler_lines):
+            fh.write(filler + "\n")
+        fh.write(json.dumps(call(2, "Bash", {"command": "make"}, "c2")) + "\n")
+
+
+def _peak_bytes(fn):
+    tracemalloc.start()
+    try:
+        fn()
+        return tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+
+def test_measure_peak_memory_does_not_grow_with_the_transcript(tmp_path):
+    # Reading the whole file held its bytes, the decoded text and every line at once: 1.2 GB RSS
+    # to tally a 217 MB transcript. Events are kept; the bulk around them must not be.
+    small, large = tmp_path / "small.jsonl", tmp_path / "large.jsonl"
+    _bulky_session(small, 500)
+    _bulky_session(large, 4000)
+    peak_small = _peak_bytes(lambda: ish.measure(small, exclude_cwd=None))
+    peak_large = _peak_bytes(lambda: ish.measure(large, exclude_cwd=None))
+    assert ish.measure(large, exclude_cwd=None)[0].calls == 2
+    assert peak_large < 2 * peak_small, (peak_small, peak_large)
+
+
+def test_measure_reads_a_bom_and_a_crlf_line_as_records(tmp_path):
+    path = tmp_path / "s.jsonl"
+    path.write_bytes(b"\xef\xbb\xbf" + json.dumps(call(0, "Bash", {"command": "a"}, "c1")).encode()
+                     + b"\r\n" + json.dumps(call(1, "Bash", {"command": "b"}, "c2")).encode()
+                     + b"\n")
+    assert ish.measure(path, exclude_cwd=None)[0].calls == 2

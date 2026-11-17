@@ -18,7 +18,7 @@ live - bad). These files live under --store (default ./.proxies):
 
   pool.txt    all discovered candidate IP:PORT (grow-only, deduped)
   live.txt    candidates that passed reachability validation on some run (accumulates)
-  good.txt    proxies that actually completed a real download (weighted up)
+  good.txt    proxies that actually completed a real download (weighted up; one line each)
   bad.txt     proxies that failed at the connection level (excluded)
   speeds.tsv  measured validation latency per proxy (proxy<TAB>seconds); selection
               weights faster proxies up so they are picked more often
@@ -417,15 +417,18 @@ class ProxyPool:
         self._fail = {}
         self._banned = set()
         self._active = set()
+        # The proven set is read once and then kept here: every acquire weighs by it, and a
+        # file re-read per acquire held the lock for a read that grew with every success.
+        self._good = _read(_p(store, "good.txt"))
         with self._lock:
             self._refill_active_locked()
 
     # -- internal helpers; caller must hold self._lock -----------------------
     def _candidates_locked(self):
+        # live and bad are re-read: the background refresh grows live.txt during a run.
         bad = _read(_p(self.store, "bad.txt"))
         live = _read(_p(self.store, "live.txt"))
-        good = _read(_p(self.store, "good.txt"))
-        return (live | good) - bad - self._banned
+        return (live | self._good) - bad - self._banned
 
     def _refill_active_locked(self):
         cands = self._candidates_locked()
@@ -435,7 +438,7 @@ class ProxyPool:
         self._active = set(ranked[:target])
 
     def _weights_locked(self):
-        good = _read(_p(self.store, "good.txt")) - self._banned
+        good = self._good - self._banned
         default_lat = _median(list(self._speed.values())) or 3.0
         weights = {}
         for p in self._active:
@@ -484,6 +487,18 @@ class ProxyPool:
     def mark_in_use(self, proxy):
         with self._lock:
             self._in_use.add(proxy)
+
+    def record_good(self, proxy):
+        """Mark a proxy proven (weighted up from the next acquire) and persist it once.
+
+        good.txt is a set: a line per successful item made it grow with the worklist and with
+        every run. Another process on the same store can still add a duplicate line; _read
+        collapses it."""
+        with self._lock:
+            if proxy in self._good:
+                return
+            self._good.add(proxy)
+            _append(_p(self.store, "good.txt"), proxy)
 
     def record(self, proxy, ok):
         """Record an attempt's outcome; evict + backfill if the proxy has turned flaky.
@@ -609,9 +624,11 @@ def _run_item(store, item, argv_tpl, per_item, item_timeout, success_glob, dead_
             # The item is data, not a pattern: an id like "a[1]" would otherwise be a character class.
             ok = bool(glob.glob(success_glob.replace("{item}", glob.escape(item))))
         if ok:
-            _append(_p(store, "good.txt"), proxy)
             if pool is not None:
+                pool.record_good(proxy)
                 pool.record(proxy, True)
+            else:
+                _append(_p(store, "good.txt"), proxy)
             return (item, proxy)
         if dead_re.search(out):          # connection-level failure: ban this proxy
             if pool is not None:
@@ -857,18 +874,10 @@ def _fetch(a):
     if not a.sha256:
         print("proxy_pool: no --sha256 given: size and identity are checked only where the origin "
               "sends them, and bytes altered behind correct headers go unnoticed", file=sys.stderr)
-    recorded = set()
-
-    def record_good(proxy):
-        # One line per proxy, not per chunk: a large file would otherwise add a line for every
-        # chunk, and every acquire re-reads the file. A race writes one extra line at worst.
-        if proxy not in recorded:
-            recorded.add(proxy)
-            _append(_p(a.store, "good.txt"), proxy)
-
+    # pool.record_good writes one line per proxy, not per chunk.
     result = cfetch.fetch(a.url, a.output, pool, chunk_size=chunk_size, workers=a.workers,
                           sha256=a.sha256, timeout=a.chunk_timeout,
-                          max_attempts=a.max_attempts_per_chunk, on_success=record_good)
+                          max_attempts=a.max_attempts_per_chunk, on_success=pool.record_good)
     if not result.ok:
         print(f"proxy_pool: {result.note}", file=sys.stderr)
         return 1

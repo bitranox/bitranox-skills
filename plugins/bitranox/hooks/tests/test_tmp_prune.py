@@ -12,6 +12,7 @@ import sys
 import time
 import uuid
 from pathlib import Path
+from typing import SupportsIndex
 
 import pytest
 
@@ -305,6 +306,88 @@ def test_a_symlinked_dir_is_never_followed(machine: Machine, tmp_path: Path) -> 
     link = machine.base / "link"
     link.symlink_to(target, target_is_directory=True)
     assert link not in decisions(machine.config())
+
+
+_COMPARES: list[int] = [0]
+
+
+class _CountedPath(str):
+    """A held path that counts every comparison made against it, so a test can see how much
+    work one `held()` costs without reaching into the index."""
+
+    __hash__ = str.__hash__
+
+    def _tick(self) -> None:
+        _COMPARES[0] += 1
+
+    def __eq__(self, other: object) -> bool:
+        self._tick()
+        return str.__eq__(self, other)
+
+    def __ne__(self, other: object) -> bool:
+        self._tick()
+        return str.__ne__(self, other)
+
+    def __lt__(self, other: str) -> bool:
+        self._tick()
+        return str.__lt__(self, other)
+
+    def __le__(self, other: str) -> bool:
+        self._tick()
+        return str.__le__(self, other)
+
+    def __gt__(self, other: str) -> bool:
+        self._tick()
+        return str.__gt__(self, other)
+
+    def __ge__(self, other: str) -> bool:
+        self._tick()
+        return str.__ge__(self, other)
+
+    def startswith(
+        self,
+        prefix: str | tuple[str, ...],
+        start: SupportsIndex | None = None,
+        end: SupportsIndex | None = None,
+        /,
+    ) -> bool:
+        self._tick()
+        return str.startswith(self, prefix, start, end)
+
+
+def _index_of(tmp_path: Path, count: int) -> tuple[tmp_prune.HolderIndex, str]:
+    # Every held path appears three times, as one process's fd, cwd and maps lines often do.
+    base = os.path.realpath(tmp_path)
+    held = [_CountedPath(os.path.join(base, "held%05d" % i, "f.txt")) for i in range(count)]
+    return tmp_prune.HolderIndex("procfs", tuple(held * 3)), base
+
+
+def _compares_per_lookup(tmp_path: Path, count: int) -> int:
+    index, base = _index_of(tmp_path, count)
+    _COMPARES[0] = 0
+    for i in range(20):
+        assert index.held(Path(base) / ("free%02d" % i)) is False
+    return _COMPARES[0]
+
+
+def test_a_held_lookup_does_not_grow_with_the_number_of_held_paths(tmp_path: Path) -> None:
+    # held() runs once per candidate in plan() and again per pruned dir in apply(); a linear
+    # scan made each one cost every fd, cwd and maps line of every process (58788 measured).
+    small = _compares_per_lookup(tmp_path, 500)
+    large = _compares_per_lookup(tmp_path, 4000)
+    assert large <= 2 * small, (small, large)
+
+
+def test_the_holder_index_answers_exact_and_below_and_never_a_name_sharing_a_prefix(
+    tmp_path: Path,
+) -> None:
+    index, base = _index_of(tmp_path, 50)
+    assert len(index.paths) == len(set(index.paths)) == 50
+    assert index.held(Path(base) / "held00007") is True                 # a file below it is held
+    assert index.held(Path(base) / "held00007" / "f.txt") is True       # the held file itself
+    assert index.held(Path(base) / "held0000") is False                 # shares only a name prefix
+    assert index.held(Path(base) / "held00007" / "f.txt.old") is False
+    assert index.held(Path(base)) is True
 
 
 @pytest.mark.skipif(not ON_LINUX, reason="the /proc holder index is Linux-only")

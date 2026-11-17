@@ -7,6 +7,7 @@ appends to the file "between polls" by doing it inside the fake sleep.
 import json
 import subprocess
 import sys
+import tracemalloc
 from pathlib import Path
 
 import pytest
@@ -248,6 +249,81 @@ def test_a_stalled_tail_is_judged_again_once_the_producer_completes_it(tmp_path,
                       "--terminal", "GATE RED", "--timeout", "10"], clock=t.clock, sleep=t.sleep)
     assert code == 0
     assert capsys.readouterr().out.splitlines() == ["GATE", "GATE RED - stop"]
+
+
+# ---- memory: a big log or a line that never ends is read in blocks, not whole ------------------
+
+
+def _peak_bytes(fn):
+    tracemalloc.start()
+    try:
+        result = fn()
+        return tracemalloc.get_traced_memory()[1], result
+    finally:
+        tracemalloc.stop()
+
+
+def _big_log(path: Path, megabytes: int):
+    line = b"progress " + b"y" * 90 + b"\n"
+    with path.open("wb") as handle:
+        for _ in range(megabytes * 10_000):
+            handle.write(line)
+        handle.write(b"DONE\n")
+
+
+def test_watch_from_start_peak_memory_does_not_grow_with_the_existing_log(tmp_path):
+    # One poll read everything appended since the last one and decoded it whole: about 5x the
+    # log (843 MB RSS on a 170 MB log whose terminal line was its last).
+    small, large = tmp_path / "small.log", tmp_path / "large.log"
+    _big_log(small, 4)
+    _big_log(large, 32)
+
+    def watch(log):
+        t = FakeTime()
+        return M.execute(["watch", str(log), "--from", "start", "--terminal", "DONE",
+                          "--timeout", "5", "--json"], clock=t.clock, sleep=t.sleep)
+
+    peak_small, code_small = _peak_bytes(lambda: watch(small))
+    peak_large, code_large = _peak_bytes(lambda: watch(large))
+    assert (code_small, code_large) == (0, 0)
+    assert peak_large < 2 * peak_small, (peak_small, peak_large)
+
+
+def test_a_line_that_never_ends_is_held_by_its_head_only(tmp_path, capsys):
+    # A producer writing progress with \r and no \n (pip, docker pull, rsync) grew `pending`
+    # without bound and re-copied it every poll. A marker is a line PREFIX, so the head decides.
+    def follow_progress(appends):
+        log = tmp_path / ("p%d.log" % appends)
+        log.write_bytes(b"DONE downloading ")
+        chunk = (b"\r" + b"z" * 1023) * 256                          # 256 KiB per poll
+        t = FakeTime([_append_bytes(log, chunk) for _ in range(appends)])
+        return M.execute(["watch", str(log), "--from", "start", "--terminal", "DONE",
+                          "--timeout", "100"], clock=t.clock, sleep=t.sleep)
+
+    peak_small, code_small = _peak_bytes(lambda: follow_progress(4))
+    peak_large, code_large = _peak_bytes(lambda: follow_progress(32))
+    assert (code_small, code_large) == (0, 0)
+    assert peak_large < 2 * peak_small, (peak_small, peak_large)
+    printed = capsys.readouterr().out.split("\n")             # the line holds \r: not splitlines
+    assert [p[:17] for p in printed if p] == ["DONE downloading ", "DONE downloading "]
+
+
+def _append_bytes(path: Path, data: bytes):
+    def act():
+        with path.open("ab") as handle:
+            handle.write(data)
+    return act
+
+
+def test_calibrate_counts_a_big_finished_log_streamed(tmp_path):
+    log = tmp_path / "big.log"
+    _big_log(log, 2)
+    with log.open("ab") as handle:
+        handle.write(b"progress tail without newline")
+    counts = M._calibrate_path(log, M.Markers(("DONE",), ("progress",)))
+    assert counts == M.calibrate(log.read_bytes().decode("utf-8"), M.Markers(("DONE",),
+                                                                                ("progress",)))
+    assert counts == {"DONE": 1, "progress": 20_001}
 
 
 # ---- the timeout -------------------------------------------------------------------------------

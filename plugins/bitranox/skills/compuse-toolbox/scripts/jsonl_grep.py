@@ -45,6 +45,7 @@ cannot be opened, even beside others that were read (what was read is still prin
 
 import argparse
 import fnmatch
+import io
 import os
 import re
 import sys
@@ -314,25 +315,38 @@ def scan_corpus(paths, *, field=None, type_=None, role=None, pattern=None) -> Sc
     return ScanResult(counts, read, skipped, bad_lines, missing, named_unreadable)
 
 
-def scan_text(text: str, *, field=None, type_=None, role=None, pattern=None) -> ScanResult:
-    """`scan_corpus` over one already-read text (stdin), counted as one source read."""
+def scan_lines(lines, *, field=None, type_=None, role=None, pattern=None) -> ScanResult:
+    """`scan_corpus` over one stream of raw lines (stdin), counted as one source read.
+
+    Takes an iterable so a piped stream is tallied a line at a time: only the current line and the
+    tally are held, never the stream.
+    """
     rx = re.compile(pattern) if pattern else None
     counts: Counter = Counter()
-    hits = (_match(raw, rx=rx, type_=type_, role=role, field=field) for raw in _records(text))
+    hits = (_match(raw, rx=rx, type_=type_, role=role, field=field) for raw in lines)
     bad = _tally((h for h in hits if h is not _MISS), counts)
     return ScanResult(counts, 1, [], bad)
 
 
-def _read_stdin() -> str:
-    """stdin as UTF-8 whatever the console code page, BOM dropped, undecodable bytes replaced.
+def scan_text(text: str, *, field=None, type_=None, role=None, pattern=None) -> ScanResult:
+    """`scan_lines` over one already-read text."""
+    return scan_lines(_records(text), field=field, type_=type_, role=role, pattern=pattern)
+
+
+def _stdin_lines():
+    """stdin as UTF-8 lines whatever the console code page, BOM dropped, bad bytes replaced.
 
     Read through the byte buffer: a cp1252 text stdin raised UnicodeDecodeError on the first byte
-    that code page leaves undefined (0x81), killing the read mid-stream.
+    that code page leaves undefined (0x81), killing the read mid-stream. Streamed line by line,
+    split on newline only, exactly as a named file is read (`iter_file_matches`): reading the whole
+    stream first held its bytes, the decoded text and the split list at once, several times its
+    size, where a named file of the same bytes stayed flat.
     """
     buffer = getattr(sys.stdin, "buffer", None)
-    if buffer is None:
-        return sys.stdin.read()
-    return buffer.read().decode("utf-8-sig", errors="replace")
+    if buffer is None:                                   # an in-process text stream with no bytes
+        yield from _records(sys.stdin.read())
+        return
+    yield from io.TextIOWrapper(buffer, encoding="utf-8-sig", errors="replace", newline="\n")
 
 
 def _report_reach(res: ScanResult) -> None:
@@ -362,7 +376,7 @@ def _exit_code(res: ScanResult) -> int:
 
 def _run_count(args) -> int:
     kwargs = dict(field=args.field, type_=args.type_, role=args.role, pattern=args.pattern)
-    res = scan_corpus(args.paths, **kwargs) if args.paths else scan_text(_read_stdin(), **kwargs)
+    res = scan_corpus(args.paths, **kwargs) if args.paths else scan_lines(_stdin_lines(), **kwargs)
     _report_reach(res)
     for value, times in res.counts.most_common():
         print(f"{times}\t{value}")
@@ -392,7 +406,7 @@ def _run_list(args) -> int:
     kwargs = dict(rx=rx, type_=args.type_, role=args.role, field=args.field)
     printer = _Printer(args.raw)
     if not args.paths:
-        hits = (_match(raw, **kwargs) for raw in _records(_read_stdin()))
+        hits = (_match(raw, **kwargs) for raw in _stdin_lines())
         bad = printer(h for h in hits if h is not _MISS)
         res = ScanResult(Counter(), 1, [], bad, hits=printer.hits)
         _report_problems(res)

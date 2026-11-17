@@ -61,6 +61,8 @@ import random
 import re
 import sys
 from collections import Counter
+from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
@@ -694,31 +696,60 @@ def write_disagreements(rep, out):
 # These arms ask the same prompts four ways over the recorded corpus, so the question shape and
 # the catalogue text can each be attributed instead of shipped together and argued about.
 
-# An arm is a shape plus two flags, deliberately not four separate builders: the only differences
-# that may exist between arms are the ones named here, and a reader can check that at a glance.
+class Shape(StrEnum):
+    """How an arm asks: one noul per skill, or one choice over the whole roster."""
+
+    NOULS = "nouls"
+    CHOICE = "choice"
+
+
+@dataclass(frozen=True)
+class ArmSpec:
+    """One replay arm: its question shape and the text source it ranks on.
+
+    A bare string shape let a typo ("choices") pass both shape tests in run_arm, which were not
+    complements: it built noul questions and then read the answers as a choice, so the arm found
+    no pick on any prompt and a paid replay read as "this arm never fires". The shape is parsed to
+    a Shape here, where the arm is written, so a typo fails at import.
+    """
+
+    shape: Shape
+    short: bool = False
+    rerank: bool = False
+    body: bool = False
+    router_text: bool = False
+
+    def __post_init__(self) -> None:
+        try:
+            shape = Shape(self.shape)
+        except ValueError:
+            raise ValueError(f"arm shape {self.shape!r} is not one of "
+                             f"{', '.join(s.value for s in Shape)}") from None
+        object.__setattr__(self, "shape", shape)
+        if sum((self.short, self.body, self.router_text)) > 1:
+            raise ValueError("an arm ranks on one text source: at most one of short, body, "
+                             "router_text")
+
+
+# An arm is a shape plus its flags, deliberately not separate builders: the only differences that
+# may exist between arms are the ones named here, and a reader can check that at a glance.
 ARMS = {
-    "nouls": {"shape": "nouls", "short": False, "rerank": False, "body": False,
-              "router_text": False},
-    "choice_full": {"shape": "choice", "short": False, "rerank": False, "body": False,
-                    "router_text": False},
-    "choice_short": {"shape": "choice", "short": True, "rerank": False, "body": False,
-                     "router_text": False},
-    "choice_short_rerank": {"shape": "choice", "short": True, "rerank": True, "body": False,
-                            "router_text": False},
+    "nouls": ArmSpec(shape=Shape.NOULS),
+    "choice_full": ArmSpec(shape=Shape.CHOICE),
+    "choice_short": ArmSpec(shape=Shape.CHOICE, short=True),
+    "choice_short_rerank": ArmSpec(shape=Shape.CHOICE, short=True, rerank=True),
     # The one text source never tested on a WIDE pass. `choice_short_rerank` did rank on bodies,
     # but it also moved to two requests, so the two changes were confounded and neither was
     # measured; it scored 0 right against 11 misses and the body half was never on trial. Cost is
     # what makes this testable at all: 700-char bodies are about 14,175 tokens a prompt, $5.95 per
     # 10,000 against $3.81 for descriptions, where FULL bodies would be 367,365 and $154.29.
-    "choice_body": {"shape": "choice", "short": False, "rerank": False, "body": True,
-                    "router_text": False},
+    "choice_body": ArmSpec(shape=Shape.CHOICE, body=True),
     # Option text written FOR the router rather than for the keyword matcher, per the API's own
     # guidance: one discriminating line per option, and the documented OBJECT form
     # ({what, not_for, examples}) for options the model keeps confusing. The adjudication named
     # those: 6 of 11 misses wanted meta-context-watcher and lost to a neighbour while ranking top
     # at 0.58-0.73. Only those skills carry an entry; the rest fall back to their descriptions.
-    "choice_router_text": {"shape": "choice", "short": False, "rerank": False, "body": False,
-                           "router_text": True},
+    "choice_router_text": ArmSpec(shape=Shape.CHOICE, router_text=True),
 }
 DEFAULT_SHORTLIST = 3
 # A prompt this short is a continuation ("go", "yes", "weiter"), which the gate exists to
@@ -799,11 +830,11 @@ def _roster(skills, spec, bodies=None, router_text=None):
     empty roster: an arm silently ranking nothing answers `none_needed` for everything, which
     reads as a real null instead of a wiring mistake.
     """
-    if spec.get("router_text"):
+    if spec.router_text:
         return {k: (router_text or {}).get(k) or skills[k] for k in skills}
-    if spec.get("body"):
+    if spec.body:
         return {k: (bodies or {}).get(k) or skills[k] for k in skills}
-    if spec.get("short"):
+    if spec.short:
         return {k: cl.short_description(v) for k, v in skills.items()}
     return dict(skills)
 
@@ -839,7 +870,7 @@ def run_arm(name, ask, fields, skills, *, threshold, top=DEFAULT_TOP,
     """
     spec = ARMS[name]
     roster = _roster(skills, spec, bodies, router_text)
-    build = cl.skill_router_choice_questions if spec["shape"] == "choice" else \
+    build = cl.skill_router_choice_questions if spec.shape is Shape.CHOICE else \
         cl.skill_router_questions
     questions = build(roster, fields, turn=turn)
     answers = ask(fields, questions)
@@ -860,13 +891,13 @@ def run_arm(name, ask, fields, skills, *, threshold, top=DEFAULT_TOP,
     # restore one the gate had suppressed, so a flat curve read as "this arm is threshold-
     # insensitive" when it was the log that had gone blank. The noul arm never had the problem,
     # since its per-skill scores are answers like any other.
-    if spec["shape"] != "nouls":
+    if spec.shape is Shape.CHOICE:
         winner, probs = _choice_parts(answers, cl.PICK_ID)
         out["winner"] = winner
         out["probabilities"] = probs
     out["gate"] = _value(answers, cl.NEW_TASK_ID)
     gated = isinstance(out["gate"], (int, float)) and out["gate"] < threshold
-    if spec["shape"] != "nouls" and not spec["rerank"]:
+    if spec.shape is Shape.CHOICE and not spec.rerank:
         # The single-choice arms take the production rule, so a replay measures what the router
         # would do: the gate, or a winner sure enough to overrule it.
         pick = cl.choice_pick(out["gate"], out["winner"], out["probabilities"],
@@ -876,7 +907,7 @@ def run_arm(name, ask, fields, skills, *, threshold, top=DEFAULT_TOP,
         return out
     if gated:
         return out
-    if spec["shape"] == "nouls":
+    if spec.shape is Shape.NOULS:
         out["picks"] = _noul_picks(answers, roster, threshold, top)
         return out
     winner, probs = out["winner"], out["probabilities"]
@@ -1055,11 +1086,11 @@ def size_replay(skills, prompts, shortlist=DEFAULT_SHORTLIST, turn=cl.TURN_PROMP
     arms = {}
     for name, spec in ARMS.items():
         roster = _roster(skills, spec, bodies, router_text)
-        build = cl.skill_router_choice_questions if spec["shape"] == "choice" else \
+        build = cl.skill_router_choice_questions if spec.shape is Shape.CHOICE else \
             cl.skill_router_questions
         chars = _question_chars(build(roster, fields, turn=turn))
-        requests = 2 if spec["rerank"] else 1
-        if spec["rerank"]:
+        requests = 2 if spec.rerank else 1
+        if spec.rerank:
             chars += close_chars
         arms[name] = {"chars_per_prompt": chars, "requests_per_prompt": requests,
                       "tokens": chars // 4 * prompts}

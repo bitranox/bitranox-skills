@@ -3277,7 +3277,7 @@ def _topic_list(anchor):
     data = topic_store.load(anchor)
     if data is None:
         raise TopicRefusal(["this tree has no topic list yet (topics-set-list writes one)"])
-    return data["topics"]
+    return data.topics
 
 
 def _outside_list(topics, allowed):
@@ -3310,7 +3310,7 @@ def _set_topic_list_held(anchor, topics, tagger):
     # By the name the list will store (trimmed), one name at a time: the list is capped by
     # topic_store.MAX_LIST, not by the per-fact tp.MAX_TOPICS a whole-list normalise applies.
     names = {tp.normalise_topics([name])[0] for name in topics}
-    dropped = set(old["topics"]) - names if old else set()
+    dropped = set(old.topics) - names if old else set()
     users, total = [], 0
     if dropped:
         for slug, carried in iter_fact_topics(anchor):
@@ -3633,7 +3633,7 @@ def level_topics_stale(level):
         return True, "its TOPICS line does not parse (set-level-topics replaces it)"
     if declared is None:
         return True, "never tagged"
-    if data["levels"].get(topic_store.level_key(anchor, level)) != tp.descriptor_digest(scope):
+    if data.levels.get(topic_store.level_key(anchor, level)) != tp.descriptor_digest(scope):
         return True, "descriptor changed since its topics were chosen"
     return False, ""
 
@@ -4348,11 +4348,11 @@ def _topic_read(args):
         print("no topic list in this tree")
         return 1
     if args.as_json:
-        print(json.dumps({"tagger": data["tagger"], "topics": data["topics"]}, sort_keys=True))
+        print(json.dumps({"tagger": data.tagger.value, "topics": dict(data.topics)}, sort_keys=True))
         return 0
-    print("tagger: %s" % data["tagger"])
-    for name in sorted(data["topics"]):
-        print("%s - %s" % (name, data["topics"][name]))
+    print("tagger: %s" % data.tagger.value)
+    for name in sorted(data.topics):
+        print("%s - %s" % (name, data.topics[name]))
     return 0
 
 

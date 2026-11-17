@@ -274,10 +274,21 @@ def _path_pair(probe_path, control_path, where: str) -> tuple[str | None, str | 
     return probe_path, control_path
 
 
+_CLAIM_KEYS = frozenset({"name", "probe", "control", "probe_args", "control_args",
+                         "probe_path", "control_path"})
+
+
 def _claim_from_line(line: str, where: str, number: int) -> Claim:
+    """One claim-file row, every key checked. A key outside `_CLAIM_KEYS` is refused: a misspelt
+    `probe_args` was dropped, so that side ran with no args and the claim was scored on an input
+    nobody wrote."""
     obj = json.loads(line)
     if not isinstance(obj, dict):
         raise ValueError(f"{where}: a claim must be a JSON object")
+    unknown = sorted(set(obj) - _CLAIM_KEYS)
+    if unknown:
+        raise ValueError(f"{where}: unknown key(s) {', '.join(map(repr, unknown))}; a claim takes "
+                         f"only {', '.join(sorted(_CLAIM_KEYS))}")
     probe_path, control_path = _path_pair(obj.get("probe_path"), obj.get("control_path"), where)
     # A path claim may carry no stdin at all; a stdin claim still needs both sides.
     if probe_path is None and ("probe" not in obj or "control" not in obj):

@@ -320,6 +320,22 @@ def test_cli_a_malformed_case_row_is_a_usage_error(tmp_path, row):
     assert "line1" in r.stderr
 
 
+@pytest.mark.parametrize("row", [
+    '{"name": "typo", "stdin": "", "arg": ["--x"]}',
+    '{"name": "typo", "args": ["--x"], "stdn": "payload"}',
+    '{"stdin": "", "args": [], "timeout": 5}',
+])
+def test_cli_a_case_row_with_a_key_it_does_not_know_is_refused(tmp_path, row):
+    # A misspelt `args` ran the case WITHOUT the args it meant, so both sides saw the same empty
+    # argv and the case read AGREE: the false all-clear this tool exists to stop.
+    a = _py("import sys;sys.stdout.write(repr(sys.argv[1:]))")
+    b = _py("pass")
+    r = _run(["--a", a, "--b", b, "--case-file", _case_file(tmp_path, row)])
+    assert r.returncode == 2, r.stdout
+    assert "Traceback" not in r.stderr
+    assert "line1" in r.stderr and "unknown key" in r.stderr
+
+
 def test_cli_a_null_stdin_is_empty_input_not_the_parent_stdin(tmp_path):
     """A null stdin used to inherit the parent's stdin: the first side drained it, fake DIFFER."""
     cat = _py("import sys;sys.stdout.write(sys.stdin.read())")

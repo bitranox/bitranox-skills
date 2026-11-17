@@ -531,3 +531,52 @@ def test_a_crash_under_json_is_exit_2_with_an_envelope(tmp_path, monkeypatch, ca
     payload = json.loads(cap.out)
     assert payload["ok"] is False and "walker broke" in payload["error"]
     assert "Traceback" not in cap.err
+
+
+# --- memory is bounded by the longest line, not by the largest file -------------------------------
+
+_SCRIPT = os.path.join(os.path.dirname(grep_all.__file__), "grep_all.py")
+
+
+def _text_file(path, megabytes):
+    line = "x" * 1000 + "\n"
+    per_mb = (1 << 20) // len(line)
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        for _ in range(megabytes):
+            fh.write(line * per_mb)
+    return path
+
+
+def _nul_file(path, megabytes):
+    with open(path, "wb") as fh:
+        fh.truncate(megabytes << 20)                     # all NUL: a binary file by the 4 KB rule
+    return path
+
+
+def _peak_rss(argv):
+    """(peak RSS in bytes, exit code) of grep_all.py run as a real process."""
+    proc = subprocess.Popen([sys.executable, _SCRIPT, *argv], stdin=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    _pid, status, usage = os.wait4(proc.pid, 0)
+    scale = 1 if sys.platform == "darwin" else 1024          # macOS reports bytes, Linux KiB
+    return usage.ru_maxrss * scale, os.waitstatus_to_exitcode(status)
+
+
+@pytest.mark.skipif(not hasattr(os, "wait4"), reason="os.wait4 rusage is POSIX only")
+@pytest.mark.parametrize("make", [_text_file, _nul_file], ids=["text", "binary"])
+def test_peak_memory_does_not_grow_with_the_file_size(tmp_path, make):
+    """8x the file must not cost 8x the memory: a big log or a database file is what this searches."""
+    small = make(tmp_path / "small.dat", 8)
+    large = make(tmp_path / "large.dat", 64)
+    rss_small, rc_small = _peak_rss(["NO_SUCH_NEEDLE", str(small)])
+    rss_large, rc_large = _peak_rss(["NO_SUCH_NEEDLE", str(large)])
+    assert (rc_small, rc_large) == (1, 1)
+    growth = rss_large - rss_small
+    assert growth < 16 * (1 << 20), f"peak RSS grew {growth >> 20} MB for a 56 MB larger file"
+
+
+def test_a_crlf_line_and_a_last_line_without_newline_are_both_searched(tmp_path):
+    f = tmp_path / "f.txt"
+    f.write_bytes(b"\xef\xbb\xbfone NEEDLE\r\ntwo\nthree NEEDLE")
+    hits = grep_all.search([f], grep_all.re.compile("NEEDLE$"))
+    assert [(n, text) for _f, n, text in hits] == [(1, "one NEEDLE"), (3, "three NEEDLE")]

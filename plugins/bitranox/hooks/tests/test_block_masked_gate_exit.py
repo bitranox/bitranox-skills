@@ -17,6 +17,7 @@ import io
 import json
 import os
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -27,6 +28,52 @@ def run_main(monkeypatch, command):
     payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}})
     monkeypatch.setattr(sys, "stdin", io.StringIO(payload))
     return B.main()
+
+
+def _repeated_whole_command_passes(run, names):
+    """{name: calls} for each transform in `names` this guard ran MORE than once on one long input.
+
+    Read with sys.setprofile, an instrument rather than a patch: the hook runs unchanged. The
+    guard runs on every Bash call, and each check re-deriving the same whole-command transform
+    cost ~1.3 ms per KB of command (a 121 KB heredoc took 160 ms in this guard alone). Only
+    calls made from the guard's own file count: a shared helper that re-derives a view inside
+    shell_text is that module's cost, not this guard's.
+    """
+    import collections
+
+    seen = collections.Counter()
+
+    def profile(frame, event, _arg):
+        if event != "call" or frame.f_code.co_name not in names:
+            return
+        if frame.f_back is None or not frame.f_back.f_code.co_filename.endswith("block-masked-gate-exit.py"):
+            return
+        first = frame.f_code.co_varnames[:1]
+        value = frame.f_locals.get(first[0]) if first else None
+        if isinstance(value, str) and len(value) > 10_000:
+            seen[(frame.f_code.co_name, len(value), hash(value))] += 1
+
+    sys.setprofile(profile)
+    try:
+        run()
+    finally:
+        sys.setprofile(None)
+    assert seen, "the instrument saw no long input: the probe is not reaching the transforms"
+    return {key[0]: n for key, n in seen.items() if n > 1}
+
+
+def _big_heredoc_command(tail):
+    body = (Path(__file__).resolve().parent.parent / "shell_text.py").read_text(encoding="utf-8")
+    return "cat > /tmp/probe/shell_text.py <<'EOS'\n" + body + "\nEOS\n" + tail
+
+
+def test_each_whole_command_transform_runs_once_per_input(monkeypatch, capsys):
+    command = _big_heredoc_command("cd /tmp/probe && python3 shell_text.py > /tmp/probe/log 2>&1\n")
+    repeated = _repeated_whole_command_passes(
+        lambda: run_main(monkeypatch, command),
+        {"mask_data_regions", "blank_heredoc_bodies", "blank_unexpanded_text"})
+    capsys.readouterr()
+    assert repeated == {}, f"recomputed on the same long command: {repeated}"
 
 
 # ---------------------------------------------------------------------------

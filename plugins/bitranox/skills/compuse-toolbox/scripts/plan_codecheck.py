@@ -25,7 +25,11 @@ is checked as a file on its own.
 
 How the checks run. The repository is COPIED to a temporary directory (without `.git`, `.venv*`,
 `node_modules` and the tool caches) and the blocks are written over the copy, so the real tree is
-never touched and the blocks see the project's other modules. Then:
+never touched and the blocks see the project's other modules. In a git checkout the copy is what
+git lists - tracked files, untracked ones, and ignored FILES (a generated `_version.py`, a `.env`)
+- but no ignored DIRECTORY: build output, nested worktrees and data trees are not the project,
+and copying them put about 0.7 GB and 22x the tracked file count into the temp dir before the
+first check. Outside a git checkout (or when git cannot answer) the whole tree is walked. Then:
   * pytest - only when a placed path is a test file (`test_*.py` / `*_test.py`), on the project's
     interpreter (`--python`, else `./.venv`'s, else this one) with the copy's `src/` and root
     first on PYTHONPATH, so an editable install of the REAL tree cannot answer for the copy.
@@ -228,13 +232,83 @@ def place_blocks(blocks: list[Block], repo: Path) -> tuple[dict[str, str], list[
 
 
 def copy_repo(repo: Path, dest: Path) -> Path:
-    """Copy `repo` to `dest/repo` without VCS metadata, virtualenvs or caches."""
-    def ignore(_dir: str, names: list[str]) -> set[str]:
-        return {n for n in names if n in _COPY_SKIP or n.startswith(".venv")}
+    """Copy `repo` to `dest/repo` without VCS metadata, virtualenvs, caches or ignored trees.
 
+    The file list comes from git when `repo` is a git checkout (see the module docstring), else
+    from a walk with the fixed skip list."""
     target = dest / "repo"
-    shutil.copytree(repo, target, symlinks=True, ignore=ignore)
+    listed = _git_listed_paths(repo)
+    if listed is None:
+        shutil.copytree(repo, target, symlinks=True, ignore=_skip_names)
+        return target
+    target.mkdir(parents=True)
+    for rel in listed:
+        if _skipped_rel(rel):
+            continue
+        _copy_entry(repo / rel, target / rel)
     return target
+
+
+def _skip_names(_dir: str, names: list[str]) -> set[str]:
+    return {n for n in names if n in _COPY_SKIP or n.startswith(".venv")}
+
+
+def _skipped_rel(rel: str) -> bool:
+    return any(part in _COPY_SKIP or part.startswith(".venv") for part in PurePosixPath(rel).parts)
+
+
+def _copy_entry(source: Path, dest: Path) -> None:
+    """Copy one listed path: a file or link as itself, a directory (a submodule) as a tree.
+
+    A path git still lists but the checkout no longer has (deleted, not yet committed) is not
+    part of the tree being checked, so it is skipped."""
+    if not os.path.lexists(source):
+        return
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if source.is_dir() and not source.is_symlink():
+        shutil.copytree(source, dest, symlinks=True, ignore=_skip_names, dirs_exist_ok=True)
+        return
+    shutil.copy2(source, dest, follow_symlinks=False)
+
+
+def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[bytes] | None:
+    """Run git in `repo` with every GIT_ variable stripped, so a hook's GIT_DIR cannot redirect
+    the question to another repository; None when git cannot be run."""
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith("GIT_") or k == "GIT_CEILING_DIRECTORIES"}
+    try:
+        return subprocess.run(["git", "-c", "core.quotePath=false", *args], cwd=repo, env=env,
+                              capture_output=True, timeout=120, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _git_lines(repo: Path, *args: str) -> list[str] | None:
+    proc = _git(repo, *args)
+    if proc is None or proc.returncode != 0:
+        return None
+    return [p for p in proc.stdout.decode("utf-8", "surrogateescape").split("\0") if p]
+
+
+def _git_listed_paths(repo: Path) -> list[str] | None:
+    """Repo-relative paths to copy, per git, or None when git cannot say for `repo`.
+
+    None also when `repo` is a directory an enclosing checkout IGNORES: there git lists the
+    directory itself as ignored and nothing in it, which would copy an empty tree."""
+    top = _git_lines(repo, "rev-parse", "-z", "--show-toplevel")
+    if not top:
+        return None
+    ignored_self = _git(Path(top[0]), "check-ignore", "-q", "--no-index", str(repo.resolve()))
+    if ignored_self is not None and ignored_self.returncode == 0:
+        return None
+    owned = _git_lines(repo, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+    ignored = _git_lines(repo, "ls-files", "-z", "--others", "--ignored", "--exclude-standard",
+                         "--directory")
+    if owned is None or ignored is None:
+        return None
+    # `--directory` names a wholly ignored directory once, with a trailing slash: that is a tree
+    # to leave out. An ignored FILE is listed by itself and copied.
+    return sorted({*owned, *(p for p in ignored if not p.endswith("/"))})
 
 
 def _project_python(repo: Path, explicit: str | None) -> str:

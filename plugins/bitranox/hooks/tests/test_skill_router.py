@@ -265,6 +265,51 @@ def test_match_control_the_separate_words_still_match():
     assert R.match("the file_path and code-base", triggers) == [("fx", 2)]   # _ and - separate
 
 
+
+# ---- cost: a pattern is compiled once, and only for a keyword the prompt contains ---------------
+# Each keyword is its own pattern string, and the shipped map holds about 950 of them against the
+# re module's 512-entry cache, so every re.search was a cache miss and a full compile - on every
+# prompt, and again for the shadow/decide request's second match(). Counted with sys.setprofile on
+# the stdlib compiler, never by patching it.
+
+def _compiles_during(fn):
+    import re._compiler as rc
+    count = 0
+
+    def prof(frame, event, _arg):
+        nonlocal count
+        if event == "call" and frame.f_code is rc.compile.__code__:
+            count += 1
+    sys.setprofile(prof)
+    try:
+        fn()
+    finally:
+        sys.setprofile(None)
+    return count
+
+
+def _many_triggers(n_keywords, tag):
+    # Unique per test (tag), so no earlier test warmed a cache these keywords would hit.
+    kws = ["kw%s%04d" % (tag, i) for i in range(n_keywords)]
+    return {"s%03d" % (i // 10): kws[i:i + 10] for i in range(0, n_keywords, 10)}
+
+
+def test_match_compiles_nothing_on_a_repeated_call_over_more_keywords_than_the_re_cache():
+    trig = _many_triggers(800, "rep")
+    prompt = "kwrep0001 and kwrep0002 and kwrep0555"
+    first = R.match(prompt, trig, max_skills=None)
+    assert first == [("s000", 2)]
+    assert _compiles_during(lambda: R.match(prompt, trig, max_skills=None)) == 0
+
+
+def test_match_compile_count_does_not_grow_with_the_keyword_count():
+    # The prompt names two keywords; 8x as many keywords it does not contain must cost nothing.
+    small = _many_triggers(100, "ga")
+    big = _many_triggers(800, "gb")
+    n_small = _compiles_during(lambda: R.match("kwga0001 kwga0002", small))
+    n_big = _compiles_during(lambda: R.match("kwgb0001 kwgb0002", big))
+    assert n_big <= n_small <= 2
+
 # ---- ranking: top MAX_SKILLS, ties alphabetical ----------------------------------------------------
 
 def test_match_keeps_the_top_two_and_breaks_ties_alphabetically():

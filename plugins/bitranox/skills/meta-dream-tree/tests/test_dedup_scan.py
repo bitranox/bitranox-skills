@@ -460,3 +460,78 @@ def test_a_usage_error_without_json_prints_no_envelope():
     proc = _usage_run("--top", "0")
     assert proc.returncode == 2
     assert proc.stdout == "" and "usage:" in proc.stderr
+
+
+# ---- the cost of a scan follows the facts, not the pairs ---------------------------------------
+
+class CountingTitle(str):
+    """A title that counts how often a scored text is built from it (`title + " " + ...`)."""
+
+    builds = 0
+
+    def __add__(self, other):
+        CountingTitle.builds += 1
+        return str.__add__(self, other)
+
+
+def _grouped_corpus(n: int, *, groups: int = 5, counting: bool = False) -> list[DS.Fact]:
+    """`n` facts in `groups` groups; each group shares two words no other group carries, so every
+    pair inside a group is a candidate pair and their number grows with the square of `n`."""
+    out = []
+    for i in range(n):
+        g = i % groups
+        title = f"fact {i}"
+        out.append(DS.Fact(slug=f"f{i}", level="/lvl",
+                           title=CountingTitle(title) if counting else title,
+                           text=f"group{g}alpha group{g}beta unique{i}word another{i}token"))
+    return out
+
+
+def test_each_fact_is_tokenised_a_fixed_number_of_times_however_many_pairs_it_is_in():
+    """A fact's words never change, but every pair re-built and re-tokenised BOTH texts: on the
+    real store (1991 facts, 1.76M pairs) that was 142 us a pair, about four minutes a scan,
+    against 13 us with each fact tokenised once."""
+    counts = {}
+    for n in (40, 160):
+        CountingTitle.builds = 0
+        result = DS.run(_grouped_corpus(n, counting=True), threshold=2.0)
+        counts[n] = (CountingTitle.builds, result.compared_pairs)
+    (small, small_pairs), (large, large_pairs) = counts[40], counts[160]
+    assert large_pairs > 12 * small_pairs, counts           # the pairs grow quadratically
+    assert large <= 4 * small + 8, \
+        f"scored texts built {small} times for 40 facts, {large} for 160: {counts}"
+
+
+def _peak_bytes(facts_in: list[DS.Fact]) -> tuple[int, DS.Result]:
+    import tracemalloc
+    tracemalloc.start()
+    try:
+        result = DS.run(facts_in, threshold=2.0)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    return peak, result
+
+
+def test_peak_memory_does_not_grow_with_the_number_of_candidate_pairs():
+    """The pair index held a count for every candidate pair at once (1.76M keys, 167 MB on the
+    real store); it is scored a row at a time instead, so memory follows the facts."""
+    small_peak, small = _peak_bytes(_grouped_corpus(50))
+    large_peak, large = _peak_bytes(_grouped_corpus(400))
+    assert large.compared_pairs > 50 * small.compared_pairs
+    assert large_peak < 16 * small_peak, \
+        f"8x the facts and {large.compared_pairs // small.compared_pairs}x the pairs raised the " \
+        f"peak from {small_peak} to {large_peak} bytes"
+
+
+def test_the_row_at_a_time_scan_finds_the_same_pairs_and_scores():
+    # Six groups of five: the planted control joins one group, which then holds six carriers,
+    # still within the index's ceiling of max(5, 30 // 5) = 6, so no group is dropped.
+    corpus = _grouped_corpus(30, groups=6)
+    result = DS.run(corpus, threshold=0.0)
+    want = sorted((a.slug, b.slug) for k, a in enumerate(corpus) for b in corpus[k + 1:]
+                  if int(a.slug[1:]) % 6 == int(b.slug[1:]) % 6)
+    got = sorted((c.a.slug, c.b.slug) for c in result.candidates)
+    assert got == want and result.compared_pairs == len(want)
+    for c in result.candidates:
+        assert c.score == DS.similarity(DS._scored(c.a), DS._scored(c.b))

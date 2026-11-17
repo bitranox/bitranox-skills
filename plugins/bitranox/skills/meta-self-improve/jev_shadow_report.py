@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from jev_shadow_sites import as_number, as_record, jev_index, jsonl_lines
+from jev_shadow_sites import as_number, as_record, jev_index
 
 __all__ = [
     "BAND",
@@ -85,24 +85,51 @@ def read_records(
     """
     out = LogRead()
     for path in files:
-        _read_file(path, out)
-    out.records = [r for r in out.records if _keep(r, site=site, since=since)]
+        _read_file(path, out, site=site, since=since)
     return out
 
 
-def _read_file(path: Path, out: LogRead) -> None:
-    """Add a file's records to `out`; an unreadable file or line goes to `out.skipped`."""
+def _read_file(path: Path, out: LogRead, *, site: str | None, since: str | None) -> None:
+    """Add a file's kept records to `out`; an unreadable file or line goes to `out.skipped`.
+
+    The file is read one line at a time and each record is filtered as it is parsed, so memory
+    follows the records KEPT rather than the file: the log is capped at 100 MiB a month and holds
+    every site, while a report usually asks for one. Lines are split on b"\\n" only, as
+    jsonl_lines does, because a raw U+2028 inside a string is not a line end. A file that does
+    not decode as UTF-8 is skipped whole, as a whole-file read refused it, so this file's records
+    are added only once it has been read to the end.
+    """
     try:
-        lines = jsonl_lines(path.read_text(encoding="utf-8"))
+        with path.open("rb") as fh:
+            kept, skipped = _scan_lines(fh, path.name, site=site, since=since)
     except (OSError, UnicodeError):
         out.skipped.append(path.name)
         return
-    for number, line in enumerate(lines, start=1):
+    out.records.extend(kept)
+    out.skipped.extend(skipped)
+
+
+def _scan_lines(
+    lines: Iterable[bytes], name: str, *, site: str | None, since: str | None
+) -> tuple[list[Record], list[str]]:
+    """(kept records, `name:line` of each unparsable line) for one file's raw lines.
+
+    Raises UnicodeDecodeError for a line that is not UTF-8, which skips the whole file.
+    """
+    kept: list[Record] = []
+    skipped: list[str] = []
+    number = 0
+    for raw in lines:
+        line = raw.decode("utf-8")
+        if not line.strip():
+            continue
+        number += 1
         rec = _parse(line)
         if rec is None:
-            out.skipped.append(f"{path.name}:{number}")
-        else:
-            out.records.append(rec)
+            skipped.append(f"{name}:{number}")
+        elif _keep(rec, site=site, since=since):
+            kept.append(rec)
+    return kept, skipped
 
 
 def _keep(rec: Record, *, site: str | None, since: str | None) -> bool:

@@ -184,11 +184,30 @@ def _commit_pathspec(operands):
     return paths
 
 
-def _statements(command, tool_name):
+def _split_statements(command, tool_name):
+    out = []
     for _at, segment in iter_segments(blank_heredoc_bodies(command or ""), tool_name):
         argv = argv_for_match(segment.strip().lstrip("(").strip(), tool_name or "Bash")
         if argv:
-            yield argv
+            out.append(tuple(argv))
+    return tuple(out)
+
+
+# The last (command, tool_name) split and its statements, held as ONE tuple. Every check reads the
+# same command, and each re-splitting it cost most of this guard's time: ~1.1 ms per KB, so a
+# 121 KB heredoc took 137 ms on every Bash call. One slot is enough because main() asks about one
+# command; memory stays at one command's statements.
+_LAST_SPLIT = (None, None, ())
+
+
+def _statements(command, tool_name):
+    """Each statement's argv, as a fresh list so a caller cannot edit the shared split."""
+    global _LAST_SPLIT
+    last = _LAST_SPLIT
+    if last[0] != command or last[1] != tool_name:
+        last = (command, tool_name, _split_statements(command, tool_name))
+        _LAST_SPLIT = last
+    return [list(argv) for argv in last[2]]
 
 
 _UNTRACK = "a staged untrack (`git rm --cached`) will be re-added"

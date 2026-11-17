@@ -111,16 +111,19 @@ def _reason(loaded=frozenset()):
 _REASON = _reason()
 
 
-def _loaded_since_compaction(transcript_path):
-    """Bare names of the skills invoked since the transcript's last compaction, or an empty set.
+_NO_SKILL_USAGE = _sig.skill_usage(())
 
-    Read only when the gate blocks: it streams the whole transcript, which a quiet turn should
-    not pay for."""
+
+def _skill_usage(transcript_path):
+    """The transcript's Skill calls (`self_improve_signals.SkillUsage`), or none on a read error.
+
+    Read only when the gate blocks: it streams the whole transcript once, line by line, for both
+    the skill hint and the loaded-since-compaction set, which a quiet turn should not pay for."""
     try:
         with open(transcript_path, encoding="utf-8", errors="replace") as fh:
-            return _sig.skills_loaded_since_compaction(fh)
+            return _sig.skill_usage(fh)
     except Exception:                                     # noqa: BLE001 - a hint must never wedge a turn
-        return frozenset()
+        return _NO_SKILL_USAGE
 
 
 def _routing_hint(event, proj):
@@ -158,8 +161,8 @@ def _routing_hint(event, proj):
         return ""
 
 
-def _skill_hint(transcript_path):
-    """Prose naming the skills this session invoked, or '' when none ran.
+def _skill_hint(tally):
+    """Prose naming the skills this session invoked (`tally`: name -> calls), or '' when none ran.
 
     A lesson learned while following a skill is usually that skill's gap: recording it as a memory
     fact leaves the skill wrong for every other install and adds a pointer competing with it. The
@@ -168,8 +171,6 @@ def _skill_hint(transcript_path):
     It names candidates and never decides: a skill loaded for one task says nothing about a lesson
     from another."""
     try:
-        with open(transcript_path, encoding="utf-8", errors="replace") as fh:
-            tally = _sig.skills_invoked(fh.read())
         if not tally:
             return ""
         names = sorted(tally)
@@ -465,8 +466,9 @@ def main():
             except OSError:
                 pass
         out["decision"] = "block"
-        hints = _routing_hint(event, proj) + _skill_hint(transcript) + sub_hint
-        loaded = _loaded_since_compaction(transcript)
+        usage = _skill_usage(transcript)
+        hints = _routing_hint(event, proj) + _skill_hint(usage.invoked) + sub_hint
+        loaded = usage.loaded_since_compaction
         if nap_hint and "meta-dream-nap" in loaded:
             nap_hint = _nap_owed_hint(proj, event.get("session_id") or "", loaded)
         out["reason"] = nap_hint + _reason(loaded) + hints

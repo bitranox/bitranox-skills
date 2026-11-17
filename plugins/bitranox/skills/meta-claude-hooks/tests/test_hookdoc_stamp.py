@@ -953,6 +953,105 @@ def test_a_non_ascii_path_in_a_message_does_not_crash_a_cp1252_console(tmp_path)
     assert b"BROKEN" in proc.stdout
 
 
+# --------------------------------------------------------------------------- a mis-shaped stamp
+
+
+def _sample_stamp() -> dict:
+    return json.loads((FIXTURES / "stamp-sample.json").read_text(encoding="utf-8"))
+
+
+def _drop_content_sha(s: dict) -> None:
+    del s["sources"][0]["content_sha256"]
+
+
+def _sources_are_strings(s: dict) -> None:
+    s["sources"] = ["a"]
+
+
+def _normalisation_is_a_string(s: dict) -> None:
+    s["normalisation"] = "n1"
+
+
+def _fingerprint_is_a_list(s: dict) -> None:
+    s["sources"][0]["fingerprint"] = ["UserPromptSubmit"]
+
+
+def _events_hold_a_number(s: dict) -> None:
+    s["sources"][0]["fingerprint"]["events"] = [1]
+
+
+def _section_without_a_path(s: dict) -> None:
+    del s["sources"][0]["sections"][0]["path"]
+
+
+def _control_is_a_string(s: dict) -> None:
+    s["sources"][0]["control"] = "strict"
+
+
+def _name_is_a_number(s: dict) -> None:
+    s["sources"][0]["name"] = 7
+
+
+def _url_missing(s: dict) -> None:
+    del s["sources"][0]["url"]
+
+
+def _tier_unknown(s: dict) -> None:
+    s["sources"][0]["tier"] = "apl"
+
+
+_MISSHAPES = [_drop_content_sha, _sources_are_strings, _normalisation_is_a_string,
+              _fingerprint_is_a_list, _events_hold_a_number, _section_without_a_path,
+              _control_is_a_string, _name_is_a_number, _url_missing, _tier_unknown]
+
+
+def _misshaped(tmp_path: Path, damage) -> Path:
+    stamp = _sample_stamp()
+    damage(stamp)
+    path = tmp_path / "stamp.json"
+    path.write_text(json.dumps(stamp), encoding="utf-8")
+    return path
+
+
+@pytest.mark.parametrize("damage", _MISSHAPES, ids=lambda f: f.__name__.strip("_"))
+def test_a_misshaped_stamp_is_broken_on_check_never_drift(tmp_path, capsys, damage):
+    """Exit 1 means STRUCTURAL DRIFT; a hand-edited stamp escaped as a traceback with exit 1."""
+    path = _misshaped(tmp_path, damage)
+    rc = H.main(["check", "--stamp", str(path), "--body", str(FIXTURES / "hooks-sample.md"),
+                 "--no-cli-probe", "--cache-dir", str(tmp_path / "cache"), "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 2
+    assert payload["data"]["verdict"] == H.BROKEN
+    assert payload["data"]["reason"].startswith("stamp ")
+
+
+_STAMP_CMD = ["stamp", "--body", str(FIXTURES / "hooks-sample.md")]
+
+
+@pytest.mark.parametrize(("command", "damage"), [
+    (["coverage"], _sources_are_strings), (["coverage"], _fingerprint_is_a_list),
+    (["coverage"], _url_missing), (["baseline"], _sources_are_strings),
+    (["baseline"], _fingerprint_is_a_list), (["baseline"], _url_missing),
+    # stamp reads only what it rebuilds a record from; a damaged fingerprint is what it replaces.
+    (_STAMP_CMD, _sources_are_strings), (_STAMP_CMD, _url_missing), (_STAMP_CMD, _tier_unknown),
+    (_STAMP_CMD, _control_is_a_string),
+], ids=lambda v: v.__name__.strip("_") if callable(v) else v[0])
+def test_a_misshaped_stamp_is_broken_on_every_command(tmp_path, capsys, command, damage):
+    path = _misshaped(tmp_path, damage)
+    rc = H.main([*command, "--stamp", str(path), "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 2
+    assert payload["data"]["reason"].startswith("stamp ")
+
+
+def test_stamp_still_rebuilds_a_record_whose_fingerprint_is_damaged(tmp_path, capsys):
+    path = _misshaped(tmp_path, _fingerprint_is_a_list)
+    rc = H.main([*_STAMP_CMD, "--stamp", str(path), "--refs", str(REFS), "--accept-gaps", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 0, payload
+    assert payload["data"]["dry_run"] is True
+
+
 def test_the_default_cache_dir_follows_claude_config_dir(tmp_path, monkeypatch):
     home, arm = tmp_path / "home", tmp_path / "arm"
     monkeypatch.setenv("HOME", str(home))

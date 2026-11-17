@@ -172,6 +172,48 @@ def test_fetch_failure_exits_2_not_the_gate_code(capsys):
     assert "could not fetch" in err
 
 
+class HugeBody:
+    """A body far larger than an audit needs, counting how much of it the client pulled."""
+
+    CHUNK = 64 * 1024
+
+    def __init__(self, total, head=b""):
+        self.total = total
+        self.head = head
+        self.pulled = 0
+
+    def __iter__(self):
+        yield self.head
+        self.pulled += len(self.head)
+        while self.pulled < self.total:
+            self.pulled += self.CHUNK
+            yield b"x" * self.CHUNK
+
+
+def _huge_site(content_type, body):
+    def handler(request):
+        if request.url.scheme == "http":
+            return httpx.Response(301, headers={"Location": str(request.url.copy_with(scheme="https"))})
+        return httpx.Response(200, headers={**CLEAN_HEADERS, "Content-Type": content_type},
+                              content=body)
+    return httpx.MockTransport(handler)
+
+
+def test_a_large_download_is_graded_without_reading_its_body():
+    body = HugeBody(64 * 1024 * 1024)
+    findings = a.fetch(f"https://{SITE}/disk.iso", transport=_huge_site("application/octet-stream", body))
+    assert {f.check for f in findings} >= {"hsts", "csp"}
+    assert body.pulled <= HugeBody.CHUNK
+
+
+def test_a_huge_html_body_is_read_only_up_to_the_cap():
+    page = b'<img src="http://203.0.113.10/a.png">'
+    body = HugeBody(64 * 1024 * 1024, head=page)
+    findings = a.fetch(f"https://{SITE}/", transport=_huge_site("text/html; charset=utf-8", body))
+    assert body.pulled <= a.HTML_SCAN_CAP + HugeBody.CHUNK
+    assert any(f.check == "mixed-content" and f.severity == "SEVERE" for f in findings)
+
+
 def _free_port():
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))

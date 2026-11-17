@@ -9,6 +9,7 @@ import json
 import os
 import subprocess
 import sys
+import tracemalloc
 from pathlib import Path
 
 import pytest
@@ -363,3 +364,52 @@ def test_cli_json_unreadable_transcript_is_ok_false_with_skipped(tmp_path, capsy
     assert rc == 2 and payload["ok"] is False
     assert any("b.jsonl" in item for item in payload["skipped"])
 
+
+# --- memory: a transcript is streamed line by line, never decoded whole ----------------------------
+
+
+def _bulky_transcript(path, filler_lines):
+    """One typed prompt followed by `filler_lines` assistant records of about 1 KB each."""
+    filler = json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "text", "text": "x" * 1000}]}})
+    with open(path, "w", encoding="utf-8", newline="") as fh:
+        fh.write(json.dumps(rec()) + "\n")
+        for _ in range(filler_lines):
+            fh.write(filler + "\n")
+
+
+def _peak_bytes(fn):
+    tracemalloc.start()
+    try:
+        fn()
+        return tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+
+def test_collect_prompts_peak_memory_does_not_grow_with_the_transcript(tmp_path):
+    # The whole-file read held the bytes, the decoded text and a list of every line at once, so
+    # the peak was several times the largest transcript (1.2 GB RSS for a 217 MB one).
+    small, large = tmp_path / "small.jsonl", tmp_path / "large.jsonl"
+    _bulky_transcript(small, 500)
+    _bulky_transcript(large, 4000)
+    peak_small = _peak_bytes(lambda: cp.collect_prompts(str(small)))
+    peak_large = _peak_bytes(lambda: cp.collect_prompts(str(large)))
+    assert cp.collect_prompts(str(large))["prompts"][0]["line"] == 1
+    assert peak_large < 2 * peak_small, (peak_small, peak_large)
+
+
+def test_collect_prompts_numbers_lines_as_transcript_lines_does(tmp_path):
+    # A stream must number lines exactly as transcript_lines(read_transcript()) does, or a replay
+    # prefix cut at `line` ends somewhere else: a BOM, CRLF, a lone CR, U+2028, an invalid byte
+    # and a blank line all sit before the second prompt here.
+    raw = (b"\xef\xbb\xbf" + json.dumps(rec(uuid="a")).encode() + b"\r\n"
+           + b"junk\rmore\n" + chr(0x2028).encode() + b"\xff\n\n"
+           + json.dumps(rec(uuid="b", message={"role": "user", "content": "caf\xe9 " + chr(0x2028)})
+                        ).encode("utf-8") + b"\n")
+    path = tmp_path / "odd.jsonl"
+    path.write_bytes(raw)
+    want = cp.extract_prompts(cp.read_transcript(path), source=str(path))
+    got = cp.collect_prompts(str(path))["prompts"]
+    assert [(p["line"], p["prompt"]) for p in got] == [(p["line"], p["prompt"]) for p in want]
+    assert [p["line"] for p in got] == [1, 5]

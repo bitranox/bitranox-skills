@@ -469,3 +469,92 @@ def test_cli_indexes_the_moved_config_dir(tmp_path):
     assert not (home / ".claude" / "transcript-index.db").exists()
     assert _cli(home, "search", "armonlyword", env_extra=extra).returncode == 0
     assert _cli(home, "search", "homeonlyword", env_extra=extra).returncode == 1
+
+
+# ---- an incremental index reads only what was appended since the last run ----
+
+def _msg(word):
+    return {"type": "user", "message": {"content": f"message {word}"}}
+
+
+def _append(path, data: bytes):
+    with path.open("ab") as fh:
+        fh.write(data)
+
+
+def _line(word) -> bytes:
+    return (json.dumps(_msg(word)) + "\n").encode("utf-8")
+
+
+def _statements_of_second_index(tmp_path, lines):
+    """SQL statements the SECOND index run executes after one line is appended to `lines`."""
+    path = _write_transcript(tmp_path, "-proj-inc", [_msg(f"w{i}") for i in range(lines)])
+    db = sqlite3.connect(":memory:")
+    ti.ensure_schema(db)
+    assert ti.index_dir(tmp_path, db) == lines
+    _append(path, _line("appendedword"))
+    seen: list[str] = []
+    db.set_trace_callback(seen.append)
+    assert ti.index_dir(tmp_path, db) == 1
+    db.set_trace_callback(None)
+    assert len(ti.search(db, "appendedword")) == 1
+    return len(seen)
+
+
+def test_a_re_index_does_not_revisit_lines_it_already_indexed(tmp_path):
+    """The work of a re-index must follow what was APPENDED, not the size of the corpus: every
+    already-indexed line used to be decoded again and cost one SELECT against `seen`."""
+    small = _statements_of_second_index(tmp_path / "a", 20)
+    large = _statements_of_second_index(tmp_path / "b", 160)
+    assert large == small, f"{small} statements at 20 lines, {large} at 160"
+
+
+def test_a_partial_last_line_is_indexed_once_it_is_complete(tmp_path):
+    """A live session's last line can be half written: it must neither be lost nor duplicated."""
+    path = _write_transcript(tmp_path, "-proj-p", [_msg("firstword")])
+    whole = _line("partialword")
+    _append(path, whole[:10])
+    db = sqlite3.connect(":memory:")
+    ti.ensure_schema(db)
+    assert ti.index_dir(tmp_path, db) == 1
+    _append(path, whole[10:])
+    assert ti.index_dir(tmp_path, db) == 1
+    assert ti.index_dir(tmp_path, db) == 0
+    assert len(ti.search(db, "partialword")) == 1
+
+
+def test_a_rewritten_transcript_is_rescanned_without_duplicates(tmp_path):
+    """A file that shrank or whose head changed is read from the start again; `seen` keeps the
+    lines already indexed from being added twice."""
+    path = _write_transcript(tmp_path, "-proj-r", [_msg("oneword"), _msg("twoword")])
+    db = sqlite3.connect(":memory:")
+    ti.ensure_schema(db)
+    assert ti.index_dir(tmp_path, db) == 2
+    path.write_bytes(_line("oneword") + _line("replacedword"))   # same lines 0 and 1, new text
+    assert ti.index_dir(tmp_path, db) == 0                       # line keys already seen
+    path.write_bytes(_line("x"))                                 # shrank
+    _append(path, _line("y") + _line("thirdlineword"))           # lines 0 and 1 already seen
+    assert ti.index_dir(tmp_path, db) == 1
+    assert len(ti.search(db, "thirdlineword")) == 1
+
+
+def test_a_json_line_that_is_not_an_object_is_skipped_not_a_crash(tmp_path):
+    proj = tmp_path / "-proj-arr"
+    proj.mkdir()
+    (proj / "s.jsonl").write_bytes(b"[1, 2]\n" + _line("afterarrayword"))
+    db = sqlite3.connect(":memory:")
+    ti.ensure_schema(db)
+    assert ti.index_dir(tmp_path, db) == 1
+
+
+def test_a_bom_file_is_indexed_incrementally(tmp_path):
+    proj = tmp_path / "-proj-bom"
+    proj.mkdir()
+    path = proj / "s.jsonl"
+    path.write_bytes(b"\xef\xbb\xbf" + _line("bomfirstword"))
+    db = sqlite3.connect(":memory:")
+    ti.ensure_schema(db)
+    assert ti.index_dir(tmp_path, db) == 1
+    _append(path, _line("bomsecondword"))
+    assert ti.index_dir(tmp_path, db) == 1
+    assert len(ti.search(db, "bomfirstword")) == 1 and len(ti.search(db, "bomsecondword")) == 1

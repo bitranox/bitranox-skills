@@ -46,15 +46,23 @@ internal error).
 Paths: the transcripts are read from `<config dir>/projects` and the index lives at
 `<config dir>/transcript-index.db`, the config dir being CLAUDE_CONFIG_DIR when it is set, else
 ~/.claude - the same dir Claude Code itself uses.
+
+Incremental: each transcript's indexed length is recorded, and the next `index` run reads only
+the bytes appended since, so a run costs what was added, not the size of the corpus. A transcript
+that shrank, or whose first 4 KB or the newline before the recorded end changed, is read from the
+start again; the per-line `seen` registry keeps what it already indexed from being added twice. A
+half-written last line is not counted as read, so it is indexed once it is complete.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import pathlib
 import sqlite3
 import sys
 import unicodedata
+from dataclasses import dataclass
 
 from _claude_config import config_dir, projects_dir
 from _cli_envelope import (EXIT_ERROR, EXIT_NO, EXIT_YES, EnvelopeArgumentParser, emit,
@@ -93,6 +101,14 @@ MESSAGES_DDL = (
 # Recorded in PRAGMA user_version. A database below it predates the UNINDEXED labels, and
 # `CREATE ... IF NOT EXISTS` would leave its old table matching path words for ever.
 SCHEMA_VERSION = 1
+# How far each transcript has been indexed. A table of its own, created when missing, so an index
+# built before it existed needs no migration: its transcripts are read once from the start, where
+# `seen` skips every line already indexed, and are incremental from then on.
+PROGRESS_DDL = (
+    "CREATE TABLE IF NOT EXISTS progress ("
+    "path TEXT PRIMARY KEY, offset INTEGER NOT NULL, lineno INTEGER NOT NULL, head TEXT NOT NULL)"
+)
+_HEAD_BYTES = 4096
 
 
 def _table_exists(db: sqlite3.Connection, name: str) -> bool:
@@ -131,6 +147,7 @@ def ensure_schema(db: sqlite3.Connection) -> None:
     db.execute(
         "CREATE TABLE IF NOT EXISTS seen (key TEXT PRIMARY KEY)"
     )
+    db.execute(PROGRESS_DDL)
     db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     db.commit()
 
@@ -173,33 +190,93 @@ def _transcripts(root: pathlib.Path, errors: list[str]) -> list[pathlib.Path]:
     return sorted(found)
 
 
+@dataclass(frozen=True)
+class _Mark:
+    """A point in a transcript: the byte `offset` where line number `lineno` (0-based) starts."""
+
+    offset: int
+    lineno: int
+
+
+_START = _Mark(0, 0)
+
+
+def _head_digest(fh, offset: int) -> str:
+    """sha256 of the first `_HEAD_BYTES` bytes below `offset`: what an append never changes."""
+    fh.seek(0)
+    return hashlib.sha256(fh.read(min(offset, _HEAD_BYTES))).hexdigest()
+
+
+def _resume_point(fh, path: pathlib.Path, db: sqlite3.Connection) -> _Mark:
+    """Where the last run stopped in this transcript, or the start when the file was rewritten.
+
+    The recorded end must still exist, end a line, and sit under the same head; anything else
+    means the file is not the one indexed, so it is read again from the start."""
+    row = db.execute("SELECT offset, lineno, head FROM progress WHERE path = ?",
+                     (str(path),)).fetchone()
+    if row is None:
+        return _START
+    mark, head = _Mark(int(row[0]), int(row[1])), str(row[2])
+    if mark.offset > os.fstat(fh.fileno()).st_size or _head_digest(fh, mark.offset) != head:
+        return _START
+    if mark.offset:
+        fh.seek(mark.offset - 1)
+        if fh.read(1) != b"\n":
+            return _START
+    return mark
+
+
+def _record_progress(fh, path: pathlib.Path, mark: _Mark, db: sqlite3.Connection) -> None:
+    db.execute("INSERT OR REPLACE INTO progress(path, offset, lineno, head) VALUES (?, ?, ?, ?)",
+               (str(path), mark.offset, mark.lineno, _head_digest(fh, mark.offset)))
+
+
+def _index_line(raw: bytes, key: str, project: str, path: pathlib.Path,
+                db: sqlite3.Connection, *, encoding: str) -> bool:
+    """Index one raw line; True when it added a message."""
+    line = raw.decode(encoding, errors="replace").strip()
+    if not line:
+        return False
+    try:
+        obj = json.loads(line)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(obj, dict):
+        return False
+    text = _text_of(obj)
+    # strip(): a list of only tool parts joins to bare separators, which is no text.
+    if not text.strip():
+        return False
+    if db.execute("INSERT OR IGNORE INTO seen(key) VALUES (?)", (key,)).rowcount == 0:
+        return False                                     # indexed by an earlier run
+    db.execute(
+        "INSERT INTO messages(project, path, role, text) "
+        "VALUES (?, ?, ?, ?)",
+        (project, str(path), obj.get("type", ""), text),
+    )
+    return True
+
+
 def _index_file(path: pathlib.Path, project: str, db: sqlite3.Connection) -> int:
+    """Index the lines of `path` appended since the last run; return how many messages it added.
+
+    Read as bytes split on newline, so the recorded offset is exact. Only a line ending in a
+    newline moves the mark: a half-written last line is read again next time, and `seen` keeps
+    it from being added twice once it is complete."""
     added = 0
-    # utf-8-sig: a BOM would otherwise make the first record unparseable and drop it unseen.
-    with path.open(encoding="utf-8-sig", errors="replace") as fh:
-        for lineno, line in enumerate(fh):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            text = _text_of(obj)
-            # strip(): a list of only tool parts joins to bare separators, which is no text.
-            if not text.strip():
-                continue
-            key = f"{path}:{lineno}"
-            cur = db.execute("SELECT 1 FROM seen WHERE key = ?", (key,))
-            if cur.fetchone():
-                continue
-            db.execute("INSERT INTO seen(key) VALUES (?)", (key,))
-            db.execute(
-                "INSERT INTO messages(project, path, role, text) "
-                "VALUES (?, ?, ?, ?)",
-                (project, str(path), obj.get("type", ""), text),
-            )
-            added += 1
+    with path.open("rb") as fh:
+        mark = _resume_point(fh, path, db)
+        fh.seek(mark.offset)
+        offset, lineno = mark.offset, mark.lineno
+        for raw in fh:
+            # utf-8-sig on the first line: a BOM would otherwise make the first record unparseable.
+            encoding = "utf-8-sig" if offset == 0 else "utf-8"
+            added += _index_line(raw, f"{path}:{lineno}", project, path, db, encoding=encoding)
+            if not raw.endswith(b"\n"):
+                break
+            offset += len(raw)
+            lineno += 1
+        _record_progress(fh, path, _Mark(offset, lineno), db)
     return added
 
 

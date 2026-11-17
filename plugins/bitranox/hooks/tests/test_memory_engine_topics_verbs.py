@@ -85,7 +85,7 @@ def test_a_list_that_drops_a_topic_in_use_is_refused_and_names_the_users(tmp_pat
     rc = E.main(["topics-set-list", "--proj", proj, "--from-file", _list_file(tmp_path, {"git": "git"})])
     out = capsys.readouterr().out
     assert rc == 2 and "feedback-uses-python carries python" in out and "declares rust" in out
-    assert topic_store.load(anchor)["topics"] == LIST
+    assert topic_store.load(anchor).topics == LIST
 
 
 def test_a_list_file_that_is_not_the_expected_json_is_a_usage_error(tmp_path, capsys):
@@ -350,7 +350,7 @@ def test_an_empty_topic_list_is_refused(tmp_path, capsys):
     anchor, proj = _tree(tmp_path)
     rc = E.main(["topics-set-list", "--proj", proj, "--from-file", _list_file(tmp_path, {})])
     assert rc == 2 and "empty" in capsys.readouterr().out
-    assert topic_store.load(anchor)["topics"] == LIST
+    assert topic_store.load(anchor).topics == LIST
 
 
 def test_a_dropped_topic_is_judged_by_the_trimmed_name(tmp_path, capsys):
@@ -361,7 +361,7 @@ def test_a_dropped_topic_is_judged_by_the_trimmed_name(tmp_path, capsys):
     rc = E.main(["topics-set-list", "--proj", proj, "--from-file",
                  _list_file(tmp_path, {" rust ": "Rust code", "git": "git"})])
     assert rc == 0, capsys.readouterr().out
-    assert set(topic_store.load(anchor)["topics"]) == {"rust", "git"}
+    assert set(topic_store.load(anchor).topics) == {"rust", "git"}
 
 
 def test_a_stored_topics_line_that_does_not_parse(tmp_path, capsys):
@@ -597,7 +597,7 @@ def test_a_symlinked_level_is_tagged_recorded_and_reads_fresh(tmp_path, capsys):
     capsys.readouterr()
     assert E.main(["set-level-topics", "--proj", level, "--topics", "python"]) == 0
     assert "Traceback" not in capsys.readouterr().err
-    assert topic_store.load(anchor)["levels"] == {"link": tp.descriptor_digest(_scope(level))}
+    assert topic_store.load(anchor).levels == {"link": tp.descriptor_digest(_scope(level))}
     assert E.main(["topics-stale", "--proj", level]) == 0
     assert capsys.readouterr().out.strip() == "fresh"
 
@@ -614,7 +614,7 @@ def test_record_level_refuses_a_level_outside_the_tree_and_records_nothing(tmp_p
     ran = []
     with pytest.raises(topic_store.TopicStoreError):
         topic_store.record_level(anchor, tmp_path / "outside", "d", before=lambda: ran.append(1))
-    assert ran == [] and topic_store.load(anchor)["levels"] == {}
+    assert ran == [] and topic_store.load(anchor).levels == {}
 
 
 def test_record_level_runs_the_callers_write_only_after_the_store_checks_pass(tmp_path):
@@ -625,7 +625,7 @@ def test_record_level_runs_the_callers_write_only_after_the_store_checks_pass(tm
     assert ran == []
     topic_store.save_list(anchor, LIST, "jev")
     topic_store.record_level(anchor, anchor, "d", before=lambda: ran.append(1))
-    assert ran == [1] and topic_store.load(anchor)["levels"] == {"": "d"}
+    assert ran == [1] and topic_store.load(anchor).levels == {"": "d"}
 
 
 # ---- dry runs, batches, pinned facts and usage errors ------------------------------------------
@@ -835,7 +835,7 @@ def test_a_topics_line_past_the_head_still_blocks_dropping_its_topic(tmp_path, c
     spec = _list_file(tmp_path, {k: v for k, v in LIST.items() if k != "rust"})
     rc = E.main(["topics-set-list", "--proj", proj, "--from-file", spec])
     assert rc == 2 and "feedback-a carries rust" in capsys.readouterr().out
-    assert "rust" in topic_store.load(anchor)["topics"]
+    assert "rust" in topic_store.load(anchor).topics
 
 
 def test_a_long_body_opening_with_a_rule_and_no_frame_reads_as_untagged(tmp_path):
@@ -880,7 +880,7 @@ def test_a_list_change_cannot_scan_between_a_set_topics_check_and_its_write(tmp_
         _wait_briefly(child)
         E._set_fact_topics_held(anchor, {"feedback-a": ("rust",)}, LIST, False, None)
     out, err = child.communicate(timeout=120)
-    listed = set(topic_store.load(anchor)["topics"])
+    listed = set(topic_store.load(anchor).topics)
     assert set(_topics(anchor, "feedback-a")) <= listed, (child.returncode, out, err)
     assert child.returncode == 2 and "feedback-a carries rust" in out, (out, err)
 

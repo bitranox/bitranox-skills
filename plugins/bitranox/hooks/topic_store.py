@@ -17,20 +17,53 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
+from types import MappingProxyType
 
 import self_improve_signals as sig
 import topic_placement as tp
 import uuid_store as us
 
-__all__ = ["MAX_LIST", "MAX_MEANING", "TAGGERS", "TopicStoreError", "level_key", "load",
-           "record_level", "save_list", "store_path"]
+__all__ = ["FORMAT_VERSION", "MAX_LIST", "MAX_MEANING", "TAGGERS", "Tagger", "TopicFile",
+           "TopicStoreError", "level_key", "load", "record_level", "save_list", "store_path"]
 
 MAX_LIST = 64
 """Most topics a tree's list may hold: every one becomes a question about every fact."""
 MAX_MEANING = 200
-TAGGERS = ("jev", "opus")
-_EMPTY = {"version": 1, "tagger": "opus", "topics": {}, "levels": {}}
+FORMAT_VERSION = 1
+"""The one file format this module reads and writes; a file naming another is refused."""
+
+
+class Tagger(StrEnum):
+    """Who chose a tree's topics: the closed vocabulary of the file's `tagger` field."""
+
+    JEV = "jev"
+    OPUS = "opus"
+
+
+TAGGERS = tuple(t.value for t in Tagger)
+_KEYS = frozenset({"version", "tagger", "topics", "levels"})
+
+
+@dataclass(frozen=True)
+class TopicFile:
+    """One topic file as `load` parsed it: every field checked, nothing else carried.
+
+    `topics` maps a stored tag to its one-line meaning, `levels` a `level_key` to the digest of
+    the descriptor that level's topics were chosen from. `load` hands both out as read-only
+    views, so a reader cannot change what a later `record_level` writes back."""
+
+    tagger: Tagger
+    topics: Mapping[str, str]
+    levels: Mapping[str, str]
+    version: int = FORMAT_VERSION
+
+    def to_json(self) -> dict[str, object]:
+        """The file's JSON object, the one shape `_write` serialises."""
+        return {"version": self.version, "tagger": self.tagger.value,
+                "topics": dict(self.topics), "levels": dict(self.levels)}
 
 
 class TopicStoreError(ValueError):
@@ -93,13 +126,45 @@ def _content_problem(topics) -> str | None:
     return None
 
 
-def load(anchor) -> dict | None:
+def _parse(anchor, data) -> TopicFile:
+    """The TopicFile a decoded JSON value holds, or TopicStoreError naming the first field that
+    is not what `_write` puts there. Every key is judged: an unknown one, a `version` other than
+    FORMAT_VERSION (a bool is no version), a `tagger` outside Tagger, or a `levels` value that is
+    not a string would otherwise be carried through and written back by `record_level`."""
+    if not (isinstance(data, dict) and isinstance(data.get("topics"), dict)):
+        raise _unusable(anchor, "is not a topic file (no 'topics' object)")
+    unknown = sorted(set(data) - _KEYS)
+    if unknown:
+        raise _unusable(anchor, "holds keys this format has none of: %s"
+                        % ", ".join(repr(k) for k in unknown))
+    version = data.get("version", FORMAT_VERSION)
+    if type(version) is not int or version != FORMAT_VERSION:
+        raise _unusable(anchor, "names format version %r; this module reads version %d"
+                        % (version, FORMAT_VERSION))
+    tagger = data.get("tagger", Tagger.OPUS.value)
+    if not isinstance(tagger, str) or tagger not in TAGGERS:
+        raise _unusable(anchor, "names the tagger %r, not one of %s" % (tagger, ", ".join(TAGGERS)))
+    levels = data.get("levels", {})
+    if not isinstance(levels, dict):
+        raise _unusable(anchor, "holds a 'levels' value that is not an object")
+    for key, digest in levels.items():
+        if not isinstance(digest, str):
+            raise _unusable(anchor, "records the level %r with a digest that is not a string" % (key,))
+    why = _content_problem(data["topics"])
+    if why:
+        raise _unusable(anchor, why)
+    return TopicFile(tagger=Tagger(tagger), topics=MappingProxyType(dict(data["topics"])),
+                     levels=MappingProxyType(dict(levels)), version=version)
+
+
+def load(anchor) -> TopicFile | None:
     """The topic file's content, or None when the tree has none. Raises TopicStoreError for a
-    file that is there but empty, that is not the JSON object this module writes, or whose list
-    `save_list` would refuse (a tag outside topic_placement's grammar, a bad meaning, more than
-    MAX_LIST topics), and TreeWalkError for one that cannot be read: a list read as absent would
-    switch placement by topic off without a word, and one read as fine would be written back by
-    `record_level` as if it were. A file without `version` reads as version 1."""
+    file that is there but empty, that is not the JSON object this module writes (any key, field
+    or value `_parse` refuses), or whose list `save_list` would refuse (a tag outside
+    topic_placement's grammar, a bad meaning, more than MAX_LIST topics), and TreeWalkError for
+    one that cannot be read: a list read as absent would switch placement by topic off without a
+    word, and one read as fine would be written back by `record_level` as if it were. A file
+    without `version`, `tagger` or `levels` reads as version 1, tagger opus and no levels."""
     path = store_path(anchor)
     text = us.read_store_text(path)
     if text == "":
@@ -112,20 +177,11 @@ def load(anchor) -> dict | None:
         data = json.loads(text)
     except ValueError as exc:
         raise _unusable(anchor, "is not valid JSON (%s)" % exc) from exc
-    if not (isinstance(data, dict) and isinstance(data.get("topics"), dict)
-            and isinstance(data.get("levels", {}), dict)):
-        raise _unusable(anchor, "is not a topic file (no 'topics' object)")
-    why = _content_problem(data["topics"])
-    if why:
-        raise _unusable(anchor, why)
-    data.setdefault("version", 1)
-    data.setdefault("levels", {})
-    data.setdefault("tagger", "opus")
-    return data
+    return _parse(anchor, data)
 
 
-def _write(anchor, data) -> bool:
-    text = json.dumps(data, indent=2, sort_keys=True, ensure_ascii=True) + "\n"
+def _write(anchor, record: TopicFile) -> bool:
+    text = json.dumps(record.to_json(), indent=2, sort_keys=True, ensure_ascii=True) + "\n"
     json.loads(text)                                  # what is written must load again
     return us.write_if_changed(store_path(anchor), text)
 
@@ -138,7 +194,7 @@ def save_list(anchor, topics: Mapping[str, str], tagger: str) -> bool:
     characters; InvalidTopic for a name that is not a plain tag. Whether a dropped topic is
     still in use is the caller's question: this module never reads a fact."""
     sig.refuse_if_memory_writes_off()
-    if tagger not in TAGGERS:
+    if not isinstance(tagger, str) or tagger not in TAGGERS:
         raise TopicStoreError("unknown tagger %r - use one of %s" % (tagger, ", ".join(TAGGERS)))
     if len(topics) > MAX_LIST:
         raise TopicStoreError("%d topics, over the limit of %d" % (len(topics), MAX_LIST))
@@ -155,9 +211,9 @@ def save_list(anchor, topics: Mapping[str, str], tagger: str) -> bool:
             raise TopicStoreError(why)
         clean[name] = meaning.strip()
     with sig.memory_lock(store_path(anchor)):
-        data = load(anchor) or dict(_EMPTY)
-        return _write(anchor, {"version": 1, "tagger": tagger, "topics": clean,
-                               "levels": dict(data["levels"])})
+        old = load(anchor)
+        return _write(anchor, TopicFile(tagger=Tagger(tagger), topics=clean,
+                                        levels=old.levels if old else {}))
 
 
 def record_level(anchor, level, digest: str, before: Callable[[], object] | None = None) -> bool:
@@ -175,6 +231,5 @@ def record_level(anchor, level, digest: str, before: Callable[[], object] | None
         key = level_key(anchor, level)
         if before is not None:
             before()
-        levels = dict(data["levels"])
-        levels[key] = digest
-        return _write(anchor, {**data, "levels": levels})
+        return _write(anchor, TopicFile(tagger=data.tagger, topics=data.topics,
+                                        levels={**data.levels, key: digest}))

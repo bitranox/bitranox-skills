@@ -1,5 +1,6 @@
 """Tests for guard_replay.py - replay real Bash calls through a guard predicate. ASCII."""
 import json
+import tracemalloc
 
 import guard_replay as G
 
@@ -966,3 +967,98 @@ def test_an_argparse_usage_error_under_json_prints_the_envelope(capsys):
     assert exc.value.code == 2
     env = json.loads(cap.out)
     assert env["ok"] is False and "--module" in env["error"]
+
+
+# --- memory: neither a whole transcript nor the whole corpus's calls are held ---------------------
+
+
+def _peak_bytes(fn):
+    tracemalloc.start()
+    try:
+        fn()
+        return tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+
+def _write_bulky(path, filler_lines, calls=1, prefix="t"):
+    """`calls` Bash calls of ~2 KB, then `filler_lines` failed Read results of ~1 KB each.
+
+    The failed results belong to ANOTHER tool, so nothing a Bash replay reports needs them.
+    """
+    with open(path, "w", encoding="utf-8", newline="") as fh:
+        for i in range(calls):
+            fh.write(json.dumps(_use("%s%d" % (prefix, i), "echo " + "c" * 2000)) + "\n")
+        for i in range(filler_lines):
+            fh.write(json.dumps(_use("r%s%d" % (prefix, i), "x", tool="Read")) + "\n")
+            fh.write(json.dumps(_result("r%s%d" % (prefix, i), "e" * 1000)) + "\n")
+
+
+def test_replay_peak_memory_does_not_grow_with_one_transcript(tmp_path):
+    # The whole file was read, decoded and split (about 5.6x its size), and every failed result
+    # of every tool was kept: 832 MB RSS over 3.9 GB of transcripts, 1.5 GB over 15.9 GB.
+    small, large = tmp_path / "small", tmp_path / "large"
+    small.mkdir()
+    large.mkdir()
+    _write_bulky(small / "a.jsonl", 250)
+    _write_bulky(large / "a.jsonl", 2000)
+    peak_small = _peak_bytes(lambda: G.replay(str(small), lambda cmd: False))
+    peak_large = _peak_bytes(lambda: G.replay(str(large), lambda cmd: False))
+    assert G.replay(str(large), lambda cmd: False)["commands"] == 1
+    assert peak_large < 2 * peak_small, (peak_small, peak_large)
+
+
+def test_replay_peak_memory_does_not_grow_with_the_number_of_transcripts(tmp_path):
+    # Every distinct call of the corpus was collected before the first was judged.
+    one, many = tmp_path / "one", tmp_path / "many"
+    one.mkdir()
+    many.mkdir()
+    _write_bulky(one / "f0.jsonl", 0, calls=200, prefix="f0-")
+    for k in range(8):
+        _write_bulky(many / ("f%d.jsonl" % k), 0, calls=200, prefix="f%d-" % k)
+    peak_one = _peak_bytes(lambda: G.replay(str(one), lambda cmd: False))
+    peak_many = _peak_bytes(lambda: G.replay(str(many), lambda cmd: False))
+    assert G.replay(str(many), lambda cmd: False)["commands"] == 1600
+    assert peak_many < 2 * peak_one, (peak_one, peak_many)
+
+
+def test_replay_peak_memory_does_not_grow_with_one_files_own_failed_calls(tmp_path):
+    # Held per file, the replayed tool's own calls and their failure texts still grew with the
+    # transcript; a call is judged once its result has arrived, so only calls in flight are held.
+    # The dedup set still holds one id per call, so the bound is on growth against input bytes.
+    def write(path, n):
+        with open(path, "w", encoding="utf-8", newline="") as fh:
+            for i in range(n):
+                fh.write(json.dumps(_use("t%d" % i, "echo " + "c" * 4000)) + "\n")
+                fh.write(json.dumps(_result("t%d" % i, "e" * 4000)) + "\n")
+
+    small, large = tmp_path / "small.jsonl", tmp_path / "large.jsonl"
+    write(small, 250)
+    write(large, 2000)
+    peak_small = _peak_bytes(lambda: G.replay(str(small), lambda cmd: False))
+    peak_large = _peak_bytes(lambda: G.replay(str(large), lambda cmd: False))
+    report = G.replay(str(large), lambda cmd: "echo" in cmd)
+    assert (report["commands"], report["errored"]) == (2000, 2000)
+    grown_input = large.stat().st_size - small.stat().st_size
+    assert peak_large - peak_small < grown_input / 10, (peak_small, peak_large, grown_input)
+
+
+def test_replay_keeps_file_order_and_the_error_of_a_call_whose_result_comes_later(tmp_path):
+    # t1's result arrives after t2 was called and t3 never gets one: the firings must still come
+    # out in call order, each with its own error.
+    path = _corpus(tmp_path, [_use("t1", "fire one"), _use("t2", "fire two"),
+                              _result("t2", "two failed"), _result("t1", "one failed"),
+                              _use("t3", "fire three")])
+    out = tmp_path / "f.jsonl"
+    G.replay(path, lambda cmd: "fire" in cmd, firings_path=str(out))
+    rows = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
+    assert [(r["id"], r["error"]) for r in rows] == [
+        ("t1", "one failed"), ("t2", "two failed"), ("t3", None)]
+
+
+def test_replay_still_joins_a_failed_result_to_its_call_across_a_bom_and_crlf(tmp_path):
+    path = tmp_path / "c.jsonl"
+    path.write_bytes(b"\xef\xbb\xbf" + json.dumps(_use("t1", "fire")).encode() + b"\r\n"
+                     + json.dumps(_result("t1", "PreToolUse:Bash hook refused")).encode() + b"\n")
+    report = G.replay(str(path), lambda cmd: "fire" in cmd)
+    assert (report["commands"], report["fires"], report["blocked"]) == (1, 1, 1)

@@ -62,8 +62,8 @@ from _cli_envelope import EnvelopeArgumentParser, emit, wants_json
 
 __all__ = [
     "TYPED_ENTRYPOINTS", "UsageError", "collect_prompts", "diff_predicates",
-    "extract_prompts", "main", "prompt_key", "prompt_text_of", "read_transcript",
-    "transcript_lines", "transcript_prefix",
+    "extract_prompts", "iter_transcript_lines", "main", "prompt_key", "prompt_text_of",
+    "read_transcript", "transcript_lines", "transcript_prefix",
 ]
 
 # `entrypoint` separates a person typing from a headless node being driven. Both are `type: user`,
@@ -71,6 +71,7 @@ __all__ = [
 # population it will never run against.
 TYPED_ENTRYPOINTS = ("cli",)
 DEFAULT_FUNC = "notice"
+_BOM = b"\xef\xbb\xbf"
 
 try:                                                     # pragma: no cover - speed, not behaviour
     import orjson
@@ -125,6 +126,27 @@ def transcript_lines(text):
     return text.split("\n")
 
 
+def iter_transcript_lines(path):
+    """Yield `(number, text)` for every line of a transcript, holding one line at a time.
+
+    The same lines, numbers and text as `enumerate(transcript_lines(read_transcript(path)), 1)`,
+    except the empty piece after a final newline, which no reader uses. Reading the whole file
+    held its bytes, the decoded text and a list of every line at once: about 5.6x the largest
+    transcript, 1.2 GB for a 217 MB one. Binary mode splits on b"\n" only, so a lone \r, a
+    U+2028 or a form feed never renumbers a later line; an undecodable byte cannot straddle a
+    b"\n" (no UTF-8 sequence contains that byte), so decoding per line gives what decoding the
+    whole file gave. Peak memory is the longest line, not the file.
+
+    Raises:
+        OSError: the file cannot be opened or read, possibly after some lines were yielded.
+    """
+    with open(path, "rb") as handle:
+        for number, raw in enumerate(handle, start=1):
+            if number == 1 and raw.startswith(_BOM):
+                raw = raw[len(_BOM):]
+            yield number, raw.removesuffix(b"\n").decode("utf-8", errors="replace")
+
+
 def transcript_prefix(text, line):
     """The transcript as it stood before 1-based `line`: every earlier line, byte for byte.
 
@@ -141,8 +163,12 @@ def extract_prompts(text, source="", sidechain=False):
     transcript PREFIX (`transcript_prefix`) and ask the production code what state it would have
     built at that moment, rather than reimplementing that state here and drifting from it.
     """
-    out = []
-    for number, line in enumerate(transcript_lines(text), start=1):
+    return list(_prompts_of(enumerate(transcript_lines(text), start=1), source, sidechain))
+
+
+def _prompts_of(numbered_lines, source, sidechain):
+    """The typed prompts among `(number, line)` pairs, yielded one at a time."""
+    for number, line in numbered_lines:
         if not line.strip():
             continue
         try:
@@ -160,11 +186,10 @@ def extract_prompts(text, source="", sidechain=False):
         body = prompt_text_of(rec.get("message"))
         if not body:
             continue
-        out.append({"uuid": rec.get("uuid"), "prompt": body, "cwd": rec.get("cwd"),
-                    "session_id": rec.get("sessionId"), "git_branch": rec.get("gitBranch"),
-                    "timestamp": rec.get("timestamp"), "source": source, "line": number,
-                    "sidechain": bool(rec.get("isSidechain"))})
-    return out
+        yield {"uuid": rec.get("uuid"), "prompt": body, "cwd": rec.get("cwd"),
+               "session_id": rec.get("sessionId"), "git_branch": rec.get("gitBranch"),
+               "timestamp": rec.get("timestamp"), "source": source, "line": number,
+               "sidechain": bool(rec.get("isSidechain"))}
 
 
 def _transcripts(base, skipped):
@@ -197,12 +222,14 @@ def collect_prompts(root, sidechain=False):
     prompts, files_read, seen, duplicates = [], 0, set(), 0
     for path in files:
         try:
-            text = read_transcript(path)
+            # Streamed, never read whole (see iter_transcript_lines). Listed inside the try, so a
+            # file that fails mid-read contributes nothing, as an unreadable file always did.
+            found = list(_prompts_of(iter_transcript_lines(path), str(path), sidechain))
         except OSError as exc:
             skipped.append("%s: %s" % (path, exc))
             continue
         files_read += 1
-        for prompt in extract_prompts(text, source=str(path), sidechain=sidechain):
+        for prompt in found:
             uuid = prompt["uuid"]
             if uuid is not None:
                 if uuid in seen:

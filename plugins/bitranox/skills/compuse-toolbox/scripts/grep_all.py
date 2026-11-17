@@ -32,6 +32,7 @@ anything matched is the exit code. A usage error or a crash under `--json` print
     uv run scripts/grep_all.py PATTERN [PATH ...] [--glob '*.md'] [--json] [-i]
 """
 
+import io
 import json
 import os
 import re
@@ -222,24 +223,36 @@ def search(files, rx, unreadable=None, binary=None):
     Files not searched are recorded ("path: reason") in the lists given: a read error goes to
     `unreadable`, a NUL in the first 4 KB to `binary` (the usual text-file rule; winlog is the
     jig for UTF-16). Lines are split on "\\n" only, so a form feed or U+2028 inside a line does
-    not shift the numbers off grep's; a leading BOM is dropped so `^pattern` matches line 1."""
+    not shift the numbers off grep's; a leading BOM is dropped so `^pattern` matches line 1.
+
+    Each file is streamed a line at a time, so memory is bounded by the longest line rather than
+    by the largest file: the big ignored files (logs, dumps, databases) are what this searches,
+    and reading one whole held its bytes, its text and its line list at once."""
     hits = []
     for f in files:
         try:
-            raw = f.read_bytes()
+            _search_file(f, rx, hits, binary)
         except OSError as exc:
             if unreadable is not None:
                 unreadable.append("%s: %s" % (f, type(exc).__name__))
-            continue
-        if b"\0" in raw[:_BINARY_SNIFF]:
+    return hits
+
+
+def _search_file(f, rx, hits, binary) -> None:
+    """Append `f`'s matching lines to `hits`, or note it in `binary` when its first 4 KB hold a NUL.
+
+    The sniff reads only those 4 KB, so a binary file costs that much and no more."""
+    with open(f, "rb") as fh:
+        if b"\0" in fh.read(_BINARY_SNIFF):
             if binary is not None:
                 binary.append("%s: binary" % f)
-            continue
-        for n, line in enumerate(raw.decode("utf-8-sig", "replace").split("\n"), 1):
-            line = line.rstrip("\r")
+            return
+        fh.seek(0)
+        text = io.TextIOWrapper(fh, encoding="utf-8-sig", errors="replace", newline="\n")
+        for n, line in enumerate(text, 1):
+            line = line.rstrip("\n").rstrip("\r")
             if rx.search(line):
                 hits.append((f, n, line.strip()))
-    return hits
 
 
 def path_problem(p: Path) -> str | None:

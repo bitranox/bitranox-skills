@@ -348,6 +348,48 @@ def fact_added_on(store: Path | None, slug: str) -> str | None:
     return dates[-1] if dates else None
 
 
+# git prints %x00 as a NUL ahead of each date, which no path line can start with (an argv
+# cannot carry the NUL itself).
+_DATE_MARK = "\x00"
+
+
+def facts_added_on(store: Path | None) -> dict[str, str]:
+    """slug -> ISO date its body was first added, from ONE walk over the store's history.
+
+    fact_added_on starts one git process per slug and each walks the whole history: measured
+    0.36 s a call on a 452-commit store against 0.48 s for this single pass over every fact.
+    Rename detection stays on (-M), so a body that arrived by rename is status R, not A, and is
+    absent here rather than dated by its rename; the caller asks fact_added_on (--follow) for
+    exactly those slugs. An empty map covers every failure alike, which sends every slug to that
+    per-slug fallback - the previous behaviour, never a guessed date.
+    """
+    if store is None or not (store / ".git").exists():
+        return {}
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(store), "log", "-M", "--diff-filter=A",
+             "--format=%x00%ad", "--date=short", "--name-only", "--", "facts/"],
+            capture_output=True, text=True, timeout=120, check=False,
+            encoding="utf-8", errors="replace")
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    if out.returncode != 0:
+        return {}
+    added: dict[str, str] = {}
+    when = ""
+    for line in out.stdout.splitlines():
+        if line.startswith(_DATE_MARK):
+            when = line[len(_DATE_MARK):].strip()
+            continue
+        name = line.strip()
+        if not when or not name.startswith("facts/") or not name.endswith(".md"):
+            continue
+        # git lists newest first, so the last date seen for a path is its FIRST add, which is
+        # what fact_added_on returns too (dates[-1]).
+        added[name[len("facts/"):-len(".md")]] = when
+    return added
+
+
 def triage_pending(result: ScanResult, cleared: dict[str, dict[str, str]],
                    pending: list[str], store: Path | None) -> dict[str, list[str]]:
     """Split the unexamined list into the three situations that all answer "nobody checked this".
@@ -367,12 +409,17 @@ def triage_pending(result: ScanResult, cleared: dict[str, dict[str, str]],
             level_of[p.slug] = p.level
     swept = _sweep_dates_by_level(cleared)
     buckets: dict[str, list[str]] = {"resurfaced": [], "written_since": [], "never_checked": []}
+    bulk: dict[str, str] | None = None
     for slug in pending:
         if slug in cleared:
             buckets["resurfaced"].append(slug)
             continue
         sweep = swept.get(level_of.get(slug, ""))
-        added = fact_added_on(store, slug) if sweep is not None else None
+        added = None
+        if sweep is not None:
+            if bulk is None:
+                bulk = facts_added_on(store)
+            added = bulk.get(slug) or fact_added_on(store, slug)
         fresh = added is not None and sweep is not None and added > sweep
         buckets["written_since" if fresh else "never_checked"].append(slug)
     return buckets

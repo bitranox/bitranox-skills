@@ -110,6 +110,66 @@ def test_an_offered_choice_is_accepted(fake_jev):
     assert result is not None and result.answers["lang"].value == "de"
 
 
+SCORE = cl.Question(id="size", type="score", instructions="How big is `user_message`?",
+                    criteria=["small", "medium", "large"])
+
+
+@pytest.mark.parametrize("value", [
+    "0.02",          # a number spelled as a string
+    True,            # bool is an int subclass, and True >= any threshold below 1
+    False,
+    None,            # JSON null
+    [0.1],
+    float("nan"),
+    float("inf"),
+    -0.1,
+    1.5,             # outside the probability range
+])
+def test_a_noul_value_that_is_not_a_probability_is_a_bad_response(fake_jev, value):
+    # A non-number gate used to be stored as-is, and choice_pick read "not a number" as
+    # "unanswered, do not suppress", so a suppressing gate turned into a pick.
+    raw = json.dumps(_answer_body(("correction", {"type": "noul", "noul": value})),
+                     allow_nan=True).encode()
+    c = _jev(fake_jev(body=raw).url)
+    assert c.ask({"user_message": "x"}, [NOUL]) is None
+    assert c.last_reason == "bad response: noul 'correction' is not a probability: %r" % (value,)
+
+
+@pytest.mark.parametrize("value", [0, 0.0, 0.02, 1, 1.0])
+def test_a_noul_probability_is_accepted(fake_jev, value):
+    # Control for the rows above: the range ends, and an integral JSON number, still parse.
+    c = _jev(fake_jev(body=_answer_body(("correction", {"type": "noul", "noul": value}))).url)
+    result = c.ask({"user_message": "x"}, [NOUL])
+    assert result is not None, c.last_reason
+    assert result.answers["correction"].value == value
+
+
+@pytest.mark.parametrize("value", ["1", True, None, -0.5, 2.5, float("nan")])
+def test_a_score_value_outside_its_levels_is_a_bad_response(fake_jev, value):
+    raw = json.dumps(_answer_body(("size", {"type": "score", "score": value})),
+                     allow_nan=True).encode()
+    c = _jev(fake_jev(body=raw).url)
+    assert c.ask({"user_message": "x"}, [SCORE]) is None
+    assert c.last_reason == "bad response: score 'size' is not a level: %r" % (value,)
+
+
+@pytest.mark.parametrize("value", [0, 1.7, 2])
+def test_a_score_between_its_levels_is_accepted(fake_jev, value):
+    c = _jev(fake_jev(body=_answer_body(("size", {"type": "score", "score": value}))).url)
+    result = c.ask({"user_message": "x"}, [SCORE])
+    assert result is not None, c.last_reason
+    assert result.answers["size"].value == value
+
+
+def test_a_string_gate_no_longer_reaches_choice_pick_as_a_pass():
+    # The consumer path the defect reached: _parse -> Result.to_json -> choice_answer ->
+    # choice_pick. A suppressing gate spelled as a string must not parse at all.
+    raw = json.dumps({"model": "m", "answers": {
+        cl.NEW_TASK_ID: {"type": "noul", "noul": "0.02"}}}).encode()
+    gate_q = cl.Question(id=cl.NEW_TASK_ID, type="noul", instructions="new task?")
+    with pytest.raises(cl._BadResponse):
+        cl._parse(raw, [gate_q], 1)
+
 @pytest.mark.parametrize("usage, expected", [
     ({"input_tokens": 12}, 12),
     ({"input_tokens": "12"}, 12),

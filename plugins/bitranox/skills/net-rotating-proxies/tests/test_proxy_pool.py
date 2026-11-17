@@ -663,3 +663,65 @@ def test_run_item_with_pool_bans_dead_proxy(store):
     assert proxy is None
     assert "dead:1" in pp._read(pp._p(store, "bad.txt"))
     assert "dead:1" not in pool.active()
+
+
+# ----------------------------------------------------------------------------
+# good.txt stays bounded per run, and acquire does no file I/O
+# ----------------------------------------------------------------------------
+_OPENED = []
+_RECORDING = [False]
+
+
+def _record_open(event, args):
+    # An interpreter audit hook rather than a patched open(): it sees every open the code makes,
+    # through whatever name it calls, and changes nothing about how the code runs.
+    if _RECORDING[0] and event == "open" and args and isinstance(args[0], str):
+        _OPENED.append(os.path.basename(args[0]))
+
+
+sys.addaudithook(_record_open)
+
+
+def _opens_during(fn):
+    _OPENED.clear()
+    _RECORDING[0] = True
+    try:
+        fn()
+    finally:
+        _RECORDING[0] = False
+    return list(_OPENED)
+
+
+def test_run_item_records_a_good_proxy_once_per_run_not_once_per_item(store):
+    # good.txt is a set of proven proxies. One line per successful ITEM made it grow with the
+    # worklist and across runs, and every acquire read all of it back.
+    _seed_store(store, live=["px:1"], speeds={"px:1": 1.0})
+    pool = pp.ProxyPool(store, need=1, cooldown=0)
+    dead_re = pp.re.compile(pp.DEAD_DEFAULT, pp.re.I)
+    for n in range(4):
+        _item, proxy = pp._run_item(store, f"JOB{n}", _argv_tpl("pass"), 1, 30, None, dead_re, pool)
+        assert proxy == "px:1"
+    with open(pp._p(store, "good.txt"), encoding="utf-8") as f:
+        assert f.read().splitlines() == ["px:1"]
+
+
+def test_pool_acquire_does_not_read_the_store(store):
+    _seed_store(store, live=[f"p{i}:1" for i in range(20)], good=["p1:1"],
+                speeds={f"p{i}:1": 0.1 + i for i in range(20)})
+    pool = pp.ProxyPool(store, need=10, cooldown=0)
+    opened = _opens_during(lambda: [pool.acquire(3) for _ in range(50)])
+    assert opened == []
+
+
+def test_pool_weights_a_proxy_proven_in_this_run_up(store):
+    # Keeping the good set in memory must not lose what re-reading the file gave: a proxy that
+    # succeeded earlier in this run is weighted 3x on the next acquire.
+    _seed_store(store, live=["a:1", "b:1"], speeds={"a:1": 1.0, "b:1": 1.0})
+    pool = pp.ProxyPool(store, need=2, cooldown=0)
+    dead_re = pp.re.compile(pp.DEAD_DEFAULT, pp.re.I)
+    random.seed(3)
+    _item, proxy = pp._run_item(store, "JOB", _argv_tpl("pass"), 1, 30, None, dead_re, pool)
+    with pool._lock:
+        weights = pool._weights_locked()
+    other = ({"a:1", "b:1"} - {proxy}).pop()
+    assert weights[proxy] == 3 * weights[other]

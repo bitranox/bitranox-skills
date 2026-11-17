@@ -16,6 +16,7 @@ import io
 import json
 import subprocess
 import sys
+import time
 import pytest
 from pathlib import Path
 
@@ -867,3 +868,37 @@ def test_an_unbalanced_command_position_brace_bails():
 
 def test_a_one_line_function_definition_is_not_executed():
     assert G.chained_state_changes("f() { git commit -m x; git push; }") is None
+
+
+# --- cost: the judgment must not grow faster than the command's statement count -----------------
+
+
+def _best_judge_seconds(command, repeats=3):
+    """Best wall time of `repeats` runs of the hook's real `main()` on `command`."""
+    payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}})
+    best = float("inf")
+    for _ in range(repeats):
+        stdin, sys.stdin = sys.stdin, io.StringIO(payload)
+        start = time.perf_counter()
+        try:
+            assert G.main() == 0
+        finally:
+            sys.stdin = stdin
+        best = min(best, time.perf_counter() - start)
+    return best
+
+
+@pytest.mark.parametrize(("statement", "joiner"), [
+    ("git commit -m x%d", " && "),           # every git step &&-joined: no pair returns early
+    ("cd /r%d && git commit -m x", " ; "),   # a repeated verb in another directory each time
+])
+def test_judging_a_long_chain_grows_about_linearly(statement, joiner):
+    """Every PAIR of git statements was examined and each pair walked the parts between them, so
+    a correctly joined fleet sweep cost O(G^2 * n): about 9x per doubling, 4.6 s at 400 steps.
+    Only the RATIO of 8x the statements against 1x is compared, never an absolute time: linear
+    work gives about 8, quadratic 64, cubic 512, and the bound leaves room for noise, not for 64."""
+    small = joiner.join(statement % i for i in range(40))
+    large = joiner.join(statement % i for i in range(320))
+    assert G.chained_state_changes(large) is None          # the shape under test never fires
+    ratio = _best_judge_seconds(large) / _best_judge_seconds(small)
+    assert ratio < 30, ratio

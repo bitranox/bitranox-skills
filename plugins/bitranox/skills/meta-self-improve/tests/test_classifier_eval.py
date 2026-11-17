@@ -711,10 +711,29 @@ def test_the_body_arm_falls_back_to_descriptions_when_no_bodies_are_given():
 def test_every_arm_declares_which_text_it_ranks_on():
     # Pins the table so a new arm cannot be added without saying what it sends - the shape flags
     # are what makes an arm's result attributable.
-    sources = {"short", "body", "router_text"}
     for name, spec in ce.ARMS.items():
-        assert set(spec) == {"shape", "short", "rerank", "body", "router_text"}, name
-        assert sum(1 for s in sources if spec[s]) <= 1, name   # one text source per arm
+        assert type(spec) is ce.ArmSpec, name
+        assert type(spec.shape) is ce.Shape, name
+        assert sum((spec.short, spec.body, spec.router_text)) <= 1, name   # one text source
+
+
+@pytest.mark.parametrize("shape", ["choices", "noul", "Choice", ""])
+def test_a_misspelt_arm_shape_is_refused_where_the_arm_is_written(shape):
+    # The two shape tests were not complements: "choices" built NOUL questions (not "choice") and
+    # then read the answers as a CHOICE (not "nouls"), so the arm found no pick on any prompt and
+    # a paid replay reported "this arm never fires" with no error.
+    with pytest.raises(ValueError, match="shape"):
+        ce.ArmSpec(shape=shape)
+
+
+def test_an_arm_with_two_text_sources_is_refused_where_it_is_written():
+    with pytest.raises(ValueError, match="one text source"):
+        ce.ArmSpec(shape=ce.Shape.CHOICE, short=True, body=True)
+
+
+@pytest.mark.parametrize("shape", ["nouls", "choice"])
+def test_a_shape_given_as_its_value_is_parsed_to_the_member(shape):
+    assert ce.ArmSpec(shape=shape).shape is ce.Shape(shape)
 
 
 def test_the_router_text_arm_ranks_on_the_router_authored_criteria():

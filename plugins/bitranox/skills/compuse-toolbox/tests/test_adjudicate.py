@@ -365,6 +365,25 @@ def test_a_string_probe_args_exits_2_not_a_silent_refuted(tmp_path):
     assert A.main(["--hook", str(hook), "--claim-file", str(f)]) == 2
 
 
+@pytest.mark.parametrize("key", ["probe_arg", "control_args ", "Probe", "probepath"])
+def test_a_claim_file_key_it_does_not_know_is_refused(tmp_path, key):
+    # A misspelt `probe_args` was dropped, so that side ran with no args and the claim was scored
+    # on an input nobody wrote: REFUTED or CONFIRMED for the wrong reason.
+    f = tmp_path / "claims.jsonl"
+    f.write_text(json.dumps({"name": "t", "probe": "", "control": "", key: ["--flag"]}) + "\n",
+                 encoding="utf-8")
+    with pytest.raises(ValueError, match="unknown key"):
+        A.load_claims(str(f), None, None, None)
+
+
+def test_a_misspelt_claim_key_exits_2_not_a_silent_refuted(tmp_path):
+    hook = _fake_hook(tmp_path, 'if "--flag" in sys.argv: print("fired")\n')
+    f = tmp_path / "claims.jsonl"
+    f.write_text('{"name":"s","probe":"","control":"","probe_arg":["--flag"]}\n',
+                 encoding="utf-8")
+    assert A.main(["--hook", str(hook), "--claim-file", str(f)]) == 2
+
+
 def test_a_claim_file_with_a_utf8_bom_is_read(tmp_path):
     f = tmp_path / "claims.jsonl"
     f.write_bytes(b"\xef\xbb\xbf" + b'{"name":"b","probe":"TRAP","control":"clean"}\n')

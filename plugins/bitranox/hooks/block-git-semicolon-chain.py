@@ -90,9 +90,11 @@ Pure standard library. Reads the PreToolUse event JSON on stdin. Exit 2 blocks t
 stderr to the model; every other path (including any error) exits 0 so a broken guard never wedges
 a turn.
 """
+import bisect
 import json
 import re
 import sys
+from typing import NamedTuple
 
 import shell_text
 
@@ -195,7 +197,7 @@ PER_TARGET_VERBS = frozenset({"push", "fetch", "tag"})
 # A statement that moves the working directory, and the git options that name a tree explicitly.
 # The trailing `(?:\s|$)` is what stops `cdrecord` and `cd-hook` reading as a directory change; a
 # bare `\b` accepts both. The optional group captures the destination, because PRESENCE of a `cd`
-# is not evidence of a MOVE - see `_directory_moves_between`.
+# is not evidence of a MOVE - see `_moves_before`.
 CD_COMMAND = re.compile(r"^\s*(?:\w+=\S+\s+)*(?:cd|pushd|popd)(?:\s+(\S+))?(?:\s|$)")
 DASHC_TARGET = re.compile(r"\bgit\s+(?:-c\s+\S+\s+)*(?:-C|--git-dir|--work-tree)\s+(\S+)")
 
@@ -278,8 +280,8 @@ def _normalise_path(value: str | None) -> str | None:
     return value
 
 
-def _directory_moves_between(raw: list[str], masked: list[str], start: int, stop: int) -> bool:
-    """True when a `cd` strictly between the two statements actually CHANGES directory.
+def _moves_before(raw: list[str], masked: list[str]) -> list[int]:
+    """For each part index i, how many statements before i really CHANGE directory.
 
     Presence of a `cd` is not a move. Tracking the destination from the START of the command is
     what separates them: `cd /repo && git commit ; cd /repo && git commit --amend` re-enters the
@@ -288,24 +290,30 @@ def _directory_moves_between(raw: list[str], masked: list[str], start: int, stop
     subject. A no-op `cd` on each step was overriding two shapes the tests declare must block.
 
     Structure is read from the MASKED text (a `cd` inside a quoted string is not a command) and the
-    destination from the RAW text at the same offset, so `"$MAIN"` compares by name.
+    destination from the RAW text at the same offset, so `"$MAIN"` compares by name. The running
+    destination depends only on the statements before it, so one pass serves every pair: a move
+    lies strictly between statements `a` and `b` when `counts[b] - counts[a + 1]` is non-zero.
     """
+    counts = [0] * (len(masked) + 1)
     current: str | None = None
-    moved = False
-    for index in range(0, stop, 2):
-        if not CD_COMMAND.match(masked[index]):
+    moves = 0
+    for index, segment in enumerate(masked):
+        counts[index] = moves
+        # EVEN indices are statements and odd ones are separators. Matching the odd indices
+        # instead matches nothing at all, and the rule silently does half its job.
+        if index % 2 or not CD_COMMAND.match(segment):
             continue
         found = CD_COMMAND.match(raw[index])
         target = _normalise_path(found.group(1)) if found else None
         if target in NON_MOVING_TARGETS or target == current:
             continue
         current = target
-        if index > start:
-            moved = True
-    return moved
+        moves += 1
+    counts[len(masked)] = moves
+    return counts
 
 
-def _tree_may_have_changed(raw: list[str], parts: list[str], start: int, stop: int) -> bool:
+def _tree_may_have_changed(walked: _Walked, start: int, stop: int) -> bool:
     """True when the two statements might not be acting on the same repository.
 
     A `cd` between them, or a differing `git -C <path>`, means the second statement works in
@@ -323,12 +331,7 @@ def _tree_may_have_changed(raw: list[str], parts: list[str], start: int, stop: i
     Measured on real command history: it clears 24 `commit`-then-`commit` blocks across a
     super-repo's separate sub-repos, and leaves every different-verb chain firing.
     """
-    # EVEN indices are statements and odd ones are separators, so step from start + 2. Walking the
-    # odd indices instead matches nothing at all, and the rule silently does half its job.
-    first, second = DASHC_TARGET.search(raw[start]), DASHC_TARGET.search(raw[stop])
-    target_a, target_b = _normalise_path(first.group(1) if first else None), _normalise_path(
-        second.group(1) if second else None
-    )
+    target_a, target_b = walked.dashc_targets[start], walked.dashc_targets[stop]
     # An identical ABSOLUTE `-C` on both is positive proof of one repository, and it outranks any
     # `cd` between them. Relative only resolves against the cwd, so it proves nothing. Reading this
     # AFTER the cd scan let weak evidence beat strong evidence purely by statement order.
@@ -336,7 +339,16 @@ def _tree_may_have_changed(raw: list[str], parts: list[str], start: int, stop: i
         return False
     if target_a != target_b:
         return True
-    return _directory_moves_between(raw, parts, start, stop)
+    return walked.moves_before[stop] - walked.moves_before[start + 1] > 0
+
+
+def _dashc_targets(raw: list[str]) -> list[str | None]:
+    """Each statement's normalised `git -C` / `--git-dir` / `--work-tree` path (None if absent)."""
+    targets: list[str | None] = []
+    for index, segment in enumerate(raw):
+        found = DASHC_TARGET.search(segment) if index % 2 == 0 else None
+        targets.append(_normalise_path(found.group(1) if found else None))
+    return targets
 
 
 def _git_subcommand(segment: str) -> tuple[str, list[str]] | None:
@@ -461,27 +473,37 @@ def _unjudgeable(masked: str, parts: list[str]) -> bool:
     return any(token in BLOCK_KEYWORDS for token in masked.split())
 
 
-def _skipped_group_end(parts: list[str], index: int) -> int | None:
+def _group_closers(parts: list[str]) -> dict[int, int]:
+    """Each group opener's index mapped to its closer's, or to len(parts) when it never closes.
+
+    One stack pass, so a group's end is a lookup rather than a scan per question. A closer with no
+    open group is ignored, as a depth count started at an opener would never see it.
+    """
+    closers: dict[int, int] = {}
+    open_at: list[int] = []
+    for at in range(1, len(parts), 2):                     # separators sit at the ODD indices
+        if parts[at] in OPENERS:
+            open_at.append(at)
+        elif parts[at] in CLOSERS and open_at:
+            closers[open_at.pop()] = at
+    closers.update(dict.fromkeys(open_at, len(parts)))
+    return closers
+
+
+def _skipped_group_end(parts: list[str], closers: dict[int, int], index: int) -> int | None:
     """Where the group right after the separator at `index` closes, or None when no group follows.
 
     After a FAILED step, `&&` skips the next element whole - and when that element is a group, the
     `;` inside it is never reached: `git commit -m x && (git push ; echo x)` cannot push after a
-    failed commit. A group that never closes swallows the rest of the command.
+    failed commit. A group that never closes swallows the rest of the command. `closers` is
+    `_group_closers(parts)`.
     """
     probe = index + 2
     while probe < len(parts) and not parts[probe - 1].strip() and parts[probe] == "\n":
         probe += 2                                         # `&&` then a line break, then the group
     if probe >= len(parts) or parts[probe - 1].strip() or parts[probe] not in OPENERS:
         return None
-    depth = 0
-    for at in range(probe, len(parts), 2):
-        if parts[at] in OPENERS:
-            depth += 1
-        elif parts[at] in CLOSERS:
-            depth -= 1
-            if depth == 0:
-                return at
-    return len(parts)
+    return closers[probe]
 
 
 def _closes_a_group(parts: list[str], index: int) -> bool:
@@ -509,39 +531,61 @@ def _failure_handled_after(parts: list[str], index: int) -> bool:
     return at < len(parts) and parts[at] == "||"
 
 
-def _gap_continues_after_failure(parts: list[str], start: int, stop: int) -> bool:
-    """True when reaching `stop` from `start` crosses a separator that runs regardless.
+def _first_unguarded_after(parts: list[str]) -> dict[int, int | None]:
+    """For each statement, the first separator after it that runs regardless of its failure.
+
+    Walking forward from a FAILED statement, a separator that runs regardless (`;`, a line break,
+    `&`) carries execution on to everything after it, so a later statement `b` is reached after
+    that failure exactly when this separator sits before `b`. None means nothing after the
+    statement runs once it fails.
 
     A newline directly after `&&`, `||` or `|` is a LINE CONTINUATION, not a separator - the
     author already wrote the correct form and split it over lines. Treating it as `;` blocks a
     correct command with a message telling the author to do what they just did.
 
-    A group after a success-join is skipped whole on failure (`_skipped_group_end`), and the
-    terminator a group's closer requires continues to nothing (`_closes_a_group`).
+    A group after a success-join is skipped whole on failure (`_skipped_group_end`), so a statement
+    inside it is never reached, and the terminator a group's closer requires continues to nothing
+    (`_closes_a_group`).
+
+    The walk from a separator depends only on that separator and on whether a success-join was
+    already crossed, so every (separator, crossed) state is answered once, back to front, and each
+    statement reads its answer off the separator after it: linear in the command, where walking
+    each pair's gap afresh was cubic in its statement count.
     """
-    joined_on_success = False
-    index = start
-    while index < stop:
+    closers = _group_closers(parts)
+    # answer[crossed][i]: the first run-regardless separator reached walking from separator i.
+    answer: dict[bool, dict[int, int | None]] = {False: {}, True: {}}
+    last = len(parts) - 2 if len(parts) % 2 else len(parts) - 1
+    for index in range(last, 0, -2):
         separator = parts[index]
-        if separator in JOINS_ON_SUCCESS:
-            joined_on_success = True
-            group_end = _skipped_group_end(parts, index)
-            if group_end is not None:
-                if group_end >= stop:
-                    return False                           # the second verb is inside the skip
-                index = group_end + 2
-                continue
-        elif separator == "\n" and joined_on_success and not parts[index - 1].strip():
-            pass                                           # continuation line, still guarded
-        elif separator in CONTINUES_AFTER_FAILURE and not (
-                separator != "&" and _closes_a_group(parts, index)):
-            return True
-        index += 2
-    return False
+        for crossed in (False, True):
+            if separator in JOINS_ON_SUCCESS:
+                group_end = _skipped_group_end(parts, closers, index)
+                following = index + 2 if group_end is None else group_end + 2
+                answer[crossed][index] = answer[True].get(following)
+            elif separator == "\n" and crossed and not parts[index - 1].strip():
+                answer[crossed][index] = answer[crossed].get(index + 2)   # continuation line
+            elif separator in CONTINUES_AFTER_FAILURE and not (
+                    separator != "&" and _closes_a_group(parts, index)):
+                answer[crossed][index] = index
+            else:
+                answer[crossed][index] = answer[crossed].get(index + 2)
+    return {index: answer[False].get(index + 1) for index in range(0, len(parts), 2)}
 
 
-def _walk(command: str, tool_name: str) -> tuple[list[str], list[str], dict[int, bool]] | None:
-    """Masked statements, raw statements and errexit-before-each, or None when unjudgeable."""
+class _Walked(NamedTuple):
+    """One command's statement structure, computed once and shared by all three rules."""
+
+    parts: list[str]                         # masked: statements at even indices, separators odd
+    raw_parts: list[str]                     # the same cuts of the unmasked text
+    active_before: dict[int, bool]           # errexit in force before each statement
+    unguarded_after: dict[int, int | None]   # `_first_unguarded_after(parts)`
+    moves_before: list[int]                  # `_moves_before(raw_parts, parts)`
+    dashc_targets: list[str | None]          # `_dashc_targets(raw_parts)`
+
+
+def _walk(command: str, tool_name: str) -> _Walked | None:
+    """The command's statement structure (`_Walked`), or None when it is unjudgeable."""
     stripped = strip_heredoc_bodies(command or "")
     masked = mask_data_regions(stripped, tool_name=tool_name)
     # The masking preserves LENGTH, so the same offsets index the pre-mask text exactly. The `-C`
@@ -559,7 +603,8 @@ def _walk(command: str, tool_name: str) -> tuple[list[str], list[str], dict[int,
         delta = _errexit_delta(parts[index])
         if delta:
             errexit = delta > 0
-    return parts, raw_parts, active_before
+    return _Walked(parts, raw_parts, active_before, _first_unguarded_after(parts),
+                   _moves_before(raw_parts, parts), _dashc_targets(raw_parts))
 
 
 def _script_runner(segment: str) -> str | None:
@@ -610,19 +655,32 @@ def git_after_script(command: str, tool_name: str = "Bash") -> tuple[str, str] |
     rewrite, not a wrong instruction.
     """
     walked = _walk(command, tool_name)
-    if walked is None:
-        return None
-    parts, _raw_parts, active_before = walked
-    statements = list(range(0, len(parts), 2))
-    for index_a in statements:
+    return _script_then_git(walked) if walked else None
+
+
+def _reached_after_failure(walked: _Walked, index_a: int) -> range:
+    """The statement indices that still run when statement `index_a` FAILS, in order."""
+    unguarded = walked.unguarded_after[index_a]
+    if unguarded is None:
+        return range(0)
+    return range(unguarded + 1, len(walked.parts), 2)
+
+
+def _unguarded(walked: _Walked, index_a: int) -> bool:
+    """True when nothing stops the command after statement `index_a` fails: no errexit, no `||`."""
+    return not walked.active_before[index_a] and not _failure_handled_after(walked.parts, index_a)
+
+
+def _script_then_git(walked: _Walked) -> tuple[str, str] | None:
+    """`git_after_script` on a command already walked."""
+    parts = walked.parts
+    for index_a in range(0, len(parts), 2):
         runner = _script_runner(parts[index_a])
-        if not runner or active_before[index_a] or _failure_handled_after(parts, index_a):
+        if not runner or not _unguarded(walked, index_a):
             continue
-        for index_b in statements:
-            if index_b <= index_a:
-                continue
+        for index_b in _reached_after_failure(walked, index_a):
             verb = _recording_verb(parts[index_b])
-            if verb and _gap_continues_after_failure(parts, index_a + 1, index_b):
+            if verb:
                 return runner, verb
     return None
 
@@ -688,19 +746,19 @@ def acquire_then_act(command: str, tool_name: str = "Bash") -> tuple[str, str] |
     handler right after the acquire.
     """
     walked = _walk(command, tool_name)
-    if walked is None:
-        return None
-    parts, _raw_parts, active_before = walked
-    statements = list(range(0, len(parts), 2))
-    for index_a in statements:
+    return _acquire_then_follower(walked) if walked else None
+
+
+def _acquire_then_follower(walked: _Walked) -> tuple[str, str] | None:
+    """`acquire_then_act` on a command already walked."""
+    parts = walked.parts
+    for index_a in range(0, len(parts), 2):
         acquired = _acquire_name(parts[index_a])
-        if not acquired or active_before[index_a] or _failure_handled_after(parts, index_a):
+        if not acquired or not _unguarded(walked, index_a):
             continue
-        for index_b in statements:
-            if index_b <= index_a:
-                continue
+        for index_b in _reached_after_failure(walked, index_a):
             follower = _follower(parts[index_b])
-            if follower and _gap_continues_after_failure(parts, index_a + 1, index_b):
+            if follower:
                 return acquired, follower
     return None
 
@@ -715,29 +773,35 @@ def chained_state_changes(command: str, tool_name: str = "Bash") -> list[str] | 
     ff-merge run the second merge on a stale base and push it sat right there.
     """
     walked = _walk(command, tool_name)
-    if walked is None:
-        return None
-    parts, raw_parts, active_before = walked
-    statements = list(range(0, len(parts), 2))
+    return _chained_pair(walked) if walked else None
 
-    found = [(index, _git_verb(parts[index])) for index in statements]
+
+def _chained_pair(walked: _Walked) -> list[str] | None:
+    """`chained_state_changes` on a command already walked.
+
+    Only the git statements a failure of `a` still reaches are paired with it, so a correctly
+    joined chain pairs nothing, and each pair's exemption is a lookup into the walk.
+    """
+    parts = walked.parts
+    found = [(index, _git_verb(parts[index])) for index in range(0, len(parts), 2)]
     found = [(index, verb) for index, verb in found if verb]
+    positions = [index for index, _verb in found]
 
-    for position, (index_a, verb_a) in enumerate(found):
-        if active_before[index_a]:
-            continue                                       # the shell aborts on failure anyway
-        if _failure_handled_after(parts, index_a):
-            continue                                       # the author wrote the failure path
-        for index_b, verb_b in found[position + 1 :]:
+    for index_a, verb_a in found:
+        if not _unguarded(walked, index_a):
+            continue                                       # errexit, or the author wrote `||`
+        unguarded = walked.unguarded_after[index_a]
+        if unguarded is None:
+            continue                                       # nothing runs once it fails
+        for index_b, verb_b in found[bisect.bisect_right(positions, unguarded):]:
             if verb_b in NEVER_THE_SECOND_HALF:
                 continue
             if verb_a == verb_b and (
                 verb_a in PER_TARGET_VERBS
-                or _tree_may_have_changed(raw_parts, parts, index_a, index_b)
+                or _tree_may_have_changed(walked, index_a, index_b)
             ):
                 continue                                   # parallel work, not a pipeline
-            if _gap_continues_after_failure(parts, index_a + 1, index_b):
-                return [verb_a, verb_b]
+            return [verb_a, verb_b]
     return None
 
 
@@ -748,11 +812,15 @@ def main() -> int:
         return 0
     command = (event.get("tool_input") or {}).get("command") or ""
     tool_name = event.get("tool_name") or "Bash"
-    verbs = chained_state_changes(command, tool_name)
+    # Walked ONCE for all three rules: each used to walk the same command again.
+    walked = _walk(command, tool_name)
+    if walked is None:
+        return 0
+    verbs = _chained_pair(walked)
     if not verbs:
-        after_script = git_after_script(command, tool_name)
+        after_script = _script_then_git(walked)
         if not after_script:
-            acquired = acquire_then_act(command, tool_name)
+            acquired = _acquire_then_follower(walked)
             if not acquired:
                 return 0
             what, follower = acquired

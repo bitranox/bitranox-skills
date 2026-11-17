@@ -564,3 +564,39 @@ def test_raw_with_count_is_a_usage_error(tmp_path, capsys):
     p = _write(tmp_path, "t.jsonl", TYPES)
     assert J.main([str(p), "--field", "v", "--count", "--raw"]) == 2
     assert "--raw" in capsys.readouterr().err
+
+
+# --- stdin streams: peak memory does not grow with the size of the piped input --------------------
+
+def _jsonl_file(path, megabytes):
+    """`megabytes` of ~1 KB records whose `type` is "x", written in pieces so the writer stays small."""
+    line = json.dumps({"type": "x", "pad": "a" * 1000}) + "\n"
+    per_mb = (1 << 20) // len(line)
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        for _ in range(megabytes):
+            fh.write(line * per_mb)
+    return path
+
+
+def _peak_rss_on_stdin(args, stdin_path):
+    """(peak RSS in bytes, exit code) of the script reading `stdin_path` on its stdin."""
+    with open(stdin_path, "rb") as fh:
+        proc = subprocess.Popen([sys.executable, str(SCRIPT), *args], stdin=fh,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    _pid, status, usage = os.wait4(proc.pid, 0)
+    proc.returncode = os.waitstatus_to_exitcode(status)
+    scale = 1 if sys.platform == "darwin" else 1024          # macOS reports bytes, Linux KiB
+    return usage.ru_maxrss * scale, proc.returncode
+
+
+@pytest.mark.skipif(not hasattr(os, "wait4"), reason="os.wait4 rusage is POSIX only")
+@pytest.mark.parametrize("mode", [["--field", "type"], ["--field", "type", "--count"]])
+def test_stdin_peak_memory_does_not_grow_with_the_input(tmp_path, mode):
+    """8x the piped bytes must not cost 8x the memory: the file path streams, so stdin must too."""
+    small = _jsonl_file(tmp_path / "small.jsonl", 8)
+    large = _jsonl_file(tmp_path / "large.jsonl", 64)
+    rss_small, rc_small = _peak_rss_on_stdin(mode, small)
+    rss_large, rc_large = _peak_rss_on_stdin(mode, large)
+    assert (rc_small, rc_large) == (0, 0)
+    growth = rss_large - rss_small
+    assert growth < 16 * (1 << 20), f"peak RSS grew {growth >> 20} MB for 56 MB more stdin"

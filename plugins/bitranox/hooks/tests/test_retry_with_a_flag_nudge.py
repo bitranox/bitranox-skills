@@ -8,6 +8,7 @@ than no nudge - the reader learns to ignore the channel - so "changed an operand
 flag", "different program" and "unrelated command" all have to stay silent.
 """
 
+import io
 import json
 import subprocess
 import sys
@@ -105,14 +106,14 @@ def test_a_different_program_is_not_this():
 # ---------------------------------------------------------------- notice()
 
 def test_notice_names_the_flag_that_was_added():
-    recorded = [list(R.shape("rsync -a src dst"))]
+    recorded = [R.shape("rsync -a src dst")]
     message = R.notice("rsync -a -z src dst", recorded)
     assert message is not None and "-z" in message
     assert "process-stop-repeating-failure" in message
 
 
 def test_notice_is_silent_when_nothing_matches():
-    assert R.notice("ls -la", [list(R.shape("rsync -a src dst"))]) is None
+    assert R.notice("ls -la", [R.shape("rsync -a src dst")]) is None
 
 
 def test_notice_is_silent_with_an_empty_ledger():
@@ -206,16 +207,16 @@ def test_a_quoted_pipe_does_not_cut_the_command():
     greps on DIFFERENT files compared equal."""
     assert R.shape('grep -n "error|warn" alpha.log') == ("grep", ("-n",), ("error|warn", "alpha.log"))
     failed = R.shape('grep -n "error|warn" alpha.log')
-    assert R.notice('grep -n -r "error|warn" beta.log', [list(failed)]) is None
+    assert R.notice('grep -n -r "error|warn" beta.log', [failed]) is None
     # Control: the same pattern on the SAME file with a flag added is the retry.
-    assert R.notice('grep -n -r "error|warn" alpha.log', [list(failed)]) is not None
+    assert R.notice('grep -n -r "error|warn" alpha.log', [failed]) is not None
 
 
 def test_a_quoted_semicolon_does_not_split_the_statement():
     """The statement split ran on the raw text, so a sed script's `;` made the program `'`."""
     assert R.shape("sed -i 's/a/b/;s/c/d/' report.txt") == ("sed", ("-i",), ("s/a/b/;s/c/d/", "report.txt"))
     failed = R.shape("sed -i 's/a/b/;s/c/d/' report.txt")
-    assert R.notice("sed -i -E 's/a/b/;s/c/d/' report.txt", [list(failed)]) is not None
+    assert R.notice("sed -i -E 's/a/b/;s/c/d/' report.txt", [failed]) is not None
 
 
 def test_a_real_pipe_and_a_real_separator_still_split():
@@ -233,9 +234,9 @@ def test_powershell_paths_keep_their_backslashes():
     hook nudged on a different target."""
     failed = R.shape("Copy-Item C:\\data\\logs C:\\backup", "PowerShell")
     assert failed == ("Copy-Item", (), ("C:\\data\\logs", "C:\\backup"))
-    assert R.notice("Copy-Item -Force C:\\datalogs C:\\backup", [list(failed)], "PowerShell") is None
+    assert R.notice("Copy-Item -Force C:\\datalogs C:\\backup", [failed], "PowerShell") is None
     # Control: the same target with a flag added is the retry.
-    assert R.notice("Copy-Item -Force C:\\data\\logs C:\\backup", [list(failed)], "PowerShell") is not None
+    assert R.notice("Copy-Item -Force C:\\data\\logs C:\\backup", [failed], "PowerShell") is not None
 
 
 @pytest.mark.parametrize(("command", "tool"), [
@@ -260,7 +261,7 @@ def test_one_looping_failure_does_not_evict_the_real_one(session):
     assert _run(_failure(session, "rsync -a src dst")) == (0, "", "")
     for _ in range(R.MAX_RECORDED):
         _run(_failure(session, "pytest -x t.py"))
-    assert len(R._load(session)["failed"]) == 2
+    assert len(R._load(session).failed) == 2
     rc, out, _err = _run(_pending(session, "rsync -a -z src dst"))
     assert rc == 0 and out, "the rsync failure was evicted by one looping command"
 
@@ -295,7 +296,7 @@ def test_a_subshell_does_not_glue_its_paren_to_the_program_or_an_operand(command
     operand `file.txt)`: a retry written without the parens compared as a different command."""
     assert R.shape("sed -n 1p file.txt") == ("sed", ("-n",), ("1p", "file.txt"))   # control
     assert R.shape(command) == ("sed", ("-n",), ("1p", "file.txt"))
-    assert R.notice("sed -n -E 1p file.txt", [list(R.shape(command))]) is not None
+    assert R.notice("sed -n -E 1p file.txt", [R.shape(command)]) is not None
 
 
 def test_a_process_substitution_is_an_argument_not_a_statement():
@@ -356,3 +357,55 @@ def test_a_single_statement_failure_is_still_recorded(session, failed, retry):
 ])
 def test_single_statement_counts_statements_not_pipeline_elements(command, single):
     assert R.is_single_statement(command) is single
+
+
+# ---------------------------------------------------------------- a state file of another shape
+
+def _main_in_process(monkeypatch, capsys, payload):
+    """Run the hook's real `main()` on `payload`, returning (rc, stdout), as the shim would."""
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
+    rc = R.main()
+    return rc, capsys.readouterr().out.strip()
+
+
+_MALFORMED_STATES = [
+    {"v": 1, "failed": [["sed"]]},
+    {"v": 1, "fired": "0", "failed": []},
+    {"v": 1, "failed": "rsync"},
+    {"v": 1, "fired": True, "failed": []},
+    {"v": 1, "fired": -1, "failed": []},
+    {"v": 1, "failed": [["sed", "-n", ["f"]]]},
+    {"v": 1, "failed": [["sed", [3], ["f"]]]},
+    {"v": 1, "failed": [["sed", ["-n"], ["f"], "extra"]]},
+    {"v": 1, "failed": [["", ["-n"], ["f"]]]},
+    {"v": 1, "failed": [["sed", ["-n"], []]]},
+    {"v": 1, "failed": [["sed", ["n"], ["f"]]]},
+    {"v": 2, "failed": []},
+    ["v", 1],
+]
+
+
+@pytest.mark.parametrize("stored", _MALFORMED_STATES[:3])
+def test_a_state_file_of_another_shape_starts_fresh_instead_of_silencing_the_session(
+        session, monkeypatch, capsys, stored):
+    """The state was only checked for being a dict with v == 1, so a file of that version but
+    another shape (a hand edit, a partial write) raised on every later call, and main's blanket
+    except turned that into silence for the rest of the session."""
+    path = R._state_path(session)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(stored), encoding="utf-8")
+    assert _main_in_process(monkeypatch, capsys, _failure(session, "rsync -a src dst")) == (0, "")
+    rc, out = _main_in_process(monkeypatch, capsys, _pending(session, "rsync -a -z src dst"))
+    assert rc == 0 and out, "the nudge must still speak after a malformed state file"
+
+
+@pytest.mark.parametrize("stored", _MALFORMED_STATES)
+def test_parse_state_refuses_every_field_shape_could_not_have_written(stored):
+    assert R.parse_state(stored) == R.RetryState()
+
+
+def test_parse_state_reads_back_what_the_hook_writes():
+    state = R.RetryState(2, (R.shape("rsync -a src dst"), R.shape("sed -n -E 1p f.txt")))
+    parsed = R.parse_state(json.loads(json.dumps(R.state_json(state))))
+    assert parsed == state
+    assert all(type(entry) is R.CommandShape for entry in parsed.failed)

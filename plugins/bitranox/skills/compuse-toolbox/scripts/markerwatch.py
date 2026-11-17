@@ -58,6 +58,13 @@ __all__ = ["MarkerError", "Markers", "calibrate", "follow", "marker_problem", "m
 COMMAND = "markerwatch"
 _POLL_S = 0.5
 _KEEP_LINES = 200                  # matched lines kept for --json; the stream itself is unbounded
+# The stream is read in blocks and a line is kept only up to _MAX_LINE bytes, so memory stays
+# fixed whatever the log holds. Reading everything appended since the last poll in one piece took
+# about 5x the log (843 MB for a 170 MB one), and a producer that never writes a newline (pip,
+# docker pull, rsync draw progress with \r) grew the unfinished line without end. A marker is a
+# line PREFIX, so the head of a line decides whether it matches; the cut-off rest never could.
+_BLOCK = 1 << 20
+_MAX_LINE = 1 << 16
 
 # An ISO-8601 date-time (GitHub Actions writes one with 7 fractional digits and a Z), or a bare
 # clock time, optionally in square brackets, then whitespace.
@@ -117,21 +124,38 @@ def match(line: str, markers: Markers) -> tuple[str, str] | None:
     return None
 
 
-def _read_text(path: Path) -> str:
+def _calibrate_path(path: Path, markers: Markers) -> dict[str, int]:
+    """`calibrate` over a finished log on disk, read in blocks rather than whole.
+
+    Raises:
+        MarkerError: the file cannot be read.
+    """
+    counts = {m: 0 for m in markers.terminal + markers.progress}
+    cursor = _Cursor()
     try:
-        return path.read_bytes().decode("utf-8", errors="replace")
+        with path.open("rb") as handle:
+            while chunk := handle.read(_BLOCK):
+                for line in _split(cursor, chunk):
+                    _count(line, markers, counts)
     except OSError as exc:
         raise MarkerError(f"cannot read {path}: {exc.strerror or exc}") from exc
+    # The last line counts with or without its newline, as `text.split("\n")` counts it.
+    _count(_decode(cursor.pending), markers, counts)
+    return counts
+
+
+def _count(line: str, markers: Markers, counts: dict[str, int]) -> None:
+    text_line = strip_timestamp(line) if markers.strip else line
+    for marker in counts:
+        if text_line.startswith(marker):
+            counts[marker] += 1
 
 
 def calibrate(text: str, markers: Markers) -> dict[str, int]:
     """How many lines of a finished run each marker starts. PURE."""
     counts = {m: 0 for m in markers.terminal + markers.progress}
     for line in text.split("\n"):
-        text_line = strip_timestamp(line) if markers.strip else line
-        for marker in counts:
-            if text_line.startswith(marker):
-                counts[marker] += 1
+        _count(line, markers, counts)
     return counts
 
 
@@ -139,7 +163,7 @@ def calibrate(text: str, markers: Markers) -> dict[str, int]:
 class _Cursor:
     pos: int = 0
     ident: tuple[int, int] | None = None
-    pending: bytes = b""
+    pending: bytes = b""             # the unfinished line's first _MAX_LINE bytes
     shown_tail: bytes = b""          # the stalled tail last yielded, so it is yielded once
     reopened: int = 0
     lines_read: int = 0
@@ -174,19 +198,34 @@ def _stalled_tail(cursor: _Cursor, *, stalled: bool) -> list[str]:
     return [_decode(cursor.pending)]
 
 
-def _poll(path: Path, cursor: _Cursor, *, final: bool = False) -> list[str]:
+def _poll(path: Path, cursor: _Cursor, *, final: bool = False) -> Iterator[str]:
     """The lines appended since the last poll, reopening after truncation or rotation; the
     unterminated last line is included once it stalls (see `_stalled_tail`)."""
     before = cursor.pos
-    lines = _read_new(path, cursor)
-    return lines + _stalled_tail(cursor, stalled=final or cursor.pos == before)
+    yield from _read_new(path, cursor)
+    yield from _stalled_tail(cursor, stalled=final or cursor.pos == before)
 
 
-def _read_new(path: Path, cursor: _Cursor) -> list[str]:
-    """The complete lines appended since the last poll; the unterminated rest stays pending."""
+def _split(cursor: _Cursor, chunk: bytes) -> Iterator[str]:
+    """The lines `chunk` completes, each cut to _MAX_LINE bytes; its unfinished rest stays
+    pending, cut the same way, so a line that never ends holds no more than its head."""
+    *complete, rest = chunk.split(b"\n")
+    for part in complete:
+        line = cursor.pending + part[:_MAX_LINE - len(cursor.pending)]
+        cursor.pending, cursor.shown_tail = b"", b""
+        cursor.lines_read += 1
+        yield _decode(line)
+    room = _MAX_LINE - len(cursor.pending)
+    if room > 0 and rest:
+        cursor.pending += rest[:room]
+
+
+def _read_new(path: Path, cursor: _Cursor) -> Iterator[str]:
+    """The complete lines appended since the last poll, read one block at a time; the
+    unterminated rest stays pending."""
     st = _stat(path)
     if st is None:
-        return []
+        return
     ident = (st.st_dev, st.st_ino)
     if cursor.ident is not None and (ident != cursor.ident or st.st_size < cursor.pos):
         # A new file under the old name, or the old one cut short: the next run's lines start
@@ -195,20 +234,15 @@ def _read_new(path: Path, cursor: _Cursor) -> list[str]:
         cursor.reopened += 1
     cursor.ident = ident
     if st.st_size <= cursor.pos:
-        return []
+        return
     try:
         with path.open("rb") as handle:
             handle.seek(cursor.pos)
-            chunk = handle.read()
+            while chunk := handle.read(_BLOCK):
+                cursor.pos += len(chunk)
+                yield from _split(cursor, chunk)
     except OSError as exc:
         raise MarkerError(f"cannot read {path}: {exc.strerror or exc}") from exc
-    cursor.pos += len(chunk)
-    data = cursor.pending + chunk
-    *complete, cursor.pending = data.split(b"\n")
-    if complete:
-        cursor.shown_tail = b""
-    cursor.lines_read += len(complete)
-    return [_decode(raw) for raw in complete]
 
 
 def follow(path: Path, *, start: str, deadline: float,
@@ -289,7 +323,7 @@ def _calibration_failures(counts: dict[str, int], markers: Markers) -> list[str]
 
 
 def _do_calibrate(args: argparse.Namespace, markers: Markers) -> int:
-    counts = calibrate(_read_text(Path(args.log)), markers)
+    counts = _calibrate_path(Path(args.log), markers)
     failures = _calibration_failures(counts, markers)
     code = EXIT_NO if failures else EXIT_YES
     if args.json:
@@ -305,7 +339,7 @@ def _do_calibrate(args: argparse.Namespace, markers: Markers) -> int:
 def _do_watch(args: argparse.Namespace, markers: Markers, *,
               clock: Callable[[], float], sleep: Callable[[float], None]) -> int:
     if args.calibrate:
-        failures = _calibration_failures(calibrate(_read_text(Path(args.calibrate)), markers),
+        failures = _calibration_failures(_calibrate_path(Path(args.calibrate), markers),
                                          markers)
         if failures:
             raise MarkerError("calibration failed: " + "; ".join(failures))

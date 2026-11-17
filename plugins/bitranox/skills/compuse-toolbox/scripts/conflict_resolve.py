@@ -72,6 +72,7 @@ import re
 import sys
 import tempfile
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 
 from _cli_envelope import EXIT_ERROR, EXIT_NO, EXIT_YES, EnvelopeArgumentParser, emit, guarded
@@ -81,6 +82,7 @@ __all__ = [
     "Hunk",
     "Refusal",
     "Rule",
+    "RuleKind",
     "UsageError",
     "assign_rules",
     "main",
@@ -93,7 +95,6 @@ __all__ = [
 COMMAND = "conflict_resolve"
 # Built with chr() so the source stays ASCII.
 _BOM = chr(0xFEFF)
-_SIDE_KINDS = ("ours", "theirs", "base", "both", "both-theirs-first")
 # The same marker shapes conflict_scan reports, captured: the kind, then the label.
 _MARKER = re.compile(r"(<{7}|\|{7}|>{7})(?:\s(.*))?$|(={7})\s*$")
 _PREVIEW_LINES = 3
@@ -128,15 +129,50 @@ class Hunk:
     closes_file_unterminated: bool
 
 
+class RuleKind(str, Enum):
+    """What a hunk resolves to: one side, both sides in an order, or a replacement file.
+
+    `str, Enum` rather than StrEnum because this jig runs on Python 3.10, where the f-string of a
+    member already differs from 3.11+: anything that builds text takes `.value`.
+    """
+
+    OURS = "ours"
+    THEIRS = "theirs"
+    BASE = "base"
+    BOTH = "both"
+    BOTH_THEIRS_FIRST = "both-theirs-first"
+    FILE = "file"
+
+
+_SIDE_KINDS = tuple(k.value for k in RuleKind if k is not RuleKind.FILE)
+
+
 @dataclass(frozen=True)
 class Rule:
-    """How to resolve a hunk: `kind` is a side kind or "file", `path` set only for "file"."""
+    """How to resolve a hunk: `kind` is a side kind or "file", `path` set only for "file".
 
-    kind: str
+    The constructor is a boundary: `Rule` and `resolve_text` are both exported, so a caller can
+    build a Rule that `parse_rule` never saw. A raw string kind is parsed into its RuleKind here,
+    and an unknown one, or a path on the wrong kind, raises UsageError; it once reached
+    `resolve_text` as a bare KeyError.
+    """
+
+    kind: RuleKind
     path: str | None = None
 
+    def __post_init__(self) -> None:
+        try:
+            kind = RuleKind(self.kind)
+        except ValueError:
+            raise UsageError("unknown rule kind %r - use one of %s"
+                             % (self.kind, ", ".join(k.value for k in RuleKind))) from None
+        object.__setattr__(self, "kind", kind)
+        if (kind is RuleKind.FILE) != bool(self.path):
+            raise UsageError("a rule takes a path exactly when its kind is 'file', got kind %r "
+                             "with path %r" % (kind.value, self.path))
+
     def __str__(self) -> str:
-        return "file:%s" % self.path if self.kind == "file" else self.kind
+        return "file:%s" % self.path if self.kind is RuleKind.FILE else self.kind.value
 
 
 def _split_keepends(text: str) -> list[str]:
@@ -256,15 +292,15 @@ def parse_rule(spec: str) -> Rule:
     """A Rule from its spelling. Raises UsageError on an unknown one.
 
     Examples:
-        >>> parse_rule("both-theirs-first").kind
+        >>> parse_rule("both-theirs-first").kind.value
         'both-theirs-first'
         >>> str(parse_rule("file:a.txt"))
         'file:a.txt'
     """
     if spec in _SIDE_KINDS:
-        return Rule(spec)
+        return Rule(RuleKind(spec))
     if spec.startswith("file:") and len(spec) > len("file:"):
-        return Rule("file", spec[len("file:"):])
+        return Rule(RuleKind.FILE, spec[len("file:"):])
     raise UsageError("unknown rule %r - use one of %s or file:<path>"
                      % (spec, ", ".join(_SIDE_KINDS)))
 
@@ -274,7 +310,7 @@ def split_match_spec(spec: str) -> tuple[str, Rule]:
 
     Examples:
         >>> regex, rule = split_match_spec("a=b=ours")
-        >>> regex, rule.kind
+        >>> regex, rule.kind.value
         ('a=b', 'ours')
     """
     positions = [i for i, ch in enumerate(spec) if ch == "="]
@@ -337,7 +373,7 @@ def assign_rules(hunks: list[Hunk], *, by_number: dict[int, Rule] | None = None,
         if rule is None:
             raise Refusal("hunk %d (lines %d-%d) has no rule - give --hunk %d=RULE or --all"
                           % (h.n, h.start, h.end, h.n))
-        if rule.kind == "base" and h.base is None:
+        if rule.kind is RuleKind.BASE and h.base is None:
             raise Refusal("hunk %d (lines %d-%d) has no ||||||| base section, so `base` cannot "
                           "apply (only a diff3-style hunk has one)" % (h.n, h.start, h.end))
         rules.append(rule)
@@ -379,14 +415,21 @@ def _join(first: list[str], second: list[str], eol: str, markdown: bool) -> list
 
 
 def _replacement(hunk: Hunk, rule: Rule, read_file, markdown: bool = False) -> list[str]:
-    if rule.kind == "file":
+    if rule.kind is RuleKind.FILE:
         return _file_lines(read_file(rule.path), hunk.eol)
-    if rule.kind == "both":
+    if rule.kind is RuleKind.BOTH:
         return _join(hunk.ours, hunk.theirs, hunk.eol, markdown)
-    if rule.kind == "both-theirs-first":
+    if rule.kind is RuleKind.BOTH_THEIRS_FIRST:
         return _join(hunk.theirs, hunk.ours, hunk.eol, markdown)
-    sides = {"ours": hunk.ours, "theirs": hunk.theirs, "base": hunk.base or []}
-    return list(sides[rule.kind])
+    if rule.kind is RuleKind.BASE:
+        if hunk.base is None:
+            # Checked here as well as in assign_rules: resolve_text is exported, and reading a
+            # missing base as an empty one deleted both sides without a word.
+            raise Refusal("hunk %d (lines %d-%d) has no ||||||| base section, so `base` cannot "
+                          "apply (only a diff3-style hunk has one)"
+                          % (hunk.n, hunk.start, hunk.end))
+        return list(hunk.base)
+    return list(hunk.ours if rule.kind is RuleKind.OURS else hunk.theirs)
 
 
 def resolve_text(text: str, rules: list[Rule], *, read_file=_read_replacement,

@@ -32,6 +32,7 @@ exception into a hook.
 
 import contextlib
 import json
+import math
 import os
 import re
 import ssl
@@ -314,12 +315,36 @@ def _parse(raw, questions, latency):
         if q.type == "choice" and isinstance(q.criteria, dict) and (
                 not isinstance(value, str) or value not in q.criteria):
             raise _BadResponse("choice %r not among the options" % (value,))
+        if q.type == "noul" and not _is_number_within(value, 1):
+            raise _BadResponse("noul %r is not a probability: %r" % (q.id, value))
+        if q.type == "score" and not _is_number_within(value, _score_top(q.criteria)):
+            raise _BadResponse("score %r is not a level: %r" % (q.id, value))
         answers[q.id] = Answer(type=q.type, value=value, probabilities=a.get("probabilities"),
                                confidence=a.get("confidence"))
     usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
     return Result(answers=answers, latency_ms=latency,
                   input_tokens=_token_count(usage.get("input_tokens")),
                   model=str(data.get("model", "")))
+
+
+def _is_number_within(value, top):
+    """True for a finite JSON number in [0, top]; never for a bool, a string or null.
+
+    The boundary check every noul/score consumer relies on: once parsed, "not a number" can only
+    mean the request failed, so a gate a server sends as "0.02", true or null cannot read as
+    unanswered and let a suppressed pick through. bool is excluded by exact type, since True is
+    an int that compares >= every threshold below 1.
+    """
+    return type(value) in (int, float) and math.isfinite(value) and 0 <= value <= top
+
+
+def _score_top(criteria):
+    """The highest level a score answer may name: levels count from 0, so len(criteria) - 1.
+    Unsized criteria give no upper bound beyond finiteness."""
+    try:
+        return max(len(criteria) - 1, 0)
+    except TypeError:
+        return math.inf
 
 
 def _token_count(value):

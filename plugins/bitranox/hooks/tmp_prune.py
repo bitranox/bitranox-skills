@@ -37,6 +37,7 @@ open, so a failed rename means "in use" and the dir is left alone.
 """
 
 import argparse
+import bisect
 import json
 import os
 import re
@@ -214,17 +215,25 @@ class HolderIndex:
 
     `method` names how it was read: `procfs`, `lsof`, `rename` (Windows: probe at delete time) or
     `none`. `held()` answers None whenever the method cannot answer for one path up front.
+
+    `paths` is kept sorted and unique, so `held()` answers by bisection: it runs once per
+    candidate in `plan()` and again per pruned dir in `apply()`, and a linear scan made each call
+    cost every fd, cwd and maps line of every process, most of them repeats of one path.
     """
 
     method: str
     paths: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "paths", tuple(sorted(set(self.paths))))
 
     @classmethod
     def build(cls, cfg: PruneConfig) -> HolderIndex:
         if os.name == "nt":
             return cls("rename")
         if Path("/proc/self/fd").is_dir():
-            return cls("procfs", tuple(_procfs_held_paths()))
+            # A set first: the stream repeats a path once per fd, map and process holding it.
+            return cls("procfs", tuple(set(_procfs_held_paths())))
         held = _lsof_held_paths(cfg.uid)
         if held is None:
             return cls("none")
@@ -235,7 +244,13 @@ class HolderIndex:
             return None
         target = os.path.realpath(path)
         prefix = target.rstrip(os.sep) + os.sep
-        return any(p == target or p.startswith(prefix) for p in self.paths)
+        # In sorted order every path below `target` sits in one run starting where `prefix`
+        # would be inserted, and `prefix` never sorts before `target` itself.
+        at = bisect.bisect_left(self.paths, target)
+        if at < len(self.paths) and self.paths[at] == target:
+            return True
+        below = bisect.bisect_left(self.paths, prefix, lo=at)
+        return below < len(self.paths) and self.paths[below].startswith(prefix)
 
 
 def _procfs_held_paths() -> Iterator[str]:

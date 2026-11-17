@@ -29,9 +29,12 @@ Each shell is named once per session. NON-BLOCKING: additionalContext only, exit
 any error. ASCII only.
 """
 
+import hashlib
 import json
+import os
 import re
 import sys
+from dataclasses import dataclass
 
 from self_improve_signals import session_state_path
 
@@ -159,6 +162,18 @@ class _Replay:
                 and not any(key in self.outstanding for key in entry[1])]
 
 
+def _feed(replay, line):
+    """Advance `replay` by one transcript line; a line naming none of the record kinds is skipped."""
+    if not any(mark in line for mark in ("tool_use", "tool_result", "task-notification")):
+        return
+    try:
+        record = json.loads(line)
+    except ValueError:
+        return
+    if isinstance(record, dict):
+        replay.record(record)
+
+
 def forgotten_backstops(lines, delivering=""):
     """[(shell id, command)] of live deadline shells whose guarded tasks have all reported.
 
@@ -166,16 +181,137 @@ def forgotten_backstops(lines, delivering=""):
     delivered now, whose tasks count as reported."""
     replay = _Replay()
     for line in lines:
-        if not any(mark in line for mark in ("tool_use", "tool_result", "task-notification")):
-            continue
-        try:
-            record = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(record, dict):
-            replay.record(record)
+        _feed(replay, line)
     replay.report(_reported_ids(delivering))
     return replay.forgotten()
+
+
+# ---- resuming the replay where the previous notification left it --------------------------------
+#
+# A notification arrives throughout a session while its transcript keeps growing, so replaying
+# from byte 0 each time made the session's total cost notifications x transcript size: measured
+# 367 ms per notification on a 147 MB transcript with 158 notifications in it. The replay state and
+# the byte offset it reached are kept per session instead, and the next notification reads only
+# what was appended. The offset is trusted only while the file still holds the same bytes in front
+# of it (a digest of the last _TAIL bytes); a shorter file, another path or unreadable state means
+# a full replay, which is always correct.
+
+_RESUME_SUFFIX = ".forgotten-backstops-replay.json"
+_TAIL = 64
+
+
+def _string(value):
+    if not isinstance(value, str):
+        raise ValueError("not a string")
+    return value
+
+
+def _strings(value, length=None):
+    if not isinstance(value, list) or (length is not None and len(value) != length):
+        raise ValueError("not a list of the expected length")
+    return [_string(x) for x in value]
+
+
+def _object(raw, key):
+    value = raw.get(key)
+    if not isinstance(value, dict):
+        raise ValueError(key + " is not an object")
+    return {_string(k): v for k, v in value.items()}
+
+
+def _replay_to_json(replay):
+    return {"launches": {k: list(v) for k, v in replay.launches.items()},
+            "outstanding": dict(replay.outstanding),
+            "deadlines": {k: [v[0], sorted(v[1]), v[2]] for k, v in replay.deadlines.items()},
+            "finished": sorted(replay.finished), "aliases": dict(replay.aliases)}
+
+
+def _replay_from_json(raw):
+    """The _Replay `_replay_to_json` wrote. Raises ValueError on any field of the wrong shape."""
+    if not isinstance(raw, dict):
+        raise ValueError("replay state is not an object")
+    replay = _Replay()
+    replay.launches = {k: tuple(_strings(v, 3)) for k, v in _object(raw, "launches").items()}
+    replay.outstanding = {k: _string(v) for k, v in _object(raw, "outstanding").items()}
+    for shell, entry in _object(raw, "deadlines").items():
+        if not isinstance(entry, list) or len(entry) != 3:
+            raise ValueError("a deadline is not [command, guarded, message id]")
+        replay.deadlines[shell] = [_string(entry[0]), set(_strings(entry[1])), _string(entry[2])]
+    replay.finished = set(_strings(raw.get("finished")))
+    replay.aliases = {k: _string(v) for k, v in _object(raw, "aliases").items()}
+    return replay
+
+
+@dataclass(frozen=True)
+class _ResumePoint:
+    """Where the last replay of `path` stopped, and the replay state it had reached there."""
+
+    path: str
+    offset: int
+    tail: str              # sha256 hex of the _TAIL bytes in front of `offset`
+    replay: _Replay        # the state reached at `offset`
+
+
+def _parse_resume(raw):
+    """The _ResumePoint a decoded state file holds. Raises ValueError on any field of the wrong shape."""
+    if not isinstance(raw, dict):
+        raise ValueError("resume state is not an object")
+    offset = raw.get("offset")
+    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        raise ValueError("offset is not a byte count")
+    return _ResumePoint(path=_string(raw.get("path")), offset=offset,
+                        tail=_string(raw.get("tail")), replay=_replay_from_json(raw.get("replay")))
+
+
+def _load_resume(session):
+    try:
+        with open(session_state_path(session, _RESUME_SUFFIX), encoding="utf-8") as fh:
+            return _parse_resume(json.load(fh))
+    except (OSError, ValueError):
+        return None
+
+
+def _save_resume(session, point):
+    path = session_state_path(session, _RESUME_SUFFIX)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        staged = path.with_name(path.name + ".tmp")
+        staged.write_text(json.dumps({"path": point.path, "offset": point.offset,
+                                      "tail": point.tail, "replay": _replay_to_json(point.replay)}),
+                          encoding="utf-8")
+        os.replace(staged, path)                   # a reader never sees half a state file
+    except OSError:
+        pass
+
+
+def _tail_digest(fh, offset):
+    fh.seek(max(0, offset - _TAIL))
+    return hashlib.sha256(fh.read(min(offset, _TAIL))).hexdigest()
+
+
+def _replay_transcript(transcript, session):
+    """The replay of `transcript` up to its last complete line, resumed from the saved point.
+
+    Only complete lines are consumed: a transcript can be mid-write when this reads it, and a
+    half-written last line is left for the next notification, which will see it whole.
+    """
+    point = _load_resume(session) if session else None
+    with open(transcript, "rb") as fh:
+        size = os.fstat(fh.fileno()).st_size
+        replay, offset = _Replay(), 0
+        if (point is not None and point.path == transcript and point.offset <= size
+                and _tail_digest(fh, point.offset) == point.tail):
+            replay, offset = point.replay, point.offset
+        fh.seek(offset)
+        for raw in fh:
+            if not raw.endswith(b"\n"):
+                break
+            offset += len(raw)
+            _feed(replay, raw.decode("utf-8", errors="replace"))
+        tail = _tail_digest(fh, offset)
+    if session:
+        _save_resume(session, _ResumePoint(path=transcript, offset=offset, tail=tail, replay=replay))
+    return replay
 
 
 def _notice(shells):
@@ -218,10 +354,13 @@ def main():
         return 0
     session = str(event.get("session_id") or "")
     try:
-        with open(str(event.get("transcript_path") or ""), encoding="utf-8", errors="replace") as fh:
-            shells = forgotten_backstops(fh, prompt)
+        replay = _replay_transcript(str(event.get("transcript_path") or ""), session)
     except OSError:
         return 0
+    # Reported AFTER the state was saved: the notification being delivered may not be on disk yet,
+    # and once it is, the next replay reads its record like any other.
+    replay.report(_reported_ids(prompt))
+    shells = replay.forgotten()
     named = _already_named(session)
     fresh = [(shell, command) for shell, command in shells if shell not in named]
     if not fresh:

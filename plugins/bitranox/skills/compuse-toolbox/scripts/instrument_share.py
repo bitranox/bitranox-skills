@@ -59,6 +59,7 @@ from typing import Any
 
 from _claude_config import projects_dir
 from _cli_envelope import EXIT_ERROR, EXIT_NO, EXIT_YES, EnvelopeArgumentParser, emit, guarded
+from corpus_prompts import iter_transcript_lines
 
 try:                                                     # pragma: no cover - speed, not behaviour
     import orjson
@@ -213,9 +214,14 @@ def _record_events(rec: dict[str, Any], when: datetime) -> Iterable[Event]:
 
 def events_of(text: str) -> tuple[list[Event], str | None]:
     """The events of one transcript in time order, and its working directory. PURE."""
+    return _events_of_lines(text.split("\n"))
+
+
+def _events_of_lines(lines: Iterable[str]) -> tuple[list[Event], str | None]:
+    """`events_of` over lines arriving one at a time, so a file never has to be held whole."""
     events: list[Event] = []
     cwd = None
-    for line in text.split("\n"):
+    for line in lines:
         if not line.strip():
             continue
         try:
@@ -310,12 +316,13 @@ def measure(root: Path, *, since: date | None = None, until: date | None = None,
     report, seen, read = Report(), set(), 0
     for path in files:
         try:
-            text = path.read_bytes().decode("utf-8-sig", errors="replace")
+            # Streamed: reading the file whole held its bytes, text and lines at once, 1.2 GB
+            # for a 217 MB transcript. Only the session's events are kept.
+            events, cwd = _events_of_lines(line for _n, line in iter_transcript_lines(path))
         except OSError as exc:
             skipped.append(f"{path}: {exc}")
             continue
         read += 1
-        events, cwd = events_of(text)
         if not any(e.kind == "call" for e in events):
             continue
         if exclude is not None and cwd and exclude.search(cwd):

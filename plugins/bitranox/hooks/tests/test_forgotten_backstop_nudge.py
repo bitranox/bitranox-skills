@@ -225,6 +225,146 @@ def test_main_names_the_shell_and_the_stop_call_once(monkeypatch, tmp_path):
     assert _run(monkeypatch, tmp_path, t, note) == ""          # said once per shell per session
 
 
+
+def _main_on(monkeypatch, tmp_path, path, prompt, session="sid-1"):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+    event = {"hook_event_name": "UserPromptSubmit", "prompt": prompt, "session_id": session,
+             "transcript_path": str(path), "cwd": str(tmp_path)}
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(event)))
+    out = io.StringIO()
+    monkeypatch.setattr("sys.stdout", out)
+    assert F.main() == 0
+    text = out.getvalue().strip()
+    return json.loads(text)["hookSpecificOutput"]["additionalContext"] if text else ""
+
+
+def _blank_lines(path, needles):
+    """Overwrite, in place and at the same length, every line holding one of `needles`."""
+    data = path.read_bytes()
+    lines = data.split(b"\n")
+    hit = 0
+    for i, line in enumerate(lines):
+        if any(n in line for n in needles):
+            lines[i] = b" " * len(line)
+            hit += 1
+    assert hit, "fixture did not contain the lines to blank"
+    blanked = b"\n".join(lines)
+    assert len(blanked) == len(data)
+    path.write_bytes(blanked)
+
+
+def test_a_later_notification_replays_only_what_was_appended(monkeypatch, tmp_path):
+    """Each notification used to replay the WHOLE transcript from byte 0, so a session's cost grew
+    with notifications x transcript size: 367 ms per notification on a 147 MB transcript. The
+    second notification here must resume from where the first one stopped: the deadline launch
+    sits in the part already read, and blanking it afterwards (same length, so the offset still
+    holds) must not make the hook forget the shell."""
+    t = Transcript()
+    a1, a2 = t.agent(), t.agent()
+    t.background(DEADLINE, "bdead1")
+    t.notify("x1", a1)
+    path = tmp_path / "t.jsonl"
+    path.write_text("\n".join(t.lines) + "\n", encoding="utf-8")
+    assert _main_on(monkeypatch, tmp_path, path, notification("x1", a1)) == ""   # a2 still out
+    _blank_lines(path, [b"bdead1", b'"run_in_background"'])
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"type": "queue-operation", "operation": "enqueue",
+                             "content": notification("x2", a2)}) + "\n")
+    assert "bdead1" in _main_on(monkeypatch, tmp_path, path, notification("x2", a2))
+
+
+def test_control_a_transcript_that_shrank_is_replayed_from_the_start(monkeypatch, tmp_path):
+    t = Transcript()
+    a1, a2 = t.agent(), t.agent()
+    t.background(DEADLINE, "bdead1")
+    t.notify("x1", a1)
+    path = tmp_path / "t.jsonl"
+    path.write_text("\n".join(t.lines) + "\n", encoding="utf-8")
+    assert _main_on(monkeypatch, tmp_path, path, notification("x1", a1)) == ""
+    short = Transcript()
+    b1 = short.agent()
+    short.background(DEADLINE, "bdead9")
+    path.write_text("\n".join(short.lines) + "\n", encoding="utf-8")
+    note = _main_on(monkeypatch, tmp_path, path, notification("y1", b1))
+    assert "bdead9" in note and "bdead1" not in note
+
+
+def test_control_a_transcript_rewritten_before_the_resume_point_is_replayed(monkeypatch, tmp_path):
+    """The resume point is trusted only while the bytes in front of it are unchanged."""
+    t = Transcript()
+    a1 = t.agent()
+    t.notify("x1", a1)
+    path = tmp_path / "t.jsonl"
+    path.write_text("\n".join(t.lines) + "\n", encoding="utf-8")
+    assert _main_on(monkeypatch, tmp_path, path, notification("x1", a1)) == ""
+    other = Transcript()
+    b1 = other.agent()
+    other.background(DEADLINE, "bdead7")
+    body = "\n".join(other.lines) + "\n"
+    assert len(body.encode()) >= path.stat().st_size, "fixture must not shrink the file"
+    path.write_text(body, encoding="utf-8")
+    assert "bdead7" in _main_on(monkeypatch, tmp_path, path, notification("y1", b1))
+
+
+_GOOD_REPLAY = {"launches": {}, "outstanding": {}, "deadlines": {}, "finished": [], "aliases": {}}
+
+
+def _resume_with(monkeypatch, tmp_path, change):
+    """Arm a deadline, save the resume point at the file end, edit that point, deliver its report."""
+    t = Transcript()
+    a1 = t.agent()
+    t.background(DEADLINE, "bdead1")
+    path = tmp_path / "t.jsonl"
+    path.write_text("\n".join(t.lines) + "\n", encoding="utf-8")
+    assert _main_on(monkeypatch, tmp_path, path, "<task-notification>\n</task-notification>") == ""
+    (state_file,) = (tmp_path / "home").rglob("*.forgotten-backstops-replay.json")
+    saved = json.loads(state_file.read_text(encoding="utf-8"))
+    assert saved["offset"] == path.stat().st_size, "fixture: the saved point must be the file end"
+    state_file.write_text(json.dumps(dict(saved, **change)), encoding="utf-8")
+    return _main_on(monkeypatch, tmp_path, path, notification("x1", a1))
+
+
+@pytest.mark.parametrize("change", [
+    {"replay": dict(_GOOD_REPLAY, launches=[])},
+    {"replay": dict(_GOOD_REPLAY, deadlines={"bdead1": ["c", "k", "m"]})},
+    {"replay": dict(_GOOD_REPLAY, finished="toolu_0001")},
+    {"replay": dict(_GOOD_REPLAY, outstanding={"toolu_0001": 5})},
+    {"replay": "not an object"},
+    {"offset": "12"},
+    {"offset": True},
+])
+def test_a_resume_state_of_the_wrong_shape_means_a_full_replay(monkeypatch, tmp_path, change):
+    """Only the named field is wrong; path, offset and tail still point at the end of the file,
+    so a loader that trusted the shape would resume from a replay that never saw the deadline."""
+    assert "bdead1" in _resume_with(monkeypatch, tmp_path, change)
+
+
+def test_control_a_well_formed_saved_replay_is_resumed_from(monkeypatch, tmp_path):
+    """The liveness pair for the test above: the same edit with a WELL-FORMED empty replay is
+    trusted, so the shell is not named - which is what makes the wrong-shape cases evidence."""
+    assert _resume_with(monkeypatch, tmp_path, {"replay": _GOOD_REPLAY}) == ""
+
+
+def test_a_partial_last_line_is_read_once_it_is_complete(monkeypatch, tmp_path):
+    """A transcript can be mid-write when the hook reads it: the unfinished line is not consumed,
+    so the next notification still sees it whole."""
+    t = Transcript()
+    a1, a2 = t.agent(), t.agent()
+    t.notify("x1", a1)
+    head = "\n".join(t.lines) + "\n"
+    t.background(DEADLINE, "bdead3")
+    tail = t.lines[-2:]
+    path = tmp_path / "t.jsonl"
+    path.write_text(head + tail[0] + "\n" + tail[1][:40], encoding="utf-8")
+    assert _main_on(monkeypatch, tmp_path, path, notification("x1", a1)) == ""
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(tail[1][40:] + "\n")
+        fh.write(json.dumps({"type": "queue-operation", "operation": "enqueue",
+                             "content": notification("x2", a2)}) + "\n")
+    assert "bdead3" in _main_on(monkeypatch, tmp_path, path, notification("x2", a2))
+
+
 def test_main_is_silent_on_a_typed_prompt(monkeypatch, tmp_path):
     t = Transcript()
     a1 = t.agent()

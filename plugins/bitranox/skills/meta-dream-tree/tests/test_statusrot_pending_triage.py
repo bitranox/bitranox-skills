@@ -22,6 +22,7 @@ because keeping a checked entry on the worklist costs a re-read, while filing an
 as "just written" hides it for good.
 """
 
+import hashlib
 import json
 import subprocess
 import sys
@@ -207,3 +208,83 @@ class TestTheRenderedReportSaysWhichKind:
         text = _run("scan", "--chain", str(root)).stdout
         assert "RE-SURFACED" in text, text
         assert "WRITTEN SINCE" not in text and "NEVER CHECKED" not in text, text
+
+
+def _scan_counting_git_logs(root: Path, monkeypatch, capsys) -> tuple[dict, int]:
+    """Run scan in-process and count the `git log` processes it starts.
+
+    subprocess.run is the process-launch edge: the spy delegates to the real one, so the real git
+    still answers every question and only the number of launches is observed.
+    """
+    real_run = subprocess.run
+    calls: list[list[str]] = []
+
+    def spy(cmd, *args, **kwargs):
+        if isinstance(cmd, list) and "log" in cmd:
+            calls.append(list(cmd))
+        return real_run(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", spy)
+    rc = statusrot.main(["scan", "--chain", str(root), "--json"])
+    monkeypatch.setattr(subprocess, "run", real_run)
+    assert rc in (0, 1)
+    return json.loads(capsys.readouterr().out)["data"], len(calls)
+
+
+def _add_distinct_fact(root: Path, slug: str, when: str) -> None:
+    """A body no other fixture body resembles: git's --follow pairs near-identical tiny files as
+    renames of each other and then dates a fact by its neighbour's add."""
+    body = root / ".claude-memory" / "facts" / f"{slug}.md"
+    text = "\n".join(f"{slug} line {n} {hashlib.sha256(f'{slug}{n}'.encode()).hexdigest()}"
+                     for n in range(12))
+    body.write_text(f"---\nname: {slug}\n---\n\n{text}\n", encoding="utf-8")
+    _git(root / ".claude-memory", "add", f"facts/{slug}.md", when=when)
+    _git(root / ".claude-memory", "commit", "-q", "-m", f"add {slug}", when=when)
+
+
+def _tree_with_fresh_facts(root: Path, count: int) -> Path:
+    root.mkdir()
+    root = _store(root)
+    _add_fact(root, "oldfact", "2026-01-01T00:00:00")
+    _index(root, OLD)
+    _run("clear", "--chain", str(root), "--note", "checked")
+    lines = [OLD]
+    for n in range(count):
+        _add_distinct_fact(root, f"fresh{n}", "2036-01-01T00:00:00")
+        lines.append(f"- [F{n}](mem:fresh{n}) - When you need Y{n}, know it was shipped in "
+                     f"release {n}.")
+    _index(root, *lines)
+    return root
+
+
+class TestTheAgesComeFromOneHistoryWalk:
+    def test_the_git_log_count_does_not_grow_with_the_pending_list(
+            self, tmp_path: Path, monkeypatch, capsys):
+        """One git process per pending slug, each walking the whole history, is N history walks:
+        about 0.36 s each on a 452-commit store, so 200 pending entries cost over a minute. The
+        dating must cost the same at 2 pending entries as at 8."""
+        small, small_calls = _scan_counting_git_logs(
+            _tree_with_fresh_facts(tmp_path / "small", 2), monkeypatch, capsys)
+        large, large_calls = _scan_counting_git_logs(
+            _tree_with_fresh_facts(tmp_path / "large", 8), monkeypatch, capsys)
+        assert len(small["pending_triage"]["written_since"]) == 2, small["pending_triage"]
+        assert len(large["pending_triage"]["written_since"]) == 8, large["pending_triage"]
+        assert large_calls == small_calls, \
+            f"git log ran {small_calls} times for 2 pending and {large_calls} for 8"
+
+    def test_a_fact_renamed_after_the_sweep_is_still_dated_by_its_first_add(
+            self, tmp_path: Path):
+        """A rename is status R, not A, so one pass over the history cannot date the new name;
+        the per-path --follow lookup must still answer it, or a fresh fact falls to
+        never_checked."""
+        root = _store(tmp_path)
+        _add_fact(root, "oldfact", "2026-01-01T00:00:00")
+        _index(root, OLD)
+        _run("clear", "--chain", str(root), "--note", "checked")
+        _add_distinct_fact(root, "draft", "2036-01-01T00:00:00")
+        store = root / ".claude-memory"
+        _git(store, "mv", "facts/draft.md", "facts/freshfact.md")
+        _git(store, "commit", "-q", "-m", "rename", when="2037-01-01T00:00:00")
+        _index(root, OLD, FRESH)
+        t = _triage(root)
+        assert t["written_since"] == ["freshfact"], t

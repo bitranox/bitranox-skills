@@ -40,6 +40,7 @@ Non-blocking (additionalContext), capped per session, silent on any error.
 import json
 import re
 import sys
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from shell_text import is_shell_tool, iter_heredocs  # noqa: E402 - shared with the other command guards
@@ -398,12 +399,107 @@ def changes_state(text):
     return bool(CHANGES_STATE.search(text or ""))
 
 
+# ----------------------------------------------------------------------------- the ledger
+
+Shingle = tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class LedgerEntry:
+    """One script written earlier this session, as stored in the ledger file."""
+
+    path: str
+    purpose: str
+    tokens: frozenset[str]
+    sketch: frozenset[Shingle]
+    mutates: bool
+
+
+@dataclass(frozen=True)
+class Ledger:
+    """The per-session state file: the scripts seen so far and what the budgets have spent.
+
+    `last_observe` is None until the observe track first nudges.
+    """
+
+    entries: tuple[LedgerEntry, ...] = ()
+    covered: frozenset[str] = frozenset()
+    n_change: int = 0
+    n_observe: int = 0
+    last_observe: int | None = None
+
+
+class _BadLedger(ValueError):
+    """The ledger file holds valid JSON of a shape this hook did not write."""
+
+
+def _str_list(value, what):
+    if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
+        raise _BadLedger(what + " is not a list of strings")
+    return value
+
+
+def _count(raw, key):
+    value = raw.get(key, 0)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise _BadLedger(key + " is not a count")
+    return value
+
+
+def _parse_entry(raw):
+    if not isinstance(raw, dict):
+        raise _BadLedger("entry is not an object")
+    path, said, mutates = raw.get("p"), raw.get("d"), raw.get("m")
+    if not isinstance(path, str) or not isinstance(said, str) or not isinstance(mutates, bool):
+        raise _BadLedger("entry p/d/m has the wrong type")
+    shingle_rows = raw.get("s")
+    if not isinstance(shingle_rows, list):
+        raise _BadLedger("entry s is not a list")
+    sketch_ = frozenset(tuple(_str_list(row, "a shingle")) for row in shingle_rows)
+    return LedgerEntry(path=path, purpose=said, tokens=frozenset(_str_list(raw.get("t"), "t")),
+                       sketch=sketch_, mutates=mutates)
+
+
+def parse_ledger(raw):
+    """The Ledger a decoded state file holds. PURE. Raises _BadLedger on any field of the wrong shape.
+
+    Every field is checked here, once, because the file is a boundary: an entry of the wrong
+    shape used to crash the hook BEFORE it saved, so the bad file was never repaired and the
+    nudge stayed dead for the rest of the session; a string where a token list belongs was
+    iterated letter by letter.
+    """
+    if not isinstance(raw, dict):
+        raise _BadLedger("ledger is not an object")
+    entries = raw.get("entries", [])
+    if not isinstance(entries, list):
+        raise _BadLedger("entries is not a list")
+    last_observe = raw.get("last_observe")
+    if last_observe is not None and (isinstance(last_observe, bool) or not isinstance(last_observe, int)):
+        raise _BadLedger("last_observe is not an integer")
+    return Ledger(entries=tuple(_parse_entry(e) for e in entries),
+                  covered=frozenset(_str_list(raw.get("covered", []), "covered")),
+                  n_change=_count(raw, "n_change"), n_observe=_count(raw, "n_observe"),
+                  last_observe=last_observe)
+
+
+def ledger_to_json(ledger):
+    """The JSON-ready form of `ledger`, in the short-key layout the state file has always used. PURE."""
+    out = {"entries": [{"p": e.path, "d": e.purpose, "t": sorted(e.tokens),
+                        "s": [list(x) for x in sorted(e.sketch)], "m": e.mutates}
+                       for e in ledger.entries],
+           "covered": sorted(ledger.covered), "n_change": ledger.n_change,
+           "n_observe": ledger.n_observe}
+    if ledger.last_observe is not None:
+        out["last_observe"] = ledger.last_observe
+    return out
+
+
 # ----------------------------------------------------------------------------- kin detection
 
 def _document_frequency(entries):
     df = {}
     for entry in entries:
-        for token in entry.get("t") or []:
+        for token in entry.tokens:
             df[token] = df.get(token, 0) + 1
     return df
 
@@ -415,7 +511,7 @@ def _shares_topic(tokens, entry, df, ledger_size, rare_shared_needed):
     gate is what stops the junk group: every script that opens with the same boilerplate shares
     those words, and without the gate they all read as one lineage.
     """
-    shared = tokens & set(entry.get("t") or [])
+    shared = tokens & entry.tokens
     if len(shared) < 2:
         return False
     rare_max = max(2, int(ledger_size * 0.15))
@@ -430,12 +526,17 @@ def sketch(sh):
     down: measured on the real corpus, delrobo/delrobo_xj fell from 0.298 to 0.234 and stopped
     registering as the near-copy it is.
     """
-    return set(sorted(sh)[:SHINGLE_LIMIT])
+    return frozenset(sorted(sh)[:SHINGLE_LIMIT])
 
 
-def _shares_text(sh, entry):
-    """Two scripts are near-COPIES. PURE. The original signal, kept as a second recall channel."""
-    return similarity(sketch(sh), {tuple(x) for x in entry.get("s") or []}) >= SIMILARITY
+def _shares_text(live_sketch, entry):
+    """Two scripts are near-COPIES. PURE. The original signal, kept as a second recall channel.
+
+    `live_sketch` is sketch() of the script being written, computed ONCE by the caller: sketch()
+    sorts the whole shingle set, and redoing it per ledger entry cost ~0.6 s on a large script
+    against a full ledger.
+    """
+    return similarity(live_sketch, entry.sketch) >= SIMILARITY
 
 
 def find_kin(path, tokens, sh, entries, rare_shared_needed):
@@ -447,13 +548,14 @@ def find_kin(path, tokens, sh, entries, rare_shared_needed):
     script is not the same act as writing another one.
     """
     df = _document_frequency(entries)                 # once, not per candidate: this is a hot path
+    live_sketch = sketch(sh)                          # likewise: it sorts the whole shingle set
     kin = []
     for entry in entries:
-        if same_file(entry.get("p"), path):
+        if same_file(entry.path, path):
             continue
         if (_shares_topic(tokens, entry, df, len(entries), rare_shared_needed)
-                or _shares_text(sh, entry)
-                or numbered_retry(path, entry.get("p"))):
+                or _shares_text(live_sketch, entry)
+                or numbered_retry(path, entry.path)):
             kin.append(entry)
     return kin
 
@@ -473,30 +575,28 @@ def _state_path(session):
 
 def _load(session):
     try:
-        state = json.loads(_state_path(session).read_text(encoding="utf-8"))
-        return state if isinstance(state, dict) else {}
-    except Exception:                                     # noqa: BLE001 - absent/corrupt: start fresh
-        return {}
+        return parse_ledger(json.loads(_state_path(session).read_text(encoding="utf-8")))
+    except Exception:                                     # noqa: BLE001 - absent/corrupt/bad shape: start fresh
+        return Ledger()
 
 
-def _save(session, state):
+def _save(session, ledger):
     try:
         path = _state_path(session)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(state), encoding="utf-8")
+        path.write_text(json.dumps(ledger_to_json(ledger)), encoding="utf-8")
     except Exception:                                     # noqa: BLE001 - state must never break the hook
         pass
 
 
-def _record(state, path, script_purpose, tokens, sh, mutates):
-    entries = [e for e in state.get("entries") or [] if not same_file(e.get("p"), path)]
-    entries.append({"p": path, "d": script_purpose, "t": sorted(tokens),
-                    "s": [list(x) for x in sorted(sketch(sh))], "m": bool(mutates)})
-    state["entries"] = entries[-LEDGER_LIMIT:]
-    return state
+def _record(ledger, path, script_purpose, tokens, sh, mutates):
+    kept = [e for e in ledger.entries if not same_file(e.path, path)]
+    kept.append(LedgerEntry(path=path, purpose=script_purpose, tokens=frozenset(tokens),
+                            sketch=sketch(sh), mutates=bool(mutates)))
+    return replace(ledger, entries=tuple(kept[-LEDGER_LIMIT:]))
 
 
-def budget_allows(state, track, written):
+def budget_allows(ledger, track, written):
     """Is this track allowed to spend a nudge now? PURE.
 
     Split by track so a session full of repeated read-only probes cannot exhaust the budget the
@@ -504,12 +604,12 @@ def budget_allows(state, track, written):
     that lineage in 0% of unperturbed runs and these two reach it in 100%.
     """
     if track == "change":
-        return int(state.get("n_change") or 0) < CHANGE_NUDGE_CAP
-    return (int(state.get("n_observe") or 0) < OBSERVE_NUDGE_CAP
-            and written - int(state.get("last_observe") or -10 ** 6) >= OBSERVE_COOLDOWN)
+        return ledger.n_change < CHANGE_NUDGE_CAP
+    last = ledger.last_observe if ledger.last_observe is not None else -10 ** 6
+    return ledger.n_observe < OBSERVE_NUDGE_CAP and written - last >= OBSERVE_COOLDOWN
 
 
-def should_nudge(group, covered, state, track, written):
+def should_nudge(group, covered, ledger, track, written):
     """The whole firing rule, in one PURE place: enough JOBS, enough of them NEW, budget left.
 
     Counted in JOBS rather than paths, because a group of three has to be three attempts at one
@@ -520,7 +620,7 @@ def should_nudge(group, covered, state, track, written):
     fresh = distinct_jobs([p for p in group if not any(same_file(p, seen) for seen in covered)])
     return (len(jobs) >= VARIANTS_BEFORE_NUDGE
             and len(fresh) >= FRESH_SCRIPTS_PER_NUDGE
-            and budget_allows(state, track, written))
+            and budget_allows(ledger, track, written))
 
 
 # ----------------------------------------------------------------------------- the handover
@@ -528,9 +628,9 @@ def should_nudge(group, covered, state, track, written):
 def _ledger_lines(entries, limit=LEDGER_WINDOW):
     out = []
     for entry in entries[-limit:]:
-        said = (entry.get("d") or "").strip() or "(no stated purpose)"
-        out.append("  %s%s - %s" % (basename(entry.get("p") or "?"),
-                                    " [changes state]" if entry.get("m") else "", said[:80]))
+        said = entry.purpose.strip() or "(no stated purpose)"
+        out.append("  %s%s - %s" % (basename(entry.path or "?"),
+                                    " [changes state]" if entry.mutates else "", said[:80]))
     return out
 
 
@@ -589,11 +689,11 @@ def main():
     if not candidates or not session:
         return 0
 
-    state = _load(session)
+    ledger = _load(session)
     path, content = candidates[-1]                        # judge the last script this call writes
     for earlier, body in candidates[:-1]:                 # a multi-heredoc call still records them
-        state = _record(state, earlier, purpose(body), topic_tokens(earlier, purpose(body)),
-                        shingles(body), changes_state(body))
+        ledger = _record(ledger, earlier, purpose(body), topic_tokens(earlier, purpose(body)),
+                         shingles(body), changes_state(body))
 
     said = purpose(content)
     tokens = topic_tokens(path, said)
@@ -602,25 +702,24 @@ def main():
     track = "change" if mutates else "observe"
     # A state-changing script needs only ONE rare shared token to count as kin: the cost of being
     # wrong is one extra look at the ledger, and the cost of missing is a machine.
-    entries = state.get("entries") or []
-    kin = find_kin(path, tokens, sh, entries, rare_shared_needed=1 if mutates else 2)
-    group = [e.get("p") for e in kin] + [path]
-    covered = set(state.get("covered") or [])
-    written = len(entries) + 1
+    kin = find_kin(path, tokens, sh, ledger.entries, rare_shared_needed=1 if mutates else 2)
+    group = [e.path for e in kin] + [path]
+    written = len(ledger.entries) + 1
 
-    fire = should_nudge(group, covered, state, track, written)
+    fire = should_nudge(group, ledger.covered, ledger, track, written)
     if fire:
-        state["covered"] = sorted(covered | set(group))
-        key = "n_change" if track == "change" else "n_observe"
-        state[key] = int(state.get(key) or 0) + 1
-        if track == "observe":
-            state["last_observe"] = written
-        nth = int(state.get("n_change") or 0) + int(state.get("n_observe") or 0)
-    state = _record(state, path, said, tokens, sh, mutates)
-    _save(session, state)
+        covered = ledger.covered | frozenset(group)
+        if track == "change":
+            ledger = replace(ledger, covered=covered, n_change=ledger.n_change + 1)
+        else:
+            ledger = replace(ledger, covered=covered, n_observe=ledger.n_observe + 1,
+                             last_observe=written)
+        nth = ledger.n_change + ledger.n_observe
+    ledger = _record(ledger, path, said, tokens, sh, mutates)
+    _save(session, ledger)
 
     if fire:
-        message = build_message(group, state.get("entries") or [], nth)
+        message = build_message(group, ledger.entries, nth)
         sys.stdout.write(json.dumps({"hookSpecificOutput": {
             "hookEventName": "PreToolUse", "additionalContext": message}}) + "\n")
         sys.stdout.flush()

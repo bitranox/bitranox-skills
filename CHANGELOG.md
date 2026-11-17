@@ -30,6 +30,48 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.10.4]
+
+### Fixed
+
+A data-architecture and performance review of the shipped hooks and scripts. Each fix has a test
+that failed before it.
+
+- Hooks, typed state: `topic_store.load` returns a frozen `TopicFile`, and the retry-with-a-flag and
+  jig-repetition nudges parse their state files into frozen records, so a malformed file starts
+  fresh instead of reaching the hook as a stray dict. `reformat-md-tables` no longer walks into
+  `.venv*` or other virtual-environment trees.
+- Hooks, bounded cost: the self-improve gate reads the transcript in one streaming pass;
+  `forgotten-backstop-nudge` resumes from the offset it last read; scheduled-prompt lookup
+  streams the transcript instead of loading it; `tmp_prune` matches holders by bisection;
+  `block-git-semicolon-chain` is linear in the command length; `block-masked-gate-exit` and
+  `git-footgun-guard` stop recomputing the same whole-command view; the classifier and
+  skill-router stop recompiling their patterns per prompt and bound their score inputs.
+- `compuse-toolbox` jigs, memory that no longer grows with the input: `jsonl_grep` on stdin,
+  `grep_all`, `conflict_scan` (which also stops scanning `.venv`, `node_modules`, caches and
+  binary files), `gate` (writes output to the log as it arrives, stdout and stderr in arrival
+  order), `fleet_ssh` (forwards the command's stderr while it runs), `corpus_prompts`,
+  `instrument_share`, `guard_replay`, `markerwatch` and `winlog`.
+- `compuse-toolbox` jigs, repeated work: `transcript_index` re-indexes only new lines (and no
+  longer crashes on a JSON line that is not an object); `enforced` parses only files that mention
+  the identifier, so an unrelated unparsable file no longer turns the verdict into exit 2;
+  `plan_codecheck` copies a git checkout's files without its ignored directories; `diffbehave`,
+  `adjudicate` and `conflict_resolve` validate their records against closed keys and enums.
+- `meta-dream-tree`: `dedup_scan` scores candidate pairs row by row and tokenises each fact once
+  (a tree-wide scan measured 250 s to 27 s); `statusrot` dates pending facts from one git history
+  walk.
+- `meta-self-improve`: `jev_shadow_report` keeps only the records it reports; `classifier_eval`
+  arms are typed `ArmSpec` records whose shape is an enum, refused where a misspelt arm is written.
+- `net-rotating-proxies`: `chunked_fetch` saves its manifest on a timer instead of after every
+  chunk, and still on the error path; `proxy_pool` records a good proxy once per run rather than
+  once per item, and `acquire` no longer re-reads the store.
+- `git-worktrees`: `landed.py` spawns a fixed number of git calls however many target commits
+  there are (measured 1.6 s to 0.08 s).
+- `sec-appsec-web-baseline`: `audit_headers` grades a non-HTML response from its headers without
+  downloading the body, and reads an HTML body only up to its cap.
+- `meta-claude-hooks`: `hookdoc_stamp` parses each stamp into a typed record, so a misshaped stamp
+  reports as broken instead of crashing or reading as drift.
+
 ## [11.10.3]
 
 ### Changed

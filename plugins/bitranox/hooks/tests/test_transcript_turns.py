@@ -389,6 +389,63 @@ def test_a_scheduling_call_early_in_a_long_transcript_is_still_found(tmp_path):
     assert T.scheduled_by_the_session(CRON_TEXT, t) is True
 
 
+def _transcript_of_size(tmp_path, name, head_records, total_bytes):
+    """A transcript of about `total_bytes`: `head_records`, then 1 MiB filler lines that are each a
+    CronCreate call with no prompt, so every one is found by the byte search AND decoded."""
+    p = tmp_path / name
+    filler = (json.dumps(_schedule("CronCreate", "", note="x" * (1024 * 1024))) + "\n").encode("utf-8")
+    with p.open("wb") as fh:
+        for record in head_records:
+            fh.write((json.dumps(record) + "\n").encode("utf-8"))
+        for _ in range(max(1, total_bytes // len(filler))):
+            fh.write(filler)
+    return str(p)
+
+
+def test_a_scheduling_call_more_than_64_mib_back_is_still_found(tmp_path):
+    """The scan read only the last 64 MiB, so a cron created early in a long session fired as a
+    'typed' prompt - the very case the whole-file search exists for. Transcripts here reach 154 MB."""
+    t = _transcript_of_size(tmp_path, "long.jsonl", [_schedule("CronCreate", CRON_TEXT)],
+                            70 * 1024 * 1024)
+    assert T.scheduled_by_the_session(CRON_TEXT, t) is True
+
+
+def test_the_scheduled_prompt_scan_holds_a_bounded_window_whatever_the_file_size(tmp_path):
+    """It runs on EVERY typed prompt, twice (skill-router and recall-memory); reading the file as
+    one bytes object cost ~140 MB of RSS per process on a long session. Peak memory must not grow
+    with the transcript: compare 4 MiB against 32 MiB."""
+    import tracemalloc
+
+    def peak(size):
+        t = _transcript_of_size(tmp_path, "t%d.jsonl" % size, [_schedule("CronCreate", CRON_TEXT)],
+                                size)
+        tracemalloc.start()
+        try:
+            assert CRON_TEXT in T.scheduled_prompts(t)
+            return tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+
+    small, large = peak(4 * 1024 * 1024), peak(32 * 1024 * 1024)
+    assert large < 2 * small, "peak %d bytes at 4 MiB, %d at 32 MiB" % (small, large)
+
+
+def test_a_scheduling_call_on_the_last_line_without_a_newline_is_found(tmp_path):
+    p = tmp_path / "t.jsonl"
+    p.write_text(json.dumps(_asst("hi")) + "\n" + json.dumps(_schedule("CronCreate", CRON_TEXT)),
+                 encoding="utf-8")
+    assert T.scheduled_by_the_session(CRON_TEXT, str(p)) is True
+
+
+def test_a_scheduling_call_straddling_a_read_boundary_is_found(tmp_path):
+    """The file is read in pieces; a record cut by a piece boundary must still be read whole."""
+    for pad in (0, 1, 7, 100, 4095):
+        p = tmp_path / ("pad%d.jsonl" % pad)
+        head = json.dumps(_asst("y" * (T.SCHEDULE_CHUNK_BYTES - 40 + pad))) + "\n"
+        p.write_text(head + json.dumps(_schedule("CronCreate", CRON_TEXT)) + "\n", encoding="utf-8")
+        assert T.scheduled_by_the_session(CRON_TEXT, str(p)) is True, pad
+
+
 def test_is_scheduled_record_reads_the_record_the_harness_writes_afterwards():
     assert T.is_scheduled_record(_fired(CRON_TEXT)) is True
     assert T.is_scheduled_record(_user(CRON_TEXT)) is False

@@ -63,10 +63,13 @@ import json
 import os
 import re
 import sys
+from collections import deque
+from dataclasses import dataclass
 from pathlib import Path
 
 from _claude_config import projects_dir
 from _cli_envelope import EXIT_ERROR, EnvelopeArgumentParser, emit, guarded
+from corpus_prompts import iter_transcript_lines
 
 try:                                                     # fast path when available (uv run installs it)
     import orjson
@@ -167,42 +170,104 @@ def _extract(text: str, tool: str, field: str, transcript: str | None = None):
     from (for a person tracing it by hand); `_extract` is the only place that knows which file a
     call came from.
     """
-    calls, errors, without_field = [], {}, 0
-    for line in _records(text):
-        if not line.strip():
-            continue
-        try:
-            rec = _loads(line)
-        except Exception:                                # noqa: BLE001 - any parse failure is a skip
-            continue
-        if not isinstance(rec, dict):
-            continue
-        cwd = rec.get("cwd")
-        message = rec.get("message")
-        # A record whose message or input is not an object is malformed, not a crash: one such
-        # line used to abort the whole replay with an AttributeError that exited 1 ("never fired").
-        content = message.get("content") if isinstance(message, dict) else None
-        if not isinstance(content, list):
-            continue
-        for block in content:
-            if not isinstance(block, dict):
-                continue
-            if block.get("type") == "tool_use" and block.get("name") == tool:
-                payload = block.get("input")
-                if not isinstance(payload, dict):
-                    continue
-                command = payload.get(field)
-                if isinstance(command, str):
-                    calls.append({"id": block.get("id"), "command": command,
-                                  "cwd": cwd, "error": None, "transcript": transcript})
-                else:
-                    without_field += 1
-            elif block.get("type") == "tool_result" and block.get("is_error"):
-                body = block.get("content")
-                errors[block.get("tool_use_id")] = body if isinstance(body, str) else _dumps(body)
-    for call in calls:
-        call["error"] = errors.get(call["id"])
-    return calls, without_field
+    return _extract_lines(_records(text), tool, field, transcript)
+
+
+def _extract_lines(lines, tool: str, field: str, transcript: str | None = None):
+    """`_extract` over lines arriving one at a time, so a transcript is never held whole."""
+    scan = _CallScan(tool, field, transcript)
+    calls = list(scan.calls(lines))
+    return calls, scan.without_field
+
+
+@dataclass
+class _Pending:
+    """A call waiting for its tool_result, which tells whether it failed and with what."""
+
+    call: dict
+    resolved: bool
+
+
+class _CallScan:
+    """The calls of one tool in one transcript, each yielded once its result has arrived.
+
+    A call is held only until its tool_result follows it (Claude Code writes the result after the
+    call), and calls are yielded in file order, so what is held is the calls still in flight, not
+    the file's calls: collecting every call and every failed result of every tool before joining
+    them grew with the transcript. A call with no id, or one whose result never arrives (an
+    interrupted session), is yielded at the latest when the file ends. Results for other tools,
+    and a result that comes BEFORE its call, are not kept.
+    """
+
+    def __init__(self, tool: str, field: str, transcript: str | None):
+        self.tool = tool
+        self.field = field
+        self.transcript = transcript
+        self.without_field = 0
+
+    def calls(self, lines):
+        """Yield every call of `self.tool` in file order, its `error` filled in."""
+        pending: deque[_Pending] = deque()
+        waiting: dict[str, list[_Pending]] = {}
+        for line in lines:
+            for block, cwd in _content_blocks(line):
+                if block.get("type") == "tool_use" and block.get("name") == self.tool:
+                    self._take_call(block, cwd, pending, waiting)
+                elif block.get("type") == "tool_result":
+                    _resolve(block, waiting)
+            while pending and pending[0].resolved:
+                yield pending.popleft().call
+        while pending:
+            yield pending.popleft().call
+
+    def _take_call(self, block, cwd, pending, waiting) -> None:
+        payload = block.get("input")
+        if not isinstance(payload, dict):
+            return
+        command = payload.get(self.field)
+        if not isinstance(command, str):
+            self.without_field += 1
+            return
+        call_id = block.get("id")
+        entry = _Pending({"id": call_id, "command": command, "cwd": cwd, "error": None,
+                          "transcript": self.transcript}, resolved=not isinstance(call_id, str))
+        pending.append(entry)
+        if isinstance(call_id, str):
+            waiting.setdefault(call_id, []).append(entry)
+
+
+def _resolve(block, waiting) -> None:
+    """Mark the calls this tool_result answers as resolved, recording a failure's text."""
+    tool_use_id = block.get("tool_use_id")
+    if not isinstance(tool_use_id, str):
+        return
+    for entry in waiting.pop(tool_use_id, ()):
+        if block.get("is_error"):
+            body = block.get("content")
+            entry.call["error"] = body if isinstance(body, str) else _dumps(body)
+        entry.resolved = True
+
+
+def _content_blocks(line: str):
+    """`(block, cwd)` for every object block of one JSONL record; nothing for a malformed one."""
+    if not line.strip():
+        return
+    try:
+        rec = _loads(line)
+    except Exception:                                    # noqa: BLE001 - any parse failure is a skip
+        return
+    if not isinstance(rec, dict):
+        return
+    message = rec.get("message")
+    # A record whose message or input is not an object is malformed, not a crash: one such
+    # line used to abort the whole replay with an AttributeError that exited 1 ("never fired").
+    content = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(content, list):
+        return
+    cwd = rec.get("cwd")
+    for block in content:
+        if isinstance(block, dict):
+            yield block, cwd
 
 
 def extract_calls(text: str, tool: str = "Bash", field: str | None = None,
@@ -344,60 +409,85 @@ def classify(calls, predicate, sample: int = 0, block_pattern: str = DEFAULT_BLO
     logs it, JSON-dumps it, hands it to another tool - would silently leak every firing command,
     cwd and error it never asked to carry.
     """
-    second, by_keyword = _forwarding(predicate)
-    declared = _second_param_name(predicate)
-    if declared and declared not in _SECOND_ARG_NAMES:
-        # Said ONCE, before the loop, and on stderr so it cannot corrupt the JSON on stdout. This
-        # is a behaviour CHANGE for a caller upgrading: that parameter used to receive the cwd,
-        # by arity and regardless of meaning. Announcing it is the whole lesson of the bug being
-        # fixed here - a result that shifts without saying so is the expensive kind.
-        print("warning: second parameter %r is not recognised (expected one of %s); "
-              "leaving it at its default"
-              % (declared, ", ".join(_SECOND_ARG_NAMES)), file=sys.stderr)
-    extra = {"cwd": None, "tool_name": tool}
-    fires, blocked, errored, clean, predicate_errors = [], 0, 0, 0, 0
+    tally = _Tally(predicate, block_pattern=block_pattern, tool=tool)
     for call in calls:
-        extra["cwd"] = call["cwd"]
+        tally.judge(call)
+    return tally.report(sample=sample, collect_fires=collect_fires)
+
+
+class _Tally:
+    """`classify`, one call at a time, so a replay judges each file's calls as it reads them.
+
+    Only the firings are kept (for the sample and `--firings`); a quiet call is counted and
+    dropped. Collecting every distinct call of the corpus before judging the first made peak
+    memory grow with the corpus.
+    """
+
+    def __init__(self, predicate, *, block_pattern: str, tool: str):
+        self.predicate = predicate
+        self.block_pattern = block_pattern
+        self.second, self.by_keyword = _forwarding(predicate)
+        declared = _second_param_name(predicate)
+        if declared and declared not in _SECOND_ARG_NAMES:
+            # Said ONCE, before the loop, and on stderr so it cannot corrupt the JSON on stdout.
+            # This is a behaviour CHANGE for a caller upgrading: that parameter used to receive
+            # the cwd, by arity and regardless of meaning. Announcing it is the whole lesson of
+            # the bug being fixed here - a result that shifts without saying so is the expensive
+            # kind.
+            print("warning: second parameter %r is not recognised (expected one of %s); "
+                  "leaving it at its default"
+                  % (declared, ", ".join(_SECOND_ARG_NAMES)), file=sys.stderr)
+        self.extra = {"cwd": None, "tool_name": tool}
+        self.fires = []
+        self.total = self.blocked = self.errored = self.clean = self.predicate_errors = 0
+
+    def judge(self, call) -> None:
+        """Judge one call and count it; keep it only if the predicate fired."""
+        self.total += 1
+        self.extra["cwd"] = call["cwd"]
         try:
-            verdict = _judge(predicate, call["command"], second, by_keyword,
-                             extra.get(second))
+            verdict = _judge(self.predicate, call["command"], self.second, self.by_keyword,
+                             self.extra.get(self.second))
         except (Exception, SystemExit):                  # noqa: BLE001 - a crash is a finding, not a stop
-            predicate_errors += 1
-            continue
+            self.predicate_errors += 1
+            return
         if not verdict:
-            continue
-        fires.append(call)
-        if is_gate_block(call["error"], block_pattern):
-            blocked += 1
+            return
+        self.fires.append(call)
+        if is_gate_block(call["error"], self.block_pattern):
+            self.blocked += 1
         elif call["error"]:
-            errored += 1
+            self.errored += 1
         else:
-            clean += 1
-    # Drawn AFTER the walk, so it can span the whole corpus rather than its first file.
-    samples = _spread_sample(fires, sample)
-    total = len(calls)
-    judged = total - predicate_errors
-    report = {
-        "commands": total,
-        "judged": judged,
-        "fires": len(fires),
-        "fire_rate_pct": round(100 * len(fires) / judged, 3) if judged else None,
-        "blocked": blocked,
-        "errored": errored,
-        "completed_fine": clean,
-        "precision_pct": round(100 * blocked / len(fires), 2) if fires else None,
-        "predicate_errors": predicate_errors,
-        "block_pattern": block_pattern,
-        # Which second argument the predicate was given, so a reader can tell WHICH reading of the
-        # guard was measured. Leaving this implicit is what let a cwd-as-tool_name run pass as real.
-        "forwarded_second_arg": second,
-        "samples": samples,
-    }
-    if collect_fires:
-        # Only built on request, and only ever read by `replay`, which pops it straight back out
-        # before returning - the key never survives into a report a caller can hold onto.
-        report["fire_calls"] = fires
-    return report
+            self.clean += 1
+
+    def report(self, *, sample: int = 0, collect_fires: bool = False):
+        """The `classify` report over every call judged so far."""
+        fires = self.fires
+        # Drawn AFTER the walk, so it can span the whole corpus rather than its first file.
+        judged = self.total - self.predicate_errors
+        report = {
+            "commands": self.total,
+            "judged": judged,
+            "fires": len(fires),
+            "fire_rate_pct": round(100 * len(fires) / judged, 3) if judged else None,
+            "blocked": self.blocked,
+            "errored": self.errored,
+            "completed_fine": self.clean,
+            "precision_pct": round(100 * self.blocked / len(fires), 2) if fires else None,
+            "predicate_errors": self.predicate_errors,
+            "block_pattern": self.block_pattern,
+            # Which second argument the predicate was given, so a reader can tell WHICH reading of
+            # the guard was measured. Leaving this implicit is what let a cwd-as-tool_name run
+            # pass as real.
+            "forwarded_second_arg": self.second,
+            "samples": _spread_sample(fires, sample),
+        }
+        if collect_fires:
+            # Only built on request, and only ever read by `replay`, which pops it straight back
+            # out before returning - the key never survives into a report a caller can hold onto.
+            report["fire_calls"] = fires
+        return report
 
 
 def load_predicate(path: str, func_name: str):
@@ -455,30 +545,22 @@ def replay(root: str, predicate, tool: str = "Bash", sample: int = 0,
     """
     field = field or payload_field(tool)
     base = Path(root).expanduser()
-    calls, files_read, skipped, seen, duplicates, without_field = [], 0, [], set(), 0, 0
+    files_read, skipped, seen, duplicates, without_field = 0, [], set(), 0, 0
+    tally = _Tally(predicate, block_pattern=block_pattern, tool=tool)
     for f in _corpus_files(base, skipped):
         try:
-            # utf-8-sig: a BOM would otherwise make the first record unparseable and drop it.
-            text = f.read_text(encoding="utf-8-sig", errors="replace")
+            missing, dupes = _replay_file(f, tally, seen, tool=tool, field=field)
         except OSError as exc:
             skipped.append("%s: %s" % (f, exc))
             continue
         files_read += 1
-        file_calls, missing = _extract(text, tool, field, transcript=str(f))
         without_field += missing
-        for call in file_calls:
-            if call["id"] is not None:
-                if call["id"] in seen:
-                    duplicates += 1
-                    continue
-                seen.add(call["id"])
-            calls.append(call)
-    if not calls and without_field:
+        duplicates += dupes
+    if not tally.total and without_field:
         raise UnreadableField(
             "no %s call carries an input field %r (%d call(s) of that tool lack it) - check "
             "--field" % (tool, field, without_field))
-    report = classify(calls, predicate, sample=sample, block_pattern=block_pattern, tool=tool,
-                      collect_fires=bool(firings_path))
+    report = tally.report(sample=sample, collect_fires=bool(firings_path))
     report["files_read"] = files_read
     report["duplicates_skipped"] = duplicates
     report["calls_without_field"] = without_field
@@ -491,6 +573,31 @@ def replay(root: str, predicate, tool: str = "Bash", sample: int = 0,
         # never in the dict this function hands back to its caller.
         write_firings(firings_path, report.pop("fire_calls"))
     return report
+
+
+def _replay_file(path: Path, tally, seen: set, *, tool: str, field: str):
+    """Judge one transcript's distinct calls into `tally`; `(calls_without_field, duplicates)`.
+
+    Streamed line by line (BOM stripped, newline-only split): reading the file whole held its
+    bytes, text and lines at once, about 5.6x the largest transcript. Each call is judged as soon
+    as its result has arrived (see `_CallScan`), so neither the file's calls nor the corpus's are
+    held; only `seen` (one id per distinct call) grows with the corpus.
+
+    Raises:
+        OSError: the file could not be opened or read. A file that cannot be opened contributes
+            nothing; one that fails part-way keeps the calls judged before the failure, and the
+            caller lists it as skipped either way.
+    """
+    scan = _CallScan(tool, field, str(path))
+    duplicates = 0
+    for call in scan.calls(line for _n, line in iter_transcript_lines(path)):
+        if call["id"] is not None:
+            if call["id"] in seen:
+                duplicates += 1
+                continue
+            seen.add(call["id"])
+        tally.judge(call)
+    return scan.without_field, duplicates
 
 
 def write_firings(path: str, fire_calls) -> None:

@@ -57,6 +57,12 @@ MAX_REDIRECTS = 8
 # How often the main thread wakes while the chunks run, in seconds: the longest a Ctrl-C that the
 # kernel delivered to a worker thread waits before Python handles it.
 _WAKE = 0.1
+# The longest a ranged run goes between manifest saves, in seconds. A save rewrites the whole
+# per-chunk list and fsyncs it under the lock every worker needs, so a save after every attempt
+# made the writes quadratic in the chunk count; on this timer they follow the run's duration. A
+# lagging manifest only under-counts, so a crash costs at most this much re-download, and the run
+# saves once more when it ends, however it ends.
+_SAVE_EVERY = 1.0
 
 
 class FetchError(Exception):
@@ -815,7 +821,7 @@ def _fetch_whole(url, out, pool, sha256, timeout, attempts, on_success, info, lo
 
 
 def fetch(url, out, pool, *, chunk_size, workers=8, sha256=None, timeout=120.0, max_attempts=20,
-          on_success=None, log=print, warn=None, ssl_context=None):
+          on_success=None, log=print, warn=None, ssl_context=None, clock=time.monotonic):
     """Download url to out through pool; see the module docstring. Returns a FetchResult.
 
     `log` gets the progress/report lines (stdout by default), `warn` the warnings (stderr).
@@ -826,7 +832,8 @@ def fetch(url, out, pool, *, chunk_size, workers=8, sha256=None, timeout=120.0, 
     written for another url or chunk_size). Otherwise the probe decides, and when it finds the
     origin ignores Range, the file comes as one whole stream per attempt instead (max_attempts in
     all, no manifest, no resume). `ssl_context` verifies an https origin (None: the system trust
-    store). Raises BadUrl before any network work for a URL that is not http(s). What proxies
+    store). `clock` times the manifest saves (_SAVE_EVERY); a test passes a frozen one. Raises
+    BadUrl before any network work for a URL that is not http(s). What proxies
     answered never raises: a run that ends with work left (the probe settled nothing, or chunks
     are missing) returns a result whose note names the odd answers, grouped (describe_answers);
     the part and manifest are kept for the rerun. A resumed run that ends so after any answer
@@ -868,6 +875,7 @@ def fetch(url, out, pool, *, chunk_size, workers=8, sha256=None, timeout=120.0, 
         f.truncate(info.total)
     lock, counts, answers = threading.Lock(), {}, {}
     dry, stop = threading.Event(), threading.Event()
+    saved_at = [None]       # clock() at the last manifest save; None: none yet in this run
 
     def chunk_attempts(index):
         start, end = chunks[index]
@@ -893,7 +901,10 @@ def fetch(url, out, pool, *, chunk_size, workers=8, sha256=None, timeout=120.0, 
             with lock:
                 state["received"][index] += outcome.written
                 _tally_outcome(counts, answers, proxy, outcome)
-                _save_manifest(manifest, state)
+                now = clock()
+                if saved_at[0] is None or now - saved_at[0] >= _SAVE_EVERY:
+                    _save_manifest(manifest, state)
+                    saved_at[0] = now
             _settle(pool, proxy, outcome, on_success)
         return start + state["received"][index] > end
 
@@ -904,29 +915,16 @@ def fetch(url, out, pool, *, chunk_size, workers=8, sha256=None, timeout=120.0, 
             stop.set()      # set here, in the failing thread: no other chunk starts another attempt
             raise
 
-    with cf.ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
-        futures = [ex.submit(run_chunk, index) for index in range(len(chunks))]
-        try:
-            # Timed, not one untimed wait: the kernel may deliver a Ctrl-C to a worker thread, and
-            # Python runs the handler only when the main thread next executes, so an untimed wait
-            # raised it after every attempt was spent. FIRST_EXCEPTION: a worker's error is
-            # re-raised the moment its chunk ends, not after every other chunk ran.
-            pending = set(futures)
-            while pending:
-                finished, pending = cf.wait(pending, timeout=_WAKE,
-                                            return_when=cf.FIRST_EXCEPTION)
-                for future in finished:
-                    future.result()
-            done = sum(future.result() for future in futures)
-        except BaseException:
-            # A Ctrl-C or a worker's error lands here. Leaving the with-block joins the running
-            # chunks, which would spend their whole attempt budget first: cancel the queued ones
-            # and stop the running ones after their current attempt, which bounds the wait to one
-            # attempt.
-            stop.set()
-            for future in futures:
-                future.cancel()
-            raise
+    try:
+        done = _run_chunks(run_chunk, len(chunks), workers, stop)
+    except BaseException:
+        # Every worker has been joined by now, so `state` holds all progress; the timer may have
+        # skipped saving the last attempts. An OSError here (the same full disk, say) must not
+        # replace the error that ended the run, and the older manifest left on disk only
+        # under-counts, which a rerun resumes safely.
+        with contextlib.suppress(OSError):
+            _save_manifest(manifest, state)
+        raise
     log(f"chunks {done}/{len(chunks)}, attempts {sum(counts.values())}: "
         + ", ".join(f"{k} {v}" for k, v in sorted(counts.items())))
     if dry.is_set():
@@ -943,3 +941,32 @@ def fetch(url, out, pool, *, chunk_size, workers=8, sha256=None, timeout=120.0, 
         return FetchResult(False, done, len(chunks), counts, note)
     _finish(part, out, sha256, manifest)
     return FetchResult(True, done, len(chunks), counts)
+
+
+def _run_chunks(run_chunk, count, workers, stop):
+    """run_chunk(index) for every chunk on a thread pool; the number of chunks that completed.
+
+    Returns or raises only once every worker has been joined (the with-block's exit)."""
+    with cf.ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
+        futures = [ex.submit(run_chunk, index) for index in range(count)]
+        try:
+            # Timed, not one untimed wait: the kernel may deliver a Ctrl-C to a worker thread, and
+            # Python runs the handler only when the main thread next executes, so an untimed wait
+            # raised it after every attempt was spent. FIRST_EXCEPTION: a worker's error is
+            # re-raised the moment its chunk ends, not after every other chunk ran.
+            pending = set(futures)
+            while pending:
+                finished, pending = cf.wait(pending, timeout=_WAKE,
+                                            return_when=cf.FIRST_EXCEPTION)
+                for future in finished:
+                    future.result()
+            return sum(future.result() for future in futures)
+        except BaseException:
+            # A Ctrl-C or a worker's error lands here. Leaving the with-block joins the running
+            # chunks, which would spend their whole attempt budget first: cancel the queued ones
+            # and stop the running ones after their current attempt, which bounds the wait to one
+            # attempt.
+            stop.set()
+            for future in futures:
+                future.cancel()
+            raise

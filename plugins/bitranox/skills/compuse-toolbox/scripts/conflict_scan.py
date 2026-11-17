@@ -22,10 +22,20 @@ as skipped and does not change the exit code. A symlink to a directory met insid
 not followed (git stores the link, never merges through it) and is named on stderr; a directory
 you pass as PATH is walked even when it is a link, and a link to a FILE is always read.
 
-Run: `uv run scripts/conflict_scan.py [PATH ...]`  (a dir is walked, skipping .git)
+A walk skips what git never merges into: `.git`, every venv (`.venv`, `.venv-3.12`, ... by prefix),
+`node_modules`, `__pycache__` and the tool caches (`.mypy_cache`, `.pytest_cache`, `.ruff_cache`),
+the same set grep_all prunes. Scanning them made a clean checkout with a venv report markers (a
+dist-info METADATA or a compiled .pyc holds a marker-shaped line by chance) after a minute and
+1.3 GB of reading. A directory you NAME is scanned whatever its name. A file with a NUL byte in its
+first 4 KB is skipped as binary (git writes no markers into a file it treats as binary) and the
+number skipped is printed on stderr. Every file is streamed a line at a time, so memory is bounded
+by the longest line, not the largest file.
+
+Run: `uv run scripts/conflict_scan.py [PATH ...]`  (a dir is walked, skipping the trees above)
 """
 
 import argparse
+import io
 import os
 import re
 import sys
@@ -36,6 +46,14 @@ from pathlib import Path
 # whitespace). Matching only at line start avoids a marker embedded in a string/doc.
 _MARKER = re.compile(r"^(?:<<<<<<<|>>>>>>>|\|\|\|\|\|\|\|)(?:\s|$)|^=======\s*$")
 _OPEN, _CLOSE, _MIDDLE = "<<<<<<<", ">>>>>>>", "======="
+_SKIP_DIRS = frozenset({".git", "node_modules", "__pycache__", ".mypy_cache", ".pytest_cache",
+                        ".ruff_cache"})
+_SKIP_DIR_PREFIXES = (".venv",)
+"""Prefix, not name: .venv-win, .venv-3.12 and .venv-bmk are venvs too (grep_all's rule)."""
+_BINARY_SNIFF = 4096
+_LOOKAHEAD = 3
+"""Lines after the current one the heading rules read: an RST overline at i checks the underline at
+i + 2, whose own heading test reads the line at i + 3."""
 
 
 def _split_lines(text: str) -> list[str]:
@@ -46,47 +64,89 @@ def _split_lines(text: str) -> list[str]:
     return [line[:-1] if line.endswith("\r") else line for line in lines]
 
 
-def _is_setext_underline(lines: list[str], i: int) -> bool:
-    """A lone ======= with text above it and a blank line or end of file below it."""
-    above = lines[i - 1].strip() if i > 0 else ""
-    below = lines[i + 1].strip() if i + 1 < len(lines) else ""
-    return bool(above) and not _MARKER.match(lines[i - 1]) and not below
+def _is_setext_underline(above: str | None, below: str | None) -> bool:
+    """A lone ======= with text above it and a blank line or end of file below it.
+
+    `above` and `below` are the neighbouring lines, None past either end of the file."""
+    return (bool(above and above.strip()) and not _MARKER.match(above)
+            and not (below or "").strip())
 
 
-def _is_rst_overline(lines: list[str], i: int) -> bool:
+def _is_rst_overline(window: list[str | None]) -> bool:
     """A lone ======= opening an RST title: nothing or a blank line above it, the title text below
     it, and under the title an identical ======= that is itself a heading underline. Requiring the
-    whole three-line block keeps a stray middle marker with plain text under it a marker."""
-    above = lines[i - 1].strip() if i > 0 else ""
-    if above or i + 2 >= len(lines):
+    whole three-line block keeps a stray middle marker with plain text under it a marker.
+
+    `window` is [line i-1, line i, ..., line i+3], None for a line past either end."""
+    above, _line, title, under, below_under = window
+    if (above or "").strip() or title is None or under is None:
         return False
-    title, under = lines[i + 1], lines[i + 2]
     return (bool(title.strip()) and not _MARKER.match(title)
-            and under.rstrip() == _MIDDLE and _is_setext_underline(lines, i + 2))
+            and under.rstrip() == _MIDDLE and _is_setext_underline(title, below_under))
 
 
-def _is_heading_rule(lines: list[str], i: int) -> bool:
-    return _is_setext_underline(lines, i) or _is_rst_overline(lines, i)
+def _is_heading_rule(window: list[str | None]) -> bool:
+    return _is_setext_underline(window[0], window[2]) or _is_rst_overline(window)
 
 
-def scan_text(text: str) -> list[tuple[int, str]]:
-    """[(1-based line number, the line)] for every conflict-marker line in `text`."""
-    lines, hits, in_span = _split_lines(text), [], False
-    for i, line in enumerate(lines):
+def _windows(lines):
+    """(i, [line i-1, line i, line i+1, line i+2, line i+3]) for each line, None past the ends.
+
+    Holds five lines at a time, so a streamed file is scanned in bounded memory."""
+    it = iter(lines)
+    window: list[str | None] = [None]
+    window.extend(next(it, None) for _ in range(1 + _LOOKAHEAD))
+    i = 0
+    while window[1] is not None:
+        yield i, window
+        window = [*window[1:], next(it, None)]
+        i += 1
+
+
+def scan_lines(lines) -> list[tuple[int, str]]:
+    """[(1-based line number, the line)] for every conflict-marker line in `lines`.
+
+    `lines` is any iterable of lines without their terminators, consumed once."""
+    hits, in_span = [], False
+    for i, window in _windows(lines):
+        line = window[1]
         if not _MARKER.match(line):
             continue
         if line.startswith(_OPEN):
             in_span = True
         elif line.startswith(_CLOSE):
             in_span = False
-        elif line.startswith(_MIDDLE) and not in_span and _is_heading_rule(lines, i):
+        elif line.startswith(_MIDDLE) and not in_span and _is_heading_rule(window):
             continue
         hits.append((i + 1, line))
     return hits
 
 
-def _read(p) -> str:
-    return Path(p).read_bytes().decode("utf-8-sig", errors="replace")
+def scan_text(text: str) -> list[tuple[int, str]]:
+    """[(1-based line number, the line)] for every conflict-marker line in `text`."""
+    return scan_lines(_split_lines(text))
+
+
+class _Binary(Exception):
+    """The file holds a NUL in its first 4 KB: binary, so it carries no conflict markers."""
+
+
+def _scan_file(p) -> list[tuple[int, str]]:
+    """`scan_lines` over the file at `p`, streamed; raises `_Binary` for a binary file.
+
+    `utf-8-sig` drops a BOM so a marker on line 1 still starts the line; the terminator and one
+    trailing \\r come off each line, as `_split_lines` does for a whole text."""
+    with open(p, "rb") as fh:
+        if b"\0" in fh.read(_BINARY_SNIFF):
+            raise _Binary(str(p))
+        fh.seek(0)
+        text = io.TextIOWrapper(fh, encoding="utf-8-sig", errors="replace", newline="\n")
+        return scan_lines(_strip_terminator(line) for line in text)
+
+
+def _strip_terminator(line: str) -> str:
+    line = line[:-1] if line.endswith("\n") else line
+    return line[:-1] if line.endswith("\r") else line
 
 
 def _is_dangling_symlink(p) -> bool:
@@ -95,18 +155,23 @@ def _is_dangling_symlink(p) -> bool:
 
 
 def scan_files(paths, unreadable: list[str] | None = None, *,
-               skipped: list[str] | None = None) -> dict[str, list[tuple[int, str]]]:
+               skipped: list[str] | None = None,
+               binary: list[str] | None = None) -> dict[str, list[tuple[int, str]]]:
     """{path: [(line, text)]} for every file with markers; an unreadable file goes to `unreadable`.
 
     Pass a list as `unreadable` to learn which paths were never read - a missing or unreadable
     path must not be mistaken for a clean one. A dangling or looping symlink goes to `skipped`
     instead: it has no content, so it cannot hold a marker, and a stale link (a .venv's python)
-    must not make a whole clean tree unprovable.
+    must not make a whole clean tree unprovable. A binary file goes to `binary`.
     """
     out = {}
     for p in paths:
         try:
-            text = _read(p)
+            hits = _scan_file(p)
+        except _Binary:
+            if binary is not None:
+                binary.append(str(p))
+            continue
         except OSError as exc:
             if _is_dangling_symlink(p):
                 if skipped is not None:
@@ -114,7 +179,6 @@ def scan_files(paths, unreadable: list[str] | None = None, *,
             elif unreadable is not None:
                 unreadable.append("%s (%s)" % (p, exc.strerror or exc))
             continue
-        hits = scan_text(text)
         if hits:
             out[str(p)] = hits
     return out
@@ -140,7 +204,8 @@ def _expand(targets, unreadable: list[str], linked_dirs: list[str] | None = None
         pt = Path(t)
         if pt.is_dir():
             for dirpath, dirs, names in os.walk(t, onerror=_record):
-                dirs[:] = [d for d in dirs if d != ".git"]
+                dirs[:] = [d for d in dirs
+                           if d not in _SKIP_DIRS and not d.startswith(_SKIP_DIR_PREFIXES)]
                 if linked_dirs is not None:
                     linked_dirs.extend(os.path.join(dirpath, d) for d in dirs
                                        if os.path.islink(os.path.join(dirpath, d)))
@@ -168,7 +233,9 @@ def _main(argv) -> int:
     unreadable: list[str] = []
     skipped: list[str] = []
     linked_dirs: list[str] = []
-    res = scan_files(_expand(args.paths, unreadable, linked_dirs), unreadable, skipped=skipped)
+    binary: list[str] = []
+    res = scan_files(_expand(args.paths, unreadable, linked_dirs), unreadable, skipped=skipped,
+                     binary=binary)
     for path, hits in sorted(res.items()):
         for line_no, text in hits:
             print(f"{path}:{line_no}: {text}")
@@ -176,6 +243,8 @@ def _main(argv) -> int:
         print(f"CONFLICT MARKERS in {len(res)} file(s)")
     for entry in skipped:
         print(f"conflict_scan: skipped dangling symlink {entry}", file=sys.stderr)
+    if binary:
+        print(f"conflict_scan: {len(binary)} binary file(s) skipped", file=sys.stderr)
     for entry in linked_dirs:
         print(f"conflict_scan: symlinked directory not followed {entry}", file=sys.stderr)
     for entry in unreadable:

@@ -152,6 +152,33 @@ def test_an_unknown_rule_is_a_usage_error(bad):
         R.parse_rule(bad)
 
 
+def test_resolve_text_refuses_base_on_a_hunk_without_a_base_section():
+    # resolve_text is exported, so a caller may hand it a Rule that assign_rules never saw; the
+    # missing base section read as "resolve to nothing" and both sides were silently deleted.
+    plain = "a\n<<<<<<< HEAD\nX\n=======\nY\n>>>>>>> feature\nb\n"
+    with pytest.raises(R.Refusal, match="base"):
+        R.resolve_text(plain, [R.Rule("base")])
+
+
+@pytest.mark.parametrize("kind", ["Ours", "mine", "", "file:a.txt"])
+def test_a_rule_built_with_an_unknown_kind_is_a_usage_error(kind):
+    # Built directly, Rule("Ours") was accepted and resolve_text then died with a bare KeyError.
+    with pytest.raises(R.UsageError):
+        R.Rule(kind)
+
+
+@pytest.mark.parametrize("kind, path", [("file", None), ("file", ""), ("ours", "a.txt")])
+def test_a_rule_path_goes_with_the_file_kind_only(kind, path):
+    with pytest.raises(R.UsageError):
+        R.Rule(kind, path)
+
+
+def test_a_rule_built_from_a_raw_string_holds_the_enum_member():
+    rule = R.Rule("both-theirs-first")
+    assert type(rule.kind) is R.RuleKind and rule.kind is R.RuleKind.BOTH_THEIRS_FIRST
+    assert str(rule) == "both-theirs-first" and str(R.Rule("file", "a.txt")) == "file:a.txt"
+
+
 def test_split_match_spec_keeps_an_equals_sign_inside_the_regex():
     regex, rule = R.split_match_spec("a=b=theirs")
     assert regex == "a=b" and rule.kind == "theirs"

@@ -25,13 +25,17 @@ import json
 import re
 import socket
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass
 from html.parser import HTMLParser
 from typing import NoReturn
 from urllib.parse import urlsplit, urlunsplit
 
 SEVERITIES = ("SEVERE", "MEDIUM", "MINOR", "OK")
+
+# How much of an HTML body the mixed-content scan reads. The grade needs only the headers plus
+# the page's markup; a download or an endless body would otherwise be buffered whole.
+HTML_SCAN_CAP = 2 * 1024 * 1024
 
 # Elements that LOAD a subresource into the current page (so an http:// URL here is mixed
 # content). <a> is deliberately excluded: it navigates away, it is not a subresource.
@@ -517,20 +521,36 @@ def fetch(url: str, *, proxy: str | None = None, transport: object | None = None
     else:
         client_opts["proxy"] = proxy
     with httpx.Client(**client_opts) as c:
-        resp = c.get(url)
-        # Grade the page that was actually served: an http:// URL that redirects to https://
-        # must get the HTTPS checks (HSTS, Secure cookies, mixed content).
-        https = resp.url.scheme == "https"
-        html = resp.text if "text/html" in resp.headers.get("content-type", "") else ""
-        set_cookies = resp.headers.get_list("set-cookie")
+        # Streamed: the grade comes from the headers, so the body is read only for an HTML page
+        # and only up to HTML_SCAN_CAP. A plain get() buffered a whole ISO, or never returned
+        # from a server that streams an endless page.
+        with c.stream("GET", url) as resp:
+            # Grade the page that was actually served: an http:// URL that redirects to https://
+            # must get the HTTPS checks (HSTS, Secure cookies, mixed content).
+            https = resp.url.scheme == "https"
+            is_html = "text/html" in resp.headers.get("content-type", "")
+            html = _read_capped(resp.iter_bytes(), HTML_SCAN_CAP).decode(
+                resp.encoding or "utf-8", errors="replace") if is_html else ""
+            headers = dict(resp.headers)
+            set_cookies = resp.headers.get_list("set-cookie")
         http_status = http_location = None
         try:
             r2 = c.head(plain_http_probe_url(url), follow_redirects=False, timeout=10.0)
             http_status, http_location = r2.status_code, r2.headers.get("location")
         except httpx.HTTPError:
             pass
-    return grade(dict(resp.headers), set_cookies, https=https,
+    return grade(headers, set_cookies, https=https,
                  http_status=http_status, http_location=http_location, html=html)
+
+
+def _read_capped(chunks: Iterable[bytes], cap: int) -> bytes:
+    """At most `cap` bytes from `chunks`, pulling no chunk past the one that reaches it."""
+    out = bytearray()
+    for chunk in chunks:
+        out += chunk[: cap - len(out)]
+        if len(out) >= cap:
+            break
+    return bytes(out)
 
 
 def summarize(findings: list[Finding]) -> dict[str, int]:

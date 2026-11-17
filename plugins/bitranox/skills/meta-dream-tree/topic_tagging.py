@@ -81,7 +81,7 @@ def _topic_list(start):
     if data is None:
         raise TaggingError("%s has no topic list (memory_engine.py topics-set-list --proj %s "
                            "--from-file LIST.json writes one)" % (anchor, anchor))
-    return anchor, data["topics"]
+    return anchor, data.topics
 
 
 def build_questions(topics):

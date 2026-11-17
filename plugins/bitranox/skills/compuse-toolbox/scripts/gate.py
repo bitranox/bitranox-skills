@@ -10,8 +10,10 @@ status. Hit three times in one session (twice unnoticed, once caught by the PreT
 which is why this exists: the guard blocks the wrong form but does not supply the right one.
 
 Each gate runs via subprocess with NO shell and NO pipe, so `returncode` is the gate's own.
-Output goes to a log; summary lines are grepped from that log AFTERWARDS, never from a pipe
-that could mask the status.
+Output goes to a log AS IT ARRIVES (stdout and stderr merged, in the order the gate wrote them),
+so a watcher polling the log sees a running gate move; summary lines and the test count are read
+from the same stream line by line, never from a pipe that could mask the status, and the output
+is never held in memory whole.
 
 A gate is given either as one quoted string (`--gate "<cmd ...>"`, or a lone positional), which
 is split into argv by the platform's own rules, or after `--`, where the tokens are ALREADY real
@@ -161,6 +163,9 @@ _GO_WARNING = re.compile(r"^testing: warning: no tests to run\b", re.MULTILINE)
 def observed_test_count(text: str) -> int | None:
     r"""How many tests the gate's OWN output says it ran, or None if it is not a test run.
 
+    The rules are applied line by line (see `_TestCounter`), so a gate's output can be counted as
+    it streams past without being kept.
+
     None and 0 are DIFFERENT answers and must stay so. None means "this gate is not a test
     runner" - `ruff check`, `git status`, a build - and it goes on being judged by its exit
     status alone. 0 means "a test runner ran and nothing was there to run", which is the state
@@ -194,29 +199,99 @@ def observed_test_count(text: str) -> int | None:
     that matched nothing has still run tests, and its count is simply unknown (None). A bare test
     binary prints just `testing: warning: no tests to run`, which is a zero.
     """
-    cargo = [int(n) for n in _CARGO_RUNNING.findall(text)]
-    if cargo:
-        return sum(cargo)
-    selected = _PYTEST_SELECTED.findall(text)
-    if selected:
-        return int(selected[-1])
-    collected = _PYTEST_COLLECTED.findall(text)
-    if collected:
-        return sum(int(n) for n in collected)
-    if _PYTEST_NO_TESTS.search(text):
-        return 0
-    ran = _UNITTEST_RAN.findall(text)
-    if ran:
-        return sum(int(n) for n in ran)
-    return _go_count(text)
+    counter = _TestCounter()
+    for line in text.split("\n"):
+        counter.feed(line)
+    return counter.count()
 
 
-def _go_count(text: str) -> int | None:
-    """0 when go test demonstrably ran nothing anywhere, else None (see observed_test_count)."""
-    packages = _GO_OK_LINE.findall(text)
-    if packages:
-        return 0 if all(_GO_NOTHING_RUN in line for line in packages) else None
-    return 0 if _GO_WARNING.search(text) else None
+class _TestCounter:
+    """`observed_test_count` gathered one line at a time, holding counts and never the output."""
+
+    def __init__(self) -> None:
+        self.cargo: int | None = None
+        self.selected: int | None = None
+        self.collected: int | None = None
+        self.no_tests = False
+        self.ran: int | None = None
+        self.go_packages = 0
+        self.go_all_nothing = True
+        self.go_warning = False
+
+    def feed(self, line: str) -> None:
+        """Count one output line, given without its newline."""
+        self.cargo = _summed(self.cargo, _CARGO_RUNNING.findall(line))
+        selected = _PYTEST_SELECTED.findall(line)
+        if selected:
+            self.selected = int(selected[-1])
+        self.collected = _summed(self.collected, _PYTEST_COLLECTED.findall(line))
+        self.no_tests = self.no_tests or bool(_PYTEST_NO_TESTS.search(line))
+        self.ran = _summed(self.ran, _UNITTEST_RAN.findall(line))
+        for package in _GO_OK_LINE.findall(line):
+            self.go_packages += 1
+            self.go_all_nothing = self.go_all_nothing and _GO_NOTHING_RUN in package
+        self.go_warning = self.go_warning or bool(_GO_WARNING.search(line))
+
+    def count(self) -> int | None:
+        """The verdict, by the precedence `observed_test_count` documents."""
+        for found in (self.cargo, self.selected, self.collected):
+            if found is not None:
+                return found
+        if self.no_tests:
+            return 0
+        if self.ran is not None:
+            return self.ran
+        return self._go_count()
+
+    def _go_count(self) -> int | None:
+        """0 when go test demonstrably ran nothing anywhere, else None (see observed_test_count)."""
+        if self.go_packages:
+            return 0 if self.go_all_nothing else None
+        return 0 if self.go_warning else None
+
+
+def _summed(total: int | None, numbers: list[str]) -> int | None:
+    """`total` plus `numbers`; None while nothing has been seen, so "absent" stays apart from 0."""
+    if not numbers:
+        return total
+    return (total or 0) + sum(int(n) for n in numbers)
+
+
+class _OutputScan:
+    """What one gate's output says - summary lines and its test count - read as it streams.
+
+    Pieces arrive as the log receives them; a line is judged once its newline arrives (or at the
+    end). Only its first `_MATCH_HEAD` characters are kept for that, so one huge line costs a
+    bounded amount: every count and summary a runner prints sits in a short line, and the log
+    still receives every character."""
+
+    def __init__(self, pattern: re.Pattern[str] | None) -> None:
+        self.pattern = pattern
+        self.summary_lines: list[str] = []
+        self.counter = _TestCounter()
+        self._head: list[str] = []
+        self._held = 0
+
+    def feed(self, piece: str) -> None:
+        body = piece[:-1] if piece.endswith("\n") else piece
+        if self._held < _MATCH_HEAD:
+            kept = body[:_MATCH_HEAD - self._held]
+            self._head.append(kept)
+            self._held += len(kept)
+        if piece.endswith("\n"):
+            self._end_line()
+
+    def finish(self) -> None:
+        """Judge a last line that had no newline."""
+        if self._head:
+            self._end_line()
+
+    def _end_line(self) -> None:
+        line = "".join(self._head)
+        self._head, self._held = [], 0
+        self.counter.feed(line)
+        if self.pattern is not None and self.pattern.search(line):
+            self.summary_lines.append(line.rstrip("\r"))
 
 
 def _windows_argv(command):
@@ -539,7 +614,7 @@ def resolve_argv0(argv: list[str], *, windows: bool = os.name == "nt", which=shu
     `pnpm` - each a `.cmd` shim - cannot start without a shell and reads as a false red rc=127.
     A name that does not resolve is left as written, so the missing-binary 127 still happens.
     `windows` and `which` are parameters so both platforms' behaviour is testable on either.
-    Used only as the retry in _run_one.
+    Used only as the retry in _start.
     """
     if not windows or not argv:
         return list(argv)
@@ -567,28 +642,50 @@ class GateSettings:
         return {**os.environ, **dict(self.env)} if self.env else None
 
 
-def _run_one(argv: list[str], settings: GateSettings = GateSettings()) -> tuple[str, int]:
-    """Run one gate; (combined output, exit status). Raises OSError when it cannot start.
+def _start(argv: list[str], settings: GateSettings) -> subprocess.Popen[str]:
+    """Start one gate with its stdout and stderr merged into one pipe; raise OSError if it cannot.
 
     The PATHEXT lookup is a RETRY after CreateProcess could not find the name, never the first
     attempt: CreateProcess searches the parent's own directory and the system directories BEFORE
     PATH, so resolving every name up front could pick a different `python` than it would.
     """
     try:
-        proc = _spawn(argv, settings)
+        return _spawn(argv, settings)
     except FileNotFoundError:
         resolved = resolve_argv0(argv)
         if resolved == list(argv):
             raise
-        proc = _spawn(resolved, settings)
-    return (proc.stdout or "") + (proc.stderr or ""), proc.returncode
+        return _spawn(resolved, settings)
 
 
-def _spawn(argv: list[str], settings: GateSettings = GateSettings()
-           ) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(argv, capture_output=True, text=True, encoding="utf-8",
-                          errors="replace", check=False, cwd=settings.cwd,
-                          env=settings.child_env())
+def _stream(proc: subprocess.Popen[str], log, scan: _OutputScan) -> int:
+    """Copy a started gate's output into `log` and `scan` as it arrives; return its exit status.
+
+    Each piece is written and flushed the moment it arrives, so a running gate shows in the log;
+    holding the output until the gate ended left the log at its header for the whole run, which
+    reads as a hang, and cost about three times the output. An OSError raised here is the LOG
+    failing, never the gate: it is kept apart from `_start` so the caller cannot report it as a
+    gate that could not start.
+    """
+    with proc:
+        for piece in iter(lambda: proc.stdout.readline(_READ_PIECE), ""):
+            log.write(piece)
+            log.flush()
+            scan.feed(piece)
+        scan.finish()
+        return proc.wait()
+
+
+def _spawn(argv: list[str], settings: GateSettings) -> subprocess.Popen[str]:
+    return subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                            encoding="utf-8", errors="replace", cwd=settings.cwd,
+                            env=settings.child_env())
+
+
+_READ_PIECE = 1 << 16
+"""Longest piece of a gate's output read at once, so a line with no newline is still streamed."""
+_MATCH_HEAD = 1 << 16
+"""Characters of each output line kept for the summary regex and the test count."""
 
 
 RUN_MARKER = "##### gate run"
@@ -640,24 +737,27 @@ def run_gates(gates, log_path, summary: str = "", run_cwd: str | None = None) ->
                 log.write(f"cwd: {Path(settings.cwd).resolve()}\n")
             log.flush()
             started = True
+            # Counted from the gate's OWN output as it streams, not from the log file: the log is
+            # opened in append mode and may already hold earlier gates, so reading it back
+            # would attribute a previous gate's tests to this one. Lines split on "\n" only:
+            # splitlines() also breaks on a form feed or U+2028 inside one output line.
+            scan = _OutputScan(pattern)
             try:
-                out, rc = _run_one(argv, settings)
+                proc = _start(argv, settings)
             except OSError as e:
                 # A missing/unrunnable binary is a FAILED gate, not a crash of the runner:
                 # the caller's follow-up must still be blocked. 127 is what a shell reports for
                 # it, kept for the report line; the RUN exits 2, since the gate never ran.
-                out, rc, started = f"could not run {argv!r}: {e}\n", 127, False
-            log.write(out)
+                rc, started = 127, False
+                message = f"could not run {argv!r}: {e}\n"
+                log.write(message)
+                scan.feed(message)
+            else:
+                rc = _stream(proc, log, scan)
             log.flush()
-            # "\n" only: splitlines() also breaks on a form feed or U+2028 inside one output line
-            lines = ([ln.rstrip("\r") for ln in out.split("\n") if pattern.search(ln)]
-                     if pattern else [])
-            # Counted from the gate's OWN combined output, not from the log file: the log is
-            # opened in append mode and may already hold earlier gates, so reading it back
-            # would attribute a previous gate's tests to this one.
             results.append(GateResult(name=name, argv=list(argv), returncode=rc,
-                                      summary_lines=lines, test_count=observed_test_count(out),
-                                      started=started))
+                                      summary_lines=scan.summary_lines,
+                                      test_count=scan.counter.count(), started=started))
 
     return GateReport(results=results, appended_to_earlier_run=appended)
 

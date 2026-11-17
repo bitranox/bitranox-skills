@@ -3,6 +3,7 @@ import sys
 import io
 import os
 import subprocess
+import tracemalloc
 
 import pytest
 
@@ -275,8 +276,17 @@ class _Runner:
         if "-E" in argv:
             with open(argv[argv.index("-E") + 1], "a", encoding="utf-8") as fh:
                 fh.write(proc.log)
-            return _FakeProc(proc.returncode, proc.stderr)
-        return _FakeProc(proc.returncode, proc.log + proc.stderr)
+            return self._stderr(proc.returncode, proc.stderr, kw)
+        return self._stderr(proc.returncode, proc.log + proc.stderr, kw)
+
+    @staticmethod
+    def _stderr(returncode, text, kw):
+        """Write the child's stderr where the caller pointed it: an fd, as a real child would."""
+        target = kw.get("stderr")
+        if isinstance(target, int):
+            os.write(target, text.encode("utf-8"))
+            return _FakeProc(returncode)
+        return _FakeProc(returncode, text)
 
 
 def _real_changed(known_hosts: str, host: str = "h") -> str:
@@ -766,3 +776,72 @@ def test_dry_run_survives_a_cp1252_stdout():
                            "./arrow\u2192f", "hst:/tmp/"], env=env, capture_output=True, timeout=60)
     assert done.returncode == 0, done.stderr
     assert b"hst:/tmp/" in done.stdout
+
+
+# ---- the command's stderr streams through as it arrives, and is never held whole ---------------
+
+class _SignallingStderr(io.StringIO):
+    """A stderr that creates `flag` the moment `line` is written to it."""
+
+    def __init__(self, flag, line):
+        super().__init__()
+        self.flag, self.line = flag, line
+
+    def write(self, s):
+        if self.line in s:
+            self.flag.write_text("seen", encoding="utf-8")
+        return super().write(s)
+
+
+_WAITS_FOR_ITS_OWN_LINE = (
+    "import pathlib, sys, time\n"
+    "flag = pathlib.Path(sys.argv[1])\n"
+    "sys.stderr.write('progress line one\\n'); sys.stderr.flush()\n"
+    "deadline = time.monotonic() + 5\n"
+    "while not flag.exists():\n"
+    "    if time.monotonic() > deadline:\n"
+    "        sys.exit(3)\n"
+    "    time.sleep(0.02)\n"
+)
+
+
+@pytest.mark.parametrize("heal", [False, True])
+def test_the_command_s_stderr_reaches_ours_while_it_still_runs(tmp_path, monkeypatch, heal):
+    """A long remote job that logs to stderr must show it as it goes: the child exits 0 only if
+    its first line reached our stderr while it was still running, and 3 if that waited for it."""
+    flag = tmp_path / "flag"
+    monkeypatch.setattr(sys, "stderr", _SignallingStderr(flag, "progress line one"))
+    argv = [sys.executable, "-c", _WAITS_FOR_ITS_OWN_LINE, str(flag)]
+    status = F.run_with_host_key_healing(argv, host="h" if heal else None,
+                                         known_hosts=str(tmp_path / "kh"), heal=heal,
+                                         run=subprocess.run)
+    assert status == 0
+    assert "progress line one" in sys.stderr.getvalue()
+
+
+_FLOODS_STDERR = ("import sys\nchunk = 'e' * 1023 + '\\n'\n"
+                  "for _ in range(int(sys.argv[1]) * 1024):\n    sys.stderr.write(chunk)\n")
+
+
+def _peak_python_memory_forwarding(megabytes, monkeypatch):
+    class _Discard(io.TextIOBase):
+        def write(self, s):
+            return len(s)
+
+    monkeypatch.setattr(sys, "stderr", _Discard())
+    argv = [sys.executable, "-c", _FLOODS_STDERR, str(megabytes)]
+    tracemalloc.start()
+    try:
+        status = F.run_with_host_key_healing(argv, host=None, known_hosts=None, heal=False,
+                                             run=subprocess.run)
+        return status, tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+
+def test_forwarding_the_command_s_stderr_does_not_hold_it_in_memory(monkeypatch):
+    status_small, peak_small = _peak_python_memory_forwarding(4, monkeypatch)
+    status_large, peak_large = _peak_python_memory_forwarding(32, monkeypatch)
+    assert (status_small, status_large) == (0, 0)
+    growth = peak_large - peak_small
+    assert growth < 4 * (1 << 20), f"peak grew {growth >> 20} MB for 28 MB more stderr"

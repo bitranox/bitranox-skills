@@ -1285,3 +1285,62 @@ def test_valid_probe_votes_decide_before_two_matching_errors(stand, tmp_path):
     store, _ = _pool(tmp_path, order)
     info = cfetch.probe(origin.url, _InOrder(store, order), PROBE_BUDGET, 20, warn=lambda *a: None)
     assert info.ranged and info.total == SIZE
+
+
+# ---- the manifest is rewritten on a timer, not on every attempt --------------------------------
+def _frozen_clock():
+    return 1000.0
+
+
+def _count_manifest_saves(monkeypatch, manifest):
+    """Count os.replace calls that land on `manifest`; the real replace still runs."""
+    real_replace, saves = os.replace, []
+
+    def spy(src, dst, *args, **kwargs):
+        if os.fspath(dst) == os.fspath(manifest):
+            saves.append(dst)
+        return real_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(os, "replace", spy)
+    return saves
+
+
+def _saves_for(stand, tmp_path, monkeypatch, size, name):
+    origin = stand.origin(size)
+    _, pool = _pool(tmp_path, [stand.proxy(), stand.proxy()], name=name)
+    out = tmp_path / f"{name}.bin"
+    saves = _count_manifest_saves(monkeypatch, f"{out}.part.json")
+    result = _fetch(origin, out, pool, chunk_size=1024, workers=2, clock=_frozen_clock)
+    monkeypatch.undo()
+    assert result.ok and out.read_bytes() == origin.data
+    return result.chunks, len(saves)
+
+
+def test_manifest_writes_do_not_grow_with_the_chunk_count(stand, tmp_path, monkeypatch):
+    # Each save rewrites the whole per-chunk list and fsyncs it under the lock every worker
+    # needs: one save per attempt is quadratic in the chunk count (20480 chunks of 512K on a
+    # 10 GiB file is about 1.6 GB of manifest written). With the clock standing still, the count
+    # must be the same at 32 chunks as at 256.
+    small_chunks, small = _saves_for(stand, tmp_path, monkeypatch, 32 * 1024, "small")
+    large_chunks, large = _saves_for(stand, tmp_path, monkeypatch, 256 * 1024, "large")
+    assert (small_chunks, large_chunks) == (32, 256)
+    assert large == small, f"{small} manifest saves for 32 chunks, {large} for 256"
+
+
+def test_a_worker_error_still_leaves_every_received_byte_in_the_manifest(stand, tmp_path):
+    # A throttled save must not lose progress to an exception: the run saves once more after
+    # the workers stopped, so the manifest a rerun resumes from counts every byte received.
+    origin = stand.origin(SIZE)
+    _, pool = _pool(tmp_path, [stand.proxy()])
+    calls = []
+
+    def fail_on_third(proxy):
+        calls.append(proxy)
+        if len(calls) == 3:
+            raise OSError(28, "No space left on device")
+
+    with pytest.raises(OSError, match="No space left"):
+        _fetch(origin, tmp_path / "f.bin", pool, workers=1, clock=_frozen_clock,
+               on_success=fail_on_third)
+    manifest = json.loads((tmp_path / "f.bin.part.json").read_text(encoding="utf-8"))
+    assert sum(manifest["received"]) == 3 * CHUNK, manifest["received"]

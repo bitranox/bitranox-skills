@@ -34,6 +34,7 @@ import json
 import re
 import sys
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from collections.abc import Callable, Iterable
@@ -45,7 +46,10 @@ import claude_paths
 
 __all__ = [
     "ControlError",
+    "Stamp",
+    "StampSource",
     "Verdict",
+    "parse_stamp",
     "normalise",
     "fingerprint",
     "structure_sha",
@@ -60,6 +64,7 @@ __all__ = [
 
 SCHEMA = 1
 NORMALISATION_ID = "n1"
+TIERS = ("api", "prose")   # the fingerprint tiers; the CLI's fingerprint --tier offers the same
 NORMALISATION_RULES = [
     "crlf->lf",
     "drop-lines-before-first-h1",
@@ -704,16 +709,116 @@ def _read_stamp_json(path: Path) -> dict[str, Any]:
     return stamp
 
 
-def load_stamp(path: Path) -> dict[str, Any]:
-    stamp = _read_stamp_json(path)
-    if not stamp.get("sources"):
-        raise ControlError("stamp lists no sources")
-    if stamp.get("normalisation", {}).get("id") != NORMALISATION_ID:
-        raise ControlError(
-            "stamp was built with normalisation %r but this code implements %r; re-stamp"
-            % (stamp.get("normalisation", {}).get("id"), NORMALISATION_ID)
-        )
-    return stamp
+@dataclass(frozen=True)
+class StampSource:
+    """One stamped source whose every field a command reads has been checked for its type.
+
+    ``record`` is that same validated mapping, kept because ``compare``, ``coverage`` and the
+    stamp file itself take the record as it is written on disk."""
+
+    name: str
+    url: str
+    tier: str
+    control: dict[str, Any] | None
+    content_sha256: str | None
+    structure_sha256: str | None
+    max_cli_version: str | None
+    record: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class Stamp:
+    """A parsed stamp file: its sources in order, plus the document they came from."""
+
+    sources: tuple[StampSource, ...]
+    generated_at: str | None
+    document: dict[str, Any]
+
+
+def _want(ok: bool, where: str, what: str) -> None:
+    # Every message starts with "stamp": the refusal names the file, not the upstream page.
+    if not ok:
+        raise ControlError("stamp %s: %s" % (where, what))
+
+
+def _typed(record: dict[str, Any], key: str, kind: type, where: str, *, required: bool) -> Any:
+    value = record.get(key)
+    if value is None and not required:
+        return None
+    is_kind = isinstance(value, kind) and not (kind is int and isinstance(value, bool))
+    _want(is_kind, where, "%r must be a %s, got %s" % (key, kind.__name__, type(value).__name__))
+    return value
+
+
+def _want_str_list(value: Any, where: str, key: str) -> None:
+    ok = isinstance(value, list) and all(isinstance(item, str) for item in value)
+    _want(ok, where, "%r must be a list of strings" % key)
+
+
+def _check_fingerprint(record: dict[str, Any], where: str) -> None:
+    fp = _typed(record, "fingerprint", dict, where, required=True)
+    for key, names in fp.items():
+        _want_str_list(names, where, "fingerprint.%s" % key)
+
+
+def _check_sections(record: dict[str, Any], where: str) -> None:
+    for i, section in enumerate(_typed(record, "sections", list, where, required=False) or []):
+        _want(isinstance(section, dict), where, "sections[%d] must be an object" % i)
+        for key in ("path", "sha256"):
+            _typed(section, key, str, "%s sections[%d]" % (where, i), required=True)
+
+
+def _check_control(control: dict[str, Any], where: str) -> None:
+    for key in ("min_raw_bytes", "min_events"):
+        _typed(control, key, int, where + " control", required=False)
+    if control.get("require_headings") is not None:
+        _want_str_list(control["require_headings"], where, "control.require_headings")
+
+
+def parse_source(raw: Any, where: str, *, recorded: bool) -> StampSource:
+    """Validate one source. ``recorded`` asks for everything ``check`` and ``baseline`` compare
+    with; without it only what ``stamp`` rebuilds a record from (name, url, tier, control)."""
+    _want(isinstance(raw, dict), where, "must be an object, got %s" % type(raw).__name__)
+    tier = _typed(raw, "tier", str, where, required=False) or "api"
+    _want(tier in TIERS, where, "tier %r is not one of %s" % (tier, ", ".join(TIERS)))
+    control = _typed(raw, "control", dict, where, required=False)
+    if control is not None:
+        _check_control(control, where)
+    if recorded:
+        _check_fingerprint(raw, where)
+        _check_sections(raw, where)
+    return StampSource(
+        name=_typed(raw, "name", str, where, required=True),
+        url=_typed(raw, "url", str, where, required=True),
+        tier=tier,
+        control=control,
+        content_sha256=_typed(raw, "content_sha256", str, where, required=recorded),
+        structure_sha256=_typed(raw, "structure_sha256", str, where, required=recorded),
+        max_cli_version=_typed(raw, "max_cli_version_mentioned", str, where, required=False),
+        record=raw,
+    )
+
+
+def parse_stamp(document: dict[str, Any], *, recorded: bool) -> Stamp:
+    """The one parse of a stamp document; a wrong shape is a ControlError (BROKEN, exit 2).
+
+    Without it a hand-edited or half-written stamp escaped as a KeyError or AttributeError, exit
+    1, which a script keyed on the exit code reads as structural drift upstream."""
+    sources = document.get("sources")
+    _want(isinstance(sources, list), "sources", "must be a list")
+    if recorded:
+        _want(bool(sources), "sources", "the stamp lists none")
+        norm = document.get("normalisation")
+        _want(isinstance(norm, dict), "normalisation", "must be an object holding the id")
+        found = norm.get("id")
+        _want(found == NORMALISATION_ID, "normalisation",
+              "built with %r but this code implements %r; re-stamp" % (found, NORMALISATION_ID))
+    parsed = tuple(parse_source(raw, "source %d" % i, recorded=recorded) for i, raw in enumerate(sources))
+    return Stamp(parsed, _typed(document, "generated_at", str, "header", required=False), document)
+
+
+def load_stamp(path: Path) -> Stamp:
+    return parse_stamp(_read_stamp_json(path), recorded=True)
 
 
 def stamp_hash(path: Path) -> str:
@@ -742,7 +847,7 @@ def cmd_fingerprint(args: argparse.Namespace) -> int:
 
 def cmd_coverage(args: argparse.Namespace) -> int:
     stamp = load_stamp(Path(args.stamp))
-    result = coverage(stamp, Path(args.refs))
+    result = coverage(stamp.document, Path(args.refs))
     ok = bool(result["complete"])
     lines = ["coverage: %s (%d events, %d required names)" % ("complete" if ok else "GAPS", result["events_checked"], result["required_checked"])]
     for label, key in (("undocumented event", "missing_events"), ("phantom event", "phantom_events"), ("undocumented name", "missing_required")):
@@ -755,15 +860,15 @@ def cmd_coverage(args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
-def _sources(stamp: dict[str, Any], only: str | None) -> list[dict[str, Any]]:
+def _sources(stamp: Stamp, only: str | None) -> list[StampSource]:
     """The stamp's sources, or the one named. A name that matches nothing is an error: returning
     an empty list let `stamp --source <typo> --write` refresh nothing and still report success."""
-    src = stamp["sources"]
+    src = list(stamp.sources)
     if not only:
         return src
-    picked = [s for s in src if s["name"] == only]
+    picked = [s for s in src if s.name == only]
     if not picked:
-        known = ", ".join(s["name"] for s in src) or "(none)"
+        known = ", ".join(s.name for s in src) or "(none)"
         raise ControlError("no source named %r in the stamp; known: %s" % (only, known))
     return picked
 
@@ -794,9 +899,9 @@ def cmd_check(args: argparse.Namespace) -> int:
     now = time.time()
 
     docs_cover = None
-    for src in stamp["sources"]:
-        v = src.get("max_cli_version_mentioned")
-        if v and src.get("tier", "api") == "api":
+    for src in stamp.sources:
+        v = src.max_cli_version
+        if v and src.tier == "api":
             docs_cover = v if docs_cover is None else max(docs_cover, v, key=version_tuple)
     cli = None if args.no_cli_probe else local_cli_version()
     ahead = cli_ahead_of_docs(cli, docs_cover)
@@ -819,7 +924,7 @@ def cmd_check(args: argparse.Namespace) -> int:
     if args.offline and not args.body:
         # Decided BEFORE the fetch loop: --offline means no network I/O at all, not a fetch whose
         # result is then thrown away.
-        verdicts = [Verdict(s["name"], BROKEN, "offline and no fresh cache") for s in selected]
+        verdicts = [Verdict(s.name, BROKEN, "offline and no fresh cache") for s in selected]
     else:
         verdicts = [_check_source(src, args) for src in selected]
 
@@ -830,7 +935,7 @@ def cmd_check(args: argparse.Namespace) -> int:
         "checked_at_epoch": now,
         "cached": False,
         "stamp_sha256": shash,
-        "stamp_generated_at": stamp.get("generated_at"),
+        "stamp_generated_at": stamp.generated_at,
         "cli_version": cli,
         "docs_cover_up_to": docs_cover,
         "cli_ahead_of_docs": ahead,
@@ -845,16 +950,16 @@ def cmd_check(args: argparse.Namespace) -> int:
     return _check_exit(args, overall)
 
 
-def _check_source(src: dict[str, Any], args: argparse.Namespace) -> Verdict:
+def _check_source(src: StampSource, args: argparse.Namespace) -> Verdict:
     try:
-        raw = Path(args.body).read_bytes() if args.body else fetch_body(src["url"], float(args.timeout))
+        raw = Path(args.body).read_bytes() if args.body else fetch_body(src.url, float(args.timeout))
     except ControlError as exc:
-        return Verdict(src["name"], BROKEN, str(exc))
+        return Verdict(src.name, BROKEN, str(exc))
     except OSError as exc:
-        return Verdict(src["name"], BROKEN, "cannot read body: %s" % exc)
-    v = compare(src, raw)
-    v.detail.setdefault("content_sha256", src["content_sha256"])
-    v.detail.setdefault("structure_sha256", src["structure_sha256"])
+        return Verdict(src.name, BROKEN, "cannot read body: %s" % exc)
+    v = compare(src.record, raw)
+    v.detail.setdefault("content_sha256", src.content_sha256)
+    v.detail.setdefault("structure_sha256", src.structure_sha256)
     return v
 
 
@@ -889,21 +994,22 @@ def cmd_stamp(args: argparse.Namespace) -> int:
 
     stamp_file = Path(args.stamp)
     # A missing file is a new stamp; a present one that does not parse is BROKEN, never a traceback.
-    stamp = _read_stamp_json(stamp_file) if stamp_file.is_file() else {"schema": SCHEMA, "sources": []}
-    if not isinstance(stamp.get("sources"), list):
-        raise ControlError("stamp has no sources list")
+    document = _read_stamp_json(stamp_file) if stamp_file.is_file() else {"schema": SCHEMA, "sources": []}
+    # Only the fields a record is rebuilt from are required: the rest is what this replaces.
+    parsed = parse_stamp(document, recorded=False)
 
     records = []
-    for src in _sources(stamp, args.source):
-        raw = Path(args.body).read_bytes() if args.body else fetch_body(src["url"], float(args.timeout))
-        rec = build_source_record(src["name"], src["url"], raw, src.get("tier", "api"), src.get("control"))
-        if args.cosmetic_only and rec["structure_sha256"] != src["structure_sha256"]:
-            emit(args, "stamp", False, {"refused": True, "source": src["name"]}, "refusing: --cosmetic-only but the structure moved")
+    for src in _sources(parsed, args.source):
+        raw = Path(args.body).read_bytes() if args.body else fetch_body(src.url, float(args.timeout))
+        rec = build_source_record(src.name, src.url, raw, src.tier, src.control)
+        if args.cosmetic_only and rec["structure_sha256"] != src.structure_sha256:
+            emit(args, "stamp", False, {"refused": True, "source": src.name}, "refusing: --cosmetic-only but the structure moved")
             return 2   # a whole-action refusal: nothing was stamped
         records.append(rec)
 
     by_name = {r["name"]: r for r in records}
-    stamp["sources"] = [by_name.get(s["name"], s) for s in stamp["sources"]]
+    stamp = dict(document)
+    stamp["sources"] = [by_name.get(s.name, s.record) for s in parsed.sources]
     stamp["schema"] = SCHEMA
     stamp["generated_at"] = time.strftime("%Y-%m-%d", time.gmtime())
     stamp["generator"] = "scripts/hookdoc_stamp.py"
@@ -952,7 +1058,7 @@ def run_selftest(fixtures_dir: Path, comparator: Callable[[dict[str, Any], bytes
     stamp_file = fixtures_dir / "stamp-sample.json"
     if not stamp_file.is_file():
         raise ControlError("fixture stamp missing: %s" % stamp_file)
-    record = json.loads(stamp_file.read_text(encoding="utf-8-sig"))["sources"][0]
+    record = load_stamp(stamp_file).sources[0].record
     results = []
     for name, expected in SELFTEST_FIXTURES:
         path = fixtures_dir / name
@@ -975,14 +1081,14 @@ def cmd_selftest(args: argparse.Namespace) -> int:
 BASELINE_RX = re.compile(r"^Reference baseline: .*$", re.M)
 
 
-def baseline_line(stamp: dict[str, Any]) -> str:
-    api = [s for s in stamp["sources"] if s.get("tier", "api") == "api"]
-    primary = api[0] if api else stamp["sources"][0]
+def baseline_line(stamp: Stamp) -> str:
+    api = [s for s in stamp.sources if s.tier == "api"]
+    primary = api[0] if api else stamp.sources[0]
     return "Reference baseline: %s, fetched %s, %d events, content %s" % (
-        primary["url"].rsplit("/", 1)[-1],
-        stamp.get("generated_at", "?"),
-        len(primary.get("fingerprint", {}).get("events", [])),
-        primary["content_sha256"][:12],
+        primary.url.rsplit("/", 1)[-1],
+        stamp.generated_at or "?",
+        len(primary.record["fingerprint"].get("events", [])),
+        (primary.content_sha256 or "")[:12],
     )
 
 
@@ -1061,7 +1167,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     f = sub.add_parser("fingerprint", help="print the structural fingerprint of a local markdown file")
     f.add_argument("body")
-    f.add_argument("--tier", default="api", choices=["api", "prose"])
+    f.add_argument("--tier", default="api", choices=list(TIERS))
     sub_json(f)
     f.set_defaults(func=cmd_fingerprint)
 
