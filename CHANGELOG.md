@@ -30,6 +30,20 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.10.7]
+
+### Fixed
+
+- `coding-python-layered-config`: mirrors the lib_layered_config skill text of the 7.7.x line. It adds the
+  `.env` owner check, the deploy refusals (`DeployDestinationError` for links, non-regular files and
+  destinations that cannot be created, `GenerateDestinationError` for examples, `HomeDirectoryUnknownError`),
+  the absolute-path rule for the POSIX root overrides, the force/batch precedence over `conflict_resolver`,
+  the YAML-without-extra refusal, `generate_examples_report` and `generated_before_failure`, and the
+  redaction rules: the built-in sensitive-name patterns with numbered names and lookalikes, the Python-only
+  dotted `not_sensitive` declaration, the redacted `str`/`repr` of a `Config`, and URL-password masking under
+  any key for every URL of a value (replacing the false "a `url` key is masked by neither" example). Ships
+  the skill's first decision-ledger entries and the skill-writer checklists for each batch.
+
 ## [11.10.6]
 
 ### Fixed

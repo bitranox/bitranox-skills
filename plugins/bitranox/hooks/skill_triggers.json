@@ -172,7 +172,8 @@
   "macos",
   "windows",
   "choosing",
-  "environment-variable"
+  "environment-variable",
+  "section__key"
  ],
  "coding-python-logging": [
   "python",
