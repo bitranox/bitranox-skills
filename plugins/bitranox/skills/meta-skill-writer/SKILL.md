@@ -813,6 +813,15 @@ so Windows does not silently break it:
        glue. If you must accept a user-supplied command template, parse it once with
        `shlex.split` and substitute placeholders into the list elements (no shell).
 
+### A bundled Python script or hook gets the data-architecture and performance skills
+
+**REQUIRED SUB-SKILLS for Python code:** before you write or edit a bundled Python script, a hook
+or a jig, load `bitranox:coding-python-data-architecture` (typed models at the boundaries, enums
+for fixed values, no raw dicts passed around) and `bitranox:coding-python-performance-review` (no
+per-item I/O in a loop, compiled regexes, bounded memory, measured claims). Apply both to new code
+as a whole, and on an edit to an existing script to the code the edit touches. A bash script
+follows `bitranox:coding-bash-clean-architecture` and `bitranox:coding-bash-reference` instead.
+
 ### A bundled script's decisions go in its docstring, not the skill's ledger
 
 When a bundled script (`skills/<skill>/scripts/*.py`) or a hook settles a choice a later editor
