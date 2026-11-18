@@ -30,6 +30,16 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.10.16]
+
+### Changed
+
+- `coding-python-layered-config` follows lib_layered_config 9.0.0: one layer's destination comes from
+  `DefaultPathResolver(...).destination_for(Layer.APP)` with `platform="linux"`, `"darwin"` or
+  `"win32"` (the `LinuxDeployment`/`MacDeployment`/`WindowsDeployment` wrappers are gone), a slug must
+  not end in `.`, `-` or `_`, and `DeployResult` is frozen with `dot_d_results` a tuple. The tool
+  repo's own copy carries the same text.
+
 ## [11.10.15]
 
 ### Changed
