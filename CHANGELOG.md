@@ -30,6 +30,14 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.10.15]
+
+### Changed
+
+- `ai-llm-jev-judge` names `btx-skill-jev-judge>=0.3.10` in its `uvx --from` lines, the tool
+  release that imports `DeployAction` from the lib_layered_config root; `JEV_JUDGE_FLOOR` in
+  `meta-self-improve/jev_shadow.py` follows. The tool repo's own copy carries the same floor.
+
 ## [11.10.14]
 
 ### Changed
