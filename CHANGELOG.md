@@ -30,6 +30,23 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.11.0]
+
+### Added
+
+- `decision-claim-guard.py`, a guard on EXECUTION-USER-REVIEW.md. Text added there that claims
+  something is not the user's decision ("not a user decision", "no user decision", "my own
+  wording", "not the user's", "the user never decided", "not decided by the user", either
+  apostrophe) needs a `decision-check: "<term>"` marker in the same entry, naming a term the entry
+  itself uses. The hook searches every CHOSEN option's label and description in the main
+  checkout's USER-DECISIONS.jsonl (and a typed answer) for the term and refuses the write when it
+  is there, quoting the option; a claim with no marker is refused with how to add one. Write and
+  Edit are judged before they run (PreToolUse). A Bash or PowerShell command that writes the file
+  is judged after it runs, against a snapshot PreToolUse took, and each added line is judged
+  once. With no USER-DECISIONS.jsonl the hook stays silent. Over the 1175 review logs on the
+  author's machine the trigger fires on 16 distinct entries, each a claim that something is not,
+  or changes no, user decision.
+
 ## [11.10.17]
 
 ### Changed

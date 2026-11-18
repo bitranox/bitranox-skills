@@ -32,6 +32,7 @@ _HOOK_MODULES = {
     "block-commit-beside-sibling-gate": "block_commit_beside_sibling_gate",
     "block-index-splice": "block_index_splice",
     "user-decision-log": "user_decision_log",
+    "decision-claim-guard": "decision_claim_guard",
     "self-improve-gate": "self_improve_gate",
     "self-improve-audit": "self_improve_audit",
     "decision-review-nudge": "decision_review_nudge",
@@ -94,11 +95,13 @@ _HOOK_MODULES = {
     "publish-after-failed-edit-note": "publish_after_failed_edit_note",
 }
 
+# Registered BEFORE exec_module: a module that builds a dataclass at import time (string
+# annotations included) looks itself up in sys.modules while it is still executing.
 for _stem, _alias in _HOOK_MODULES.items():
     _spec = importlib.util.spec_from_file_location(_alias, HOOKS_DIR / (_stem + ".py"))
     _module = importlib.util.module_from_spec(_spec)
-    _spec.loader.exec_module(_module)
     sys.modules[_alias] = _module
+    _spec.loader.exec_module(_module)
 
 
 import types as _types
