@@ -30,6 +30,15 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.10.14]
+
+### Changed
+
+- `infra-proxmox-bindsnap` names no vetted pve-container range and no pve-bindsnap release that
+  holds one: it points at the repo's `docs/compatible-versions.md` as the list for both guards,
+  and says a node accepts only the rows its installed pve-bindsnap release holds, so update
+  pve-bindsnap to pick up newer rows. The tool repo's own copy carries the same text.
+
 ## [11.10.13]
 
 ### Added
