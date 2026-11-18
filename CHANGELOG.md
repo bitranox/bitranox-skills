@@ -30,6 +30,16 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.11.2]
+
+### Changed
+- coding-python-layered-config: follows the lib_layered_config patch release from its docs and skill
+  audit: `destination_for` takes a layer name in any case (`Layer.ENV` or an unknown name raises
+  `ValidationError`); the `--json` failure envelope is `{ok, command, error}`; the `read` flags
+  `--default-file`, `--start-dir`, `--format`, `--provenance`; a declared table still masks the
+  sensitive keys below it; the provenance entry shape; `redact_mapping` on a `Config` ignores its
+  declaration; deploy directory modes; which platform checks each root override; `SourceInfo`.
+
 ## [11.11.1]
 
 ### Changed
