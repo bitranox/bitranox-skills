@@ -30,6 +30,14 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.10.17]
+
+### Changed
+
+- `coding-python-layered-config` names `deployed_before_failure(error)`: a deploy that fails part-way
+  has written the earlier targets, in the order `targets` lists them, and that call returns their
+  `DeployResult`s, or `[]` for an error that carries none. The tool repo's own copy carries the same text.
+
 ## [11.10.16]
 
 ### Changed
