@@ -30,6 +30,16 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.11.1]
+
+### Changed
+- coding-python-layered-config: an environment or `.env` `null`/`none` is judged in the spelling a
+  lower layer stored for the key (`MY_APP___DB__DBPASSWORD=null` over a file's `dbPassword` stays
+  `"null"`), and a `not_sensitive` path matches in any case; `deploy_config`'s `dir_mode`/`file_mode`
+  take an int or a `DeployMode` of the matching kind; `DefaultPathResolver(platform=)` takes the
+  `deploy_config` aliases (`macos`, `Darwin`, `windows`, ...). Follows the lib_layered_config patch
+  release that ships these.
+
 ## [11.11.0]
 
 ### Added
