@@ -30,6 +30,19 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.13.1]
+
+### Fixed
+
+- mutation_arm tests: the grandchild-kill check polls the Windows-safe liveness probe. A second
+  helper of the same name had replaced it, so on Windows the check called `os.kill(pid, 0)`,
+  which errors for a gone process and terminates a live one.
+- Restore-journal tests write the mutant as the exact bytes the journal records, as
+  mutation_arm does. A text-mode write produced CRLF on Windows, and recovery treated the file as
+  a conflict instead of restoring it.
+- compact-resume tests spell the cd target the way Git Bash reads it (`C:/temp/...`). An
+  unquoted backslash path is an escape sequence in bash and never reaches the checkpoint.
+
 ## [11.13.0]
 
 ### Added
