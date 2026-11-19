@@ -30,7 +30,7 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
-## [11.13.3]
+## [11.13.5]
 
 ### Fixed
 
@@ -65,6 +65,28 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   without `DISPLAY`) and the instruments that isolate a new one.
 - coding-python-uv: smoke-test a just-published wheel with `--isolated` or `env -u VIRTUAL_ENV`
   and require `site-packages` in the module's `__file__`.
+
+## [11.13.4]
+
+### Changed
+
+- process-test-design: the growth-ratio check now says what comes first (make the negative input reach the costly path; the too-fast floor is only the backstop), gives clock steps measured on the Windows dev box, and says a test whose cost is page faulting reads user plus system time (ru_utime + ru_stime).
+
+## [11.13.3]
+
+### Fixed
+
+- compact-resume: on Windows, a checkpoint the session re-stamped from Bash after a Git Bash drive cd (cd /c/temp/... && sed -i ... handover.md) is attributed to the session again; the hook used to resolve /c/temp under the current drive, as C:\c\temp.
+- compact-resume: an unquoted backslash path in a Bash command (sed -i ... C:\temp\x\handover.md) no longer counts as an edit of that checkpoint, since bash drops the backslashes and edits C:tempxhandover.md.
+- process-test-design: the growth-ratio check no longer recommends os.times().user, which steps in whole clock ticks (10 ms on Linux); it names resource.getrusage(...).ru_utime on POSIX and says to measure the clock's step.
+- meta-dream-tree: the backup directory `<key>-<ts>` is now defined (`tree-<anchor dir name>-<YYYYMMDD-HHMM>`), and dream-core's manifest field list matches what store_manifest records.
+- repo-gate tests: two helpers defined twice in test_repo_gate.py ran some tests with the other helper's git behaviour; each now has one definition.
+
+### Added
+
+- shell_text: msys_drive_path, and an opt-in msys_drives keyword on directory_change that reads a Git Bash drive path as that drive (compact-resume turns it on under Windows).
+- A repo test that refuses any module under plugins/ defining a top-level def or class name twice.
+- process-test-design: entries for a duplicated module-level def (ruff F811 skips `_`-prefixed names under its default dummy-variable-rgx) and for growth-ratio arms that do no measurable work.
 
 ## [11.13.2]
 

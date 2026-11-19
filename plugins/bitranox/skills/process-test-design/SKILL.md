@@ -922,21 +922,22 @@ spawned child's, or one a library reads at import), redirects or deletes coverag
 conftest, simulates a race between a check and an open, blocks a stub so it can be signalled
 mid-call, plants a marker to prove a process ran (or did not), starts a fixture process that must
 carry a given `/proc/<pid>/comm` name, asserts that no file descriptor leaked or that a file is held
-only through a memory map, binds a unix socket under `tmp_path`, builds a test double by subclassing
-a `@dataclass`, configures a logger in a fixture, checks that an event from another thread wakes an
-asyncio consumer, races a call on a helper thread, mints synthetic identifiers (an address, a
-serial, ids that something later truncates), carries a skip or an exclusion, judges an artifact,
-compares against a git ref, guards against cost (an absolute time budget or a growth ratio), or
-tests environment isolation - or before you claim a code path is untested or accept a surviving
-mutation. Read it too when code in a unit suite could reach a real host or a user-facing service
-(ssh, a keyring, a session bus), a test guards a secret its own failure output could print, a test
-spawns a nested test runner or several writers appending to one file, asserts only a real tool's
-verdict, relies on `tests/conftest.py` fixtures reaching `src/` doctests or on fixtures ported
-from a template, isolates the suite in an autouse fixture (an override or fallback knob it sets,
-a file it plants), feeds a FIFO from a writer thread, or derives its input from a constant you are
-about to mutate. Read it too when a test proves an input was refused before any side effect,
-proves a timed wake or poll fires, runs `git commit` under a sandboxed or fresh home directory, or
-cancels an operation at every await or step to check what it leaves behind.
+only through a memory map, binds a unix socket under `tmp_path`, adds a module-level helper to a
+test module, builds a test double by subclassing a `@dataclass`, configures a logger in a fixture,
+checks that an event from another thread wakes an asyncio consumer, races a call on a helper thread,
+mints synthetic identifiers (an address, a serial, ids that something later truncates), carries a
+skip or an exclusion, judges an artifact, compares against a git ref, guards against cost (an
+absolute time budget or a growth ratio), or tests environment isolation - or before you claim a code
+path is untested or accept a surviving mutation. Read it too when code in a unit suite could reach a
+real host or a user-facing service (ssh, a keyring, a session bus), a test guards a secret its own
+failure output could print, a test spawns a nested test runner or several writers appending to one
+file, asserts only a real tool's verdict, relies on `tests/conftest.py` fixtures reaching `src/`
+doctests or on fixtures ported from a template, isolates the suite in an autouse fixture (an
+override or fallback knob it sets, a file it plants), feeds a FIFO from a writer thread, or derives
+its input from a constant you are about to mutate. Read it too when a test proves an input was
+refused before any side effect, proves a timed wake or poll fires, runs `git commit` under a
+sandboxed or fresh home directory, or cancels an operation at every await or step to check what it
+leaves behind.
 
 ## Quick checklist
 

@@ -1176,6 +1176,44 @@ def test_directory_change_knows_the_powershell_spellings(statement):
     assert changed is True and landing == _norm("/s/r")
 
 
+# ---- Git Bash drive paths: `cd /c/temp` lands on drive C ---------------------------------------
+# Measured in Git Bash on a Windows box (Git 2.56): `cd /c/temp` and `cd /C/temp` land in C:/temp,
+# `cd /c` and `cd /c/` in C:/, while `cd /cygdrive/c/temp` and `cd //c/temp` fail - Git for Windows
+# mounts the drives at `/` (its fstab: `none / cygdrive ...`), not at `/cygdrive`. Python's os.path
+# read `/c/temp` as a path rooted at the CURRENT drive, C:\c\temp, a directory nobody was in.
+
+@pytest.mark.parametrize("path, windows, expected", [
+    ("/c/temp/x", True, "C:/temp/x"),
+    ("/C/temp", True, "C:/temp"),
+    ("/d", True, "D:/"),
+    ("/c/", True, "C:/"),
+    ("/cygdrive/c/temp", True, "/cygdrive/c/temp"),   # Git Bash does not resolve it either
+    ("//c/temp", True, "//c/temp"),
+    ("/temp/x", True, "/temp/x"),                     # a name longer than one letter
+    ("/tmp", True, "/tmp"),                           # a mount, not a drive
+    ("C:/temp", True, "C:/temp"),
+    ("c/temp", True, "c/temp"),                       # relative
+    ("/c/temp/x", False, "/c/temp/x"),                # on POSIX /c is just a directory
+    ("/d", False, "/d"),
+])
+def test_msys_drive_path_spells_a_git_bash_drive_the_windows_way(path, windows, expected):
+    assert S.msys_drive_path(path, windows) == expected
+
+
+def test_a_cd_into_a_git_bash_drive_path_lands_on_that_drive_when_asked():
+    """A caller that knows the text is Git Bash's on Windows passes msys_drives; the host decides
+    which arm runs, so each CI cell checks its own."""
+    windows = os.name == "nt"
+    expected = _norm("C:/temp/x" if windows else "/c/temp/x")
+    assert S.directory_change("cd /c/temp/x", _HERE, msys_drives=windows) == (True, expected)
+    assert S.directory_change("cd /c/temp/x", None, msys_drives=windows) == (True, expected)
+
+
+def test_the_drive_reading_is_off_unless_a_caller_asks_for_it():
+    """The guards and nudges keep the reading they were tested against."""
+    assert S.directory_change("cd /c/temp/x", _HERE) == (True, _norm("/c/temp/x"))
+
+
 # ---- past_command_prefix: the launcher walk, public -------------------------------------------
 #
 # A guard asking "which program does this statement really run?" had to read the private

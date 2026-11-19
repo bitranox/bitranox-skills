@@ -111,6 +111,8 @@ _BASH_REMOVES = re.compile(r"\b(?:rm|mv|unlink)\b")
 #: a long word rescanned it from each character.
 _BASH_PATH = re.compile(
     r"""(?<![^\s'"`;|&<>()=,])[^\s'"`;|&<>()=,]*handover[^\s'"`;|&<>()=,/]*\.md(?![\w.-])""")
+#: A backslash escape in an unquoted shell word: bash keeps only the escaped character.
+_BASH_ESCAPE = re.compile(r"\\(.)", re.DOTALL)
 #: The harness attachments that name the session's plan file while plan mode is on or ending.
 _PLAN_ATTACHMENTS = frozenset({"plan_mode", "plan_mode_reentry", "plan_mode_exit"})
 #: A file with an improvised name counts only when one of its lines is exactly this heading.
@@ -542,6 +544,9 @@ def bash_targets(command: object, cwd: str | None) -> dict[str, bool]:
     the command's statements ran in. A relative path is resolved against the call's cwd as moved
     by a preceding `cd`; one built from a variable, or after a `cd` no static read can follow, is
     skipped. `removes` is True when the statement removes or moves the file.
+
+    A statement's words are read the way Git Bash reads them: `/c/temp` is drive C on Windows,
+    and an unquoted backslash is an escape. A heredoc body keeps its interpreter's reading.
     """
     if not isinstance(command, str) or "handover" not in command:
         return {}
@@ -550,20 +555,21 @@ def bash_targets(command: object, cwd: str | None) -> dict[str, bool]:
     bases: set[str | None] = set()
     for statement in _statements(shell_text.strip_heredoc_bodies(command)):
         changed, landing = cast(tuple[bool, str | None],
-                                shell_text.directory_change(statement, here))
+                                shell_text.directory_change(statement, here,
+                                                            msys_drives=os.name == "nt"))
         if changed:
             here = landing
             continue
         if here:
             bases.add(here)
-        _collect_targets(statement, here, out)
+        _collect_targets(statement, here, out, shell=True)
     lines = command.split("\n")
     heredocs = cast(list[tuple[int, object, tuple[int, int]]],
                     list(shell_text.iter_heredocs(command)))
     for _line, _opener, (start, end) in heredocs:
         body = "\n".join(lines[start:end])
         for base in bases or {None}:
-            _collect_targets(body, base, out)
+            _collect_targets(body, base, out, shell=False)
     return out
 
 
@@ -602,18 +608,26 @@ def _statements(text: str) -> list[str]:
     return [s for s in out if s.strip()]
 
 
-def _collect_targets(text: str, base: str | None, out: dict[str, bool]) -> None:
-    """Add the checkpoint files `text` (one statement or script) can change to `out`. Mutates it."""
+def _collect_targets(text: str, base: str | None, out: dict[str, bool], *, shell: bool) -> None:
+    """Add the checkpoint files `text` (one statement or script) can change to `out`. Mutates it.
+
+    `shell` is True for a shell statement, whose words get Git Bash's reading (`_as_bash_reads`),
+    and False for a script body, whose paths reach a native interpreter as written.
+    """
     if not _BASH_CHANGES.search(text):
         return
     removes = bool(_BASH_REMOVES.search(text))
     words = cast(list[str], shell_text.argv_for_match(text.strip(), "Bash"))
     program = next((w for w in words if "=" not in w), "")
+    raw = shell                      # the text still carries the shell's quotes and escapes
     if os.path.basename(program) in _COPY_PROGRAMS and len(words) > 1:
         # a copy changes only its destination: `cp handover.md handover.prev.md` reads the file
-        text = words[-1]
+        text, raw = words[-1], False
     for match in _BASH_PATH.finditer(text):
         token = match.group(0)
+        if shell:
+            quoted = text[match.start() - 1:match.start()] in ("'", '"')
+            token = _as_bash_reads(token, escaped=raw and not quoted)
         if "$" in token or not is_checkpoint_name(os.path.basename(token)):
             continue
         token = os.path.expanduser(token)
@@ -623,6 +637,19 @@ def _collect_targets(text: str, base: str | None, out: dict[str, bool]) -> None:
             token = os.path.join(base, token)
         key = _norm(token)
         out[key] = out.get(key, False) or removes
+
+
+def _as_bash_reads(token: str, *, escaped: bool) -> str:
+    """The path Git Bash reaches for a word of a statement. PURE apart from the host check.
+
+    `escaped` is True for an unquoted word as written, whose backslashes bash drops as escapes
+    (`C:\\temp\\x` is `C:tempx`, measured in Git Bash): the word then names another file than
+    the one a Windows path parse would find. A quoted word, or one the shell already read, keeps
+    them. On Windows a `/c/...` drive path is drive C (see `shell_text.msys_drive_path`).
+    """
+    if escaped:
+        token = _BASH_ESCAPE.sub(r"\1", token)
+    return cast(str, shell_text.msys_drive_path(token, os.name == "nt"))
 
 
 def _epoch(stamp: object) -> float | None:
