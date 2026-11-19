@@ -72,6 +72,7 @@ _HOOK_MODULES = {
     "forgotten-backstop-nudge": "forgotten_backstop_nudge",
     "subagent-brief-pyright-nudge": "subagent_brief_pyright_nudge",
     "subagent-brief-must-not-nudge": "subagent_brief_must_not_nudge",
+    "subagent-brief-fetch-nudge": "subagent_brief_fetch_nudge",
     "touched-paths": "touched_paths",
     "subagent-capture": "subagent_capture",
     "subagent-brief": "subagent_brief",

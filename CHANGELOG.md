@@ -30,6 +30,23 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.12.0]
+
+### Added
+
+- `subagent-brief-fetch-nudge.py` (PreToolUse, Task and Agent, warn-only): a dispatch whose brief
+  asks the subagent to read or compare state across several repositories ("for each repo", "in
+  each of the 3 repos", "both templates", "grep the code in sibling repos", "clone each repo",
+  "which of the templates", "CLIs built on lib_x", "the templates and their consumers") and
+  nowhere says to fetch or read origin gets additionalContext telling the dispatcher to put "git
+  fetch each repo first and read origin's state (git show @{u}:<path>, origin/<branch>), never the
+  working tree" in the brief. A local checkout describes the last fetch, so such a report comes
+  back confident and wrong; on 2026-11-18 one named a version floor origin had already raised. The
+  sweep word and a read word must share a sentence; brief files the prompt points at (name says
+  "brief") are read too and a hit there is reported by file and line, never quoted. Replayed over
+  every recorded Task/Agent dispatch: 8 of 3538 judged fire (0.23 percent), 7 real and 1 false
+  positive on hand reading, the 2026-11-18 incident brief among the real ones.
+
 ## [11.11.2]
 
 ### Changed
