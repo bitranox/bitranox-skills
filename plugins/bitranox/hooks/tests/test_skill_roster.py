@@ -198,13 +198,13 @@ def test_a_trimmed_plugin_command_takes_its_command_file_description(home, tmp_p
 
 def test_a_trimmed_project_skill_is_found_from_the_cwd_and_its_ancestors(tmp_path):
     proj = tmp_path / "proj"
-    _skill_md(proj / ".claude" / "skills" / "provmm-build" / "SKILL.md", "Build provmm.")
+    _skill_md(proj / ".claude" / "skills" / "sample-build" / "SKILL.md", "Build sample.")
     sub = proj / "src" / "deep"
     sub.mkdir(parents=True)
-    got = SR.parse_listing("- provmm-build", ["provmm-build"], cwd=str(sub))
-    assert got["provmm-build"] == "Build provmm."
+    got = SR.parse_listing("- sample-build", ["sample-build"], cwd=str(sub))
+    assert got["sample-build"] == "Build sample."
     # Without the cwd the same line has nothing to resolve against: the name alone.
-    assert SR.parse_listing("- provmm-build", ["provmm-build"])["provmm-build"] == "provmm-build"
+    assert SR.parse_listing("- sample-build", ["sample-build"])["sample-build"] == "sample-build"
 
 
 def test_a_trimmed_user_command_without_front_matter_takes_its_first_line(home):
@@ -409,9 +409,9 @@ def test_a_transcript_listing_is_used_and_cached_for_its_project(tmp_path):
 
 
 def test_the_cache_is_per_project_so_project_skills_do_not_leak(tmp_path):
-    SR.installed_skills(_transcript(tmp_path, [_listing(BASE + [("provmm-build", "p")])]), "/p/a")
+    SR.installed_skills(_transcript(tmp_path, [_listing(BASE + [("sample-build", "p")])]), "/p/a")
     skills, source = SR.installed_skills("", "/p/b")
-    assert source == SR.SOURCE_SHIPPED and "provmm-build" not in skills
+    assert source == SR.SOURCE_SHIPPED and "sample-build" not in skills
 
 
 def test_with_no_listing_and_no_cache_the_shipped_skills_answer():
@@ -466,14 +466,14 @@ def test_a_cache_of_the_wrong_shape_falls_back_to_the_shipped_skills(data):
 
 def test_the_installed_roster_offers_trimmed_skills_resolved_from_the_project(tmp_path):
     proj = tmp_path / "proj"
-    _skill_md(proj / ".claude" / "skills" / "provmm-build" / "SKILL.md", "Build provmm.")
+    _skill_md(proj / ".claude" / "skills" / "sample-build" / "SKILL.md", "Build sample.")
     rec = {"type": "attachment", "attachment": {
         "type": "skill_listing",
-        "content": "- bitranox:compuse-git: Use when running git.\n- provmm-build\n- loop",
-        "names": ["bitranox:compuse-git", "provmm-build", "loop"], "isInitial": True}}
+        "content": "- bitranox:compuse-git: Use when running git.\n- sample-build\n- loop",
+        "names": ["bitranox:compuse-git", "sample-build", "loop"], "isInitial": True}}
     skills, source = SR.installed_skills(_transcript(tmp_path, [rec]), str(proj))
     assert source == SR.SOURCE_TRANSCRIPT
-    assert skills == {"compuse-git": "Use when running git.", "provmm-build": "Build provmm.",
+    assert skills == {"compuse-git": "Use when running git.", "sample-build": "Build sample.",
                       "loop": "loop"}
 
 

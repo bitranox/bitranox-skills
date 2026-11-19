@@ -319,7 +319,7 @@ def _tree_may_have_changed(walked: _Walked, start: int, stop: int) -> bool:
     """True when the two statements might not be acting on the same repository.
 
     A `cd` between them, or a differing `git -C <path>`, means the second statement works in
-    another directory. Committing to `provmm_planning` and then to `provmm_proxmox` is two pieces
+    another directory. Committing to `sample_planning` and then to `sample_proxmox` is two pieces
     of work, not a chain, so `&&` is wrong advice: you want the second attempted when the first
     fails.
 

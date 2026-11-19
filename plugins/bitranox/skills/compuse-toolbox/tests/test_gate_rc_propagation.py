@@ -2,7 +2,7 @@
 
 Collapsing every failure to 1 re-creates, one layer out, the exact masking this tool exists
 to prevent. A pipe masks with its last element's status; a runner masks with its own. It bites
-hardest on a gate whose codes are a TAXONOMY rather than pass/fail: the provmm Leg 3 perf gate
+hardest on a gate whose codes are a TAXONOMY rather than pass/fail: one project's perf gate
 uses 0 = clean, 2 = a metric regressed, 1 = no metrics measured, so a run reported as 1 reads as
 "the measurement crashed" when it actually returned a verdict. Measured 2026-09-04: a background
 task notification said "exit code 1" and four tool calls went into hunting a defect in the gate's

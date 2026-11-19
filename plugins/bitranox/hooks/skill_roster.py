@@ -3,7 +3,8 @@
 Globbing this plugin's own `skills/*/SKILL.md` offers only bitranox skills, so a skill from another
 plugin, a project skill or a Claude Code built-in can never be proposed however well it fits.
 Measured on the two blind-adjudicated replays: 4 of the 6 skills no arm ever proposed were of that
-kind (typesafe-ai, soundtouch-decloud, provmm-build, update-config).
+kind (typesafe-ai, soundtouch-decloud, a private project skill,
+update-config).
 
 The session's real listing is in its transcript as a `skill_listing` attachment: a full record
 (`isInitial: true`) after startup and after every plugin reload, and a delta (`isInitial: false`)

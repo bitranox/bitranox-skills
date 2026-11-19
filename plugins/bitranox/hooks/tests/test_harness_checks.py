@@ -98,7 +98,7 @@ def test_personal_skills_dir_is_not_shipped(tmp_path):
 def test_project_skills_dir_is_not_shipped(tmp_path):
     home = tmp_path / "home"
     proj = tmp_path / "work" / "vm-umbrella" / ".claude"
-    assert hc.is_shipped(_skills(proj, "provmm-build"), home=home) is False
+    assert hc.is_shipped(_skills(proj, "sample-build"), home=home) is False
 
 
 def test_a_project_inside_a_plugin_repo_is_shipped(tmp_path):
@@ -168,7 +168,7 @@ def test_select_targets_dedupes_a_repeated_path(tmp_path):
 def test_discover_finds_project_and_personal_skills_dirs(tmp_path):
     home = tmp_path / "home"
     personal = _skills(home / ".claude", "toolbox")
-    proj = _skills(tmp_path / "work" / "provmm" / ".claude", "provmm-build")
+    proj = _skills(tmp_path / "work" / "sample" / ".claude", "sample-build")
     got = hc.discover_candidates([tmp_path / "work"], home=home)
     assert personal in got and proj in got
 
@@ -198,7 +198,7 @@ def test_discover_can_leave_the_personal_dir_out(tmp_path):
     """The per-tree dream audits one tree; the personal dir is the crosstree pass's business."""
     home = tmp_path / "home"
     _skills(home / ".claude", "toolbox")
-    proj = _skills(tmp_path / "work" / "provmm" / ".claude", "provmm-build")
+    proj = _skills(tmp_path / "work" / "sample" / ".claude", "sample-build")
     assert hc.discover_candidates([tmp_path / "work"], home=home, personal=False) == [proj]
 
 

@@ -838,7 +838,7 @@ def red_status(report: GateReport) -> int:
 
     Collapsing every failure to 1 would re-create, one layer out, the masking this tool exists to
     prevent - a pipe masks with its last element's status, a runner with its own. It costs most on
-    a gate whose codes are a TAXONOMY rather than pass/fail (the provmm Leg 3 perf gate: 0 clean,
+    a gate whose codes are a TAXONOMY rather than pass/fail (one project's perf gate: 0 clean,
     2 a metric regressed, 1 no metrics measured), where a reported 1 reads as "the measurement
     crashed" instead of "it returned a verdict". Not hypothetical: a background task's completion
     notification carries THIS process's code, not the gate's, so the collapse is what a caller

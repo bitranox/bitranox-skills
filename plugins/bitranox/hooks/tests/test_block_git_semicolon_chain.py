@@ -638,8 +638,8 @@ def test_differing_dash_c_targets_are_different_repositories():
     """Committing to one sub-repo then another is two pieces of work, not a chain."""
     command = (
         "cd /umbrella\n"
-        'git -C provmm_planning add -A && git -C provmm_planning commit -q -m "notes"\n'
-        'git -C provmm_proxmox add -A && git -C provmm_proxmox commit -q -m "code"'
+        'git -C sample_planning add -A && git -C sample_planning commit -q -m "notes"\n'
+        'git -C sample_proxmox add -A && git -C sample_proxmox commit -q -m "code"'
     )
     assert G.chained_state_changes(command) is None
 

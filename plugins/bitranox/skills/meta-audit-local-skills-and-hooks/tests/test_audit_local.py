@@ -34,7 +34,7 @@ def tree(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
     work = tmp_path / "work"
-    project = _skills(work / "provmm" / ".claude", "provmm-build")
+    project = _skills(work / "sample" / ".claude", "sample-build")
     shipped = _skills(_manifest(work / "igittigitt", "plugin.json"), "python-gitignore")
     personal = _skills(home / ".claude", "toolbox")
     return type("Tree", (), dict(home=home, work=work, project=project,
@@ -121,24 +121,24 @@ def _run_check(argv):
 
 def test_check_is_clean_and_exits_zero_for_a_healthy_tree(tree):
     """The control. A check that can only ever report findings is not a check."""
-    (tree.project / "provmm-build" / "SKILL.md").write_text(
-        "---\nname: provmm-build\ndescription: Use when building provmm images from source.\n---\n",
+    (tree.project / "sample-build" / "SKILL.md").write_text(
+        "---\nname: sample-build\ndescription: Use when building sample images from source.\n---\n",
         encoding="utf-8")
     code, out, _ = _run_check(["check", "--root", str(tree.work), "--no-personal"])
     assert code == 0 and "clean" in out
 
 
 def test_check_reports_a_description_that_is_not_trigger_first(tree):
-    (tree.project / "provmm-build" / "SKILL.md").write_text(
-        "---\nname: provmm-build\ndescription: Builds the provmm images from source.\n---\n",
+    (tree.project / "sample-build" / "SKILL.md").write_text(
+        "---\nname: sample-build\ndescription: Builds the sample images from source.\n---\n",
         encoding="utf-8")
     code, out, _ = _run_check(["check", "--root", str(tree.work), "--no-personal"])
     assert code == 1 and "trigger-first" in out
 
 
 def test_check_reports_a_name_that_disagrees_with_its_dir(tree):
-    (tree.project / "provmm-build" / "SKILL.md").write_text(
-        "---\nname: wrong-name\ndescription: Use when building provmm images from source.\n---\n",
+    (tree.project / "sample-build" / "SKILL.md").write_text(
+        "---\nname: wrong-name\ndescription: Use when building sample images from source.\n---\n",
         encoding="utf-8")
     _, out, _ = _run_check(["check", "--root", str(tree.work), "--no-personal"])
     assert "[frontmatter]" in out and "wrong-name" in out
@@ -146,8 +146,8 @@ def test_check_reports_a_name_that_disagrees_with_its_dir(tree):
 
 def test_check_reports_an_unmanaged_twin_against_a_shipped_catalogue(tree, tmp_path):
     desc = "Use when parsing gitignore files and filtering paths with the igittigitt library."
-    (tree.project / "provmm-build" / "SKILL.md").write_text(
-        "---\nname: provmm-build\ndescription: %s\n---\n" % desc, encoding="utf-8")
+    (tree.project / "sample-build" / "SKILL.md").write_text(
+        "---\nname: sample-build\ndescription: %s\n---\n" % desc, encoding="utf-8")
     catalogue = tmp_path / "mkt" / "coding-python-gitignore"
     catalogue.mkdir(parents=True)
     (catalogue / "SKILL.md").write_text("---\nname: coding-python-gitignore\ndescription: %s\n---\n"
@@ -158,18 +158,18 @@ def test_check_reports_an_unmanaged_twin_against_a_shipped_catalogue(tree, tmp_p
 
 
 def test_check_reports_a_skill_shipping_a_script_with_no_test(tree):
-    (tree.project / "provmm-build" / "SKILL.md").write_text(
-        "---\nname: provmm-build\ndescription: Use when building provmm images from source.\n---\n",
+    (tree.project / "sample-build" / "SKILL.md").write_text(
+        "---\nname: sample-build\ndescription: Use when building sample images from source.\n---\n",
         encoding="utf-8")
-    (tree.project / "provmm-build" / "scripts").mkdir()
-    (tree.project / "provmm-build" / "scripts" / "tool.py").write_text("x = 1\n", encoding="utf-8")
+    (tree.project / "sample-build" / "scripts").mkdir()
+    (tree.project / "sample-build" / "scripts" / "tool.py").write_text("x = 1\n", encoding="utf-8")
     _, out, _ = _run_check(["check", "--root", str(tree.work), "--no-personal"])
     assert "[tests-missing]" in out
 
 
 def test_check_json_envelope_counts_findings(tree):
-    (tree.project / "provmm-build" / "SKILL.md").write_text(
-        "---\nname: provmm-build\ndescription: Builds the images.\n---\n", encoding="utf-8")
+    (tree.project / "sample-build" / "SKILL.md").write_text(
+        "---\nname: sample-build\ndescription: Builds the images.\n---\n", encoding="utf-8")
     code, out, _ = _run_check(["check", "--root", str(tree.work), "--no-personal", "--json"])
     payload = json.loads(out)
     assert code == 1 and payload["command"] == "check"
@@ -564,7 +564,7 @@ def _healthy_project(tmp_path):
     skill = tmp_path / "work" / "p" / ".claude" / "skills" / "demo"
     skill.mkdir(parents=True)
     (skill / "SKILL.md").write_text(
-        "---\nname: demo\ndescription: Use when building provmm images from source.\n---\n",
+        "---\nname: demo\ndescription: Use when building sample images from source.\n---\n",
         encoding="utf-8")
     return home, skill
 
