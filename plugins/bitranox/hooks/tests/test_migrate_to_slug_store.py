@@ -53,7 +53,11 @@ def test_dry_run_reports_and_writes_nothing(tmp_path):
     anchor, proj = _legacy_tree(tmp_path)
     before = (proj / "CLAUDE.local.md").read_text(encoding="utf-8")
     rep = MS.migrate([str(tmp_path)], apply=False)
-    assert rep["legacy_lines"] == 2 and rep["moved"] == 0 and rep["collisions"] == 0
+    assert rep.legacy_lines == 2 and rep.moved == 0 and rep.collisions == 0
+    assert type(rep) is MS.MigrateReport and rep.backups == [] and rep.backup_failed is None
+    assert sorted((type(i), i.slug, i.final_slug, i.collided, i.missing) for i in rep.items) == [
+        (MS.MigrateItem, "anchor-fact", "anchor-fact", False, False),
+        (MS.MigrateItem, "proj-fact", "proj-fact", False, False)]
     assert (proj / "CLAUDE.local.md").read_text(encoding="utf-8") == before
     assert not us.body_path(anchor, "proj-fact").exists()
 
@@ -61,7 +65,7 @@ def test_dry_run_reports_and_writes_nothing(tmp_path):
 def test_apply_moves_bodies_flips_lines_and_adds_recipe(tmp_path):
     anchor, proj = _legacy_tree(tmp_path)
     rep = MS.migrate([str(tmp_path)], apply=True)
-    assert rep["moved"] == 2 and rep["missing"] == 0
+    assert rep.moved == 2 and rep.missing == 0
     # bodies at slug paths; old sharded files gone
     assert us.body_path(anchor, "proj-fact").read_text(encoding="utf-8") == "PROJ BODY\n"
     assert us.body_path(anchor, "anchor-fact").read_text(encoding="utf-8") == "ANCHOR BODY\n"
@@ -74,20 +78,20 @@ def test_apply_moves_bodies_flips_lines_and_adds_recipe(tmp_path):
     got = {r.slug: r.body for r in us.resolve(str(proj))}
     assert got == {"proj-fact": "PROJ BODY", "anchor-fact": "ANCHOR BODY"}
     # backup exists
-    assert rep["backups"] and Path(rep["backups"][0]).is_dir()
+    assert rep.backups and Path(rep.backups[0]).is_dir()
 
 
 def test_apply_is_idempotent(tmp_path):
     anchor, proj = _legacy_tree(tmp_path)
     MS.migrate([str(tmp_path)], apply=True)
     rep2 = MS.migrate([str(tmp_path)], apply=True)
-    assert rep2["legacy_lines"] == 0 and rep2["moved"] == 0
+    assert rep2.legacy_lines == 0 and rep2.moved == 0
 
 
 def test_cross_level_slug_collision_gets_suffixed_and_reported(tmp_path):
     anchor, proj = _legacy_tree(tmp_path, extra_level_same_slug=True)
     rep = MS.migrate([str(tmp_path)], apply=True)
-    assert rep["collisions"] == 1
+    assert rep.collisions == 1
     bodies = {p.stem: p.read_text(encoding="utf-8").strip()
               for p in us.central_facts_dir(anchor).glob("*.md")}
     assert bodies["proj-fact"] in ("PROJ BODY", "DIFFERENT BODY SAME SLUG")
@@ -102,7 +106,7 @@ def test_missing_old_body_leaves_line_legacy_and_reports(tmp_path):
     u = us.fact_uuid(str(proj), "proj-fact")
     us.legacy_body_path(str(anchor), u).unlink()
     rep = MS.migrate([str(tmp_path)], apply=True)
-    assert rep["missing"] == 1 and rep["moved"] == 1
+    assert rep.missing == 1 and rep.moved == 1
     local = (proj / "CLAUDE.local.md").read_text(encoding="utf-8")
     assert "uuid:%s" % u in local                     # NOT flipped (body unmovable), still visible
 
@@ -162,7 +166,7 @@ def test_a_legacy_fact_sharing_a_migrated_slug_keeps_its_own_body(tmp_path):
     assert us.body_path(anchor, migrated.slug).read_text(encoding="utf-8") == "ANCHOR LEGACY BODY\n"
     assert us.body_path(anchor, "foo").read_text(encoding="utf-8") == "PROJ MIGRATED BODY\n"
     assert not any(us.central_facts_dir(anchor).glob("*/*.md"))      # nothing left orphaned
-    assert rep["collisions"] == 1
+    assert rep.collisions == 1
 
 
 def test_a_migrated_pointer_whose_body_is_missing_still_owns_its_slug(tmp_path):
@@ -171,7 +175,7 @@ def test_a_migrated_pointer_whose_body_is_missing_still_owns_its_slug(tmp_path):
     anchor, proj = _mixed_tree(tmp_path)
     us.body_path(anchor, "foo").unlink()
     rep = MS.migrate([str(tmp_path)], apply=True)
-    assert _only_pointer(anchor).slug == "foo-2" and rep["collisions"] == 1
+    assert _only_pointer(anchor).slug == "foo-2" and rep.collisions == 1
     assert not us.body_path(anchor, "foo").exists()
 
 
@@ -183,7 +187,7 @@ def test_a_dangling_body_at_the_slug_path_is_a_collision_too(tmp_path):
     us.put_body(anchor, "foo", "DANGLING BODY")
     rep = MS.migrate([str(tmp_path)], apply=True)
     migrated = _only_pointer(anchor)
-    assert migrated.slug == "foo-2" and rep["collisions"] == 1
+    assert migrated.slug == "foo-2" and rep.collisions == 1
     assert us.body_path(anchor, "foo-2").read_text(encoding="utf-8") == "LEGACY BODY\n"
     assert us.body_path(anchor, "foo").read_text(encoding="utf-8") == "DANGLING BODY\n"
 
@@ -203,7 +207,7 @@ def test_two_legacy_lines_sharing_one_uuid_repoint_instead_of_crashing(tmp_path)
     line_b = "- [B](uuid:%s) - hook b <!-- bx:slug=b -->" % u
     (proj / "CLAUDE.local.md").write_text(_legacy_block([line_a, line_b]), encoding="utf-8")
     rep = MS.migrate([str(tmp_path)], apply=True)          # must not raise
-    assert rep["moved"] == 2 and rep["collisions"] == 1
+    assert rep.moved == 2 and rep.collisions == 1
     text = (proj / "CLAUDE.local.md").read_text(encoding="utf-8")
     assert "uuid:" not in text
     assert text.count("(mem:a)") == 2 and "(mem:b)" not in text
@@ -224,7 +228,7 @@ def test_seeding_reaches_the_trees_anchor_even_when_root_is_narrower_than_it(tmp
     (proj / "CLAUDE.local.md").write_text(
         _legacy_block([_legacy_line(anchor, proj, "foo", "PROJ LEGACY BODY")]), encoding="utf-8")
     rep = MS.migrate([str(proj)], apply=True)
-    assert _only_pointer(proj).slug == "foo-2" and rep["collisions"] == 1
+    assert _only_pointer(proj).slug == "foo-2" and rep.collisions == 1
     assert us.body_path(anchor, "foo").exists() is False     # the anchor's own pointer, untouched
     assert us.body_path(anchor, "foo-2").read_text(encoding="utf-8") == "PROJ LEGACY BODY\n"
 
@@ -241,7 +245,7 @@ def test_the_same_slug_in_two_independent_trees_is_not_a_collision(tmp_path):
     (a2 / "CLAUDE.local.md").write_text(
         _legacy_block([_legacy_line(a2, a2, "foo", "T2 BODY")]), encoding="utf-8")
     rep = MS.migrate([str(tmp_path)], apply=True)
-    assert rep["collisions"] == 0
+    assert rep.collisions == 0
     assert _only_pointer(a2).slug == "foo"
     assert us.body_path(a2, "foo").read_text(encoding="utf-8") == "T2 BODY\n"
 
@@ -254,8 +258,8 @@ def test_a_non_utf8_pointer_file_is_reported_and_the_rest_still_migrates(tmp_pat
     other.mkdir()
     (other / "CLAUDE.local.md").write_bytes(b"caf\xe9 " + us.LEGACY_INDEX_BEGIN.encode("ascii"))
     rep = MS.migrate([str(tmp_path)], apply=False)
-    assert rep["legacy_lines"] == 2
-    assert rep["unreadable"] == [str(other / "CLAUDE.local.md")]
+    assert rep.legacy_lines == 2
+    assert rep.unreadable == [str(other / "CLAUDE.local.md")]
     # 2, not 0: a file it could not scan is a part of the question it could not answer
     assert MS.main(["--root", str(tmp_path)]) == 2
     out = capsys.readouterr().out
@@ -280,11 +284,11 @@ def test_apply_refuses_a_tree_that_holds_an_unreadable_pointer_file(tmp_path):
     # the poisoned tree: nothing moved, nothing rewritten, no backup for it
     assert (proj / "CLAUDE.local.md").read_text(encoding="utf-8") == before
     assert not us.body_path(anchor, "proj-fact").exists()
-    assert str(anchor) in rep["refused_trees"]
-    assert not any(str(anchor) in b for b in rep["backups"])
+    assert str(anchor) in rep.refused_trees
+    assert not any(str(anchor) in b for b in rep.backups)
     # the unrelated tree: migrates normally
     assert us.body_path(other_anchor, "proj-fact").read_text(encoding="utf-8") == "OTHER BODY\n"
-    assert any(str(other_anchor) in b for b in rep["backups"])
+    assert any(str(other_anchor) in b for b in rep.backups)
 
 
 # ---- a failed backup stops the apply -----------------------------------------------------------
@@ -315,7 +319,7 @@ def test_a_successful_backup_holds_every_touched_pointer_file(tmp_path):
     anchor, proj = _legacy_tree(tmp_path)
     before = (proj / "CLAUDE.local.md").read_text(encoding="utf-8")
     rep = MS.migrate([str(tmp_path)], apply=True)
-    bdir = Path(rep["backups"][0])
+    bdir = Path(rep.backups[0])
     manifest = (bdir / "manifest.txt").read_text(encoding="utf-8").splitlines()
     saved = {line.split("\t")[1]: bdir / line.split("\t")[0] for line in manifest}
     assert saved[str(proj / "CLAUDE.local.md")].read_text(encoding="utf-8") == before
