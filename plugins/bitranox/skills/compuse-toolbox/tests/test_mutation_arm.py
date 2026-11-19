@@ -1671,12 +1671,16 @@ def _start_waiting_arm(p):
     return proc
 
 
-def _gone(pid, within=15.0):
+def _gone_within(pid, within=15.0):
+    """Whether `pid` stops running within `within` seconds, asked through :func:`_gone`.
+
+    Its own name, not a second `_gone`: a module-level redefinition replaces the first for every
+    test in the module, and this one's os.kill(pid, 0) TERMINATES a live process on Windows and
+    raises WinError 87 for a gone one, so the Windows-safe probe above was never called there.
+    """
     deadline = time.monotonic() + within
     while time.monotonic() < deadline:
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
+        if _gone(pid):
             return True
         time.sleep(0.05)
     return False
@@ -1708,7 +1712,8 @@ def test_a_signal_to_mutation_arm_itself_restores_the_source(tmp_path, journal_d
     assert proc.returncode == 128 + getattr(signal, signame), (proc.returncode, err)
     assert (p / "src.py").read_bytes() == before
     assert "restored" in err, err
-    assert _gone(child), "the arm's own pytest must not keep running on a source being restored"
+    assert _gone_within(child), (
+        "the arm's own pytest must not keep running on a source being restored")
     assert not any(journal_dir.iterdir()), "a restored arm leaves no journal behind"
 
 
