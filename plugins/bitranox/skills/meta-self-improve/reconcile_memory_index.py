@@ -799,10 +799,10 @@ def render_drift(anchor):
         return [], "the dry run could not read a store file (%s)" % (
             str(exc) or type(exc).__name__)
     rows = []
-    for level in sorted(rep.get("levels", {})):
-        row = rep["levels"][level]
-        examples = sorted({slug for slugs in row["examples"].values() for slug in slugs})[:5]
-        rows.append((level, row["added"], row["refreshed"], row["removed"], examples))
+    for level in sorted(rep.levels):
+        row = rep.levels[level]
+        examples = sorted({slug for slugs in row.examples.values() for slug in slugs})[:5]
+        rows.append((level, row.added, row.refreshed, row.removed, examples))
     return rows, ""
 
 

@@ -14,6 +14,7 @@ that many writes). Prints the call's result as JSON; exit 0 on success, 2 on any
 Not a test module: pytest collects only test_*.py.
 """
 
+import dataclasses
 import json
 import os
 import sys
@@ -64,15 +65,15 @@ def main(argv):
     write = barrier_writer(Path(barrier), pause_after)
     try:
         if verb == "render":
-            rep = E.render_topics(proj, scope=arg, write=write)
+            data = E.render_topics(proj, scope=arg, write=write).to_data()
         else:
             rows = {slug: (None if topics is None else tuple(topics))
                     for slug, topics in json.loads(arg).items()}
-            rep = E.set_fact_topics(proj, rows, write=write)
+            data = dataclasses.asdict(E.set_fact_topics(proj, rows, write=write))
     except Exception as exc:                     # noqa: BLE001 - reported to the test as data
         print("%s: %s" % (type(exc).__name__, exc))
         return 2
-    print(json.dumps(rep, sort_keys=True, default=str))
+    print(json.dumps(data, sort_keys=True))
     return 0
 
 

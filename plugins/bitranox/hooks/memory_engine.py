@@ -3723,7 +3723,7 @@ def _collapse_copies(anchor, slug, holders, line, write):
     """Leave ONE line of an un-bound fact: at the tree top, written before the others are dropped,
     so no moment has the fact without a line. `holders` are the levels holding one, top first, and
     `line` the one at the first of them."""
-    scratch = {"levels": {}}
+    scratch = RenderReport()             # the line writers note into one; nobody reads it
     if _level_parts(anchor, holders[0]) != tp.TOP:
         _add_lines(os.path.abspath(str(anchor)),
                    {slug: us.Pointer(slug=slug, title=line.title, hook=line.hook)},
@@ -4038,7 +4038,72 @@ def _held_bytes(anchor, pinned, level_dir, goes=None):
     return split["kept"], split["stale"]
 
 
-def _census_lines(anchor, pinned, tally):
+class RenderKind(StrEnum):
+    """What a render did to the lines at one level; the value is the report's key."""
+
+    ADDED = "added"
+    REFRESHED = "refreshed"
+    REMOVED = "removed"
+    KEPT = "kept"
+
+
+@dataclass
+class RenderLevel:
+    """What a render did at one level: a count per kind, and the first slugs of each kind that
+    happened (`_RENDER_SHOWN` at most). `kept` is a misplaced line left because no level its fact is
+    placed at holds a line of it; it is 0 where none was, and the JSON then has no `kept` key."""
+
+    added: int = 0
+    refreshed: int = 0
+    removed: int = 0
+    kept: int = 0
+    examples: dict[RenderKind, list[str]] = field(default_factory=dict[RenderKind, list[str]])
+
+    def to_data(self) -> dict[str, object]:
+        """The level's row as `render-topics --json` prints it: `kept` only where a line was."""
+        row: dict[str, object] = {"added": self.added, "refreshed": self.refreshed,
+                                  "removed": self.removed,
+                                  "examples": {kind.value: slugs
+                                               for kind, slugs in self.examples.items()}}
+        if self.kept:
+            row["kept"] = self.kept
+        return row
+
+
+@dataclass
+class RenderCensus:
+    """The census of a render's one pass over the bodies: how many facts are managed, and the
+    tagged unpinned ones no line can be built from (the first _RENDER_SHOWN, sorted, and the
+    total)."""
+
+    managed: int = 0
+    incomplete: list[str] = field(default_factory=list[str])
+    incomplete_total: int = 0
+
+
+@dataclass
+class RenderReport:
+    """What `render_topics` did or, for a dry run, would do. `has_list` False means the tree has no
+    topic list: nothing was read past that, every other field keeps its default, and the JSON
+    is `{"list": false}` alone. `levels` holds a row per level dir that changed."""
+
+    has_list: bool = True
+    scope: str = ""
+    dry_run: bool = False
+    census: RenderCensus = field(default_factory=RenderCensus)
+    levels: dict[str, RenderLevel] = field(default_factory=dict[str, RenderLevel])
+
+    def to_data(self) -> dict[str, object]:
+        """The report as `render-topics --json` prints it (the printer sorts the keys)."""
+        if not self.has_list:
+            return {"list": False}
+        return {"list": True, "scope": self.scope, "dry_run": self.dry_run,
+                "levels": {level: row.to_data() for level, row in self.levels.items()},
+                "managed": self.census.managed, "incomplete": self.census.incomplete,
+                "incomplete_total": self.census.incomplete_total}
+
+
+def _census_lines(anchor, pinned, tally: RenderCensus):
     """Yield (slug, topics, line) for every managed fact, one body head at a time, counting into
     `tally` how many are managed and the tagged unpinned ones no line can be built from (the first
     _RENDER_SHOWN and their total)."""
@@ -4048,20 +4113,20 @@ def _census_lines(anchor, pinned, tally):
             continue
         line = _line_from_head(slug, head)
         if line is None:
-            tally["incomplete_total"] += 1
-            if len(tally["incomplete"]) < _RENDER_SHOWN:
-                tally["incomplete"].append(slug)
+            tally.incomplete_total += 1
+            if len(tally.incomplete) < _RENDER_SHOWN:
+                tally.incomplete.append(slug)
             continue
-        tally["managed"] += 1
+        tally.managed += 1
         yield slug, topics, line
 
 
-def _census_tally():
-    """An empty census report, filled by `_census_lines`."""
-    return {"managed": 0, "incomplete": [], "incomplete_total": 0}
+def _census_tally() -> RenderCensus:
+    """An empty census, filled by `_census_lines`."""
+    return RenderCensus()
 
 
-def _render_census(anchor, pinned, place, dirs, adds):
+def _render_census(anchor, pinned, place, dirs, adds) -> RenderCensus:
     """One pass over the bodies, before anything is written: the `_census_lines` counts, and the
     bytes each level of `adds` will hold, starting from the lines it keeps (`_held_bytes`). Raises
     RenderBlockTooLarge when a level would pass MAX_RENDER_BLOCK_BYTES, so that refusal comes
@@ -4083,7 +4148,7 @@ def _render_census(anchor, pinned, place, dirs, adds):
     if full is not None:
         raise RenderBlockTooLarge(dirs[full], kept[full], sizes[full] - kept[full],
                                   place.bound_to(full), now=now[full])
-    tally["incomplete"].sort()
+    tally.incomplete.sort()
     return tally
 
 
@@ -4114,13 +4179,15 @@ def _wanted_lines(anchor, place, pinned, parts, level_dir, held=(0, 0), skip=fro
     return wanted
 
 
-def _note(rep, level_dir, kind, slugs):
-    """Count `slugs` under `kind` for `level_dir` in the report, keeping the first few as examples."""
+def _note(rep: RenderReport, level_dir: str, kind: RenderKind,
+          slugs: list[str] | set[str]) -> None:
+    """Count `slugs` under `kind` for `level_dir` in the report, keeping the first few as examples.
+    A level gets a row only once something happened there."""
     if not slugs:
         return
-    row = rep["levels"].setdefault(level_dir, {"added": 0, "refreshed": 0, "removed": 0, "examples": {}})
-    row[kind] = row.get(kind, 0) + len(slugs)        # `kept` is counted only where it happened
-    shown = row["examples"].setdefault(kind, [])
+    row = rep.levels.setdefault(level_dir, RenderLevel())
+    setattr(row, kind.value, getattr(row, kind.value) + len(slugs))
+    shown = row.examples.setdefault(kind, [])
     shown.extend(sorted(slugs)[:_RENDER_SHOWN - len(shown)])
 
 
@@ -4158,8 +4225,8 @@ def _add_lines(level_dir, wanted, rep, dry_run, write):
                 refreshed.append(slug)
         if (added or refreshed) and not dry_run:
             write(local, us.upsert_pointer_block(text, scope, pointers))
-    _note(rep, level_dir, "added", added)
-    _note(rep, level_dir, "refreshed", refreshed)
+    _note(rep, level_dir, RenderKind.ADDED, added)
+    _note(rep, level_dir, RenderKind.REFRESHED, refreshed)
     return set(held) | set(added)
 
 
@@ -4175,7 +4242,7 @@ def _drop_lines(level_dir, doomed, rep, dry_run, write):
         removed = [p.slug for p in pointers if p.slug in doomed and not (p.pin or p.legacy)]
         if removed and not dry_run:
             write(local, us.upsert_pointer_block(text, scope, kept))
-    _note(rep, level_dir, "removed", removed)
+    _note(rep, level_dir, RenderKind.REMOVED, removed)
 
 
 def _misplaced_lines(anchor, place, pinned, parts, level_dir):
@@ -4239,7 +4306,7 @@ def _render_tree(anchor, levels, adds, place, dirs, pinned, rep, dry_run, write)
         level = os.path.abspath(str(level))
         drop, kept = _keep_last_lines(dirs, _misplaced_lines(anchor, place, pinned, parts, level),
                                       dry_run)
-        _note(rep, level, "kept", kept)
+        _note(rep, level, RenderKind.KEPT, kept)
         _drop_lines(level, drop, rep, dry_run, write)
 
 
@@ -4279,7 +4346,7 @@ def _chain_goes(place, parts, above):
     return lambda slug, topics: slug in above or parts in place(topics)
 
 
-def _chain_census(anchor, pinned, place, chain, adds):
+def _chain_census(anchor, pinned, place, chain, adds) -> RenderCensus:
     """The chain scope's census, one pass over the bodies before anything is written: the
     `_census_lines` counts and, for each chain level of `adds`, the block it will hold, the lines
     it keeps (`_held_bytes` with `_chain_goes`) plus the lines added or refreshed there. Raises
@@ -4305,7 +4372,7 @@ def _chain_census(anchor, pinned, place, chain, adds):
                 raise RenderBlockTooLarge(level, kept, sizes[i], place.bound_to(parts),
                                           stale=stale, anchor=anchor, now=now[i])
         above |= held_at[i] | added[i]
-    tally["incomplete"].sort()
+    tally.incomplete.sort()
     return tally
 
 
@@ -4349,7 +4416,7 @@ def _render_chain(anchor, chain, adds, place, pinned, rep, dry_run, write):
 
 
 def render_topics(proj, scope="tree", dry_run=False, write=None, *,
-                  lock_timeout=PLACEMENT_LOCK_TIMEOUT_S):
+                  lock_timeout=PLACEMENT_LOCK_TIMEOUT_S) -> RenderReport:
     """Place the pointer lines of every MANAGED fact of `proj`'s tree by topic.
 
     A fact is managed when its body's `topics:` is non-empty, no pointer of it is pinned or
@@ -4361,10 +4428,10 @@ def render_topics(proj, scope="tree", dry_run=False, write=None, *,
     scope to sweep; no file off the chain is written). `write(path, text)` is the port a
     level file is written through (default `uuid_store.write_if_changed`); a test passes a
     recording one. A dry run takes no lock and creates no file (`_write_lock`), so it runs on a
-    read-only tree and beside a peer's held lock. Returns a report: {'list': False} alone when the tree has no topic list (then
-    nothing is read further and nothing written), else scope, dry_run, managed, incomplete,
-    incomplete_total and, per changed level dir, the counts added / refreshed / removed with a
-    few example slugs.
+    read-only tree and beside a peer's held lock. Returns a RenderReport: `has_list` False alone
+    when the tree has no topic list (then nothing is read further and nothing written), else the
+    scope, dry_run, the census and, per changed level dir, the counts added / refreshed / removed
+    (and kept) with a few example slugs.
 
     Checked before the first write: a level whose TOPICS line does not parse and a tree top with
     no pointer block raise TopicRefusal, and a level whose block - the lines placed there plus the
@@ -4388,7 +4455,7 @@ def render_topics(proj, scope="tree", dry_run=False, write=None, *,
     proj = os.path.abspath(str(proj))
     anchor = _anchor(proj)
     if topic_store.load(anchor) is None:
-        return {"list": False}
+        return RenderReport(has_list=False)
     if dry_run:
         return _render_held(anchor, proj, scope, True, write)
     with placement_lock(anchor, "render-topics", lock_timeout):
@@ -4399,7 +4466,7 @@ def render_topics(proj, scope="tree", dry_run=False, write=None, *,
                                        % (_ENGINE_ROUTE, proj, scope)) from exc
 
 
-def _render_held(anchor, proj, scope, dry_run, write):
+def _render_held(anchor, proj, scope, dry_run, write) -> RenderReport:
     """`render_topics` from the level walk on; a real run's caller holds the placement lock."""
     levels = curated_levels_under(anchor)
     level_map, dirs = topic_level_map(anchor, levels)
@@ -4408,45 +4475,46 @@ def _render_held(anchor, proj, scope, dry_run, write):
                             "it (ensure-memory-structure writes one)" % anchor])
     pinned = _unplaceable_slugs(levels)     # pinned or legacy anywhere: never placed
     place, adds = _Placer(level_map), _add_levels(level_map)
-    rep = {"list": True, "scope": scope, "dry_run": bool(dry_run), "levels": {}}
+    rep = RenderReport(scope=scope, dry_run=bool(dry_run))
     write = write or us.write_if_changed
     if scope == "tree":
-        rep.update(_render_census(anchor, pinned, place, dirs, adds))
+        rep.census = _render_census(anchor, pinned, place, dirs, adds)
         _render_tree(anchor, levels, adds, place, dirs, pinned, rep, dry_run, write)
     else:
         chain, add_set = _chain_levels(anchor, proj, levels), frozenset(adds)
-        rep.update(_chain_census(anchor, pinned, place, chain, add_set))
+        rep.census = _chain_census(anchor, pinned, place, chain, add_set)
         _render_chain(anchor, chain, add_set, place, pinned, rep, dry_run, write)
     return rep
 
 
-def _print_render(rep, as_json):
+def _print_render(rep: RenderReport, as_json: bool) -> None:
     """Print a render report; the verb's whole output."""
     if as_json:
-        print(json.dumps(rep, sort_keys=True))
+        print(json.dumps(rep.to_data(), sort_keys=True))
         return
-    if not rep["list"]:
+    if not rep.has_list:
         print("no topic list in this tree: nothing is placed by topic")
         return
-    verb = "would change" if rep["dry_run"] else "changed"
-    for level in sorted(rep["levels"]):
-        row = rep["levels"][level]
-        print("  %s: +%d added, %d refreshed, -%d removed" % (level, row["added"], row["refreshed"],
-                                                               row["removed"]))
-    kept = [(level, row) for level, row in sorted(rep["levels"].items()) if row.get("kept")]
+    verb = "would change" if rep.dry_run else "changed"
+    for level in sorted(rep.levels):
+        row = rep.levels[level]
+        print("  %s: +%d added, %d refreshed, -%d removed" % (level, row.added, row.refreshed,
+                                                               row.removed))
+    kept = [(level, row) for level, row in sorted(rep.levels.items()) if row.kept]
     if kept:
         print("~ warning: kept %d line(s) placed elsewhere, because no level the fact is placed at "
               "holds a line of it (its body changed during the render): %s. Run render-topics "
               "--scope tree again to place them"
-              % (sum(row["kept"] for _level, row in kept),
+              % (sum(row.kept for _level, row in kept),
                  ", ".join(sorted({slug for _level, row in kept
-                                   for slug in row["examples"]["kept"]}))))
-    if rep["incomplete_total"]:
+                                   for slug in row.examples[RenderKind.KEPT]}))))
+    census = rep.census
+    if census.incomplete_total:
         print("~ %d tagged fact(s) have a body without title: or description: and stay where they "
-              "are: %s%s" % (rep["incomplete_total"], ", ".join(rep["incomplete"]),
-                             " ..." if rep["incomplete_total"] > len(rep["incomplete"]) else ""))
+              "are: %s%s" % (census.incomplete_total, ", ".join(census.incomplete),
+                             " ..." if census.incomplete_total > len(census.incomplete) else ""))
     print("render-topics (%s): %d managed fact(s); %s %d level(s)"
-          % (rep["scope"], rep["managed"], verb, len(rep["levels"])))
+          % (rep.scope, census.managed, verb, len(rep.levels)))
 
 
 def _read_topic_batch(path):

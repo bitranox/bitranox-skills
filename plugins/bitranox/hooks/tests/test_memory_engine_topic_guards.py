@@ -233,7 +233,7 @@ def test_add_from_a_level_without_a_line_is_refused_and_writes_nothing(tmp_path,
     assert rc == 0, said
     for rel in ("a/py", "b/py"):
         assert _line(levels[rel], "feedback-py-rule").hook == "When this is the new hook, say so."
-    assert E.render_topics(anchor, dry_run=True)["levels"] == {}
+    assert E.render_topics(anchor, dry_run=True).levels == {}
     with pytest.raises(E.SlugCollision) as exc:
         E.add_or_update_entry(anchor, title="T", hook=HOOK, slug="feedback-py-rule")
     assert isinstance(exc.value, E.PlacedElsewhere) and exc.value.suggestion is None
@@ -250,7 +250,7 @@ def test_an_update_at_one_line_refreshes_the_others(tmp_path):
         assert (line.title, line.hook, line.pin) == ("New title", new_hook, False)
     body = us.body_path(anchor, "feedback-py-rule").read_text(encoding="utf-8")
     assert E._body_topics(body) == ("python",) and "new body" in body
-    assert E.render_topics(anchor, dry_run=True)["levels"] == {}
+    assert E.render_topics(anchor, dry_run=True).levels == {}
 
 
 def test_a_dangling_bound_body_is_still_adopted(tmp_path):
@@ -302,7 +302,7 @@ def test_retitle_reaches_every_line_without_calling_them_duplicates(tmp_path):
     rep = E.retitle_entry(levels["a/py"], "feedback-py-rule", "A better title")
     assert rep.refused is None and not any("duplicate" in w for w in rep.warnings)
     assert _line(levels["b/py"], "feedback-py-rule").title == "A better title"
-    assert E.render_topics(anchor, dry_run=True)["levels"] == {}
+    assert E.render_topics(anchor, dry_run=True).levels == {}
 
 
 def test_a_real_duplicate_is_still_named_by_rename(tmp_path):
