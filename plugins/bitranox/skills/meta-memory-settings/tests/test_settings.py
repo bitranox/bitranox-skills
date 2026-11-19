@@ -166,6 +166,15 @@ def test_tmp_prune_refuses_a_mode_it_does_not_have(capsys):
     assert sig.load_config()["tmp_prune"] == "on"
 
 
+def test_tmp_prune_choices_come_from_the_hooks_mode_type():
+    """The CLI must accept exactly what the hook runs: a mode the hook gains is settable, and a
+    mode the hook drops is refused, without a second spelling of the vocabulary to keep in step."""
+    hook_file = Path(ST.__file__).resolve().parents[2] / "hooks" / "tmp-prune-hook.py"
+    assert Path(sys.modules[ST.TmpPruneMode.__module__].__file__).resolve() == hook_file
+    assert ST.ENUM_CHOICES["tmp_prune"] == tuple(m.value for m in ST.TmpPruneMode)
+    assert ST.TmpPruneMode("dry-run").value == "dry-run"
+
+
 def test_set_list_knob_json(capsys):
     assert ST.main(["set", "discovery_roots", '["/a", "/b"]']) == 0
     assert sig.load_config()["discovery_roots"] == ["/a", "/b"]

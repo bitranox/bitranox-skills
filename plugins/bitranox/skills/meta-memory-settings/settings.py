@@ -17,13 +17,37 @@ written (nothing was saved). No verb answers a yes/no question, so 1 is never re
 Pure standard library.
 """
 
+import importlib.util
 import sys
 from pathlib import Path
 
 # self_improve_signals lives in the plugin's hooks dir: skills/meta-memory-settings -> skills -> bitranox -> hooks
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "hooks"))
+_HOOKS_DIR = Path(__file__).resolve().parents[2] / "hooks"
+sys.path.insert(0, str(_HOOKS_DIR))
 
 import self_improve_signals as sig  # noqa: E402
+
+# The hook's file name is hyphenated, so it cannot be imported by name. Its Mode type is the one
+# vocabulary for the tmp_prune knob: spelling the values again here let the two drift apart, so a
+# mode the hook gained would be refused here and one it dropped still stored.
+_TMP_PRUNE_HOOK = "tmp_prune_hook"
+
+
+def _load_tmp_prune_hook():
+    loaded = sys.modules.get(_TMP_PRUNE_HOOK)
+    if loaded is not None:
+        return loaded
+    hook_file = _HOOKS_DIR / "tmp-prune-hook.py"
+    spec = importlib.util.spec_from_file_location(_TMP_PRUNE_HOOK, hook_file)
+    if spec is None or spec.loader is None:
+        raise ImportError("cannot load %s" % hook_file)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[_TMP_PRUNE_HOOK] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+TmpPruneMode = _load_tmp_prune_hook().Mode
 
 
 # The knobs whose value is one of a fixed set. Without this the CLI stored anything it was given:
@@ -43,7 +67,7 @@ ENUM_CHOICES = {
     "classifier_recall_rerank": ("off", "shadow", "decide"),
     "classifier_subagent_signal": ("off", "shadow", "decide"),
     "classifier_skills": ("off", "shadow"),
-    "tmp_prune": ("on", "dry-run", "off"),
+    "tmp_prune": tuple(mode.value for mode in TmpPruneMode),
 }
 
 _TRUE_WORDS = ("1", "true", "yes", "on")
