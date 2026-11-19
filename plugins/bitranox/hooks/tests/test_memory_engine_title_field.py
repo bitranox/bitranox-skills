@@ -305,3 +305,71 @@ def test_backfill_refuses_when_the_bodies_cannot_be_reached(tmp_path, capsys):
     finally:
         facts.chmod(0o755)
     assert E._body_title(_body(anchor, "old-fact")) == ""
+
+
+def test_a_retitle_leaves_an_unframed_body_byte_identical(tmp_path):
+    """A body with no frontmatter has nowhere to carry a title, so the retitle changes the pointer
+    line and leaves the body exactly as it was."""
+    anchor, proj = _tree(tmp_path)
+    slug = E.add_or_update_entry(proj, "Old title", "When x, do y.", body="B")
+    us.body_path(anchor, slug).write_text("just prose, no frame\n", encoding="utf-8")
+    assert E.retitle_entry(proj, slug, "New title")["retitled"] is True
+    assert _body(anchor, slug) == "just prose, no frame\n"
+    assert _pointer_title(proj, slug) == "New title"
+
+
+_LEGACY_UUID = "00000000-0000-5000-8000-000000000001"
+
+
+def test_backfill_names_a_legacy_pointer_it_skips(tmp_path, capsys):
+    """A legacy `uuid:` pointer is skipped (its body sits at the legacy path until migrated), and
+    the skip is reported: a silent one let a tree with unmigrated facts read as fully back-filled."""
+    _, proj = _tree(tmp_path)
+    _pre_title_fact(proj, "Old fact title", "old-fact")
+    local = sig.claude_local_md_path(proj)
+    text = local.read_text(encoding="utf-8")
+    scope, pointers = us.parse_pointer_index(text)
+    pointers = [us.Pointer(slug=p.slug, title=p.title, hook=p.hook, uuid=_LEGACY_UUID, legacy=True)
+                for p in pointers]
+    local.write_text(us.upsert_pointer_block(text, scope, pointers), encoding="utf-8")
+    rep = E.backfill_titles(proj)
+    assert rep["legacy"] == ["old-fact"] and rep["filled"] == []
+    assert E.main(["heal", "--proj", proj, "--backfill-titles"]) == 0
+    out = capsys.readouterr().out
+    assert "~ legacy uuid: pointer, migrate it first" in out
+    assert "left as it is: old-fact" in out
+
+
+def test_a_legacy_line_at_one_level_does_not_hide_the_slug_from_the_backfill_at_another(tmp_path):
+    """The tree walk meets the anchor first; a legacy line there must not mark the slug as handled,
+    or its migrated line at a lower level is never back-filled."""
+    anchor, proj = _tree(tmp_path)
+    _pre_title_fact(proj, "Old fact title", "old-fact")
+    top = sig.claude_local_md_path(anchor)
+    text = top.read_text(encoding="utf-8") if top.is_file() else ""
+    scope, pointers = us.parse_pointer_index(text)
+    legacy = us.Pointer(slug="old-fact", title="Old fact title", hook="When x, do y.",
+                        uuid=_LEGACY_UUID, legacy=True)
+    top.write_text(us.upsert_pointer_block(text, scope, [*pointers, legacy]), encoding="utf-8")
+    rep = E.backfill_titles(proj)
+    assert rep["legacy"] == ["old-fact"] and rep["filled"] == ["old-fact"]
+    assert E._body_title(_body(anchor, "old-fact")) == "Old fact title"
+
+
+@pytest.mark.skipif(os.name == "nt" or os.geteuid() == 0,
+                    reason="POSIX permission bits; root reads through them")
+def test_backfill_exits_2_on_a_level_file_it_cannot_read(tmp_path, capsys):
+    """An unreadable CLAUDE.local.md is a part of the tree the back-fill never saw, so it refuses
+    (exit 2) rather than report the tree done."""
+    anchor, proj = _tree(tmp_path)
+    _pre_title_fact(proj, "Old fact title", "old-fact")
+    local = sig.claude_local_md_path(proj)
+    local.chmod(0o000)
+    try:
+        with pytest.raises(E.TreeWalkError):
+            E.backfill_titles(proj)
+        assert E.main(["heal", "--proj", proj, "--backfill-titles"]) == 2
+        assert "back-filled" not in capsys.readouterr().out
+    finally:
+        local.chmod(0o644)
+    assert E._body_title(_body(anchor, "old-fact")) == ""

@@ -129,6 +129,39 @@ def test_propose_mode_carves_out_a_move_to_the_tree_top():
         "dream-core.md's off mode lost its carve-out for a move to the tree top")
 
 
+def test_a_corroborated_promotion_to_the_top_is_applied_in_every_mode():
+    """The mode decides only a MISPLACEMENT re-home to the top; a promotion the gate corroborated
+    moves whatever the mode. Dropping the promotion clause turns every promotion into a proposal
+    in propose mode, which is the default."""
+    core = " ".join(_read(CORE).split())
+    tree = " ".join(_read(FAMILY["meta-dream-tree"]).split())
+    assert "while a corroborated promotion to the top is applied in every mode" in core, (
+        "dream-core.md's Boundaries lost the promotion clause")
+    assert "and so is a corroborated promotion to the top" in core, (
+        "dream-core.md's propose mode no longer applies a corroborated promotion")
+    assert "move it to the tree top in every mode" in tree, (
+        "meta-dream-tree's promotion step no longer moves a `promote` fact in every mode")
+
+
+def test_the_nap_follows_the_core_mode_for_a_move_to_the_anchor():
+    """The nap restates the core's three-way rule for its one move the mode decides (a move to the
+    anchor, since a nap runs no promotion gate). Pinned on both sides so the two cannot drift
+    apart unnoticed."""
+    nap = " ".join(_read(FAMILY["meta-dream-nap"]).split())
+    core = " ".join(_read(CORE).split())
+    for clause in (
+            "A move TO the tree top (the anchor) is a misplacement re-home in the core's sense",
+            "in propose mode the nap lists the fact and its cost",
+            "in auto mode it applies the move and prints its cost in the report",
+            "under `off` it proposes it, as in propose mode",
+            ("Every other evidence-clear chain move, a move down from the anchor included, is "
+             "applied in every mode")):
+        assert clause in nap, "meta-dream-nap step 4 lost: %s" % clause
+    assert "EXCEPT a misplacement re-home to the tree top" in core
+    assert "a misplacement re-home to the tree top is applied and its cost printed" in core
+    assert "and PROPOSES a misplacement re-home to the tree top as propose mode does" in core
+
+
 @pytest.mark.parametrize("name", sorted(FAMILY))
 def test_every_dream_backs_up_and_verifies_with_store_manifest(name):
     """A hand-rolled snapshot records no manifest, so the run can never be verified against it

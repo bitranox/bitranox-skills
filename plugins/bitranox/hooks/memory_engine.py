@@ -2098,24 +2098,30 @@ def backfill_titles(proj):
     Separate from `heal`, which SessionStart runs on every start and which never opens a body: a
     back-fill reads every body of the tree and writes most of them once, a one-off for stores
     written before titles were kept as data. Returns {'filled': [slugs], 'kept': n, 'unframed':
-    [slugs], 'untitled': [slugs], 'missing': [slugs]}; `untitled` is a framed body whose pointer
-    has an empty link text, so there is no title to copy (kept apart from `unframed`, which would
-    report a frame that is there as absent). A slug pointed at from two levels is filled from the
-    first level the walk meets, and each body is read and written under the lock of that first
+    [slugs], 'untitled': [slugs], 'missing': [slugs], 'legacy': [slugs]}; `untitled` is a framed
+    body whose pointer has an empty link text, so there is no title to copy (kept apart from
+    `unframed`, which would report a frame that is there as absent). A slug pointed at from two
+    levels is filled from the first level the walk meets, and each body is read and written under the lock of that first
     level only: an engine write to the same slug through another level holds that level's lock.
     Raises TreeWalkError (exit 2 on the CLI) when a level or a body cannot be read: a back-fill
     that skipped part of the tree would read as done. Missing is decided by the read itself, never
     by a `Path.is_file()` pre-check, which answers False for a body it cannot stat (EACCES) and
-    would report an unreadable store as a store of missing bodies."""
+    would report an unreadable store as a store of missing bodies. A legacy `uuid:` pointer is not
+    back-filled (its body stays at the legacy path until migrated) and is listed in `legacy`, so a
+    tree holding unmigrated facts never reads as fully back-filled."""
     sig.refuse_if_memory_writes_off()
     anchor = _anchor(proj)
-    rep = {"filled": [], "kept": 0, "unframed": [], "untitled": [], "missing": []}
+    rep = {"filled": [], "kept": 0, "unframed": [], "untitled": [], "missing": [], "legacy": []}
     seen = set()
     for level in curated_levels_under(anchor):
         with sig.memory_lock(sig.claude_local_md_path(level)):
             text = read_store_text(sig.claude_local_md_path(level))
             for ptr in us.parse_pointer_index(text)[1]:
-                if ptr.legacy or ptr.slug in seen:
+                if ptr.legacy:                       # not added to `seen`: a slug's legacy line
+                    if ptr.slug not in rep["legacy"]:    # at one level never hides its migrated
+                        rep["legacy"].append(ptr.slug)   # line at another from the back-fill
+                    continue
+                if ptr.slug in seen:
                     continue
                 seen.add(ptr.slug)
                 raw = read_store_text(us.body_path(anchor, ptr.slug))   # "" only when absent
@@ -2670,8 +2676,10 @@ def _retitle_entry(level, slug, to_title):
     with sig.memory_lock(sig.claude_local_md_path(str(lvl))):
         current = read_store_text(us.body_path(anchor, slug)).rstrip("\n")
         retitled_body = _with_title(current, title)
-        if current and retitled_body != current:     # "" is an absent body: writing it back
-            us.put_body(str(anchor), slug, retitled_body)   # would create one for a dangler
+        # `current and` is belt-and-braces: `_with_title("")` returns "", so an absent body
+        # (read as "") already compares equal and gets no file, which keeps a dangler dangling.
+        if current and retitled_body != current:
+            us.put_body(str(anchor), slug, retitled_body)
 
     # A slug carried by more than one level is a pre-existing violation, but leaving the OTHER
     # pointers on the old title is not neutral: `move_entry` and `relocate_entry` both refuse when
@@ -4873,6 +4881,9 @@ def _main(argv=None):
             print("    ~ pointer has no title to copy, body left as it is: %s" % slug)
         for slug in rep["missing"]:
             print("    ! missing central body (not fabricated): %s" % slug)
+        for slug in rep["legacy"]:
+            print("    ~ legacy uuid: pointer, migrate it first (hooks/migrate_to_slug_store.py), "
+                  "left as it is: %s" % slug)
         return 0
 
     if args.cmd == "heal":

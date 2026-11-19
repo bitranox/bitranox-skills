@@ -670,6 +670,22 @@ def test_a_manifest_whose_levels_is_not_a_list_of_strings_is_refused(tmp_path):
     assert "'levels' is not a list of strings" in r.stdout + r.stderr
 
 
+def test_a_chain_backup_copies_exactly_the_chain_levels_and_records_them(tmp_path):
+    """A chain backup holds the levels from its start up to the anchor and no sibling: a sibling
+    copied in would be verified against a run that never touched it, and one missing would leave
+    a chain level the run writes without its bytes before."""
+    sib_a, sib_b = make_siblings(tmp_path)
+    out = outside(tmp_path)
+    r = run_cli(["backup", "--from", str(sib_a), "--scope", "chain", "--out", str(out)], tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    copies = sorted(p.parent.relative_to(out / "levels").as_posix()
+                    for p in (out / "levels").rglob("CLAUDE.local.md"))
+    assert copies == [".", sib_a.name]
+    data = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
+    assert sorted(data["levels"]) == sorted([str(tmp_path), str(sib_a)])
+    assert str(sib_b) not in data["levels"]
+
+
 def test_scope_levels_is_the_set_derive_walks(tmp_path):
     sib_a, sib_b = make_siblings(tmp_path)
     tree = SM.scope_levels(tmp_path, scope="tree", start=tmp_path)
