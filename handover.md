@@ -1,4 +1,4 @@
-# Handover 2026-11-19 05:49 CET: overnight sweep released as 11.13.0
+# STALE - read 2026-11-19 13:04 CET, work continued (11.13.1 to 11.13.3 released since)
 
 ## In flight
 
