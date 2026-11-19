@@ -140,8 +140,11 @@ INVOKED tally (real data, not recall: if a miss shipped DESPITE a skill that ran
 skill's coverage gap - flag it per `flag-a-skill-when-a-real-bug-slips-past-it`). It is
 INCREMENTAL: a per-reviewer watermark means an already-consumed prefix is never re-read, so a second
 dream in one session costs nothing and re-analyzes nothing. When the pass is done, run
-`dream_state.py session-reviewed "<cwd>"` to advance the mark. If a compaction happened, the Stop
-gate will not let the session stop until this nap has run.
+`dream_state.py session-reviewed "<cwd>"` to advance the mark. That bare form marks only the
+transcript this session's last `session-review` for the cwd showed: with no such review, or with
+that transcript gone, it refuses with exit 2 and marks nothing, never resolving another session's
+file - run `session-review` first, or name the transcript you read with `--transcript <path>`. If
+a compaction happened, the Stop gate will not let the session stop until this nap has run.
 
 **Redirect `session-review` to a file. Its output is truncated otherwise, and it does not say
 so.** Run it as `dream_state.py session-review "<cwd>" > review.txt 2>&1` and read the file. The
@@ -222,8 +225,11 @@ not the live one, so nothing else ever offers it. The list is an offer, not a qu
 hold dozens. Read the ones that may hold uncaptured learnings, newest first, as far as the run
 allows: `dream_state.py session-review "<cwd>" --transcript <path> > review.txt 2>&1`, capture,
 then `dream_state.py session-reviewed "<cwd>" --transcript <path>` with the SAME path. Parts work
-as above. A mark that landed on a stretch nobody read is undone with `session-reviewed "<cwd>"
---transcript <path> --to <offset>`.
+as above. A mark that landed on a stretch nobody read is undone with
+`session-reviewed "<cwd>" --transcript <path> --to <offset>`, taking `<offset>` and `<path>` from
+the success line of the call that set the mark, `review watermark advanced from X to Y for <path>`:
+X, the "from" value, is where the mark stood before. `--to` only moves a mark back (exit 2 for an
+offset past it).
 Never mark a listed transcript reviewed without reading it, and report how many the run left
 unread.
 

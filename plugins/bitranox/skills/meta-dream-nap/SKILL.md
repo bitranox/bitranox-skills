@@ -114,9 +114,12 @@ violation.
    and marked with `session-reviewed --prose --transcript PATH`, the same PATH. The review's first
    line names the transcript it shows and that session's id, so check it is the one you meant. A
    bare `session-reviewed` marks the file this session's last review showed, up to where that view
-   ended, and marks nothing when no review came since the last mark; `session-reviewed --transcript
-   PATH --to OFFSET` moves a mark back after a stretch was marked unread. An owed transcript whose
-   session is still running is left to that session: the gate does not block on it and the review
+   ended, and marks nothing when no review came since the last mark (exit 0); with no review of
+   this session for the cwd (or its transcript gone) it refuses, exit 2, and marks nothing.
+   `session-reviewed --transcript PATH --to OFFSET` moves a mark back after a stretch was marked
+   unread: OFFSET is the "from" value X of that mark's success line,
+   `review watermark advanced from X to Y for PATH`. An owed transcript whose session is still
+   running is left to that session: the gate does not block on it and the review
    skips it. When the shell has no session id and live sessions share the directory, the review
    warns; then pass `--transcript` to both calls.
    **A capture that wrote BELOW the chain** (an existing fact owned by a descendant level the
