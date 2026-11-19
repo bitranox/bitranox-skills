@@ -160,6 +160,6 @@ def test_an_un_bind_leaves_the_lines_of_a_fact_with_a_legacy_line_where_they_are
         text, scope, pointers + [us.Pointer(slug="feedback-lg", title="T feedback-lg",
                                             hook=HOOK)]), encoding="utf-8")
     rep = E.set_fact_topics(L[""], {"feedback-lg": None})
-    assert rep["collapsed"] == [] and rep["set"] == ["feedback-lg"]
+    assert rep.collapsed == [] and rep.changed == ["feedback-lg"]
     assert _levels_holding(L[""], "feedback-lg") == sorted([L["a/py"], L["c"]])
     assert E.read_body_topics(us.body_path(L[""], "feedback-lg")) is None

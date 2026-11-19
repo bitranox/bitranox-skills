@@ -706,7 +706,7 @@ def test_a_set_topics_dry_run_takes_no_lock_either(tmp_path):
     finally:
         for p in paths:
             p.chmod(modes[p])
-    assert rep["set"] == ["feedback-plain"] and _stat_snapshot(anchor) == before
+    assert rep.changed == ["feedback-plain"] and _stat_snapshot(anchor) == before
 
 
 # ---- the over-cap refusal names the same level whatever order the store lists bodies in ---------

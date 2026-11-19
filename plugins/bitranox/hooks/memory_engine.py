@@ -3733,8 +3733,19 @@ def _collapse_copies(anchor, slug, holders, line, write):
             _drop_lines(level, {slug}, scratch, False, write)
 
 
+@dataclass
+class TopicsSetReport:
+    """What `set_fact_topics` did: `changed` names the facts whose `topics:` line it set (or a dry
+    run would set), `unchanged` counts the rows that already said that, and `collapsed` names the
+    un-bound facts whose lines it folded into one line at the tree top."""
+
+    changed: list[str] = field(default_factory=list[str])
+    unchanged: int = 0
+    collapsed: list[str] = field(default_factory=list[str])
+
+
 def set_fact_topics(proj, rows, dry_run=False, write=None, *,
-                    lock_timeout=PLACEMENT_LOCK_TIMEOUT_S):
+                    lock_timeout=PLACEMENT_LOCK_TIMEOUT_S) -> TopicsSetReport:
     """Set the `topics:` line of each fact in `rows`, a {slug: topics} mapping where topics is a
     tuple of tags, an empty tuple (bound to no topic) or None (remove the line).
 
@@ -3759,7 +3770,7 @@ def set_fact_topics(proj, rows, dry_run=False, write=None, *,
     seconds for it, then raises PlacementLockBusy. A dry run takes no lock. An OSError once it
     holds the lock (a level it could not lock or write) is raised as PlacementInterrupted, naming
     the cause and that the same call, run again, completes the collapse.
-    Returns {'set': [slugs], 'unchanged': n, 'collapsed': [slugs]}.
+    Returns a TopicsSetReport.
     Holds `rows`, one owner entry per row and, for a collapse, the levels holding each un-bound
     row's line; a batch over MAX_TOPIC_BATCH rows is refused."""
     if not dry_run:
@@ -3781,7 +3792,7 @@ def set_fact_topics(proj, rows, dry_run=False, write=None, *,
                                        % _ENGINE_ROUTE) from exc
 
 
-def _set_fact_topics_held(anchor, rows, allowed, dry_run, write):
+def _set_fact_topics_held(anchor, rows, allowed, dry_run, write) -> TopicsSetReport:
     """`set_fact_topics` from the row checks on; a real call's caller holds the placement lock."""
     owners = _pointer_owners(anchor, set(rows))
     problems, total = [], 0
@@ -3795,7 +3806,7 @@ def _set_fact_topics_held(anchor, rows, allowed, dry_run, write):
         raise TopicRefusal(problems, total)
     plan = _collapse_plan(anchor, rows, owners)
     write = write or us.write_if_changed
-    rep = {"set": [], "unchanged": 0, "collapsed": []}
+    rep = TopicsSetReport()
     for slug in sorted(rows):
         _placement_heartbeat()
         if slug in plan:
@@ -3804,16 +3815,16 @@ def _set_fact_topics_held(anchor, rows, allowed, dry_run, write):
             # outside its lock: the pointer writers take their own.
             if not dry_run:
                 _collapse_copies(anchor, slug, *plan[slug], write)
-            rep["collapsed"].append(slug)
+            rep.collapsed.append(slug)
         with _write_lock(sig.claude_local_md_path(owners[slug][0]), dry_run):
             body = read_store_text(us.body_path(anchor, slug)).rstrip("\n")
             tagged = _with_topics(body, rows[slug])
             if tagged == body:
-                rep["unchanged"] += 1
+                rep.unchanged += 1
                 continue
             if not dry_run:
                 us.put_body(str(anchor), slug, tagged)
-            rep["set"].append(slug)
+            rep.changed.append(slug)
     return rep
 
 
@@ -4691,14 +4702,14 @@ def _topic_write(args):
             rows = {args.slug: topics}
         rep = set_fact_topics(args.proj, rows, dry_run=args.dry_run)
         print("%s topics on %d fact(s); %d unchanged"
-              % ("would set" if args.dry_run else "set", len(rep["set"]), rep["unchanged"]))
-        if rep["collapsed"]:
-            shown = rep["collapsed"][:_REFUSALS_SHOWN]
+              % ("would set" if args.dry_run else "set", len(rep.changed), rep.unchanged))
+        if rep.collapsed:
+            shown = rep.collapsed[:_REFUSALS_SHOWN]
             print("~ note: %d un-bound fact(s) had a line at several levels; each %s one line, at "
-                  "the tree top: %s%s" % (len(rep["collapsed"]),
+                  "the tree top: %s%s" % (len(rep.collapsed),
                                           "would keep" if args.dry_run else "now has",
                                           ", ".join(shown),
-                                          " ..." if len(rep["collapsed"]) > len(shown) else ""))
+                                          " ..." if len(rep.collapsed) > len(shown) else ""))
         return 0
     topics, err = _topics_arg(args.topics)
     if err:
