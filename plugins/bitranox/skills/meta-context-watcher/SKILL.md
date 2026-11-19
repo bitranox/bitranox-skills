@@ -530,9 +530,17 @@ classification, not an afterthought to it:
    premise rests on (a tool version, a reported failure) rather than repeating its claim. A commit
    that only touched `OPEN-WORK.md` is the line's own history, not the work. Where
    the item names an evidence or output directory, check that directory's mtime too, since an
-   audit can be finished with no commit naming it. Run this for EVERY item you recommend as next,
-   and put its result beside the recommendation in your reply: the commits it hit, or `no hit
-   since <date>`.
+   audit can be finished with no commit naming it. This repo's history shows only work that
+   landed HERE. For an item whose fix lands in other repos (a sweep across member repos, a trim
+   or edit a template distributes), take the target repos from point 4 and run the check in each
+   of them: `git fetch`, then the same `git log` against `origin/<default branch>`, or grep that
+   ref for the state the item would produce, such as the heading it removes:
+   `git grep -c '<heading>' origin/<default branch> -- <file>`. No output with exit 1 means the
+   heading is gone only when `git cat-file -e origin/<default branch>:<file>` exits 0: an
+   untracked or deleted file answers the same way. Another session can finish such a sweep with
+   no commit here, so `no hit` in this repo alone is no answer for it. Run this for EVERY item you
+   recommend as next, and put its result beside the recommendation in your reply: the commits it
+   hit, per repo checked, or `no hit since <date>`.
 4. **Check which repo each line's fix lands in, for EVERY line you list.** A line whose fix lands
    elsewhere is other-repo (see "Before working an item" below). When a line you keep names
    another repo (carried over from a sibling's backlog, moved from a template), say in the listing
