@@ -591,7 +591,9 @@ def test_an_own_bash_edit_after_the_own_write_keeps_the_checkpoint_ours(tmp_path
                                                                         capsys, command, run_in):
     repo = _repo(tmp_path)
     cp = repo / "handover.md"
-    command = command.replace("{abs}", str(cp)).replace("{repo}", str(repo))
+    # Spelled the way Git Bash reads a Windows path: unquoted, a backslash is an escape, so
+    # `cd C:\temp\x\repo` lands in `C:tempxrepo` - bash itself never reaches the checkpoint.
+    command = command.replace("{abs}", cp.as_posix()).replace("{repo}", repo.as_posix())
     _cp, tr = _own_then_bash(tmp_path, repo, command, bash_cwd=repo / run_in if run_in else repo)
     ctx = _context(_run(monkeypatch, capsys, _event(repo, transcript=str(tr))))
     assert "OWN-RESTAMPED-41" in ctx, "the session's own re-stamped checkpoint must come back"
