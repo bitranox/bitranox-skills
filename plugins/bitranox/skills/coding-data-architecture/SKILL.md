@@ -346,9 +346,16 @@ INITIALIZATION:
        pass 2 on, and on every pass of a change-set request, a finding counts only on a line
        changed since `base`. Rules such as "defined once" and "refuse impossible values" apply
        to a whole file, so later analysers widen into code no fix touched and the count stops
-       converging. Attribute every finding before you count: `git blame <base>..HEAD -- <file>`
-       prefixes each line NOT changed since `base` with `^`. Move findings on such lines to
-       `out_of_scope`; they do not count toward total_violations. Put the collected list to the
+       converging. Attribute every finding before you count:
+       `git blame --contents <file> <base>..HEAD -- <file>` prefixes each line NOT changed since
+       `base` with `^`. Keep `--contents`: from pass 2 on STEP B's fixes are uncommitted until
+       STEP C, the analysers number the WORKING-TREE file, and a plain `<base>..HEAD` blame
+       numbers HEAD's, so every finding below an uncommitted edit is attributed to the wrong
+       line; `--contents` blames the working tree, its uncommitted lines showing as `00000000`
+       (changed since base). Blame cannot see a DUPLICATE whose old twin predates `base`: when a
+       changed line adds a table, constant or helper, grep the repo for an older copy of the same
+       rule and count the pair in scope, though the old copy's lines carry `^`. Move findings on
+       other `^` lines to `out_of_scope`; they do not count toward total_violations. Put the collected list to the
        user ONCE, when the in-scope count reaches zero, instead of looping on it; a finding the
        user rules in scope moves back into `violations`. Measured: pass 4 found 73 and pass 5
        found 86 findings; 59 of the 86 sat on lines older than the base.

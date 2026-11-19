@@ -30,6 +30,39 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.13.3]
+
+### Fixed
+
+- `repo-gate.py`: the "plugin.json version is still X" refusal on a plain commit now says it read
+  the STAGED plugin.json, and when the working tree already holds a different version it adds a
+  line telling the reader to `git add` it. A bump written but never staged was refused as if no
+  bump existed.
+- `block-write-after-sibling-cd.py`: the refusal's remedy shows `gate.py --gate "<cmd>"
+  --gate-cwd /abs/repo` in its working order; gate.py refuses a `--gate-cwd` written before its
+  `--gate`, so the old remedy led into a second refusal.
+
+### Changed
+
+- compuse-bash: a `grep -c` count chained with `&&` stops the chain at a zero count; a new row for
+  `tail -F` over several logs (headers reach grep; pass `-q`; take the pattern from the
+  producer's exact line).
+- compuse-ssh: set `-o ConnectTimeout` below the outer bound when code tells a hung call from an
+  unreachable host.
+- meta-dream-nap: Step 1 passes `--level` to `factedit.py show` and `apply` for a fact owned off
+  the cwd's chain and folds only after `show` exited 0; step 4b names memory_engine.py's home.
+- write-humanize-en: pattern 22 lists "happy to" with a rewrite for replies to a person.
+- coding-data-architecture: SCOPE attributes findings with `git blame --contents`, since STEP B's
+  fixes are uncommitted from pass 2 on, and counts a new duplicate of an older rule in scope.
+- meta-skill-writer: Step 0b's ledger reads answer for the checkout they run in (run them at
+  origin's default branch); the checklist `Decisions:` line must end at the last id or reason.
+- infra-chrome-remote-desktop: the bus fix's keyring-unlock prompt after each reboot and its two
+  ways out; timing a real page load against an interleaved `--password-store=basic` control arm;
+  two further causes of a slow first start (rtkit in an unprivileged container, a user manager
+  without `DISPLAY`) and the instruments that isolate a new one.
+- coding-python-uv: smoke-test a just-published wheel with `--isolated` or `env -u VIRTUAL_ENV`
+  and require `site-packages` in the module's `__file__`.
+
 ## [11.13.2]
 
 ### Fixed

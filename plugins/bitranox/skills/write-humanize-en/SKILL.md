@@ -424,7 +424,7 @@ He said "the project is on track" but others disagreed. They felt the timeline w
 
 ### 22. Collaborative Communication Artifacts
 
-**Words to watch:** I hope this helps, Of course!, Certainly!, You're absolutely right!, Would you like..., is there anything else, let me know, more detailed breakdown, here is a...
+**Words to watch:** I hope this helps, Of course!, Certainly!, You're absolutely right!, Would you like..., is there anything else, let me know, more detailed breakdown, here is a..., happy to / I'm happy to / I'd be happy to
 
 **Problem:** Text meant as chatbot correspondence gets pasted as content. Chatbots prompted to produce content may also mention various guidelines in the output - often explicitly specifying that they are conventions of the target platform.
 
@@ -433,6 +433,8 @@ He said "the project is on track" but others disagreed. They felt the timeline w
 
 **After:**
 > The French Revolution began in 1789 when financial crisis and food shortages led to widespread unrest.
+
+In a reply to a person (a PR review, an issue, an email), "happy to" is the same tell: state what you can do. "I'm also happy to move the retry handling into its own PR" becomes "I can also move the retry handling into its own PR."
 
 ---
 

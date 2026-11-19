@@ -478,6 +478,24 @@ def _shipped_plugin_change(root, stage, base):
     return diff_and_version()
 
 
+def _unstaged_bump_hint(root, stage, staged_v):
+    """A line naming a bump that sits in the working tree but not in the index, else nothing.
+
+    Only a plain index commit can leave it behind: a pathspec commit (`CommitSelection`) stages
+    its paths itself, and a push reads HEAD, where an unstaged edit is no part of anything.
+    """
+    if stage != STAGE_INDEX:
+        return []
+    try:
+        disk_v = _version_in((Path(root) / _PLUGIN_JSON).read_bytes())
+    except OSError:
+        return []
+    if disk_v is None or disk_v == staged_v:
+        return []
+    return [f"The working tree's plugin.json already says {disk_v}: git add it (and "
+            "pyproject.toml) so the commit carries the bump."]
+
+
 def check_version_bumped(root, stage=None):
     """Does this change ship a plugin version an installed clone will see move?
 
@@ -510,11 +528,13 @@ def check_version_bumped(root, stage=None):
         return []
     base_v, tip_v = _git_version(root, base), _git_version(root, "origin/master")
     if new_v == base_v:
-        return [
-            f"plugins/ changed but plugin.json version is still {new_v} (== the fork point with "
+        which = "the staged plugin.json" if stage == STAGE_INDEX else "plugin.json"
+        fails = [
+            f"plugins/ changed but {which} version is still {new_v} (== the fork point with "
             "origin/master).",
             "Bump the version (the marketplace is append-only; updates ship via a version bump).",
         ]
+        return fails + _unstaged_bump_hint(root, stage, new_v)
     if new_v == tip_v:
         return [
             f"plugin.json version {new_v} is the one origin/master already published - installs "

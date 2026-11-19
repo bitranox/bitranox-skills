@@ -1167,9 +1167,12 @@ python3 plugins/bitranox/hooks/skill_decisions.py show <skill>
 
 The first prints, in full, every live alternative that was rejected and every rule that was
 removed; the second lists the live decisions one line each. Both print nothing for a skill with
-no ledger yet. A skill that also ships from a tool repo (`python3
-plugins/bitranox/hooks/repo-gate.py --mirrors` lists the pairs) keeps its ledger in the marketplace
-copy: run the command from the marketplace repo, or add
+no ledger yet, and both read the ledger of the checkout they run in: a checkout behind origin
+lists none of the newer entries, so its empty answer is not "no ledger". Fetch, and run them in a
+worktree at the origin default branch (measured: a main checkout 249 commits behind printed 0
+lines for a skill whose ledger at origin listed 2). A skill that also ships from a tool repo
+(`python3 plugins/bitranox/hooks/repo-gate.py --mirrors` lists the pairs) keeps its ledger in
+the marketplace copy: run the command from the marketplace repo, or add
 `--skill-dir <marketplace>/plugins/bitranox/skills/<skill>` after the marketplace skill name.
 
 A worktree branched before `skill_decisions.py` existed has no such file, and the command exits 2
@@ -1260,7 +1263,9 @@ new text reads found 0. Entry text is public, so it names no private host, path 
 - **The checklist names them** on one line the commit gate reads: `Decisions: <id>, <id>` (ids in
   the ledger the commit ships) or `Decisions: none - <reason>`. The line may be indented and may
   stand in a list item, ticked or not (`- Decisions: ...`, `1. Decisions: ...`,
-  `- [x] Decisions: ...`); one inside a code fence does not count.
+  `- [x] Decisions: ...`); one inside a code fence does not count. The line ENDS at the last id
+  or the reason: anything after the ids, a parenthetical note or even a closing period, makes the
+  gate report no `Decisions:` line in the required form.
 
 **Last step - close the receipt when the procedure is finished** (the change and its review
 artifact committed; for a coordinator, also every subagent it dispatched to edit a SKILL.md has

@@ -252,3 +252,11 @@ def test_the_leak_is_a_nudge_not_a_refusal(capsys, monkeypatch):
         {"tool_name": "Bash", "tool_input": {"command": "cd /abs && V=x && lane1 & lane2 $V & wait"}})))
     assert guard.main() == 0
     assert "ONE COMMAND, TWO JOBS" in capsys.readouterr().out
+
+
+def test_the_refusal_shows_gate_cwd_after_the_gate_it_applies_to():
+    # gate.py refuses a --gate-cwd written before its --gate (exit 2), so a remedy that names the
+    # option alone sends the reader into a second refusal.
+    text = guard.refusal(GATE_RUN, "cd /work/bmk")
+    assert '`gate.py --gate "<cmd>" --gate-cwd /abs/repo`' in text
+    assert "`gate.py --gate-cwd /abs/repo`" not in text

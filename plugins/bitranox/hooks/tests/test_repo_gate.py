@@ -3720,6 +3720,29 @@ def test_version_bumped_refuses_an_unbumped_change_in_a_behind_checkout(tmp_path
     assert any("still 1.0.0" in f and "fork point" in f for f in fails), fails
 
 
+def test_version_refusal_names_a_bump_left_unstaged_in_the_working_tree(tmp_path):
+    """The check reads the STAGED plugin.json: a bump written to disk but never `git add`ed was
+    refused as 'still 1.0.0', which sent the reader looking for a bump that had already happened."""
+    pj = "plugins/bitranox/.claude-plugin/plugin.json"
+    git_repo_with_origin(tmp_path, {pj: '{"version": "1.0.0"}\n',
+                                    "plugins/bitranox/hooks/x.py": "x = 1\n"})
+    _stage(tmp_path, "plugins/bitranox/hooks/x.py", "x = 2\n")
+    (tmp_path / pj).write_text('{"version": "1.0.1"}\n', encoding="utf-8")   # bumped, not staged
+    fails = RG.check_version_bumped(tmp_path)
+    assert any("staged plugin.json" in f and "still 1.0.0" in f for f in fails), fails
+    assert any("working tree" in f and "1.0.1" in f and "git add" in f for f in fails), fails
+
+
+def test_version_refusal_adds_no_unstaged_hint_when_the_working_tree_is_not_bumped(tmp_path):
+    pj = "plugins/bitranox/.claude-plugin/plugin.json"
+    git_repo_with_origin(tmp_path, {pj: '{"version": "1.0.0"}\n',
+                                    "plugins/bitranox/hooks/x.py": "x = 1\n"})
+    _stage(tmp_path, "plugins/bitranox/hooks/x.py", "x = 2\n")
+    fails = RG.check_version_bumped(tmp_path)
+    assert any("still 1.0.0" in f for f in fails), fails
+    assert not any("git add" in f for f in fails), fails
+
+
 def test_version_bumped_refuses_a_bump_to_the_number_origin_already_published(tmp_path):
     pj = "plugins/bitranox/.claude-plugin/plugin.json"
     git_repo_with_origin(tmp_path, {pj: '{"version": "1.0.0"}\n',

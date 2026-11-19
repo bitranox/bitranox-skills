@@ -89,9 +89,13 @@ violation.
    the session that formed it. Deferral is cheaper, never better.
    **Fanned out to subagents**, every brief states three rules. (a) A delta to an EXISTING fact is
    folded with `python3 <plugin>/skills/meta-dream-tree/factedit.py apply --slug <slug>
-   --body-file <f> [--hook-file <f>] [--type <kind>]` (read it first with `factedit.py show --body --slug
-   <slug>`), never with a hand-rolled fold script; deltas to SEVERAL existing facts go through
-   one `factedit.py apply --batch <file.jsonl>` (one line per fact,
+   --body-file <f> [--hook-file <f>] [--type <kind>]` (read it first with
+   `factedit.py show --body --slug <slug>`), never with a hand-rolled fold script. Both walk UP
+   from the cwd only, so for a fact owned OFF the chain (the carve-out below) pass
+   `--level <owning level>` to `show` AND `apply`, and fold only after `show` exited 0: without
+   it `show` prints nothing, exits 1 and names the level to retry with, so `show ... > f` leaves
+   an empty `f`; deltas to SEVERAL existing facts go through one
+   `factedit.py apply --batch <file.jsonl>` (one line per fact,
    `{"slug": ..., "body_file": ..., "hook_file": ..., "type": ...}`, all but `slug` optional),
    which checks every entry before writing any. (b) A fold target named in two subagents' work
    lists goes to ONE of them, or is folded sequentially, each fold preceded by a fresh `show`, so
@@ -166,8 +170,8 @@ violation.
    (`! refused: '<slug>' is placed by topic`). Leave it where it is and name it in the
    deferred list.
 4b. **Topics of this directory, and the chain's lines (only when
-   `memory_engine.py topics-show --proj <cwd>` exits 0; it exits 1 printing
-   `no topic list in this tree`, and such a tree skips this step).** For the cwd's level
+   `memory_engine.py topics-show --proj <cwd>` (home: `<plugin>/hooks/`) exits 0; it exits 1
+   printing `no topic list in this tree`, and such a tree skips this step).** For the cwd's level
    ONLY, and only when it lies below the tree top: a cwd that IS the tree top is left alone,
    since its topics are the user's (`set-level-topics` refuses it, and `set-top-topics` is
    never a nap's to run); a change you would make there is a proposal in the report. Run

@@ -38,16 +38,16 @@ jingle_session.cc:428  Session closed with error 4: Local login check failed.
 
 ## Symptom to cause
 
-| Symptom the user reports                                | Real cause                                                                                                    | Confirm with                                                                                                                     | Disproved if                                                                                                                |
-|---------------------------------------------------------|---------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------|
-| "PIN is not valid" every time, host listed as online    | PAM account check rejects the user                                                                            | journal shows `pam_acct_mgmt() returned error 7`                                                                                 | journal shows no `pam_` line during the attempt - the PIN may be genuinely wrong, verify the hash                           |
-| Connects, then drops immediately                        | Same account-check failure, later in the handshake                                                            | journal shows `Session closed with error 4`                                                                                      | journal shows a network or relay error instead                                                                              |
-| Host shows offline in the device list                   | The service is not running; exiting 1 at start after a rename is the hostname row below                       | `systemctl status chrome-remote-desktop@<user>`                                                                                  | the unit is `active (running)` - the host is registered to a different account or machine                                   |
-| `sudo: The "no new privileges" flag is set`             | `start-host` ran as root (the binary sets the flag on itself), or the target user's shell already carries NNP | `whoami` in the shell that ran it; if that was already the target user, `runuser -u <user> -- grep NoNewPrivs /proc/self/status` | you ran as the target user AND that reads `0` - the flag is not the obstacle, look elsewhere                                |
-| `Failed to set new config` / `Failed to start host`     | The run died after the OAuth code was already spent                                                           | `ls ~<user>/.config/chrome-remote-desktop/host#*.json`                                                                           | no config file was written at all                                                                                           |
-| Unit exits 1 right after start, after a hostname change | The config file is named after an md5 of the hostname, so the renamed host finds no config                    | `printf %s "$(hostname)" \| md5sum` differs from the hex in the one `host#*.json` name                                           | the hash equals the file name                                                                                               |
-| Two device entries, one permanently dead                | A cloned image inherited the source host's config                                                             | more than one `host#*.json`, or a `private_key` from the source                                                                  | exactly one config whose `host_id` matches the live entry                                                                   |
-| Browser takes about 25 s to open inside the session     | The session file started its own bus (`dbus-launch`), so the desktop cannot reach the keyring                 | the desktop's `DBUS_SESSION_BUS_ADDRESS` is not `unix:path=/run/user/<uid>/bus` (see "The session bus" below)                    | the Ping on the desktop's own bus answers fast with no error, or the user-bus Ping is slow too - the keyring itself is slow |
+| Symptom the user reports                                | Real cause                                                                                                    | Confirm with                                                                                                                     | Disproved if                                                                                                                                                              |
+|---------------------------------------------------------|---------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| "PIN is not valid" every time, host listed as online    | PAM account check rejects the user                                                                            | journal shows `pam_acct_mgmt() returned error 7`                                                                                 | journal shows no `pam_` line during the attempt - the PIN may be genuinely wrong, verify the hash                                                                         |
+| Connects, then drops immediately                        | Same account-check failure, later in the handshake                                                            | journal shows `Session closed with error 4`                                                                                      | journal shows a network or relay error instead                                                                                                                            |
+| Host shows offline in the device list                   | The service is not running; exiting 1 at start after a rename is the hostname row below                       | `systemctl status chrome-remote-desktop@<user>`                                                                                  | the unit is `active (running)` - the host is registered to a different account or machine                                                                                 |
+| `sudo: The "no new privileges" flag is set`             | `start-host` ran as root (the binary sets the flag on itself), or the target user's shell already carries NNP | `whoami` in the shell that ran it; if that was already the target user, `runuser -u <user> -- grep NoNewPrivs /proc/self/status` | you ran as the target user AND that reads `0` - the flag is not the obstacle, look elsewhere                                                                              |
+| `Failed to set new config` / `Failed to start host`     | The run died after the OAuth code was already spent                                                           | `ls ~<user>/.config/chrome-remote-desktop/host#*.json`                                                                           | no config file was written at all                                                                                                                                         |
+| Unit exits 1 right after start, after a hostname change | The config file is named after an md5 of the hostname, so the renamed host finds no config                    | `printf %s "$(hostname)" \| md5sum` differs from the hex in the one `host#*.json` name                                           | the hash equals the file name                                                                                                                                             |
+| Two device entries, one permanently dead                | A cloned image inherited the source host's config                                                             | more than one `host#*.json`, or a `private_key` from the source                                                                  | exactly one config whose `host_id` matches the live entry                                                                                                                 |
+| Browser takes about 25 s to open inside the session     | The session file started its own bus (`dbus-launch`), so the desktop cannot reach the keyring                 | the desktop's `DBUS_SESSION_BUS_ADDRESS` is not `unix:path=/run/user/<uid>/bus` (see "The session bus" below)                    | the Ping on the desktop's own bus answers fast with no error, or the user-bus Ping is slow too - the keyring itself is slow, or a cause in "Still slow after the bus fix" |
 
 ## The account-check failure: /etc/shadow group ownership
 
@@ -325,6 +325,81 @@ the services the user bus starts, so a keyring unlock prompt opens on the remote
 effect at the next session start, not in the running desktop. Restarting the unit starts one, but
 it ends the current session: tell the user first. Then re-run the check above, expect the user-bus
 address, and time the browser's first window.
+
+**The fix has a cost to name when you offer it.** Once the desktop is on the user bus, Chrome
+really uses gnome-keyring, and a CRD login never hands the account password to PAM, so
+`pam_gnome_keyring` cannot unlock the login keyring: Chrome asks to unlock it at its first start
+after every reboot (before the fix it fell back to its own store without asking). The two ways
+out, each with its own cost:
+
+- **An empty login-keyring password** (set in `seahorse`, which needs the old password once). The
+  keyring is then stored unencrypted, readable by the user and root. Check it on disk after the
+  change AND after the next reboot: `head -c 9 ~/.local/share/keyrings/login.keyring` prints
+  `[keyring]` for the plain-text file; a binary file is still encrypted. The journal logs each
+  `gcr-prompter` run, so a second prompt (one that may have set a new password) shows there.
+- **`--password-store=basic`**: anything Chrome stored under the keyring becomes unreadable, and
+  there is no single place to set the flag. `/opt/google/chrome/google-chrome` is a plain wrapper
+  that reads no flags file (unlike chromium's `chromium-flags.conf`), and Chrome starts from the
+  system `.desktop` file, desktop icon copies, panel launchers, `xdg-open` handlers and every app
+  shortcut, so the flag means overriding each of them or diverting the wrapper.
+
+### Still slow after the bus fix: time a real page load
+
+A keyring Ping is a proxy. Judge the fix, and any later slowness, by a real Chrome start that
+loads an http(s) page, run as the desktop user with the desktop's `DISPLAY` and
+`DBUS_SESSION_BUS_ADDRESS`, with the default password store and, as the control arm,
+`--password-store=basic`, interleaved:
+
+```bash
+# URL: any http(s) page; a data: URL makes no network request and stays fast in both arms
+for arm in default basic default basic; do
+    flag=()
+    [ "$arm" = basic ] && flag=(--password-store=basic)
+    dir="$(mktemp -d)"                       # throwaway profile: no state from the user's own
+    t0=$(date +%s%N)
+    timeout 60 google-chrome --headless=new --user-data-dir="$dir" "${flag[@]}" \
+        --dump-dom "${URL:?}" > /dev/null 2>&1
+    rc=$?
+    echo "$arm rc=$rc $(( ($(date +%s%N) - t0) / 1000000 )) ms"
+    rm -rf "$dir"
+done
+```
+
+A slow default arm beside a fast basic arm puts the wait in the password-store path, not the
+network (measured on one affected host: default 25.2 s twice, basic 0.24 and 0.29 s; the same
+loop on a `data:` URL read 0.3 to 0.8 s in both arms). Before reading a slow default run as a
+fault coming back, look for `gcr-prompter` in the journal during that run: a locked login
+keyring opens an unlock prompt on the remote desktop, waits about 10 s, then falls back, and only
+the first run pays it (measured: 9.9 s, then 0.33 to 0.37 s in both arms). Two causes besides the
+private bus give a slow default arm:
+
+- **rtkit in an unprivileged LXC container.** `rtkit-daemon` starts, logs
+  `pthread_create failed: Resource temporarily unavailable`, keeps the
+  `org.freedesktop.RealtimeKit1` name and never answers: the `busctl` read below times out after
+  25 s, and `journalctl --user -u xdg-desktop-portal` shows
+  `Failed to load RealtimeKit property: Timeout was reached`. Chrome's first start asks D-Bus to
+  start the portal and waits out its 25 s activation limit before loading any page. Fix:
+  `systemctl mask --now rtkit-daemon.service` (rtkit cannot grant realtime priority in such a
+  container anyway); measured: first page 23 to 25 s before, 0.4 s after, interleaved.
+
+  ```bash
+  busctl --system get-property org.freedesktop.RealtimeKit1 /org/freedesktop/RealtimeKit1 \
+      org.freedesktop.RealtimeKit1 MaxRealtimePriority
+  ```
+
+- **The user manager has no `DISPLAY`.** While the desktop runs on a private `dbus-launch` bus,
+  `systemctl --user show-environment` has no `DISPLAY=` line, so the portal backend and
+  `gcr-prompter` that the user bus starts cannot open a window (journal: `cannot open display:`,
+  and `Failed to create settings proxy` naming `org.freedesktop.impl.portal.desktop.gtk`). Chrome
+  is then slow on BOTH buses, so the Ping control above does not separate it. The session file
+  above fixes it through its `dbus-update-activation-environment` line, at the next desktop start
+  only: on a host whose desktop must not be restarted (work open in it), say so and schedule it.
+
+For a cause not listed, two instruments isolate the wait: `--log-net-log=<file>` on the timing
+loop (the main-frame `URL_REQUEST` stalls between `COMPUTED_PRIVACY_MODE` and
+`NETWORK_DELEGATE_BEFORE_START_TRANSACTION` while `COOKIE_STORE` waits), then
+`dbus-monitor --session --monitor` as the desktop user during one run: an unanswered
+`StartServiceByName` names the service Chrome waits for.
 
 ## A cloned host: retire the inherited registration before the first start
 

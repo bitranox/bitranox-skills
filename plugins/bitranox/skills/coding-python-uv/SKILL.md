@@ -179,6 +179,16 @@ cannot hijack a bare `uv run pytest`/`uv run pyright` - but keep the `env -u VIR
 anyway (harmless, and still required for `pip-audit`, `tox`, `nox`, and any Makefile target that
 falls back to `python3` on PATH, none of which have this guard).
 
+**Smoke-testing a just-published wheel is where `--no-project` lets it in.** With `VIRTUAL_ENV`
+pointing at the package's own dev venv (an editable install),
+`uv run --no-project --with "<pkg>==<new>" python -c ...` imports the ACTIVE venv's copy, the
+source tree, and its version
+string can still read `<new>`: the check passes for code that never left your disk (measured on
+uv 0.13.0: `src/<pkg>/__init__.py`; `python -I` does not help, the interpreter is the venv's).
+Pass `--isolated`, or prefix `env -u VIRTUAL_ENV` (both measured: `site-packages` inside uv's
+cache), and print the module's `__file__` with `importlib.metadata.version("<pkg>")`, requiring
+`site-packages` in the path.
+
 **Default: strip the ambient env for every local test/lint/build, do not wait for it to break.** Prefix
 the invocation rather than relying on the inherited environment:
 
