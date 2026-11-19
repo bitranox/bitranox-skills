@@ -523,12 +523,14 @@ classification, not an afterthought to it:
    that last segment as the item's state, never the opening lines or a compaction summary's
    paraphrase of them, and live-check any external state it names (`gh pr view`, the release).
 3. **Check the line is not already done.** Before listing an item as workable, search the history
-   since its first-raised date for its distinctive text:
-   `git log --oneline --since=<raised date> -S '<a phrase or symbol unique to the item>'`, plus
-   `git log --oneline --since=<raised date> -- <the paths it names>`. A hit means the work may
-   have shipped; read the commit before offering the item, and re-run any measurement the line's
-   premise rests on (a tool version, a reported failure) rather than repeating its claim. A commit
-   that only touched `OPEN-WORK.md` is the line's own history, not the work. Where
+   since its first-raised date for its distinctive text (with `00:00`: git reads a bare date as
+   that day at the current time of day, so it drops the day's earlier commits):
+   `git log --oneline --since='<raised date> 00:00' -S '<a phrase or symbol unique to the item>'`,
+   plus `git log --oneline --since='<raised date> 00:00' -- <the paths it names>`. A hit means
+   the work may have shipped; read the commit before offering the item, and re-run any
+   measurement the line's premise rests on (a tool version, a reported failure) rather than
+   repeating its claim. A commit that only touched `OPEN-WORK.md` is the line's own history, not
+   the work. Where
    the item names an evidence or output directory, check that directory's mtime too, since an
    audit can be finished with no commit naming it. This repo's history shows only work that
    landed HERE. For an item whose fix lands in other repos (a sweep across member repos, a trim

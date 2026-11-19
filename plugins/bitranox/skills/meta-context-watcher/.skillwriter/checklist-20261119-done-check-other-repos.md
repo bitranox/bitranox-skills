@@ -49,3 +49,15 @@ Decisions: d-20261119-9531f9de
 - [x] Declined (haiku): which of `git log -S` and `git grep` governs when they disagree - a hit in
       either means "read the commit / state before offering", as the paragraph already says.
 - [x] Width check on the added lines: none over 100 columns, no code span split across lines.
+
+## Follow-up: the bare --since date
+
+Decisions: d-20261119-add305f0
+
+- [x] RED: three of the four point-3 probes (opus RED, opus and haiku GREEN) named the template's
+      bare `--since=<raised date>` as a gap; their reports reached the dispatcher only later,
+      relayed by the main session.
+- [x] Measured: `git rev-parse --since=2026-11-19` resolved to that day at the time the command
+      ran (00:14:34), `--since='2026-11-19 00:00'` to midnight.
+- [x] GREEN: both templates now read `--since='<raised date> 00:00'`, with the reason beside them;
+      no other skill's template uses a bare `--since=<...>` (grep over skills/*/SKILL.md).
