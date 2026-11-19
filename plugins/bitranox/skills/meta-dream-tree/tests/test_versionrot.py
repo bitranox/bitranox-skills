@@ -318,3 +318,68 @@ def test_a_claim_status_keeps_its_wire_string() -> None:
     claim = _only(versionrot.find_claims("fixed in bmk 3.13.0", _reg(bmk="3.21.1")))
     assert claim.status is versionrot.ClaimStatus.SUPERSEDED
     assert json.dumps(versionrot._claim_dict(claim)["status"]) == '"superseded"'
+
+
+class TestPypiAsksOnlyAboutPackageMentions:
+    """--pypi must not turn an English word that happens to stand beside a version into a package.
+
+    Measured on a 805-fact chain: "no startup() in 0.2.139" was resolved as the PyPI project
+    "startup" and "SDK 0.2.144" as "sdk", both reported superseded, among 93 candidates a nap
+    could not triage.
+    """
+
+    @staticmethod
+    def _ask(texts: list[str], reg: versionrot.Registry, answer: str = "9.9.9") -> list[str]:
+        asked: list[str] = []
+
+        def fetch(name: str) -> str:
+            asked.append(name)
+            return answer
+
+        versionrot._resolve_online(texts, reg, fetch, set())
+        return asked
+
+    @pytest.mark.parametrize("text", [
+        "Agent SDK: no startup() in 0.2.139, so connect takes 2 s.",
+        "Seen on SDK 0.2.144 with api_error_status null.",
+    ])
+    def test_a_bare_word_beside_a_version_is_not_asked_and_stays_unresolved(self, text: str) -> None:
+        reg = versionrot.Registry()
+        assert self._ask([text], reg) == []
+        assert {c.status for c in versionrot.find_claims(text, reg)} == {"unresolved"}
+
+    def test_a_name_a_pyproject_depends_on_is_asked(self, tmp_path: Path) -> None:
+        d = tmp_path / "app"
+        d.mkdir()
+        (d / "pyproject.toml").write_text(
+            '[project]\nname = "app"\nversion = "1.0.0"\n'
+            'dependencies = ["click>=8.1", "rich_click[extra] ; python_version>\'3.10\'"]\n'
+            '[project.optional-dependencies]\ndev = ["ruff==0.17.4"]\n'
+            '[dependency-groups]\ntest = ["pytest>=9", {include-group = "dev"}]\n',
+            encoding="utf-8")
+        reg = versionrot.discover([tmp_path])
+        text = ("pip-audit failed on click 8.2.1. rich-click 1.8.0 too. ruff 0.16.7 flagged it. "
+                "pytest 8.4.2 as well.")
+        assert sorted(self._ask([text], reg)) == ["click", "pytest", "rich-click", "ruff"]
+        assert {c.status for c in versionrot.find_claims(text, reg)} == {"superseded"}
+
+    def test_a_name_a_uv_lock_lists_is_asked(self, tmp_path: Path) -> None:
+        d = tmp_path / "app"
+        d.mkdir()
+        (d / "uv.lock").write_text(
+            'version = 1\n\n[[package]]\nname = "anyio"\nversion = "4.9.0"\n'
+            'source = { registry = "https://pypi.org/simple" }\n'
+            'dependencies = [\n    { name = "idna" },\n]\n', encoding="utf-8")
+        reg = versionrot.discover([tmp_path])
+        assert self._ask(["anyio 4.0.0 swallows a cancel."], reg) == ["anyio"]
+        # A dependency line inside a package entry is not a package entry of its own.
+        assert self._ask(["idna 3.0.0 is fine."], reg) == []
+
+    @pytest.mark.parametrize("text", ["Pin foo-bar==1.2.0 here.", "Requires foo_bar >= 1.2.0."])
+    def test_an_explicit_requirement_form_is_asked(self, text: str) -> None:
+        assert self._ask([text], versionrot.Registry()) == ["foo-bar"]
+
+    def test_a_preposition_fallback_name_is_not_asked(self) -> None:
+        # "processes" is only the nearest unknown word behind "fixed in", not the version's owner.
+        text = "It rebuilt under running processes (fixed in 3.13.0)."
+        assert self._ask([text], versionrot.Registry()) == []

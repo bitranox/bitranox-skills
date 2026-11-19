@@ -14,7 +14,10 @@ number, works out which package it belongs to, and compares it with that package
 version. Current versions come from the repos on disk (every `pyproject.toml` and
 `.claude-plugin/plugin.json` under `--repos`, default: the memory tree's anchor), from
 `--current NAME=VERSION`, and with `--pypi` from PyPI. Nothing is guessed: a package it cannot
-resolve is reported `unresolved`, never compared.
+resolve is reported `unresolved`, never compared. `--pypi` asks only about a name something
+vouches for - a package a repo under `--repos` has or depends on (its pyproject, its uv.lock) or a
+requirement the fact writes out (`foo==1.2.0`) - because PyPI has a project for almost every
+English word, and "SDK 0.2.144" is not the project "sdk".
 
 A claim that records evidence rather than asserts a current fact is reported `dated`, not
 superseded: a version in a sentence carrying an ISO date or "measured" (an incident on the version
@@ -42,6 +45,16 @@ Decisions:
     this scan exists for. Why: a re-check of one chain's 57 superseded claims kept all 57, each a
     dated incident record or a "since X" statement. Reopen if a scan shows dated claims that were
     really stale and were hidden. Pinned by test_a_dated_or_since_claim_is_dated_not_superseded.
+
+    `--pypi` asks only about a name something vouches for: a package a repo under `--repos` has
+    or depends on (pyproject name, dependencies, optional dependencies, dependency groups, uv.lock
+    packages) or a requirement written out in the fact (`foo==1.2.0`, `foo >= 1.2`). Why: asking
+    about every word beside a version turned English words into PyPI projects - measured on an
+    815-fact chain, 16 of 91 superseded claims were "only", "startup", "a", "sdk", "tag", "named"
+    and "that"; vouched-only asking dropped exactly those 16 and kept all 75 real ones. A word-only
+    match stays `unresolved`. Reopen if a real package the repos do not use is reported unresolved
+    often enough to matter (pass it with --current then). Pinned by
+    TestPypiAsksOnlyAboutPackageMentions.
 """
 
 import argparse
@@ -56,6 +69,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
+from typing import cast
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "hooks"))
 import uuid_store  # noqa: E402
@@ -102,6 +116,13 @@ _SINCE = re.compile(r"\bsince\s+(?:[\w.-]+\s+)?v?$", re.IGNORECASE)
 # A version these sources name is not a PyPI release question: the caller said so, or it is this
 # plugin's own version.
 _NOT_ASKED_SOURCES = frozenset({"--current", "this plugin"})
+# The distribution name at the start of a PEP 508 requirement ("rich_click[extra]>=1 ; ..").
+_REQ_NAME = re.compile(r"\s*([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)")
+# A uv.lock package entry's own name line (unindented, directly in a [[package]] table).
+_LOCK_NAME = re.compile(r'name = "([^"]+)"\s*$')
+# A requirement written out in a fact ("foo-bar==1.2.0", "foo_bar >= 1.2"): the text itself says
+# the word is a distribution, so PyPI may be asked about it even when no repo on disk uses it.
+_PINNED = re.compile(r"([A-Za-z0-9][A-Za-z0-9._-]*[A-Za-z0-9]|[A-Za-z0-9])\s*(?:===?|>=|<=|~=|!=|@)\s*v?\d")
 _NOT_PYPI = frozenset({"python", "cpython", "kernel", "linux", "windows", "git", "node", "gh",
                        "powershell", "tpm", "uefi", "pve", "proxmox", "debian", "ubuntu"})
 
@@ -119,10 +140,20 @@ class Known:
 
 @dataclass
 class Registry:
-    """normalized package name -> its current version, plus aliases (a word -> a package)."""
+    """normalized package name -> its current version, plus aliases (a word -> a package).
 
-    known: dict[str, Known] = field(default_factory=dict)
-    aliases: dict[str, str] = field(default_factory=dict)
+    `recognised` holds distribution names seen on disk WITHOUT a version worth trusting (a
+    dependency of some project, a uv.lock entry): enough to say a word in a fact names a real
+    package, so PyPI may be asked about it, never enough to compare against.
+    """
+
+    known: dict[str, Known] = field(default_factory=dict[str, Known])
+    aliases: dict[str, str] = field(default_factory=dict[str, str])
+    recognised: set[str] = field(default_factory=set[str])
+
+    def is_package(self, name: str) -> bool:
+        """True when `name` is a distribution the disk vouches for, with or without a version."""
+        return self.lookup(name) is not None or self.canonical(name) in self.recognised
 
     def lookup(self, name: str) -> Known | None:
         key = normalize(name)
@@ -276,15 +307,60 @@ def find_claims(text: str, reg: Registry, where: str = "") -> list[Claim]:
 
 # -- current versions ------------------------------------------------------------------------
 
-def _toml_project(path: Path) -> tuple[str | None, str | None]:
-    """[project] name and version from a pyproject.toml; a missing or dynamic one is None."""
-    text = path.read_text(encoding="utf-8", errors="replace")
+def _table(value: object) -> dict[str, object]:
+    """`value` when it is a TOML table, else an empty one: a pyproject is untrusted input."""
+    return cast("dict[str, object]", value) if isinstance(value, dict) else {}
+
+
+def _items(value: object) -> list[object]:
+    """`value` when it is a TOML array, else an empty one."""
+    return cast("list[object]", value) if isinstance(value, list) else []
+
+
+def _requirement_names(lists: Iterable[object]) -> set[str]:
+    """The distribution names a set of PEP 508 requirement lists name (a non-string entry, such as
+    a dependency group's include-group table, is skipped)."""
+    names: set[str] = set()
+    for reqs in lists:
+        for req in _items(reqs):
+            m = _REQ_NAME.match(req) if isinstance(req, str) else None
+            if m:
+                names.add(normalize(m.group(1)))
+    return names
+
+
+def _record_pyproject(path: Path, reg: Registry) -> None:
+    """Its [project] name at its version (a dynamic one is not guessed), and every name it depends
+    on, recognised without a version."""
     try:
-        proj = tomllib.loads(text).get("project", {})
-    except tomllib.TOMLDecodeError:
-        return None, None
+        data = tomllib.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return
+    proj = _table(data.get("project"))
     name, ver = proj.get("name"), proj.get("version")
-    return (name if isinstance(name, str) else None), (ver if isinstance(ver, str) else None)
+    if isinstance(name, str) and name and isinstance(ver, str) and ver:
+        reg.add(name, ver, str(path))
+    if isinstance(name, str) and name:
+        reg.recognised.add(normalize(name))
+    groups: list[object] = [proj.get("dependencies")]
+    for table in (proj.get("optional-dependencies"), data.get("dependency-groups")):
+        groups += list(_table(table).values())
+    reg.recognised |= _requirement_names(groups)
+
+
+def _record_uv_lock(path: Path, reg: Registry) -> None:
+    """Every `[[package]]` name a uv.lock lists, read line by line so a large lock is not loaded
+    whole. A `{ name = ... }` inside a dependency list is indented, so it is never taken."""
+    section = ""
+    try:
+        with path.open(encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if line.startswith("["):
+                    section = line.strip()
+                elif section == "[[package]]" and (m := _LOCK_NAME.match(line)):
+                    reg.recognised.add(normalize(m.group(1)))
+    except OSError:
+        return
 
 
 def _json(path: Path) -> dict:
@@ -309,7 +385,7 @@ def _record_plugin_dir(d: Path, reg: Registry) -> None:
 
 
 def discover(roots: Iterable[Path], max_depth: int = 7) -> Registry:
-    """Current versions of every package whose repo sits under `roots`.
+    """Current versions of every package whose repo sits under `roots`, and the names they use.
 
     Hidden and vendored dirs are not entered: a `.venv` or `node_modules` copy is somebody else's
     version, not the project's.
@@ -324,12 +400,9 @@ def discover(roots: Iterable[Path], max_depth: int = 7) -> Registry:
                 dirnames[:] = []
             dirnames[:] = [n for n in dirnames if not n.startswith(".") and n not in _SKIP_DIRS]
             if "pyproject.toml" in filenames:
-                try:
-                    name, ver = _toml_project(d / "pyproject.toml")
-                except OSError:
-                    name, ver = None, None
-                if name and ver:
-                    reg.add(name, ver, str(d / "pyproject.toml"))
+                _record_pyproject(d / "pyproject.toml", reg)
+            if "uv.lock" in filenames:
+                _record_uv_lock(d / "uv.lock", reg)
             if (d / ".claude-plugin").is_dir():
                 _record_plugin_dir(d, reg)
     return reg
@@ -406,15 +479,23 @@ def _resolve_online(texts: list[str], reg: Registry, fetch: Callable[[str], str 
                     asked: set[str]) -> None:
     """Ask PyPI, once per name, about each package a claim calls unresolved or superseded.
 
+    Only a name something vouches for is asked: a package a repo on disk has or depends on (a
+    pyproject, a uv.lock), or one the text itself writes as a requirement ("foo==1.2.0"). A bare
+    word that merely stands beside a version ("SDK 0.2.144", "no startup() in 0.2.139") stays
+    unresolved, because PyPI holds a project for almost every English word.
+
     An answer REPLACES what the repos on disk said: the newest release is what "current" means,
     and a local pyproject can hold a version that was never published. No answer (not on PyPI, or
     offline) leaves the local version in place."""
     for text in texts:
+        pinned = {normalize(m.group(1)) for m in _PINNED.finditer(text)}
         for claim in find_claims(text, reg):
             name = claim.pkg
             if claim.status not in (ClaimStatus.UNRESOLVED, ClaimStatus.SUPERSEDED):
                 continue
             if not name or name in _NOT_PYPI or name in asked:
+                continue
+            if not (reg.is_package(name) or name in pinned):
                 continue
             known = reg.lookup(name)
             if known is not None and known.source in _NOT_ASKED_SOURCES:
@@ -457,8 +538,8 @@ def _render(reports: list[FactReport], stale: list[FactReport], counts: dict[Cla
                 lines.append(f"        {c.pkg} {c.named} -> {c.current} ({c.where}): {c.context}")
     if missing:
         lines += ["", f"bodies not readable ({len(missing)}): " + ", ".join(missing)]
-    lines += ["", "These are CANDIDATES: re-check each claim against the current release, then "
-              "reword it to the current state, archive it, or merge it with its siblings."]
+    lines += ["", ("These are CANDIDATES: re-check each claim against the current release, then "
+              "reword it to the current state, archive it, or merge it with its siblings.")]
     return "\n".join(lines)
 
 
@@ -512,7 +593,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="a word that names a package, e.g. plugin=bitranox (repeatable)")
     sc.add_argument("--pypi", action="store_true",
                     help="ask PyPI for the newest release of every unresolved or superseded "
-                         "package; its answer replaces a local checkout's version")
+                         "package a repo under --repos has or depends on, or the fact writes as "
+                         "a requirement (foo==1.2.0); its answer replaces a local checkout's "
+                         "version. A bare word beside a version stays unresolved")
     sc.add_argument("--json", action="store_true", help="emit a JSON envelope")
     utf8_stdio()
     args = ap.parse_args(argv)
