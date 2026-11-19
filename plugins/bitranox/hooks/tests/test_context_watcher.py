@@ -357,6 +357,31 @@ def test_the_save_request_asks_for_the_write_tool():
     assert "with the Write tool" in msg and "through Bash" in msg
 
 
+def test_the_save_request_says_to_read_the_clock_before_stamping():
+    # Measured: the CLOCK CHECK nudge fired on most watcher checkpoints because the stamp was typed
+    # from a sense of time, and the sessions then fixed it with `sed -i`, which made the resume
+    # treat the checkpoint as not theirs. Reading `date` before the Write avoids both.
+    _s, detail = W.compact_verdict(150_000, 200_000, 70, 400_000, 140_000)
+    msg = W._save(detail)
+    assert "`date`" in msg and "Edit tool" in msg
+
+
+def test_a_plan_mode_save_request_says_where_the_checkpoint_goes():
+    # Measured: three sessions in plan mode could write only their plan file, put the checkpoint
+    # there on their own, and then got "no checkpoint was saved" back. The request names the place.
+    _s, detail = W.compact_verdict(150_000, 200_000, 70, 400_000, 140_000)
+    msg = W._save(detail, plan_mode=True)
+    assert "plan mode" in msg and "plan file" in msg
+    assert "plan mode" not in W._save(detail)
+
+
+def test_decide_passes_plan_mode_through(tmp_path, session):
+    t = _transcript(tmp_path, _usage_line(cache_read=150_000))
+    ev = dict(_event(session, t, tmp_path), hook_event_name="PostToolUse", permission_mode="plan")
+    reason = W.decide(ev, CFG)
+    assert reason is not None and "plan file" in reason
+
+
 def test_the_misconfigured_message_says_which_knob_to_set():
     _s, detail = W.compact_verdict(563_038, 200_000, 70, 400_000, 0)
     detail["source"] = "assumed"

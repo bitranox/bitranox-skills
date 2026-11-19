@@ -508,3 +508,274 @@ def test_own_checkpoint_writes_reads_successful_writes_after_the_request(tmp_pat
     assert set(writes) == {os.path.normpath(str(a))}
     assert abs(writes[os.path.normpath(str(a))] - (now - 10)) < 0.01
     assert H.own_checkpoint_writes(str(tmp_path / "missing.jsonl"), now) is None
+
+
+# ---- a session's own shell edit of the checkpoint it wrote --------------------------------------
+# Measured over real transcripts: after the save request, sessions wrote handover.md with Write and
+# then changed it through Bash a few seconds later - mostly a `sed -i` re-stamping the time after
+# the PreToolUse CLOCK CHECK nudge (23 of 25), once a python heredoc. That moved the mtime past the
+# Write's result, so the session's own checkpoint resumed as "unattributed" (25 misses). The fix
+# extends the attribution record, not the slack: a write-shaped Bash command of THIS session that
+# names the path, run after its own Write, keeps the file the session's. A change by anything else
+# still breaks attribution.
+
+def _tool_use(tid, at, name, tool_input, cwd):
+    return {"type": "assistant", "timestamp": _iso(at - 0.5), "cwd": str(cwd), "message": {
+        "role": "assistant", "content": [{"type": "tool_use", "id": tid, "name": name,
+                                          "input": tool_input}]}}
+
+
+def _tool_result(tid, at, cwd, ok=True):
+    result = {"type": "tool_result", "tool_use_id": tid, "content": "ok"}
+    if not ok:
+        result["is_error"] = True
+    return {"type": "user", "timestamp": _iso(at), "cwd": str(cwd), "message": {
+        "role": "user", "content": [result]}}
+
+
+def _session_transcript(tmp_path, events, cwd, name="s-1.jsonl"):
+    """A transcript in the shape the harness writes, from (kind, ...) events in order.
+
+    ("write", path, at, ok) and ("edit", path, at, ok) are Write/Edit tool calls with their result;
+    ("bash", command, at, ok[, cwd]) a Bash call run in `cwd`; ("plan", plan_path, at) the plan_mode
+    attachment the harness adds while plan mode is on.
+    """
+    lines = []
+    for i, ev in enumerate(events):
+        tid = f"toolu_{i:02d}"
+        kind = ev[0]
+        if kind in ("write", "edit"):
+            _k, path, at, ok = ev
+            tool_input = ({"file_path": str(path), "content": "x"} if kind == "write" else
+                          {"file_path": str(path), "old_string": "a", "new_string": "b"})
+            lines += [_tool_use(tid, at, kind.capitalize(), tool_input, cwd),
+                      _tool_result(tid, at, cwd, ok)]
+        elif kind == "bash":
+            command, at, ok = ev[1], ev[2], ev[3]
+            run_in = ev[4] if len(ev) > 4 else cwd
+            lines += [_tool_use(tid, at, "Bash", {"command": command}, run_in),
+                      _tool_result(tid, at, run_in, ok)]
+        elif kind == "plan":
+            lines.append({"type": "attachment", "timestamp": _iso(ev[2]), "cwd": str(cwd),
+                          "attachment": {"type": "plan_mode", "reminderType": "full",
+                                         "isSubAgent": False, "planFilePath": str(ev[1]),
+                                         "planExists": True}})
+    out = tmp_path / name
+    out.write_text("".join(json.dumps(r) + "\n" for r in lines), encoding="utf-8")
+    return out
+
+
+def _own_then_bash(tmp_path, repo, command, *, bash_cwd=None, peer_after=False):
+    """Own Write at now-200, then a Bash call at now-190; the file's mtime is the Bash moment, or a
+    later peer change at now-60 when `peer_after`."""
+    now = time.time()
+    SIG.mark_checkpoint_asked("s-1", now=now - 300)
+    cp = _write_fresh(repo / "handover.md", "# Checkpoint 12:03\n- OWN-RESTAMPED-41\n")
+    _set_mtime(cp, now - 60 if peer_after else now - 190)
+    tr = _session_transcript(tmp_path, [("write", cp, now - 200, True),
+                                        ("bash", command, now - 190, True, bash_cwd or repo)], repo)
+    return cp, tr
+
+
+@pytest.mark.parametrize("command, run_in", [
+    ('sed -i "1s/12:00/$(date +%H:%M)/" handover.md && head -1 handover.md', ""),
+    ("T=$(date +%H:%M) && sed -i \"1s/12:00/$T/\" handover.md", ""),
+    ("sed -i 1s/12:00/$(date +%H:%M)/ handover.md | head -1", ""),
+    ("sed -i '1s/12:00/12:03/' ../handover.md && grep -n x src/mod.py", "sub"),
+    ("sed -i '1s/12:00/12:03/' {abs} && head -1 {abs}", "sub"),
+    (("python3 - <<'PY'\nfrom pathlib import Path\np = Path(\"handover.md\")\n"
+      "p.write_text(p.read_text().replace(\"12:00\", \"12:03\"))\nPY"), ""),
+    ("cd {repo} && sed -i '1s/12:00/12:03/' handover.md", "sub"),
+])
+def test_an_own_bash_edit_after_the_own_write_keeps_the_checkpoint_ours(tmp_path, monkeypatch,
+                                                                        capsys, command, run_in):
+    repo = _repo(tmp_path)
+    cp = repo / "handover.md"
+    command = command.replace("{abs}", str(cp)).replace("{repo}", str(repo))
+    _cp, tr = _own_then_bash(tmp_path, repo, command, bash_cwd=repo / run_in if run_in else repo)
+    ctx = _context(_run(monkeypatch, capsys, _event(repo, transcript=str(tr))))
+    assert "OWN-RESTAMPED-41" in ctx, "the session's own re-stamped checkpoint must come back"
+    assert "replace its first line" in ctx
+
+
+@pytest.mark.parametrize("command", [
+    "head -1 handover.md && cat OPEN-WORK.md",                 # names it, changes nothing
+    "cp handover.md handover.prev.md",                         # a copy reads its source
+    "sed -i '1s/12:00/12:03/' notes/handover.md",              # changes ANOTHER handover.md
+    "sed -i '1s/12:00/12:03/' OPEN-WORK.md",                   # changes another file
+])
+def test_an_own_bash_call_that_does_not_change_the_file_does_not_vouch_for_a_later_change(
+        tmp_path, monkeypatch, capsys, command):
+    """A peer changed the file after this session's Write; this session's own Bash call reads it
+    or edits something else. The content on disk is still not known to be this session's."""
+    repo = _repo(tmp_path)
+    now = time.time()
+    SIG.mark_checkpoint_asked("s-1", now=now - 300)
+    cp = _write_fresh(repo / "handover.md", "# Checkpoint\n- PEER-CHANGED-42\n")
+    _set_mtime(cp, now - 60)
+    tr = _session_transcript(tmp_path, [("write", cp, now - 200, True),
+                                        ("bash", command, now - 50, True)], repo)
+    ctx = _context(_run(monkeypatch, capsys, _event(repo, transcript=str(tr))))
+    assert "PEER-CHANGED-42" not in ctx
+    assert "replace its first line" not in ctx
+
+
+def test_a_change_after_the_own_bash_edit_still_breaks_attribution(tmp_path, monkeypatch, capsys):
+    """Own Write, own sed, then a change by another process with no own call naming the path."""
+    repo = _repo(tmp_path)
+    _cp, tr = _own_then_bash(tmp_path, repo, "sed -i '1s/12:00/12:03/' handover.md",
+                             peer_after=True)
+    ctx = _context(_run(monkeypatch, capsys, _event(repo, transcript=str(tr))))
+    assert "OWN-RESTAMPED-41" not in ctx
+    assert "replace its first line" not in ctx
+
+
+def test_a_bash_edit_before_the_own_write_does_not_attribute(tmp_path, monkeypatch, capsys):
+    """Only a Bash edit that FOLLOWS the session's own Write continues its record: a shell edit on
+    its own is not this session's checkpoint (it could have touched a peer's file)."""
+    repo = _repo(tmp_path)
+    now = time.time()
+    SIG.mark_checkpoint_asked("s-1", now=now - 300)
+    cp = _write_fresh(repo / "handover.md", "# Checkpoint\n- BASH-ONLY-43\n")
+    _set_mtime(cp, now - 100)
+    tr = _session_transcript(tmp_path, [("bash", "sed -i '1s/a/b/' handover.md", now - 100, True)],
+                             repo)
+    ctx = _context(_run(monkeypatch, capsys, _event(repo, transcript=str(tr))))
+    assert "BASH-ONLY-43" not in ctx
+
+
+# ---- a prefix name: handover-<topic>.md with the checkpoint heading ------------------------------
+# Measured: a session kept its checkpoint in the scratchpad as handover-<topic>.md (heading
+# included) across five compactions, and none was handed back; the suffix rule above did not cover
+# the prefix form.
+
+def test_a_prefix_name_with_the_lessons_heading_is_handed_back(tmp_path, monkeypatch, capsys):
+    repo = _repo(tmp_path)
+    now = time.time()
+    SIG.mark_checkpoint_asked("s-1", now=now - 300)
+    cp = tmp_path / "scratchpad" / "handover-crud-design.md"
+    cp.parent.mkdir()
+    cp.write_text("# Handover - crud design\n- PREFIX-44\n\n" + _LESSONS, encoding="utf-8")
+    _set_mtime(cp, now - 100)
+    tr = _session_transcript(tmp_path, [("write", cp, now - 100, True)], repo)
+    ctx = _context(_run(monkeypatch, capsys, _event(repo, transcript=str(tr))))
+    assert "PREFIX-44" in ctx and str(cp) in ctx
+
+
+def test_a_prefix_name_without_the_heading_is_not_a_checkpoint(tmp_path, monkeypatch, capsys):
+    repo = _repo(tmp_path)
+    now = time.time()
+    SIG.mark_checkpoint_asked("s-1", now=now - 300)
+    cp = tmp_path / "scratchpad" / "handover-notes.md"
+    cp.parent.mkdir()
+    cp.write_text("# Notes\n- PREFIX-NOTES-45\n", encoding="utf-8")
+    _set_mtime(cp, now - 100)
+    tr = _session_transcript(tmp_path, [("write", cp, now - 100, True)], repo)
+    ctx = _context(_run(monkeypatch, capsys, _event(repo, transcript=str(tr))))
+    assert "PREFIX-NOTES-45" not in ctx
+
+
+@pytest.mark.parametrize("name, expected", [
+    ("handover-crud-design.md", True), ("handover-.md", False), ("handover-x.md.bak", False),
+    ("handover-x.txt", False),
+])
+def test_is_checkpoint_name_prefix_form(name, expected):
+    assert H.is_checkpoint_name(name) is expected
+
+
+# ---- a checkpoint the session retired itself before the compaction ------------------------------
+# Measured: 10 of the 47 compactions with a save request and nothing handed back were sessions that
+# finished the work after the checkpoint and marked their own file `# STALE ...` (by Edit or by a
+# `sed -i`) or removed it, before the compaction landed. The block then said "no checkpoint was
+# saved", which is false and sends the reader to the transcript looking for a lost save.
+
+_REMOVE_COMMAND = "g" + "it rm -q handover.md && g" + "it commit -qF msg.txt"
+
+
+def _retired_by(tmp_path, repo, how):
+    now = time.time()
+    SIG.mark_checkpoint_asked("s-1", now=now - 300)
+    cp = _write_fresh(repo / "handover.md", "# STALE - read 2026-11-14, work continued\n- R-46\n")
+    _set_mtime(cp, now - 100)
+    events = [("write", cp, now - 200, True)]
+    if how == "edit":
+        events.append(("edit", cp, now - 100, True))
+    elif how == "sed":
+        events.append(("bash", "sed -i '1s/^/# STALE - done\\n\\n/' handover.md", now - 100, True))
+    elif how == "rm":
+        cp.unlink()
+        events.append(("bash", _REMOVE_COMMAND, now - 100, True))
+    return cp, _session_transcript(tmp_path, events, repo)
+
+
+@pytest.mark.parametrize("how", ["edit", "sed", "rm"])
+def test_a_checkpoint_the_session_retired_itself_is_reported_as_retired(tmp_path, monkeypatch,
+                                                                         capsys, how):
+    repo = _repo(tmp_path)
+    cp, tr = _retired_by(tmp_path, repo, how)
+    ctx = _context(_run(monkeypatch, capsys, _event(repo, transcript=str(tr))))
+    assert "no checkpoint was saved" not in ctx
+    assert "retired" in ctx and str(cp) in ctx
+    assert "summary" in ctx
+    assert "R-46" not in ctx, "a retired checkpoint is not handed back"
+
+
+def test_a_stale_line_written_by_another_process_is_not_called_our_retirement(tmp_path,
+                                                                               monkeypatch,
+                                                                               capsys):
+    repo = _repo(tmp_path)
+    now = time.time()
+    SIG.mark_checkpoint_asked("s-1", now=now - 300)
+    cp = _write_fresh(repo / "handover.md", "# STALE - read by a peer\n- R-47\n")
+    _set_mtime(cp, now - 60)
+    tr = _session_transcript(tmp_path, [("write", cp, now - 200, True)], repo)
+    ctx = _context(_run(monkeypatch, capsys, _event(repo, transcript=str(tr))))
+    assert "retired" not in ctx
+
+
+def test_a_checkpoint_removed_by_something_else_is_not_called_our_retirement(tmp_path,
+                                                                              monkeypatch, capsys):
+    repo = _repo(tmp_path)
+    now = time.time()
+    SIG.mark_checkpoint_asked("s-1", now=now - 300)
+    cp = _write_fresh(repo / "handover.md", "# Checkpoint\n- R-48\n")
+    tr = _session_transcript(tmp_path, [("write", cp, now - 200, True)], repo)
+    cp.unlink()
+    ctx = _context(_run(monkeypatch, capsys, _event(repo, transcript=str(tr))))
+    assert "retired" not in ctx
+
+
+# ---- plan mode: the plan file is the only writable file ----------------------------------------
+# Measured: three sessions in plan mode, asked for a checkpoint, wrote it into the plan file (the
+# only file plan mode lets them write) and got "no checkpoint was saved" back. The harness itself
+# re-attaches the plan file after a compaction, so the block must point there instead.
+
+def test_a_plan_file_written_after_the_request_is_named_instead_of_no_checkpoint(tmp_path,
+                                                                                  monkeypatch,
+                                                                                  capsys):
+    repo = _repo(tmp_path)
+    now = time.time()
+    SIG.mark_checkpoint_asked("s-1", now=now - 300)
+    plan = tmp_path / "home" / ".claude" / "plans" / "some-plan.md"
+    plan.parent.mkdir(parents=True)
+    plan.write_text("# Plan\n\n## Checkpoint\n- PLAN-49\n", encoding="utf-8")
+    tr = _session_transcript(tmp_path, [("plan", plan, now - 400),
+                                        ("edit", plan, now - 100, True)], repo)
+    ctx = _context(_run(monkeypatch, capsys, _event(repo, transcript=str(tr))))
+    assert "no checkpoint was saved" not in ctx
+    assert str(plan) in ctx and "plan file" in ctx
+    assert "replace its first line" not in ctx, "the plan file is never marked STALE"
+
+
+def test_a_plan_file_written_before_the_request_is_not_named(tmp_path, monkeypatch, capsys):
+    repo = _repo(tmp_path)
+    now = time.time()
+    SIG.mark_checkpoint_asked("s-1", now=now - 300)
+    plan = tmp_path / "home" / ".claude" / "plans" / "some-plan.md"
+    plan.parent.mkdir(parents=True)
+    plan.write_text("# Plan\n", encoding="utf-8")
+    tr = _session_transcript(tmp_path, [("plan", plan, now - 500),
+                                        ("edit", plan, now - 400, True)], repo)
+    ctx = _context(_run(monkeypatch, capsys, _event(repo, transcript=str(tr))))
+    assert str(plan) not in ctx
+    assert "no checkpoint was saved" in ctx

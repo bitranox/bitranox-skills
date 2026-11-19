@@ -81,6 +81,24 @@ def test_a_bash_command_naming_no_record_is_silent():
     assert _assess({"tool_name": "Bash", "tool_input": {"command": "echo 21:20 > f.txt"}}) is None
 
 
+@pytest.mark.parametrize("path", ["/r/handover.md", "/s/handover-topic.md", "/h/wt-x-handover.md"])
+def test_a_checkpoint_stamp_is_fixed_with_the_edit_tool_after_reading_the_clock(path):
+    """Measured: 23 of 25 checkpoints that resumed as "unattributed" had been re-stamped with
+    `sed -i` right after this nudge, which told the session to stamp "from `date` in the same
+    command". The compaction resume attributes a checkpoint by this session's Write/Edit calls, so
+    for a checkpoint the nudge must say: read `date`, then fix the stamp with the Edit tool."""
+    text = _assess(_edit(path, "# Checkpoint 2026-11-09 17:55"))
+    assert "17:55" in text and "17:44" in text
+    assert "`date`" in text and "Edit tool" in text
+    assert "same command" not in text
+    assert "sed" in text, "the shell edit to avoid is named, so it is not the reflex fix"
+
+
+def test_a_backlog_stamp_keeps_the_same_command_advice():
+    text = _assess(_edit("/r/OPEN-WORK.md", "ran at 17:55 today"))
+    assert "same command" in text and "Edit tool" not in text
+
+
 def test_main_is_silent_on_junk_and_quiet_events():
     assert N.main("not json") == 0
     assert N.main(json.dumps({"tool_name": "Read"})) == 0

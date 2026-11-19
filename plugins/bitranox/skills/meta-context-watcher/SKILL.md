@@ -353,11 +353,21 @@ after it; a handover the user asked for takes steps 7 and 8 instead.
    another session that is still working (not an earlier session that ended, whose file this step
    supersedes), it is not the outgoing file of steps 2 and 3: leave it untouched, and write a
    watcher checkpoint as `handover.md` in the session scratchpad instead, with the Write tool. The
-   compaction resume hands back a `handover.md` this session wrote with Write or Edit; one written
-   through Bash it only lists, never as this session's. Where `handover.md` is tracked, a linked
+   compaction resume hands back a checkpoint this session wrote with Write or Edit (`handover.md`,
+   or `handover-<topic>.md` when it carries the `## Lessons for the next nap` heading); one written
+   only through Bash it lists, never as this session's. A later Bash call of yours that changes
+   that same file keeps it yours. Wherever the checkpoint lives, stamp it from `date` and correct
+   a wrong stamp with the Edit tool, not `sed`. Where `handover.md` is tracked, a linked
    worktree's copy is the same shared record, and your next commit ships yours over the other.
    The scratchpad does not survive a host reboot, so it never holds the only copy: put what runs,
    what is decided and the exact next action in the work's own `OPEN-WORK.md` line as well.
+   **In plan mode the plan file is the one file you may write.** Add a watcher checkpoint to it
+   with the Edit tool, as a section of its own (`## Checkpoint`, with its
+   `## Lessons for the next nap`) instead of `handover.md`, and leave the plan itself intact; the
+   harness attaches the plan file after a compaction in plan mode, and the resume names it. Step 3
+   does not apply, since no `handover.md` is overwritten, and step 5's expiry line is left out,
+   since the plan file is never marked STALE; step 2's `OPEN-WORK.md` reconcile waits until plan
+   mode ends, so carry the unfinished items into `OPEN-WORK.md` then.
 5. **End the file with its own expiry instruction:**
 
    > Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not
@@ -456,20 +466,26 @@ the next action. A question you have not yet put to the user about a blocked ite
 without stopping the work. All of those rules apply again when the task in flight is finished and
 you choose what comes next. A block saying NO checkpoint was saved means the compaction summary is
 all that carried over: when the next step needs detail it lacks, read the transcript the block names
-before continuing. A block that LISTS checkpoint files (path and age) without handing one back found
-none that this session's own records show it wrote: the block hands back only a file the session
-wrote with Write or Edit after the save request and that nothing changed since, never one picked by
-the cwd or the newest mtime, because sessions share a checkout and its worktrees. Each listed file
-may be another session's, or one you wrote through Bash. Opening one to see what work it describes
-is fine. One that describes work the summary never names is not yours: leave it alone and continue
-as when no checkpoint was saved. One that describes the summary's work is still only notes, not
-your checkpoint: check its next action against the summary and `git log` / `git status`, and
-continue from the summary's step. A listed file is yours only when the summary or the transcript
-the block names shows you writing that path through Bash after the save request, and the file's
-age shows no later change; a matching subject is no proof, since a peer can work the same task.
-With that proof, handle it as a checkpoint handed back; without it, do not edit it or mark it
-STALE. The checkpoint's lessons need nothing from you: after a compaction the Stop gate asks for
-`bitranox:meta-dream-nap`, which captures them.
+before continuing. A block saying this session RETIRED its checkpoint (it wrote one after the save
+request, then set its first line to `# STALE` or removed it) means no save was lost: continue from
+the summary's step and leave that file as it is. A block saying the checkpoint is in this session's
+plan file means you were in plan mode: read the plan file (attached above while plan mode is on,
+otherwise Read the path the block names), check its `## Checkpoint` next action against the
+summary as above (when it is already done, continue from the summary's step), and never mark the
+plan file STALE, since it is the plan. A block that LISTS checkpoint files (path and age) without
+handing one back found none that this session's own records show it wrote: the block hands back only
+a file the session wrote with Write or Edit after the save request and that nothing changed since
+except its own later calls, never one picked by the cwd or the newest mtime, because sessions share
+a checkout and its worktrees. Each listed file may be another session's, or one you wrote only
+through Bash. Opening one to see what work it describes is fine. One that describes work the summary
+never names is not yours: leave it alone and continue as when no checkpoint was saved. One that
+describes the summary's work is still only notes, not your checkpoint: check its next action against
+the summary and `git log` / `git status`, and continue from the summary's step. A listed file is
+yours only when the summary or the transcript the block names shows you writing that path through
+Bash after the save request, and the file's age shows no later change; a matching subject is no
+proof, since a peer can work the same task. With that proof, handle it as a checkpoint handed back;
+without it, do not edit it or mark it STALE. The checkpoint's lessons need nothing from you: after a
+compaction the Stop gate asks for `bitranox:meta-dream-nap`, which captures them.
 
 Never amend a stale handover to update it - write a NEW one and replace the file. An edited handover
 holds two moments with no way to tell them apart.

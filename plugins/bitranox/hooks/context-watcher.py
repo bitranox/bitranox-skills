@@ -465,7 +465,19 @@ _OVERWRITE_WARNING = MappingProxyType({
 })
 
 
-def _save(detail, tracking=HandoverTracking.UNKNOWN) -> str:
+# A session in plan mode may write only its plan file, so the request says where the checkpoint goes
+# there. Measured: three plan-mode sessions put it into the plan file on their own and were then
+# told no checkpoint was saved; the harness attaches the plan file after a compaction itself, and
+# compact-resume points at it.
+_PLAN_MODE_NOTE = (
+    "This session is in plan mode, where the plan file is the only file you may write. Put the "
+    "checkpoint into the plan file as a section of its own (`## Checkpoint`, with its "
+    "`## Lessons for the next nap`) instead of `handover.md`, and leave the plan itself intact; the "
+    "harness attaches the plan file after the compaction, and the resume points at it. Carry the "
+    "unfinished items into `OPEN-WORK.md` once plan mode ends.")
+
+
+def _save(detail, tracking=HandoverTracking.UNKNOWN, *, plan_mode: bool = False) -> str:
     fill = {k: format(v, ",") if isinstance(v, int) and k != "pct" else v for k, v in detail.items()}
     text = (
         "This session is carrying %(tokens)s tokens of context. The harness auto-compacts at about "
@@ -477,7 +489,8 @@ def _save(detail, tracking=HandoverTracking.UNKNOWN) -> str:
         "next nap`. Replace the whole file with the Write tool, never append to it: a first line "
         "still reading `# STALE` from an earlier hand-back keeps the new checkpoint from being "
         "handed back, and a file written through Bash is never handed back as yours: the resume "
-        "only lists it. "
+        "only lists it. Read the clock with `date` before you stamp it, and correct a stamp "
+        "afterwards with the Edit tool, not a shell edit. "
         "Commit nothing just for this.\n"
         "2. Then CONTINUE the task you were on. Do not stop, do not ask the user, and do not tell "
         "them to /clear: the compaction follows automatically, and the checkpoint is handed back "
@@ -491,6 +504,8 @@ def _save(detail, tracking=HandoverTracking.UNKNOWN) -> str:
             "~/.claude/settings.json through the update-config skill; it takes effect in the next "
             "session." % {"limit": fill["limit"], "env": _ENV_COMPACT_WINDOW, "raw": detail["limit"],
                           "now": fill["harness"] if detail.get("harness") else "unset"})
+    if plan_mode:
+        text += "\n\n" + _PLAN_MODE_NOTE
     warning = _OVERWRITE_WARNING[HandoverTracking(tracking)]
     return text + "\n\n" + warning if warning else text
 
@@ -596,10 +611,11 @@ def decide(event, cfg):
     tokens, model = read_session(transcript)
     window, source = resolve_window(cfg, model, os.environ)
     pct, cap = cfg.get("context_handover_pct", 70), cfg.get("context_handover_cap", 400000)
-    return _decide_compact(session, proj, tokens, window, source, pct, cap)
+    plan_mode: bool = event.get("permission_mode") == "plan"
+    return _decide_compact(session, proj, tokens, window, source, pct, cap, plan_mode=plan_mode)
 
 
-def _decide_compact(session, proj, tokens, window, source, pct, cap):
+def _decide_compact(session, proj, tokens, window, source, pct, cap, *, plan_mode: bool = False):
     """Request a checkpoint once per crossing of the save point. IMPURE.
 
     A reading back BELOW the save point after a request means the harness compacted, so the request
@@ -625,7 +641,7 @@ def _decide_compact(session, proj, tokens, window, source, pct, cap):
     mark_asked(session, tokens)
     sig.mark_checkpoint_asked(session)
     # Asked only here, on the rare turn that requests a save, so an ordinary turn never pays for git.
-    return _save(detail, handover_tracking(proj))
+    return _save(detail, handover_tracking(proj), plan_mode=plan_mode)
 
 
 def main() -> int:

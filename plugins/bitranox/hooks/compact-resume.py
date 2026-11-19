@@ -28,8 +28,16 @@ of 106 checkpoints written after the request, across real transcripts).
 WHOSE it is. A candidate is handed back as this session's only when the session's own records show
 it wrote that file as it now stands: a successful Write/Edit/MultiEdit of the path in the session's
 transcript at or after the request, with the file unchanged since (mtime at most _WRITE_SLACK past
-that tool result). Without a readable transcript the touched-paths record stands in, which cannot
-see a later overwrite. Neither the cwd nor the newest mtime decides: several sessions share one
+that tool result). A later Bash call of the same session that names the path and can change it (an
+in-place `sed -i`, a redirect onto it, a Python write in a heredoc, a copy, move or removal)
+continues that record: its result time becomes the file's own-write time. Sessions re-stamp the
+time in a checkpoint through `sed -i` right after writing it, mostly answering the CLOCK CHECK
+nudge, and that moved the mtime past the Write (measured: 25 own checkpoints resumed as
+unattributed). Widening the slack instead would also cover a peer's edit in the same window, while
+a Bash call in THIS transcript is this session's by construction; only a call that follows the own
+Write counts, so a shell edit alone never attributes a file. The path is resolved against the
+call's recorded cwd and any `cd` before it; a path built from a variable is not resolved. Without a
+readable transcript the touched-paths record stands in, which cannot see a later overwrite. Neither the cwd nor the newest mtime decides: several sessions share one
 main checkout and its linked worktrees, each writing its own handover.md, so the cwd's copy and the
 newest file can both be a peer's, and a linked worktree's tracked copy is as new as the checkout
 that wrote it (measured 2026-11-16: the cwd's tracked copy in a worktree, an older moment, came back
@@ -38,13 +46,24 @@ file no record attributes (a peer's, or one this session wrote through Bash) is 
 and age, and the reader is told it is not known to be theirs and not to edit it. A subagent's own
 transcript is not read: a checkpoint a subagent wrote is that subagent's, not this session's.
 
-WHICH NAMES. `handover.md`, and a touched file whose name ENDS in `-handover.md` that carries the
-line `## Lessons for the next nap` (the heading the meta-context-watcher skill requires in every
-checkpoint). Sessions with a worktree outside any repo improvise names such as
-`~/wt-vmxnet3-handover.md` (43 writes of three such names across 5497 transcripts, 2026-11-08), and
-an exact-name rule never hands those back. The heading keeps out other files that share the suffix:
-the one such file in that corpus was a skill checklist without it. `handover.prev.md`, the backup of
-an earlier checkpoint, does not end in `-handover.md` and so never counts, heading or not.
+WHICH NAMES. `handover.md`, and a touched file whose name ENDS in `-handover.md` or STARTS with
+`handover-` (and ends in `.md`) that carries the line `## Lessons for the next nap` (the heading the
+meta-context-watcher skill requires in every checkpoint). Sessions with a worktree outside any repo
+improvise names such as `~/wt-vmxnet3-handover.md` (43 writes of three such names across 5497
+transcripts, 2026-11-08), and a session kept its checkpoint in the scratchpad as
+`handover-<topic>.md` across five compactions; an exact-name rule never hands those back. The
+heading keeps out other files that share the suffix: the one such file in that corpus was a skill
+checklist without it. `handover.prev.md`, the backup of an earlier checkpoint, matches neither form
+and so never counts, heading or not.
+
+WHAT ELSE IT SAYS. Two cases used to read as "no checkpoint was saved" and were not. A session that
+finished the work after its checkpoint retires it itself - a `# STALE` first line, by Edit or by
+`sed -i`, or the file removed - before the compaction lands (10 of 47 such compactions measured);
+the block then says the session retired its own checkpoint and the summary carries the current
+step. A session in plan mode can write only its plan file, and wrote its checkpoint there (3 of
+47); the harness attaches the plan file after a compaction itself, so the block names that file
+and says not to mark it STALE. Both are attributed the same way as a checkpoint: from this
+session's own transcript, after the request.
 
 WHY its own hook rather than a branch of session-start.py: that hook's essentials are held under a
 small byte ceiling so they always land inline, and a checkpoint can be several KB. The harness inlines
@@ -54,21 +73,43 @@ preview, so the checkpoint is cut to fit below that, naming the file for the res
 Pure standard library, ASCII only. Every failure path prints nothing and exits 0.
 """
 
+import dataclasses
 import datetime
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
+from typing import NamedTuple, cast
 
 import open_work
 import self_improve_signals as sig
+import shell_text
 
 #: Below the harness's 10,000-character inline limit, with room for the framing around the body.
 MAX_CONTEXT_CHARS = 9000
 _STALE_PREFIX = "# STALE"
 _CHECKPOINT_NAME = "handover.md"
 _IMPROVISED_SUFFIX = "-handover.md"
+_IMPROVISED_PREFIX = "handover-"
+_MD = ".md"
+#: One shell statement (or a heredoc script) that can change a file it names: an in-place editor, a
+#: redirect onto a checkpoint-like name, tee, a Python write, a copy, move or removal. A statement
+#: that only reads (`head -1 handover.md`) does not match, so it never vouches for a change.
+_BASH_CHANGES = re.compile(
+    r"\b(?:sed|perl)\b[^\n]*\s(?:-[A-Za-z]*i|--in-place)"
+    r"|>>?\s*['\"]?[^\s'\"<>|;&]*handover[^\s'\"<>|;&]*\.md"
+    r"|\btee\b|\.write_(?:text|bytes)\(|\.write\(|\bopen\("
+    r"|\b(?:cp|mv|rm|unlink|truncate|install)\b")
+#: Programs that change only the last file they name.
+_COPY_PROGRAMS = frozenset({"cp", "install"})
+#: The statement removes or moves away a file it names.
+_BASH_REMOVES = re.compile(r"\b(?:rm|mv|unlink)\b")
+#: A word in a command naming a checkpoint-like file, with any directory part in front of it.
+_BASH_PATH = re.compile(r"""[^\s'"`;|&<>()=,]*handover[^\s'"`;|&<>()=,/]*\.md(?![\w.-])""")
+#: The harness attachments that name the session's plan file while plan mode is on or ending.
+_PLAN_ATTACHMENTS = frozenset({"plan_mode", "plan_mode_reentry", "plan_mode_exit"})
 #: A file with an improvised name counts only when one of its lines is exactly this heading.
 _CHECKPOINT_HEADING = "## Lessons for the next nap"
 #: The tools whose transcript record attributes a written file to this session.
@@ -121,6 +162,29 @@ _UNATTRIBUTED = (
     "detail the summary lacks. OPEN-WORK.md is the standing backlog.\n"
     "</BITRANOX-COMPACT-RESUME>"
 )
+_RETIRED = (
+    "<BITRANOX-COMPACT-RESUME>\n"
+    "The conversation was just compacted. After the save request this session wrote a checkpoint "
+    "at %(path)s and then retired it itself before the compaction (it set the first line to "
+    "`# STALE` or removed the file), which says the work that checkpoint described was finished. "
+    "So nothing is handed back and no save was lost: the compaction summary above names the "
+    "current step, and the work continues from it. If that step needs detail the summary lacks, "
+    "read the transcript %(transcript)s with `dream_state.py session-review` (skill "
+    "bitranox:meta-dream-tree). OPEN-WORK.md is the standing backlog.\n"
+    "</BITRANOX-COMPACT-RESUME>"
+)
+_PLAN = (
+    "<BITRANOX-COMPACT-RESUME>\n"
+    "The conversation was just compacted. After the save request this session wrote its plan file "
+    "%(path)s - in plan mode the one file a session may write - so a checkpoint saved before the "
+    "compaction is in that plan file, not in a handover.md. The harness attaches the plan file "
+    "after a compaction while plan mode is on (look for it above); otherwise Read it. Resume from "
+    "its checkpoint section, checking that section's next action against the compaction summary "
+    "first. The plan file is not a handover: do not mark it STALE or rewrite its plan to say it "
+    "was read. The full pre-compaction stretch is in the transcript %(transcript)s. OPEN-WORK.md "
+    "is the standing backlog.\n"
+    "</BITRANOX-COMPACT-RESUME>"
+)
 
 
 def repo_root(cwd) -> Path:
@@ -153,10 +217,15 @@ def fresh_checkpoint(path, asked_at):
     return text
 
 
-def is_checkpoint_name(name) -> bool:
-    """True for `handover.md` and for an improvised `<anything>-handover.md`. PURE."""
-    return name == _CHECKPOINT_NAME or (
-        name.endswith(_IMPROVISED_SUFFIX) and len(name) > len(_IMPROVISED_SUFFIX))
+def is_checkpoint_name(name: str) -> bool:
+    """True for `handover.md` and an improvised `<anything>-handover.md` or `handover-<topic>.md`.
+    PURE."""
+    if name == _CHECKPOINT_NAME:
+        return True
+    if name.endswith(_IMPROVISED_SUFFIX) and len(name) > len(_IMPROVISED_SUFFIX):
+        return True
+    return (name.startswith(_IMPROVISED_PREFIX) and name.endswith(_MD)
+            and len(name) > len(_IMPROVISED_PREFIX) + len(_MD))
 
 
 def has_checkpoint_heading(text) -> bool:
@@ -184,20 +253,67 @@ def build(event, today=None, now=None):
     cwd = event.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
     session = str(event.get("session_id") or "")
     transcript = event.get("transcript_path") or ""
+    shown = transcript or "(unknown)"
     found = []
     if session:
         asked_at = sig.checkpoint_asked_at(session)
-        writes = own_checkpoint_writes(transcript, asked_at) if asked_at > 0 else None
+        record = scan_transcript(transcript, asked_at) if asked_at > 0 else None
+        writes = record.writes if record is not None else None
         touched = sig.read_touched_paths(session)
         found = qualifying(candidates(cwd, touched, writes), asked_at)
         own = [c for c in found if is_own(c[0], c[2], writes, touched)]
         if own:
             path, text, _mtime = max(own, key=lambda c: c[2])
             return resume_context(path, text, today or datetime.date.today().isoformat())
+        own_note = _own_note(record, shown)
+        if own_note:
+            return own_note
     if found:
         return _UNATTRIBUTED % {"listing": listing(found, time.time() if now is None else now),
-                                "transcript": transcript or "(unknown)"}
-    return _NO_CHECKPOINT % {"transcript": transcript or "(unknown)"}
+                                "transcript": shown}
+    return _NO_CHECKPOINT % {"transcript": shown}
+
+
+def _own_note(record: TranscriptRecord | None, shown: str) -> str | None:
+    """The block for a checkpoint this session retired itself, or for one it put in its plan file;
+    None when neither applies. IMPURE (reads)."""
+    if record is None:
+        return None
+    retired = retired_checkpoint(record)
+    if retired is not None:
+        return _RETIRED % {"path": retired, "transcript": shown}
+    if record.plan_writes:
+        plan = max(record.plan_writes, key=lambda p: record.plan_writes[p])
+        return _PLAN % {"path": plan, "transcript": shown}
+    return None
+
+
+def retired_checkpoint(record: TranscriptRecord) -> str | None:
+    """The checkpoint this session wrote after the request and then retired itself, or None.
+    IMPURE (reads).
+
+    Retired means its first line now reads `# STALE` and nothing but this session changed it since
+    its last own write, or it is gone and this session's own Bash call removed or moved it.
+    """
+    retired: list[tuple[float, str]] = []
+    for path, at in record.writes.items():
+        try:
+            mtime = os.path.getmtime(path)
+        except FileNotFoundError:
+            if path in record.removed:
+                retired.append((at, path))
+            continue
+        except OSError:
+            continue
+        if mtime > at + _WRITE_SLACK:
+            continue
+        try:
+            text = Path(path).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if text.lstrip().startswith(_STALE_PREFIX):
+            retired.append((at, path))
+    return max(retired)[1] if retired else None
 
 
 def candidates(cwd, touched, writes):
@@ -259,68 +375,254 @@ def _age(seconds) -> str:
     return f"{minutes // (24 * 60)} d ago"
 
 
-def _norm(path) -> str:
+def _norm(path: object) -> str:
     """An absolute, normalised spelling of `path`, for comparing recorded paths. PURE."""
     return os.path.normpath(os.path.abspath(str(path)))
 
 
-def own_checkpoint_writes(transcript, asked_at):
+#: A decoded transcript record or block: JSON keys to JSON values.
+_Json = dict[str, object]
+
+
+class _Pending(NamedTuple):
+    """A tool call awaiting its result: what kind of change, and to which paths. For a Bash call
+    each path maps to whether the statement removes or moves the file; otherwise to False."""
+
+    kind: str
+    paths: dict[str, bool]
+
+
+@dataclasses.dataclass
+class TranscriptRecord:
+    """What this session's own transcript shows it did to checkpoint and plan files after the save
+    request. Every map is keyed by a normalised path and holds the latest result epoch.
+
+    `writes`: checkpoint files it wrote with Write/Edit/MultiEdit, each kept current by its later
+    Bash calls that name the path and can change it. `removed`: those of them a later own Bash call
+    removed or moved away. `plan_writes`: plan files it wrote. `pending` and `plan_paths` are scan
+    state: tool calls still awaiting their result, and the plan files the harness has named.
+    """
+
+    asked_at: float
+    writes: dict[str, float] = dataclasses.field(default_factory=dict[str, float])
+    removed: set[str] = dataclasses.field(default_factory=set[str])
+    plan_writes: dict[str, float] = dataclasses.field(default_factory=dict[str, float])
+    plan_paths: set[str] = dataclasses.field(default_factory=set[str])
+    pending: dict[str, _Pending] = dataclasses.field(default_factory=dict[str, _Pending])
+
+
+def own_checkpoint_writes(transcript: str, asked_at: float) -> dict[str, float] | None:
     """{path: epoch} of this session's successful checkpoint writes at or after `asked_at`. IMPURE.
 
-    Read from the session's own transcript: a Write/Edit/MultiEdit tool_use naming a checkpoint
-    file, and its tool_result without is_error; the epoch is the result's timestamp, the latest per
-    path. None when the transcript cannot be read. Memory stays flat: one line at a time, holding
-    only the ids of checkpoint writes still awaiting their result.
+    `scan_transcript(...).writes`; None when the transcript cannot be read.
+    """
+    record = scan_transcript(transcript, asked_at)
+    return None if record is None else record.writes
+
+
+def scan_transcript(transcript: str, asked_at: float) -> TranscriptRecord | None:
+    """The TranscriptRecord of this session's transcript, or None when it cannot be read. IMPURE.
+
+    A Write/Edit/MultiEdit tool_use naming a checkpoint file, with its tool_result without
+    is_error at or after `asked_at`, is an own write; the epoch is the result's timestamp. A Bash
+    tool_use whose command can change a checkpoint file it names continues the record of a file
+    already written that way (see WHOSE); its exit status does not matter, since a command chained
+    after the edit can fail while the edit stood. Memory stays flat: one line at a time, holding
+    only checkpoint and plan paths and the ids of their calls still awaiting a result.
     """
     if not transcript:
         return None
-    pending, writes = {}, {}
+    record = TranscriptRecord(asked_at)
     try:
         with open(transcript, encoding="utf-8", errors="replace") as fh:
             for line in fh:
-                if "tool_use" in line:           # also the prefix of every tool_result's tool_use_id
-                    _scan_record(line, pending, writes, asked_at)
+                # "tool_use" is also the prefix of every tool_result's tool_use_id
+                if "tool_use" in line or "planFilePath" in line:
+                    _scan_line(line, record)
     except OSError:
         return None
-    return writes
+    return record
 
 
-def _scan_record(line, pending, writes, asked_at):
-    """Fold one transcript line into `pending` (tool_use id -> path) and `writes`. Mutates both."""
+def _scan_line(line: str, record: TranscriptRecord) -> None:
+    """Fold one transcript line into `record`. Mutates it."""
     try:
-        record = json.loads(line)
+        entry: object = json.loads(line)
     except ValueError:
         return
-    message = record.get("message") if isinstance(record, dict) else None
-    content = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(entry, dict):
+        return
+    entry_map = cast(_Json, entry)
+    _note_plan_file(entry_map, record)
+    message = entry_map.get("message")
+    content = cast(_Json, message).get("content") if isinstance(message, dict) else None
     if not isinstance(content, list):
         return
-    for block in content:
-        if not isinstance(block, dict):
+    cwd = entry_map.get("cwd")
+    for item in cast(list[object], content):
+        if not isinstance(item, dict):
             continue
+        block = cast(_Json, item)
         if block.get("type") == "tool_use":
-            target = _checkpoint_write_target(block)
-            if target:
-                pending[str(block.get("id"))] = target
-        elif block.get("type") == "tool_result" and str(block.get("tool_use_id")) in pending:
-            target = pending.pop(str(block.get("tool_use_id")))
-            at = _epoch(record.get("timestamp"))
-            if not block.get("is_error") and at is not None and at >= asked_at:
-                writes[target] = max(at, writes.get(target, at))
+            _note_tool_use(block, cwd if isinstance(cwd, str) else None, record)
+        elif block.get("type") == "tool_result" and str(block.get("tool_use_id")) in record.pending:
+            pending = record.pending.pop(str(block.get("tool_use_id")))
+            _note_result(pending, bool(block.get("is_error")), _epoch(entry_map.get("timestamp")),
+                         record)
 
 
-def _checkpoint_write_target(block):
-    """The normalised path a Write/Edit tool_use writes, when it names a checkpoint file. PURE."""
+def _note_plan_file(entry: _Json, record: TranscriptRecord) -> None:
+    """Remember the plan file a plan-mode attachment names. Mutates `record`."""
+    attachment = entry.get("attachment")
+    if not isinstance(attachment, dict):
+        return
+    attachment_map = cast(_Json, attachment)
+    if attachment_map.get("type") not in _PLAN_ATTACHMENTS:
+        return
+    path = attachment_map.get("planFilePath")
+    if isinstance(path, str) and path:
+        record.plan_paths.add(_norm(path))
+
+
+def _note_tool_use(block: _Json, cwd: str | None, record: TranscriptRecord) -> None:
+    """Queue a tool call that writes a checkpoint or plan file, or a Bash call that can change a
+    checkpoint file. Mutates `record`."""
+    tid = str(block.get("id"))
+    target = _write_target(block)
+    if target and is_checkpoint_name(Path(target).name):
+        record.pending[tid] = _Pending("write", {target: False})
+    elif target and target in record.plan_paths:
+        record.pending[tid] = _Pending("plan", {target: False})
+    elif block.get("name") == "Bash":
+        tool_input = block.get("input")
+        command = cast(_Json, tool_input).get("command") if isinstance(tool_input, dict) else None
+        changed = bash_targets(command, cwd)
+        if changed:
+            record.pending[tid] = _Pending("bash", changed)
+
+
+def _note_result(pending: _Pending, is_error: bool, at: float | None,
+                 record: TranscriptRecord) -> None:
+    """Fold a queued call's result into `record`. Mutates it."""
+    if at is None or at < record.asked_at:
+        return
+    if pending.kind == "bash":
+        for path, removes in pending.paths.items():
+            if path in record.writes:
+                record.writes[path] = max(at, record.writes[path])
+                if removes:
+                    record.removed.add(path)
+        return
+    if is_error:
+        return
+    into = record.writes if pending.kind == "write" else record.plan_writes
+    for path in pending.paths:
+        into[path] = max(at, into.get(path, at))
+        record.removed.discard(path)
+
+
+def _write_target(block: _Json) -> str | None:
+    """The normalised path a Write/Edit/MultiEdit tool_use writes, or None. PURE."""
     tool_input = block.get("input")
     if block.get("name") not in _WRITE_TOOLS or not isinstance(tool_input, dict):
         return None
-    path = tool_input.get("file_path")
-    if not isinstance(path, str) or not is_checkpoint_name(Path(path).name):
-        return None
-    return _norm(path)
+    path = cast(_Json, tool_input).get("file_path")
+    return _norm(path) if isinstance(path, str) and path else None
 
 
-def _epoch(stamp):
+def bash_targets(command: object, cwd: str | None) -> dict[str, bool]:
+    """{normalised path: removes} of the checkpoint-named files a Bash command can change. PURE
+    apart from the directory checks a `cd` is resolved with.
+
+    Judged per statement, so a read of the checkpoint chained to an edit of another file does not
+    count; a heredoc body (a script fed to an interpreter) is judged whole, against every directory
+    the command's statements ran in. A relative path is resolved against the call's cwd as moved
+    by a preceding `cd`; one built from a variable, or after a `cd` no static read can follow, is
+    skipped. `removes` is True when the statement removes or moves the file.
+    """
+    if not isinstance(command, str) or "handover" not in command:
+        return {}
+    out: dict[str, bool] = {}
+    here: str | None = cwd or None
+    bases: set[str | None] = set()
+    for statement in _statements(shell_text.strip_heredoc_bodies(command)):
+        changed, landing = cast(tuple[bool, str | None],
+                                shell_text.directory_change(statement, here))
+        if changed:
+            here = landing
+            continue
+        if here:
+            bases.add(here)
+        _collect_targets(statement, here, out)
+    lines = command.split("\n")
+    heredocs = cast(list[tuple[int, object, tuple[int, int]]],
+                    list(shell_text.iter_heredocs(command)))
+    for _line, _opener, (start, end) in heredocs:
+        body = "\n".join(lines[start:end])
+        for base in bases or {None}:
+            _collect_targets(body, base, out)
+    return out
+
+
+def _statements(text: str) -> list[str]:
+    """`text` cut at the list and pipe operators (`;`, `&`, `&&`, `||`, `|`, newline) that sit
+    outside quotes and outside a `$(...)` or backtick substitution. PURE.
+
+    shell_text.iter_segments also cuts INSIDE a substitution, which a guard needs and this reader
+    does not: `sed -i "1s/x/$(date +%H:%M)/" handover.md` must stay one statement, or its edit and
+    the path it edits land in different pieces and the call reads as changing nothing.
+    """
+    out: list[str] = []
+    start, depth, quote, i = 0, 0, "", 0
+    while i < len(text):
+        ch = text[i]
+        if quote:
+            # a quoted string is one word whatever it holds, a substitution inside it included
+            if ch == "\\" and quote == '"':
+                i += 1
+            elif ch == quote:
+                quote = ""
+        elif ch == "\\":
+            i += 1
+        elif ch in "'\"`" and not (ch == "`" and depth):
+            quote = ch
+        elif text.startswith("$(", i):
+            depth += 1
+            i += 1
+        elif ch == ")" and depth:
+            depth -= 1
+        elif ch in ";&|\n" and not depth:
+            out.append(text[start:i])
+            start = i + 1
+        i += 1
+    out.append(text[start:])
+    return [s for s in out if s.strip()]
+
+
+def _collect_targets(text: str, base: str | None, out: dict[str, bool]) -> None:
+    """Add the checkpoint files `text` (one statement or script) can change to `out`. Mutates it."""
+    if not _BASH_CHANGES.search(text):
+        return
+    removes = bool(_BASH_REMOVES.search(text))
+    words = cast(list[str], shell_text.argv_for_match(text.strip(), "Bash"))
+    program = next((w for w in words if "=" not in w), "")
+    if os.path.basename(program) in _COPY_PROGRAMS and len(words) > 1:
+        # a copy changes only its destination: `cp handover.md handover.prev.md` reads the file
+        text = words[-1]
+    for match in _BASH_PATH.finditer(text):
+        token = match.group(0)
+        if "$" in token or not is_checkpoint_name(os.path.basename(token)):
+            continue
+        token = os.path.expanduser(token)
+        if not shell_text.is_rooted(token):
+            if not base:
+                continue
+            token = os.path.join(base, token)
+        key = _norm(token)
+        out[key] = out.get(key, False) or removes
+
+
+def _epoch(stamp: object) -> float | None:
     """Epoch seconds of a transcript ISO-8601 timestamp, or None. PURE."""
     try:
         return datetime.datetime.fromisoformat(str(stamp)).timestamp()

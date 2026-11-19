@@ -4,7 +4,9 @@
 A session's sense of elapsed time is unreliable, and a stamp typed from it reads as evidence: a
 later reader takes "17:55" in a handover or backlog as when something happened. Rewriting the rule
 as prose has not stopped it, so a write to OPEN-WORK.md, a handover file or EXECUTION-USER-REVIEW.md
-that adds a same-day HH:MM far from the clock, or ahead of it, gets one line naming both.
+that adds a same-day HH:MM far from the clock, or ahead of it, gets one line naming both. For a
+checkpoint (`handover.md`, `handover-<topic>.md`, `<topic>-handover.md`) that line says to read
+`date` and fix the stamp with the Edit tool rather than a shell edit (see _CHECKPOINT_MESSAGE).
 
 Scope of a NUDGE (additionalContext, exit 0, always): a time quoted from the past (when the user
 said go, when a run ended) is legitimate and indistinguishable here, so nothing is refused, the
@@ -27,7 +29,9 @@ import shell_text
 
 __all__ = ["assess", "main", "new_stamp_problems"]
 
-_DURABLE = re.compile(r"(?:^|/)(?:OPEN-WORK\.md|handover[^/]*\.md|EXECUTION-USER-REVIEW\.md)$", re.IGNORECASE)
+_DURABLE = re.compile(r"(?:^|/)(?:OPEN-WORK\.md|handover[^/]*\.md|[^/]+-handover\.md|EXECUTION-USER-REVIEW\.md)$", re.IGNORECASE)
+# A checkpoint (handover.md, handover-<topic>.md, <topic>-handover.md): its stamp is fixed with Edit.
+_CHECKPOINT = re.compile(r"^handover[^/]*\.md$|^[^/]+-handover\.md$", re.IGNORECASE)
 _DURABLE_IN_TEXT = re.compile(r"OPEN-WORK\.md|handover[^\s'\"/]*\.md|EXECUTION-USER-REVIEW\.md", re.IGNORECASE)
 _STAMP = re.compile(r"(?<![\d:/.-])(?P<hh>[01]\d|2[0-3]):(?P<mm>[0-5]\d)(?::[0-5]\d)?(?P<tz>\s?(?:Z|UTC)\b)?(?![\d:])")
 _ANY_DATE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
@@ -38,6 +42,15 @@ _HORIZON_MINUTES = 90
 _MESSAGE = ("CLOCK CHECK: this writes %s into %s, but the clock reads %s. Stamp a durable record "
             "from `date` in the same command, not from a sense of elapsed time. A time quoted from "
             "the past (when a run ended, when the user said go) is fine: leave it.")
+# For a checkpoint the fix itself matters: the compaction resume attributes a checkpoint to the
+# session by its own Write/Edit calls, and "stamp from `date` in the same command" was read as
+# "sed -i the stamp with $(date)" - 23 of 25 own checkpoints that resumed as unattributed had been
+# re-stamped that way right after this nudge. So the checkpoint wording names the Edit tool.
+_CHECKPOINT_MESSAGE = ("CLOCK CHECK: this writes %s into %s, but the clock reads %s. Run `date` "
+                       "first, then correct the stamp in the checkpoint with the Edit tool - not "
+                       "with sed or another shell edit, since the compaction resume recognises a "
+                       "checkpoint by this session's own Write and Edit calls. A time quoted from "
+                       "the past (when a run ended, when the user said go) is fine: leave it.")
 
 
 def _bad_stamps(text, known, now_local, now_utc):
@@ -133,7 +146,8 @@ def assess(event, now_local=None, now_utc=None):
     if not problems:
         return None
     stamp, clock = problems[0]
-    return _MESSAGE % (stamp, name, clock)
+    message = _CHECKPOINT_MESSAGE if _CHECKPOINT.match(name) else _MESSAGE
+    return message % (stamp, name, clock)
 
 
 def main(raw=None):
