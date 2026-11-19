@@ -77,7 +77,12 @@ _CARGO_CRATE = re.compile(
 # A flag starts a token and has a letter right after its dashes, so go test's `--- FAIL:` and a
 # diff's `- error` line are left alone; a path component touches a separator, so a gcc/MSVC
 # `file.c:3: error:` keeps its keyword, which is separated from the path by `: `.
-_PATH_OR_FLAG = re.compile(r"(?<!\S)--?[A-Za-z][\w-]*(?:=\S*)?|(?<=[/\\])[\w.-]+|[\w.-]+(?=[/\\])")
+# A component before a separator is matched from where its run starts, never from inside it: a
+# start anywhere in a long run rescanned the run from each character. The one place a component
+# began inside a run was right after a flag (`--foo.bar/x`), so the flag alternative now takes that
+# dotted component with it; both were removed before, so the scrubbed text is the same.
+_PATH_OR_FLAG = re.compile(r"(?<!\S)--?[A-Za-z][\w-]*(?:=\S*|\.[\w.-]*(?=[/\\]))?"
+                           r"|(?<=[/\\])[\w.-]+|(?<![\w.-])[\w.-]+(?=[/\\])")
 _BOMS = [(b"\xef\xbb\xbf", "utf-8"), (b"\xff\xfe", "utf-16-le"), (b"\xfe\xff", "utf-16-be")]
 
 Runner = Callable[[Sequence[str]], "tuple[str, int]"]

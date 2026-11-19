@@ -154,7 +154,9 @@ def default_log_path() -> str:
 
 # What a test runner says it RAN. Kept as module constants so the shapes are readable together
 # and a new runner is one line rather than a rewrite of the matcher.
-_CARGO_RUNNING = re.compile(r"^\s*running (\d+) tests?\b", re.MULTILINE)
+# `[^\S\n]*`, not `\s*`: a line start must not absorb the blank lines after it, or every one of
+# a long blank run rescans the rest of the run.
+_CARGO_RUNNING = re.compile(r"^[^\S\n]*running (\d+) tests?\b", re.MULTILINE)
 _PYTEST_SELECTED = re.compile(r"^.*?\b(\d+) selected\b", re.MULTILINE)
 _PYTEST_COLLECTED = re.compile(r"^.*?\bcollected (\d+) items?\b", re.MULTILINE)
 _PYTEST_NO_TESTS = re.compile(r"^.*\bno tests ran\b", re.MULTILINE)
