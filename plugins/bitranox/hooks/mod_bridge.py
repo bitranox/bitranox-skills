@@ -111,7 +111,7 @@ def _backlog_add(inp, cwd):
         _refuse_a_second_backlog(path, inp)
     data = _where(ow.add_item(path, inp.get("rank"), inp.get("origin"), inp.get("what"),
                               inp.get("size"), inp.get("open"), inp.get("next"),
-                              raised=inp.get("raised")), path, cwd)
+                              raised=inp.get("raised")).to_data(), path, cwd)
     if created:
         data["created"] = True
     return data
@@ -119,7 +119,7 @@ def _backlog_add(inp, cwd):
 
 def _backlog_close(inp, cwd):
     path = ow.backlog_path(cwd)
-    return _where(ow.close_item(path, inp.get("rank"), inp.get("reason")), path, cwd)
+    return _where(ow.close_item(path, inp.get("rank"), inp.get("reason")).to_data(), path, cwd)
 
 
 def _optional_text(inp, name):
