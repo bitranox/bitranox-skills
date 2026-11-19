@@ -220,16 +220,21 @@ the success line, abort-and-show on a miss).
 
    `<key>` is `tree-<name of the anchor dir>` and `<ts>` the `YYYYMMDD-HHMM` of the dream id named
    in step 0c (so `tree-notes-20261119-1430` for an anchor dir named `notes`). A backup into a dir
-   that already holds one replaces it with exit 0, so only a new name keeps the earlier backup.
+   that already holds this tree's backup replaces it with exit 0, so only a new name keeps the
+   earlier backup; a dir holding another tree's backup, or a `manifest.json` that cannot be read,
+   is refused (exit 2), since replacing it could destroy that tree's only restore source.
    It copies the anchor's `.claude-memory/` AND each in-scope `CLAUDE.local.md`, and records the
    ORDER-INDEPENDENT manifest of (level, slug, title, pin, hook digest, body digest) tuples that
    step 8 re-derives. Do not
    hand-roll the walk: a gitignore-aware `grep -r` SKIPS the pointer files, and an exact-match
    prune of `.venv` misses `.venv-win` and `venv-<user>`, so vendored copies read as real levels.
-   An empty scope is a REFUSAL, because a manifest of nothing verifies clean against anything.
-   So is an `--out` anywhere inside the knowledge tree (its copied `CLAUDE.local.md` files would
-   read as real levels to the engine, recall and `--check-tree`), or an existing dir that is not
-   an earlier backup.
+   An `--out` anywhere inside the knowledge tree is refused (its copied `CLAUDE.local.md` files
+   would read as real levels to the engine, recall and `--check-tree`), and so is an existing dir
+   that is not an earlier backup. An empty scope is a REFUSAL too, because a manifest of nothing
+   verifies clean against anything; it also means the tree holds no fact this dream could lose
+   (exit 2, `no pointers found in scope`): go on without the backup, write
+   `verify skipped (no pointers before the run)` in step 8, and list each pointer the dream adds
+   at the tree top with its cost.
    Then commit the store's git repo (Durability pass) so the pre-dream state is one `git diff`
    away. Start step 4's `dedup_scan.py` now with `run_in_background`: over a large store it runs
    for minutes, past the foreground Bash limit, and started here it finishes while step 3 reads and
