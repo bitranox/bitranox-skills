@@ -184,6 +184,21 @@ def test_a_cr_ended_topics_line_is_replaced_not_duplicated():
     assert lone.count("TOPICS:") == 1 and "TOPICS: python" in lone
 
 
+@pytest.mark.parametrize("nl", ["\r\n", "\r", "\n"])
+def test_an_added_topics_line_follows_stack_with_the_descriptor_s_own_line_end(nl):
+    """Added after `STACK:`, the new line ends as the descriptor's lines do: a CRLF descriptor
+    gained a bare-LF line, and a CR-only one was read as a single line, so the TOPICS line went to
+    the end instead of after `STACK:`."""
+    scope = nl.join(["WHAT: x", "STACK: y", "CHILDREN:", "- a/: b"])
+    tagged = tp.with_descriptor_topics(scope, ["python"])
+    assert tagged == nl.join(["WHAT: x", "STACK: y", "TOPICS: python", "CHILDREN:", "- a/: b"])
+    assert tp.descriptor_topics(tagged) == ("python",)
+    at_end = tp.with_descriptor_topics(nl.join(["WHAT: x", "STACK: y"]), ["python"])
+    assert at_end == nl.join(["WHAT: x", "STACK: y", "TOPICS: python"])
+    no_stack = tp.with_descriptor_topics(nl.join(["WHAT: x", "PLACE-HERE: z"]), ["python"])
+    assert no_stack == nl.join(["WHAT: x", "PLACE-HERE: z", "TOPICS: python"])
+
+
 def test_the_digest_leaves_out_a_cr_ended_topics_line():
     plain = tp.descriptor_digest("WHAT: x\nSTACK: y")
     assert tp.descriptor_digest("WHAT: x\r\nTOPICS: rust\r\nSTACK: y") == plain

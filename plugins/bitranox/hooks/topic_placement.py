@@ -75,6 +75,7 @@ _TOPIC_RX = re.compile(r"(?=[a-z0-9-]{1,32}\Z)[a-z0-9]+(?:-[a-z0-9]+)*")
 # LF only made such a line invisible, and the TOPICS gate then let a second line through.
 _TOPICS_LINE_RX = re.compile(r"(?m)(?:^|(?<=\r))TOPICS:[ \t]*([^\r\n]*)(?=\r|$)")
 _LINE_END_RX = re.compile(r"\r\n|\r|\n")
+_LINE_END_SPLIT_RX = re.compile(r"(\r\n|\r|\n)")
 
 
 class InvalidTopic(ValueError):
@@ -124,20 +125,22 @@ def descriptor_topics(scope: str) -> tuple[str, ...] | None:
 
 def with_descriptor_topics(scope: str, topics: Iterable[str]) -> str:
     """`scope` with its `TOPICS:` line set. A descriptor without the line gains it after the
-    `STACK:` line, or at the end when it has none; every other line is kept as it is."""
+    `STACK:` line, or at the end when it has none; every other line is kept as it is. A CR ends a
+    line as LF does, and the added line ends as the `STACK:` line does (at the end, it is joined with
+    the descriptor's first line end), so a CRLF or CR-only descriptor keeps one kind of line end."""
     line = "TOPICS: %s" % ", ".join(normalise_topics(topics))
-    text = (scope or "").strip("\n")
+    text = (scope or "").strip("\r\n")
     if _TOPICS_LINE_RX.search(text):
         return _TOPICS_LINE_RX.sub(lambda _m: line, text, count=1)
-    out, placed = [], False
-    for row in text.split("\n") if text else []:
-        out.append(row)
-        if not placed and row.startswith("STACK:"):
-            out.append(line)
-            placed = True
-    if not placed:
-        out.append(line)
-    return "\n".join(out)
+    if not text:
+        return line
+    parts = _LINE_END_SPLIT_RX.split(text)          # row, end, row, end, ..., row
+    nl = parts[1] if len(parts) > 1 else "\n"
+    rows = parts[0::2]
+    for i, row in enumerate(rows):
+        if row.startswith("STACK:") and i + 1 < len(rows):
+            return "".join(parts[:2 * i + 2]) + line + parts[2 * i + 1] + "".join(parts[2 * i + 2:])
+    return text + nl + line
 
 
 def descriptor_digest(scope: str) -> str:

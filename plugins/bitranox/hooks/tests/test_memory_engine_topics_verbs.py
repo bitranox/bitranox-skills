@@ -805,6 +805,16 @@ def test_topics_show_json_reports_an_unusable_file_as_a_json_error(tmp_path, cap
     assert env["ok"] is False and env["command"] == "topics-show" and said in env["error"], out
 
 
+def test_topics_show_json_without_a_list_prints_json_and_still_exits_1(tmp_path, capsys):
+    """A caller that asked for JSON gets JSON on the "no list" exit too: the success shape with no
+    tagger and no topics, so `json.loads` never meets the plain-text sentence."""
+    _anchor, proj = _tree(tmp_path, with_list=False)
+    assert E.main(["topics-show", "--proj", proj, "--json"]) == 1
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == {"tagger": None, "topics": {}}, captured.out
+    assert captured.err == ""
+
+
 def test_topics_show_without_json_still_reports_a_damaged_file_as_plain_text(tmp_path, capsys):
     anchor, proj = _tree(tmp_path)
     topic_store.store_path(anchor).write_bytes(b"{broken")

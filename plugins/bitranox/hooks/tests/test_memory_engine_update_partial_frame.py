@@ -140,6 +140,53 @@ def test_a_bare_managed_key_is_not_removed(fact):
     assert (frame["description"], frame["title"]) == (HOOK, "T")
 
 
+# ---- removing a `metadata:` sub-key -------------------------------------------------------------
+# The same rule one level down: a sub-key named with no value removes the stored one. `type:` is
+# the fact's kind, which --type changes and the lint requires, so a bare `type:` keeps it.
+
+def test_a_bare_skill_sub_key_removes_the_stored_skill(fact):
+    anchor, proj, slug = fact
+    stored = _stored(anchor, slug)
+    emptied = stored.replace("skill: bitranox:compuse-git", "skill:").replace("first", "second")
+    E.add_or_update_entry(proj, title="T", hook=HOOK, body=emptied, slug=slug)
+    after = _stored(anchor, slug)
+    assert E._body_skill(after) == ""
+    assert _yaml_frame(after)["metadata"] == {"type": "feedback"}
+    assert after.endswith("second prose\n")
+
+
+def test_a_bare_skill_sub_key_beside_a_four_space_frame_removes_it(fact):
+    anchor, proj, slug = fact
+    body = "---\nname: x\nmetadata:\n    type: reference\n    skill:\n---\n\nnew prose\n"
+    E.add_or_update_entry(proj, title="T", hook=HOOK, body=body, slug=slug)
+    assert _yaml_frame(_stored(anchor, slug))["metadata"] == {"type": "reference"}
+
+
+def test_an_explicit_skill_wins_over_a_bare_skill_sub_key(fact):
+    anchor, proj, slug = fact
+    emptied = _stored(anchor, slug).replace("skill: bitranox:compuse-git", "skill:")
+    E.add_or_update_entry(proj, title="T", hook=HOOK, body=emptied, slug=slug,
+                          skill="bitranox:compuse-bash")
+    assert E._body_skill(_stored(anchor, slug)) == "bitranox:compuse-bash"
+
+
+def test_a_bare_type_sub_key_keeps_the_stored_kind(fact):
+    anchor, proj, slug = fact
+    emptied = _stored(anchor, slug).replace("type: feedback", "type:")
+    E.add_or_update_entry(proj, title="T", hook=HOOK, body=emptied, slug=slug)
+    assert _yaml_frame(_stored(anchor, slug))["metadata"] == {
+        "type": "feedback", "skill": "bitranox:compuse-git"}
+
+
+def test_a_stored_bare_sub_key_survives_an_unedited_round_trip(fact):
+    anchor, proj, slug = fact
+    stored = _stored(anchor, slug).replace("  skill: bitranox:compuse-git\n",
+                                           "  skill: bitranox:compuse-git\n  marker:\n")
+    us.put_body(str(anchor), slug, stored)
+    E.add_or_update_entry(proj, title="T", hook=HOOK, body=stored, slug=slug)
+    assert _stored(anchor, slug) == stored
+
+
 # ---- a frame whose `metadata:` sub-keys are indented differently from the stored frame ---------
 # A stored frame indents its sub-keys by two spaces; a body handed in may use four. Lines carried
 # over, or inserted, at the other indent made the frontmatter invalid YAML.

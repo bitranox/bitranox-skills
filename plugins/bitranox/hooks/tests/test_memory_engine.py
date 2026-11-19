@@ -343,6 +343,22 @@ def test_add_refuses_slug_collision_across_levels(tmp_path):
     assert got == "setup-notes-2"
 
 
+def test_the_collision_suggestion_skips_a_slug_a_dangling_line_holds(tmp_path):
+    """A line whose body is gone still owns its slug, so add refuses it: the suggestion must not
+    name it, or following the advice is refused in turn."""
+    anchor, proj = _anchored_tree(tmp_path)
+    top = str(tmp_path / "tree")
+    E.add_or_update_entry(top, "Setup notes", "h", body="anchor-level fact")
+    E.add_or_update_entry(top, "Setup notes 2", "h", body="soon dangling")
+    us.body_path(top, "setup-notes-2").unlink()           # the line stays, its body is gone
+    with pytest.raises(E.SlugCollision) as exc:
+        E.add_or_update_entry(proj, "Setup notes", "h", body="different fact, same slug")
+    assert exc.value.suggestion == "setup-notes-3"
+    got = E.add_or_update_entry(proj, "Setup notes", "h", body="different fact, same slug",
+                                slug=exc.value.suggestion)
+    assert got == "setup-notes-3"
+
+
 def test_add_roundtrips_through_the_resolver(tmp_path):
     anchor, proj = _anchored_tree(tmp_path)
     E.add_or_update_entry(proj, "Fact", "h", body="the body")

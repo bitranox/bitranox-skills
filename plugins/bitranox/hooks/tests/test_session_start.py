@@ -1370,6 +1370,29 @@ def test_a_healthy_level_adds_no_self_heal_line(tmp_path, monkeypatch, capsys):
     assert S._self_heal(str(proj)) == ""
 
 
+def test_a_level_the_self_heal_could_not_read_is_named_in_the_session_start_context(
+        tmp_path, monkeypatch, capsys):
+    """heal() lists a level whose files are not UTF-8 under 'unreadable' and leaves it untouched;
+    SessionStart named only 'refused', so that level stayed broken with nothing said."""
+    _anchor, proj = _tree_with_a_refused_level(tmp_path, "TOPICS: python")
+    (proj / "CLAUDE.local.md").write_bytes(b"# Memory index\n\xff\xfe not utf-8\n")
+    assert S._self_heal(str(proj)) != ""
+    rc, out = run_with_stdin(monkeypatch, capsys, make_plugin_root(tmp_path), str(proj))
+    assert rc == 0
+    ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    lines = [ln for ln in ctx.split("\n") if "self-heal could not read" in ln]
+    assert len(lines) == 1, ctx
+    assert str(proj) in lines[0] and "memory_engine.py heal" in lines[0]
+
+
+def test_self_heal_names_at_most_three_unreadable_levels_and_counts_the_rest():
+    unreadable = [("/t/u%d" % i, "why %d" % i) for i in range(4)]
+    line = S._unreadable_heal_line(unreadable)
+    assert line.count("\n") == 0
+    assert "4 level(s)" in line and "/t/u2" in line and "/t/u3" not in line and "1 more" in line
+    assert S._unreadable_heal_line([]) == ""
+
+
 def test_self_heal_names_at_most_three_levels_and_counts_the_rest():
     refused = [("/t/l%d" % i, "why %d" % i) for i in range(5)]
     line = S._refused_heal_line(refused)

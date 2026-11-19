@@ -847,12 +847,14 @@ def _upsert_checked(proj, anchor, slug, title, hook, body, type_, pin, scope_def
                 # with the bare frame. No explicit --type on an UPDATE means "leave the kind alone": re-deriving it from
                 # the slug discards what the stored body already records, and for a prefix-less slug
                 # that always lands on "project".
-                kept_skill = skill or _body_skill(body) or _body_skill(e.body)
                 framed = _framed_body(slug, e.hook, type_ or _body_type(e.body), body)
                 # A body that brings its own frame sets only the keys it names: a partial frame
                 # (`name:` and `topics:`) replaced the stored one whole and dropped `description:`
                 # and `metadata:`, so the body yielded no line and stopped being placed by topic.
                 framed = _with_stored_frame_keys(framed, e.body)
+                # Read after the merge, which already carries the stored skill unless the frame
+                # removed it with a bare `skill:` - falling back to the stored body put it back.
+                kept_skill = skill or _body_skill(framed)
                 # The stored topics line wins over whatever the new body's frame says or lacks:
                 # topics change only through set-topics (`e.body` is still the stored body here).
                 e.body = _with_stored_topics(_with_skill(_synced_frame(slug, e.hook, type_, framed),
@@ -1051,18 +1053,23 @@ def _readable_copies_of(anchor, slug):
     read, or a tree whose level walk fails, contributes no line instead of raising TreeWalkError.
     Only for a question where a missed line costs less than a refused write (see
     `_slug_owned_elsewhere`)."""
+    return [(level, ptr) for level, ptr in _readable_pointers(anchor) if ptr.slug == slug]
+
+
+def _readable_pointers(anchor):
+    """Yield (level, pointer) for every line of every level under `anchor` that can be read; a
+    level that cannot, or a tree whose level walk fails, yields nothing for it."""
     try:
         levels = list(curated_levels_under(anchor))
     except TreeWalkError:
-        return []
-    out = []
+        return
     for level in levels:
         try:
             text = read_store_text(sig.claude_local_md_path(level))
         except TreeWalkError:
             continue
-        out.extend((level, ptr) for ptr in us.parse_pointer_index(text)[1] if ptr.slug == slug)
-    return out
+        for ptr in us.parse_pointer_index(text)[1]:
+            yield level, ptr
 
 
 def _body_description(text):
@@ -1259,15 +1266,61 @@ def _frame_blocks(inner):
     return blocks
 
 
+# The `metadata:` sub-key a bare line never removes: the fact's kind, which `--type` changes and
+# `lint --tree` requires. Like `_MANAGED_FRAME_KEYS` one level up.
+_MANAGED_METADATA_KEYS = frozenset({"type"})
+
+
+def _metadata_sub_blocks(lines):
+    """[(key, lines)] for the sub-keys of a `metadata:` block (its header line left out), each
+    with its own deeper lines; lines before the first sub-key come under key None."""
+    def indent(line):
+        return len(line) - len(line.lstrip(" \t"))
+
+    subs = [line for line in lines[1:] if _FRAME_SUBKEY_RX.match(line)]
+    level = min(map(indent, subs), default=0)
+    blocks = []
+    for line in lines[1:]:
+        m = _FRAME_SUBKEY_RX.match(line)
+        if (m and indent(line) == level) or not blocks:
+            blocks.append((m.group(1) if m and indent(line) == level else None, [line]))
+        else:
+            blocks[-1][1].append(line)
+    return blocks
+
+
+def _bare_sub_block(lines):
+    """True when a metadata sub-block (`_metadata_sub_blocks`) is its key with no value and
+    nothing below it."""
+    return (not lines[0].split(":", 1)[1].strip()
+            and all(not line.strip() for line in lines[1:]))
+
+
+def _metadata_cleared(new_lines, stored_lines):
+    """The sub-keys the new `metadata:` block removes (a bare sub-key against a stored one with a
+    value, never a `_MANAGED_METADATA_KEYS` one) and those it hands back to the stored value (a
+    bare managed one); see `_with_stored_frame_keys`."""
+    stored = {k: b for k, b in _metadata_sub_blocks(stored_lines) if k is not None}
+    bare = {k for k, b in _metadata_sub_blocks(new_lines) if k is not None and _bare_sub_block(b)}
+    valued = {k for k in bare if k in stored and not _bare_sub_block(stored[k])}
+    return valued - _MANAGED_METADATA_KEYS, valued & _MANAGED_METADATA_KEYS
+
+
 def _merged_metadata(new_lines, stored_lines):
     """The `metadata:` block `new_lines` with each sub-key line of `stored_lines` it does not set
     appended (a sub-key's own continuation lines come with it), re-indented to the new block's
     sub-key indent: the two frames may indent differently (a stored two against a handed-in
-    four), and a carried line at the stored indent made the frame invalid YAML."""
+    four), and a carried line at the stored indent made the frame invalid YAML. A bare sub-key
+    the stored block gives a value removes it; a bare `type:` keeps the stored kind instead."""
     def indent(line):
         return len(line) - len(line.lstrip(" \t"))
 
-    have = {m.group(1) for m in map(_FRAME_SUBKEY_RX.match, new_lines[1:]) if m}
+    removed, restored = _metadata_cleared(new_lines, stored_lines)
+    if removed or restored:
+        dropped = removed | restored
+        new_lines = new_lines[:1] + [line for key, block in _metadata_sub_blocks(new_lines)
+                                     if key not in dropped for line in block]
+    have = {m.group(1) for m in map(_FRAME_SUBKEY_RX.match, new_lines[1:]) if m} | removed
     subs = [line for line in stored_lines[1:] if _FRAME_SUBKEY_RX.match(line)]
     level = min(map(indent, subs), default=0)    # a sub-key's own indent; deeper is its value
     new_subs = [line for line in new_lines[1:] if _FRAME_SUBKEY_RX.match(line)]
@@ -1317,8 +1370,11 @@ def _with_stored_frame_keys(text, stored):
     So leaving a key out never removes it. A key the engine does not manage (any but
     `_MANAGED_FRAME_KEYS`) is removed by naming it with no value: a bare `stale:` line, nothing
     below it, against a stored `stale:` that has a value. It is the only route, since the
-    store-edit-guard denies a hand edit of the body. A stored bare key handed back bare stays, so an
-    unedited round trip (`factedit.py show --body`, then `apply --body-file`) changes nothing."""
+    store-edit-guard denies a hand edit of the body. The same holds one level down: a bare
+    `metadata:` sub-key (`skill:`) removes the stored one, except `type:`, the fact's kind, which
+    a bare line leaves as stored (`--type` changes it). A stored bare key handed back bare stays,
+    so an unedited round trip (`factedit.py show --body`, then `apply --body-file`) changes
+    nothing."""
     head, m = _frontmatter(text)
     _shead, sm = _frontmatter(stored)
     if m is None or sm is None:
@@ -1402,9 +1458,13 @@ def _entry_from_body(anchor, slug):
 
 
 def _free_slug(anchor, slug):
-    """The first free `<slug>-N` variant in this tree (the collision suggestion)."""
+    """The first free `<slug>-N` variant in this tree (the collision suggestion): no body file
+    holds it and no level points at it. A line whose body is gone still owns its slug (see
+    `_slug_owned_elsewhere`), so a suggestion checked against body files alone was refused in turn.
+    The line walk is best effort, like the one a new slug gets: an unreadable level holds none."""
+    pointed = {ptr.slug for _level, ptr in _readable_pointers(anchor)}
     n = 2
-    while us.body_path(anchor, "%s-%d" % (slug, n)).is_file():
+    while ("%s-%d" % (slug, n)) in pointed or us.body_path(anchor, "%s-%d" % (slug, n)).is_file():
         n += 1
     return "%s-%d" % (slug, n)
 
@@ -4354,7 +4414,9 @@ def _topic_read(args):
         return 1 if stale else 0
     data = topic_store.load(_anchor(args.proj))
     if data is None:
-        print("no topic list in this tree")
+        # a caller that asked for JSON parses stdout on every exit: the success shape, emptied
+        print(json.dumps({"tagger": None, "topics": {}}, sort_keys=True) if args.as_json
+              else "no topic list in this tree")
         return 1
     if args.as_json:
         print(json.dumps({"tagger": data.tagger.value, "topics": dict(data.topics)}, sort_keys=True))
