@@ -21,7 +21,7 @@ import os
 import sys
 
 from shell_text import (
-    argv_for_match, basename_for_tool, directory_change, is_rooted, is_shell_tool, iter_segments,
+    argv_for_match, basename_for_tool, directory_change, is_shell_tool, iter_segments, resolve_path,
     statement_program, strip_heredoc_bodies,
 )
 
@@ -52,7 +52,7 @@ def _is_bmk_makefile(directory):
         return False
 
 
-def _make_dir_and_targets(args, here):
+def _make_dir_and_targets(args, here, tool_name="Bash"):
     """(directory make runs in, its targets) from the words after `make`."""
     directory, targets, skip = here, [], False
     for i, word in enumerate(args):
@@ -61,21 +61,21 @@ def _make_dir_and_targets(args, here):
             continue
         if word in ("-C", "--directory", "-f", "--file", "--makefile"):
             if word in ("-C", "--directory") and i + 1 < len(args):
-                directory = _join(here, args[i + 1])
+                directory = _join(here, args[i + 1], tool_name)
             skip = True
         elif word.startswith("--directory="):
-            directory = _join(here, word.split("=", 1)[1])
+            directory = _join(here, word.split("=", 1)[1], tool_name)
         elif word.startswith("-C") and len(word) > 2:
-            directory = _join(here, word[2:])
+            directory = _join(here, word[2:], tool_name)
         elif not word.startswith("-") and "=" not in word:
             targets.append(word)
     return directory, targets
 
 
-def _join(here, target):
-    if is_rooted(target):   # not os.path.isabs: from 3.13 on Windows it rejects /work/x
-        return target
-    return os.path.join(here, target) if here else None
+def _join(here, target, tool_name):
+    # `resolve_path`, not os.path.isabs: from 3.13 on Windows isabs rejects /work/x, and a Git Bash
+    # drive path (`make -C /c/repo`) is drive C there, not C:\c\repo.
+    return resolve_path(target, here, tool_name)
 
 
 def _runs_bmk(tokens, idx, tool_name):
@@ -107,7 +107,7 @@ def notice(command, cwd, tool_name=None):
             return _NOTICE
         if basename_for_tool(tokens[idx], tool_name or "Bash") != "make":
             continue
-        directory, targets = _make_dir_and_targets(tokens[idx + 1:], here)
+        directory, targets = _make_dir_and_targets(tokens[idx + 1:], here, tool_name or "Bash")
         if any(t in _GATE_TARGETS for t in targets) and _is_bmk_makefile(directory):
             return _NOTICE
     return None

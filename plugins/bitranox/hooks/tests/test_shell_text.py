@@ -705,62 +705,62 @@ def test_strip_leading_cd_keeps_a_bare_cd_with_nothing_after_it():
 
 def test_git_verb_dir_follows_cd_and_dash_c_to_the_first_matching_verb():
     verbs = S.GATED_GIT_VERBS
-    moved = os.path.normpath("/r")        # a path the walk resolved is normalised: `\r` on Windows
+    moved = os.path.normpath("/repo")        # a path the walk resolved is normalised: `\repo` on Windows
     assert S.git_verb_dir("git push", "/s", verbs) == "/s"
-    assert S.git_verb_dir("cd /r && git push origin master", "/s", verbs) == moved
-    assert S.git_verb_dir("git -C /r push", "/s", verbs) == moved
+    assert S.git_verb_dir("cd /repo && git push origin master", "/s", verbs) == moved
+    assert S.git_verb_dir("git -C /repo push", "/s", verbs) == moved
     # only a cd BEFORE the verb moves it; a later one belongs to the next statement
-    assert S.git_verb_dir("git commit -m x && cd /r && git push", "/s", verbs) == "/s"
+    assert S.git_verb_dir("git commit -m x && cd /repo && git push", "/s", verbs) == "/s"
     # a verb outside the set is not where the walk stops
-    assert S.git_verb_dir("git -C /a status; cd /r; git commit -m x", "/s", verbs) == moved
+    assert S.git_verb_dir("git -C /alpha status; cd /repo; git commit -m x", "/s", verbs) == moved
 
 
 def test_git_verb_dir_refuses_what_the_text_cannot_name():
     verbs = S.GATED_GIT_VERBS
     assert S.git_verb_dir('cd "$R" && git push', "/s", verbs) is None
     assert S.git_verb_dir("popd; git commit -m x", "/s", verbs) is None
-    assert S.git_verb_dir("git --git-dir=/r/.git commit -m x", "/s", verbs) is None
-    assert S.git_verb_dir("GIT_DIR=/r/.git git push", "/s", verbs) is None
+    assert S.git_verb_dir("git --git-dir=/repo/.git commit -m x", "/s", verbs) is None
+    assert S.git_verb_dir("GIT_DIR=/repo/.git git push", "/s", verbs) is None
     assert S.git_verb_dir("git status", "/s", verbs) is None
 
 
 def test_git_verb_dir_follows_a_variable_the_same_command_assigned_literally():
     """Measured 2026-10-19: `W=<worktree>; cd "$W" && git commit` was read as unreadable, so the
     commit gate judged the SESSION's repository and blocked a commit that repo was not making."""
-    verbs, moved = S.GATED_GIT_VERBS, os.path.normpath("/r")
-    assert S.git_verb_dir('W=/r; cd "$W" && git commit -m x', "/s", verbs) == moved
-    assert S.git_verb_dir("W=/r && cd $W && git push", "/s", verbs) == moved
-    assert S.git_verb_dir('export W=/r; cd "${W}" && git commit -m x', "/s", verbs) == moved
-    assert S.git_verb_dir('W=/r; git -C "$W" commit -m x', "/s", verbs) == moved
-    assert S.git_verb_dir('W=/r; cd "$W/sub" && git commit -m x', "/s", verbs) == os.path.normpath("/r/sub")
-    assert S.git_verb_dir('W="/a b"; cd "$W" && git commit -m x', "/s", verbs) == os.path.normpath("/a b")
+    verbs, moved = S.GATED_GIT_VERBS, os.path.normpath("/repo")
+    assert S.git_verb_dir('W=/repo; cd "$W" && git commit -m x', "/s", verbs) == moved
+    assert S.git_verb_dir("W=/repo && cd $W && git push", "/s", verbs) == moved
+    assert S.git_verb_dir('export W=/repo; cd "${W}" && git commit -m x', "/s", verbs) == moved
+    assert S.git_verb_dir('W=/repo; git -C "$W" commit -m x', "/s", verbs) == moved
+    assert S.git_verb_dir('W=/repo; cd "$W/sub" && git commit -m x', "/s", verbs) == os.path.normpath("/repo/sub")
+    assert S.git_verb_dir('W="/alpha b"; cd "$W" && git commit -m x', "/s", verbs) == os.path.normpath("/alpha b")
 
 
 def test_git_verb_dir_keeps_a_leading_value_for_the_whole_command():
     """The value is not forgotten after the first statement that uses it: `git -C "$R"` on two
-    statements, or behind an unrelated one, commits in /r."""
-    verbs, moved = S.GATED_GIT_VERBS, os.path.normpath("/r")
-    assert S.git_verb_dir('R=/r; git -C "$R" add x && git -C "$R" commit -m y', "/s", verbs) == moved
-    assert S.git_verb_dir('R=/r; echo hi; git -C "$R" commit -m y', "/s", verbs) == moved
-    assert S.git_verb_dir('R=/r\ngit -C "$R" status\ngit -C "$R" push', "/s", verbs) == moved
+    statements, or behind an unrelated one, commits in /repo."""
+    verbs, moved = S.GATED_GIT_VERBS, os.path.normpath("/repo")
+    assert S.git_verb_dir('R=/repo; git -C "$R" add x && git -C "$R" commit -m y', "/s", verbs) == moved
+    assert S.git_verb_dir('R=/repo; echo hi; git -C "$R" commit -m y', "/s", verbs) == moved
+    assert S.git_verb_dir('R=/repo\ngit -C "$R" status\ngit -C "$R" push', "/s", verbs) == moved
     # the name inside another word is not a rebinding: `%B`, `-B`
-    assert S.git_verb_dir('B=/r; git -C $B commit -q && git -C $B log -1 --format=%B', "/s", verbs) == moved
-    assert S.git_verb_dir('B=/r; git -C $B status -B; git -C $B push', "/s", verbs) == moved
+    assert S.git_verb_dir('B=/repo; git -C $B commit -q && git -C $B log -1 --format=%B', "/s", verbs) == moved
+    assert S.git_verb_dir('B=/repo; git -C $B status -B; git -C $B push', "/s", verbs) == moved
 
 
 @pytest.mark.parametrize("command", [
     # a later statement could rebind the name without the text spelling it
-    'R=/r; source ./env; git -C "$R" commit -m y',
-    'R=/r; . ./env; git -C "$R" commit -m y',
-    'R=/r; eval "$X"; git -C "$R" commit -m y',
-    'R=/r; if true; then source ./env; fi; git -C "$R" commit -m y',
+    'R=/repo; source ./env; git -C "$R" commit -m y',
+    'R=/repo; . ./env; git -C "$R" commit -m y',
+    'R=/repo; eval "$X"; git -C "$R" commit -m y',
+    'R=/repo; if true; then source ./env; fi; git -C "$R" commit -m y',
     # the name appears as a bare word later: rebinding or not, it is dropped
-    'R=/r; f() { R=/a; }; f; git -C "$R" commit -m y',
-    'R=/r; echo R; git -C "$R" commit -m y',
-    'R=/r; x=`R=/a`; git -C "$R" commit -m y',
-    'R=/r; declare "R=/a"; git -C "$R" commit -m y',
-    'R=/r; read -r R < f; git -C "$R" commit -m y',
-    'R=/r; printf -v R %s /a; git -C "$R" commit -m y',
+    'R=/repo; f() { R=/alpha; }; f; git -C "$R" commit -m y',
+    'R=/repo; echo R; git -C "$R" commit -m y',
+    'R=/repo; x=`R=/alpha`; git -C "$R" commit -m y',
+    'R=/repo; declare "R=/alpha"; git -C "$R" commit -m y',
+    'R=/repo; read -r R < f; git -C "$R" commit -m y',
+    'R=/repo; printf -v R %s /alpha; git -C "$R" commit -m y',
 ])
 def test_git_verb_dir_drops_a_kept_value_the_rest_could_rebind(command):
     assert S.git_verb_dir(command, "/s", S.GATED_GIT_VERBS) is None
@@ -771,43 +771,43 @@ def test_git_verb_dir_does_not_trust_a_variable_it_cannot_know():
     # the value itself is not static
     assert S.git_verb_dir('W=$(mktemp -d); cd "$W" && git commit -m x', "/s", verbs) is None
     # a later assignment the text cannot read replaces the literal one
-    assert S.git_verb_dir('W=/r; W=$(pwd); cd "$W" && git commit -m x', "/s", verbs) is None
-    assert S.git_verb_dir('W=/r; W=`pwd`; cd "$W" && git commit -m x', "/s", verbs) is None
+    assert S.git_verb_dir('W=/repo; W=$(pwd); cd "$W" && git commit -m x', "/s", verbs) is None
+    assert S.git_verb_dir('W=/repo; W=`pwd`; cd "$W" && git commit -m x', "/s", verbs) is None
     # the segmenter cuts `W=$(...)` at the substitution, leaving `W=` or `W="`; neither is the value
     assert S.git_verb_dir('W=$(mktemp -d); cd "$W/sub" && git commit -m x', "/s", verbs) is None
     assert S.git_verb_dir('W="$(pwd)"; cd "$W" && git commit -m x', "/s", verbs) is None
     # a prefix assignment sets the variable for that one command, never for the shell after it
-    assert S.git_verb_dir('W=/r true; cd "$W" && git commit -m x', "/s", verbs) is None
+    assert S.git_verb_dir('W=/repo true; cd "$W" && git commit -m x', "/s", verbs) is None
     # assigned AFTER the cd, so the cd still reads the inherited (unknown) value
-    assert S.git_verb_dir('cd "$W" && W=/r && git commit -m x', "/s", verbs) is None
+    assert S.git_verb_dir('cd "$W" && W=/repo && git commit -m x', "/s", verbs) is None
     # never assigned at all: an inherited variable stays unknown
     assert S.git_verb_dir('cd "$HOME/r" && git commit -m x', "/s", verbs) is None
 
 
 @pytest.mark.parametrize("command", [
     # the assignment may not run, or runs in another shell
-    'W=/b; false && W=/a; cd "$W"; git commit -m x',
-    'W=/b; true || W=/a; cd "$W"; git commit -m x',
-    'W=/b; ( W=/a ); cd "$W"; git commit -m x',
-    'W=/b; W=/a | true; cd "$W"; git commit -m x',
-    'W=/b; W=/a & cd "$W"; git commit -m x',
-    'W=/b; if false; then\n W=/a\nfi\ncd "$W"; git commit -m x',
-    'W=/b; x=$(W=/a); cd "$W"; git commit -m x',
+    'W=/beta; false && W=/alpha; cd "$W"; git commit -m x',
+    'W=/beta; true || W=/alpha; cd "$W"; git commit -m x',
+    'W=/beta; ( W=/alpha ); cd "$W"; git commit -m x',
+    'W=/beta; W=/alpha | true; cd "$W"; git commit -m x',
+    'W=/beta; W=/alpha & cd "$W"; git commit -m x',
+    'W=/beta; if false; then\n W=/alpha\nfi\ncd "$W"; git commit -m x',
+    'W=/beta; x=$(W=/alpha); cd "$W"; git commit -m x',
     # a later statement may reassign or unset the name in a form nothing here reads
-    'W=/b; declare W=/a; cd "$W"; git commit -m x',
-    'W=/b; read W <<< /a; cd "$W"; git commit -m x',
-    'W=/a; W+=/sub; cd "$W"; git commit -m x',
-    'W=/a; unset W; cd "$W"; git commit -m x',
+    'W=/beta; declare W=/alpha; cd "$W"; git commit -m x',
+    'W=/beta; read W <<< /alpha; cd "$W"; git commit -m x',
+    'W=/alpha; W+=/sub; cd "$W"; git commit -m x',
+    'W=/alpha; unset W; cd "$W"; git commit -m x',
     # the shell would not expand it to exactly the value
-    "W=/a; cd '$W'; git commit -m x",
-    'W=/a; cd \\$W; git commit -m x',
-    "W='/a b'; cd $W; git commit -m x",
+    "W=/alpha; cd '$W'; git commit -m x",
+    'W=/alpha; cd \\$W; git commit -m x',
+    "W='/alpha b'; cd $W; git commit -m x",
     'W=/[a]; cd $W; git commit -m x',
     'W=/x:~/y; cd "$W"; git commit -m x',
     # a relative value, which CDPATH can redirect
     'W=sub; cd "$W"; git commit -m x',
     # a continued line makes the assignment a prefix of the cd
-    'W=/a\\\ncd "$W"; git commit -m x',
+    'W=/alpha\\\ncd "$W"; git commit -m x',
 ])
 def test_git_verb_dir_never_reads_a_variable_it_cannot_be_sure_of(command):
     """Adversarial review 2026-10-19 found ~40 commands where following any assignment anywhere
@@ -817,53 +817,53 @@ def test_git_verb_dir_never_reads_a_variable_it_cannot_be_sure_of(command):
 
 
 def test_git_verb_dir_follows_variables_only_in_bash():
-    assert S.git_verb_dir('W=/r; cd "$W"; git commit -m x', "/s", S.GATED_GIT_VERBS, "PowerShell") is None
+    assert S.git_verb_dir('W=/repo; cd "$W"; git commit -m x', "/s", S.GATED_GIT_VERBS, "PowerShell") is None
 
 
 def test_a_backgrounded_or_piped_cd_does_not_move_the_next_statement():
     """`cd x & git commit` runs the cd in a subshell, so git runs where the command started."""
     verbs = S.GATED_GIT_VERBS
-    assert S.git_verb_dir("cd /r & git commit -m x", "/s", verbs) == "/s"
-    assert S.git_verb_dir("cd /r | cat; git commit -m x", "/s", verbs) == "/s"
-    assert S.git_verb_dir('W=/r; cd "$W" & git commit -m x', "/s", verbs) == "/s"
-    assert S.git_verb_dir("cd /r || exit; git commit -m x", "/s", verbs) == os.path.normpath("/r")
+    assert S.git_verb_dir("cd /repo & git commit -m x", "/s", verbs) == "/s"
+    assert S.git_verb_dir("cd /repo | cat; git commit -m x", "/s", verbs) == "/s"
+    assert S.git_verb_dir('W=/repo; cd "$W" & git commit -m x', "/s", verbs) == "/s"
+    assert S.git_verb_dir("cd /repo || exit; git commit -m x", "/s", verbs) == os.path.normpath("/repo")
 
 
-_AT_R, _AT_A = os.path.normpath("/r"), os.path.normpath("/a")
+_AT_R, _AT_A = os.path.normpath("/repo"), os.path.normpath("/alpha")
 
 
 @pytest.mark.parametrize("command, lands", [
     # a cd inside a subshell is undone when the subshell closes (OPEN-WORK [650])
-    ("(cd /r); git commit -m x", "/s"),
-    ("( cd /r ) && git push", "/s"),
-    ("x=$(cd /r; pwd); git commit -m x", "/s"),
-    ("echo `cd /r`; git commit -m x", "/s"),
-    ("diff <(cd /r; ls) x; git commit -m x", "/s"),
-    ("(cd /a; (cd /b); git commit -m x)", _AT_A),
+    ("(cd /repo); git commit -m x", "/s"),
+    ("( cd /repo ) && git push", "/s"),
+    ("x=$(cd /repo; pwd); git commit -m x", "/s"),
+    ("echo `cd /repo`; git commit -m x", "/s"),
+    ("diff <(cd /repo; ls) x; git commit -m x", "/s"),
+    ("(cd /alpha; (cd /beta); git commit -m x)", _AT_A),
     # inside the subshell the cd still holds, and a cd outside one still moves
-    ("(cd /r && git commit -m x)", _AT_R),
-    ("cd /r && (git commit -m x)", _AT_R),
-    ("(cd /a); cd /r; git commit -m x", _AT_R),
+    ("(cd /repo && git commit -m x)", _AT_R),
+    ("cd /repo && (git commit -m x)", _AT_R),
+    ("(cd /alpha); cd /repo; git commit -m x", _AT_R),
     # arithmetic and quoted parentheses open no subshell that a cd could be in
-    ("echo $((1+2)); cd /r; git commit -m x", _AT_R),
-    ("cd /r; git commit -m 'fix (x)'", _AT_R),
+    ("echo $((1+2)); cd /repo; git commit -m x", _AT_R),
+    ("cd /repo; git commit -m 'fix (x)'", _AT_R),
     # braces group in the SAME shell, so the cd persists
-    ("{ cd /r; }; git commit -m x", _AT_R),
+    ("{ cd /repo; }; git commit -m x", _AT_R),
 ])
 def test_git_verb_dir_undoes_a_cd_made_inside_a_subshell(command, lands):
     assert S.git_verb_dir(command, "/s", S.GATED_GIT_VERBS) == lands
 
 
 @pytest.mark.parametrize("command", [
-    "(cd /r && files=(a b) && git commit -m x)",
-    "(cd /r; a+=(z); git commit -m x)",
-    "x=$(cd /r; a=(x); git commit -m x)",
-    "(cd /r; f() { :; }; git commit -m x)",
-    "(cd /r; echo ${x:-(a)}; git commit -m x)",
-    "(cd /r; ls !(x) >/dev/null; git commit -m x)",
-    "(cd /r; [[ x == @(x|y) ]] && git commit -m x)",
-    "(cd /r; echo a\\); git commit -m x)",
-    "(cd /r; echo ')'; git commit -m x)",
+    "(cd /repo && files=(a b) && git commit -m x)",
+    "(cd /repo; a+=(z); git commit -m x)",
+    "x=$(cd /repo; a=(x); git commit -m x)",
+    "(cd /repo; f() { :; }; git commit -m x)",
+    "(cd /repo; echo ${x:-(a)}; git commit -m x)",
+    "(cd /repo; ls !(x) >/dev/null; git commit -m x)",
+    "(cd /repo; [[ x == @(x|y) ]] && git commit -m x)",
+    "(cd /repo; echo a\\); git commit -m x)",
+    "(cd /repo; echo ')'; git commit -m x)",
 ])
 def test_a_close_paren_that_ends_no_subshell_keeps_the_subshell_open(command):
     """Adversarial review: an array, f(), ${x:-(a)} and extglob send only their `)` to the gap, and
@@ -873,11 +873,11 @@ def test_a_close_paren_that_ends_no_subshell_keeps_the_subshell_open(command):
 
 
 @pytest.mark.parametrize("command", [
-    "(cd /r; case a in a) ;; esac; git commit -m x)",
-    "(case a in a) cd /r;; esac); git commit -m x",
-    "x=$(case a in a) cd /r;; esac); git commit -m x",
-    "(cd /r; : # )\ngit commit -m x)",
-    "(cd /r # )\n); git commit -m x",
+    "(cd /repo; case a in a) ;; esac; git commit -m x)",
+    "(case a in a) cd /repo;; esac); git commit -m x",
+    "x=$(case a in a) cd /repo;; esac); git commit -m x",
+    "(cd /repo; : # )\ngit commit -m x)",
+    "(cd /repo # )\n); git commit -m x",
 ])
 def test_a_case_pattern_inside_or_around_a_subshell_gives_up(command):
     """A case pattern's `)`, or one inside a comment, looks like a subshell closer: None, never a guess."""
@@ -885,16 +885,16 @@ def test_a_case_pattern_inside_or_around_a_subshell_gives_up(command):
 
 
 @pytest.mark.parametrize("command", [
-    "case a in a) cd /r;; esac; git commit -m x",
-    "case a in a) cd /r ;; esac\ngit commit -m x",
-    "case a in\n  a)\n    cd /r\n    ;;\nesac\ngit commit -m x",
-    "case $x in a) echo;; b) pushd /r;; esac && git push",
-    "f() { cd /r; }; f; git commit -m x",
-    "f() { cd /r; }\nf\ngit commit -m x",
-    "f () {\n  cd /r\n}\nf && git push",
-    "function f { cd /r; }; f && git commit -m x",
-    "f() { cd /r; git commit -m x; }; f",
-    "f() { if true; then { cd /r; }; fi; }; f; git commit -m x",
+    "case a in a) cd /repo;; esac; git commit -m x",
+    "case a in a) cd /repo ;; esac\ngit commit -m x",
+    "case a in\n  a)\n    cd /repo\n    ;;\nesac\ngit commit -m x",
+    "case $x in a) echo;; b) pushd /repo;; esac && git push",
+    "f() { cd /repo; }; f; git commit -m x",
+    "f() { cd /repo; }\nf\ngit commit -m x",
+    "f () {\n  cd /repo\n}\nf && git push",
+    "function f { cd /repo; }; f && git commit -m x",
+    "f() { cd /repo; git commit -m x; }; f",
+    "f() { if true; then { cd /repo; }; fi; }; f; git commit -m x",
 ])
 def test_a_case_arm_or_a_called_function_holding_a_cd_is_unknown(command):
     """Which case arm runs, and what a function body does when called, is not in the walk: None,
@@ -903,20 +903,20 @@ def test_a_case_arm_or_a_called_function_holding_a_cd_is_unknown(command):
 
 
 @pytest.mark.parametrize("command", [
-    "if false; then cd /r; fi; git commit -m x",
-    "if false\nthen\n  cd /r\nfi\ngit commit -m x",
-    "if test -d x; then echo; else cd /r; fi && git push",
-    "if a; then echo; elif b; then pushd /r; fi; git commit -m x",
-    "if a; then if b; then cd /r; fi; fi; git commit -m x",
-    "while false; do cd /r; done; git commit -m x",
-    "while read d\ndo\n  cd /r\ndone < list\ngit commit -m x",
-    "until true; do cd /r; done; git commit -m x",
-    "for d in $(ls none); do cd /r; done; git commit -m x",
-    "while true; do git commit -m x; cd /r; done",
-    "if c; then cd /r; else git commit -m x; fi",
-    "if a; then :; elif cd /r; then :; fi; git commit -m x",
-    "while cd /r; do :; done; git commit -m x",
-    "if a; then if cd /r; then :; fi; fi; git commit -m x",
+    "if false; then cd /repo; fi; git commit -m x",
+    "if false\nthen\n  cd /repo\nfi\ngit commit -m x",
+    "if test -d x; then echo; else cd /repo; fi && git push",
+    "if a; then echo; elif b; then pushd /repo; fi; git commit -m x",
+    "if a; then if b; then cd /repo; fi; fi; git commit -m x",
+    "while false; do cd /repo; done; git commit -m x",
+    "while read d\ndo\n  cd /repo\ndone < list\ngit commit -m x",
+    "until true; do cd /repo; done; git commit -m x",
+    "for d in $(ls none); do cd /repo; done; git commit -m x",
+    "while true; do git commit -m x; cd /repo; done",
+    "if c; then cd /repo; else git commit -m x; fi",
+    "if a; then :; elif cd /repo; then :; fi; git commit -m x",
+    "while cd /repo; do :; done; git commit -m x",
+    "if a; then if cd /repo; then :; fi; fi; git commit -m x",
 ])
 def test_a_cd_inside_an_if_or_loop_block_is_unknown(command):
     """OPEN-WORK [810]: a branch may never run and a loop body may run zero or many times, so a cd in
@@ -927,18 +927,18 @@ def test_a_cd_inside_an_if_or_loop_block_is_unknown(command):
 @pytest.mark.parametrize("command, lands", [
     # a block without a cd changes nothing, and neither does a cd before or after the block
     ("if true; then echo x; fi; git commit -m x", "/s"),
-    ("cd /r; if a; then echo; fi; git commit -m x", _AT_R),
-    ("if a; then echo; fi; cd /r; git commit -m x", _AT_R),
-    ("while read l; do echo $l; done < f; cd /r && git push", _AT_R),
+    ("cd /repo; if a; then echo; fi; git commit -m x", _AT_R),
+    ("if a; then echo; fi; cd /repo; git commit -m x", _AT_R),
+    ("while read l; do echo $l; done < f; cd /repo && git push", _AT_R),
     # `if` and `done` count only as keywords leading a statement, never as an argument
-    ("echo if; cd /r; git commit -m x", _AT_R),
-    ("echo done; cd /r; git commit -m x", _AT_R),
+    ("echo if; cd /repo; git commit -m x", _AT_R),
+    ("echo done; cd /repo; git commit -m x", _AT_R),
     # an `if`'s own condition runs whenever the `if` is reached, like any unguarded cd
-    ("if cd /r; then :; fi; git commit -m x", _AT_R),
-    ("if ! cd /r; then exit 1; fi\ngit push", _AT_R),
+    ("if cd /repo; then :; fi; git commit -m x", _AT_R),
+    ("if ! cd /repo; then exit 1; fi\ngit push", _AT_R),
     # a verb in a loop holds its answer when no cd follows it inside the loop
-    ("cd /r; while read b; do git push origin $b; done < list", _AT_R),
-    ("for b in a c; do git push origin $b; done; cd /a", "/s"),
+    ("cd /repo; while read b; do git push origin $b; done < list", _AT_R),
+    ("for b in a c; do git push origin $b; done; cd /alpha", "/s"),
 ])
 def test_control_an_if_or_loop_block_without_a_cd_keeps_the_walk(command, lands):
     assert S.git_verb_dir(command, "/s", S.GATED_GIT_VERBS) == lands
@@ -946,40 +946,40 @@ def test_control_an_if_or_loop_block_without_a_cd_keeps_the_walk(command, lands)
 
 @pytest.mark.parametrize("command, lands", [
     # a function body runs only when called, so its cd does not move a statement after the definition
-    ("f() {\n  cd /r\n}\ngit commit -m x", "/s"),
-    ("f() { cd /r; }; git commit -m x", "/s"),
-    ("f() { cd /r; }; git commit -m x; f", "/s"),
+    ("f() {\n  cd /repo\n}\ngit commit -m x", "/s"),
+    ("f() { cd /repo; }; git commit -m x", "/s"),
+    ("f() { cd /repo; }; git commit -m x; f", "/s"),
     # a case or function without a cd changes nothing
     ("case a in a) echo x;; esac; git commit -m x", "/s"),
     ("f() { echo hi; }; f; git commit -m x", "/s"),
-    ("cd /r; case a in a) echo;; esac; git commit -m x", _AT_R),
-    ("f() { echo hi; }; cd /r; f; git commit -m x", _AT_R),
-    ("f() ( cd /a ); f; cd /r; git commit -m x", _AT_R),
+    ("cd /repo; case a in a) echo;; esac; git commit -m x", _AT_R),
+    ("f() { echo hi; }; cd /repo; f; git commit -m x", _AT_R),
+    ("f() ( cd /alpha ); f; cd /repo; git commit -m x", _AT_R),
     # `case` and a function name count only as the PROGRAM, never as an argument
-    ("echo case; cd /r; git commit -m x", _AT_R),
-    ("f() { cd /a; }; echo f; git commit -m x", "/s"),
+    ("echo case; cd /repo; git commit -m x", _AT_R),
+    ("f() { cd /alpha; }; echo f; git commit -m x", "/s"),
 ])
 def test_control_a_case_or_function_without_a_reachable_cd_keeps_the_walk(command, lands):
     assert S.git_verb_dir(command, "/s", S.GATED_GIT_VERBS) == lands
 
 
 @pytest.mark.parametrize("command, lands", [
-    ("(echo ${x:-(a)}; cd /r; true); git commit -m x", "/s"),
-    ("(ls @(x|y) >/dev/null; cd /r; true); git commit -m x", "/s"),
-    ("x=$(a=(1 2); cd /r; echo); git commit -m x", "/s"),
+    ("(echo ${x:-(a)}; cd /repo; true); git commit -m x", "/s"),
+    ("(ls @(x|y) >/dev/null; cd /repo; true); git commit -m x", "/s"),
+    ("x=$(a=(1 2); cd /repo; echo); git commit -m x", "/s"),
 ])
 def test_a_subshell_holding_a_non_subshell_paren_still_closes(command, lands):
     assert S.git_verb_dir(command, "/s", S.GATED_GIT_VERBS) == lands
 
 
 def test_a_relative_cd_after_the_command_sets_cdpath_is_unknown():
-    """bash resolves a relative cd against CDPATH first, so `CDPATH=/a; cd sub` lands in /a/sub
+    """bash resolves a relative cd against CDPATH first, so `CDPATH=/alpha; cd sub` lands in /alpha/sub
     when that exists - which the text cannot tell. An absolute cd is unaffected."""
     verbs = S.GATED_GIT_VERBS
-    assert S.git_verb_dir("CDPATH=/a; cd sub; git commit -m x", "/s", verbs) is None
-    assert S.git_verb_dir("export CDPATH=/a; cd sub && git push", "/s", verbs) is None
-    assert S.git_verb_dir("CDPATH=/a cd sub; git commit -m x", "/s", verbs) is None
-    assert S.git_verb_dir("CDPATH=/a; cd /r; git commit -m x", "/s", verbs) == _AT_R
+    assert S.git_verb_dir("CDPATH=/alpha; cd sub; git commit -m x", "/s", verbs) is None
+    assert S.git_verb_dir("export CDPATH=/alpha; cd sub && git push", "/s", verbs) is None
+    assert S.git_verb_dir("CDPATH=/alpha cd sub; git commit -m x", "/s", verbs) is None
+    assert S.git_verb_dir("CDPATH=/alpha; cd /repo; git commit -m x", "/s", verbs) == _AT_R
     assert S.git_verb_dir("cd sub; git commit -m x", "/s", verbs) == os.path.normpath("/s/sub")
 
 
@@ -1019,14 +1019,14 @@ def test_git_verb_dir_leaves_a_tilde_it_cannot_resolve_unknown(monkeypatch, comm
 
 def test_powershell_parentheses_do_not_open_a_subshell():
     """PowerShell's ( ) and $( ) run in the same runspace, so Set-Location inside them persists."""
-    assert S.git_verb_dir("(cd /r); git commit -m x", "/s", S.GATED_GIT_VERBS, "PowerShell") == _AT_R
+    assert S.git_verb_dir("(cd /repo); git commit -m x", "/s", S.GATED_GIT_VERBS, "PowerShell") == _AT_R
 
 
 def test_git_verb_dir_reads_a_continued_line_with_a_quoted_dash_c_value():
     # Each statement here ends in `\<newline>`; git_verb_dir strip()s the segment before tokenizing,
     # which used to leave a lone backslash, split the quoted -c value and hide the push.
-    moved = os.path.normpath("/r")
-    cmd = ("S=/tmp/x\ncd /r \\\n && git add f \\\n"
+    moved = os.path.normpath("/repo")
+    cmd = ("S=/tmp/x\ncd /repo \\\n && git add f \\\n"
            " && git -c credential.helper='!gh auth git-credential' push origin main \\\n"
            " && git status --porcelain")
     for tool in ("Bash", None):
@@ -1036,15 +1036,15 @@ def test_git_verb_dir_reads_a_continued_line_with_a_quoted_dash_c_value():
 @pytest.mark.parametrize("command", [
     # OPEN-WORK [1050]: the cd runs only when the statement before it succeeds or fails, and the
     # verb after the `;` runs either way
-    "false && cd /r; git commit -m x",
-    "test -d /r && cd /r; git commit -m x",
-    "true || cd /r; git commit -m x",
-    "x || cd /r\ngit push",
+    "false && cd /repo; git commit -m x",
+    "test -d /repo && cd /repo; git commit -m x",
+    "true || cd /repo; git commit -m x",
+    "x || cd /repo\ngit push",
     # the verb runs both where the cd landed and where it was skipped
-    "x || cd /r && git commit -m x",
-    "x && cd /r || true; git push",
-    "x && cd /r || git push",
-    "! cd /r && git commit -m x",
+    "x || cd /repo && git commit -m x",
+    "x && cd /repo || true; git push",
+    "x && cd /repo || git push",
+    "! cd /repo && git commit -m x",
 ])
 def test_a_cd_that_may_not_run_is_unknown(command):
     """A cd that depends on another statement's exit status is not a cd at that point of the text;
@@ -1054,25 +1054,25 @@ def test_a_cd_that_may_not_run_is_unknown(command):
 
 @pytest.mark.parametrize("command, lands", [
     # a cd guarded by `&&` still holds for a verb joined to it by `&&`: the verb runs only after it
-    ("x && cd /r && git commit -m x", _AT_R),
-    ("test -d /r && cd /r && git add f && git push", _AT_R),
-    ("cd /a && cd r && git commit -m x", os.path.normpath("/a/r")),
-    ("cd /a && cd r; git commit -m x", os.path.normpath("/a/r")),
-    ("x || mkdir y && cd /r && git push", _AT_R),
+    ("x && cd /repo && git commit -m x", _AT_R),
+    ("test -d /repo && cd /repo && git add f && git push", _AT_R),
+    ("cd /alpha && cd r && git commit -m x", os.path.normpath("/alpha/r")),
+    ("cd /alpha && cd r; git commit -m x", os.path.normpath("/alpha/r")),
+    ("x || mkdir y && cd /repo && git push", _AT_R),
     # a cd that is the first statement of its list is read as succeeding, as before
-    ("cd /r || exit 1; git commit -m x", _AT_R),
-    ("cd /r && x; git push", _AT_R),
+    ("cd /repo || exit 1; git commit -m x", _AT_R),
+    ("cd /repo && x; git push", _AT_R),
     # the guarded cd inside a subshell is undone when the subshell closes
-    ("x && (cd /r); git commit -m x", "/s"),
+    ("x && (cd /repo); git commit -m x", "/s"),
     # a later cd that always runs makes the earlier one irrelevant
-    ("false && cd /a; cd /r; git commit -m x", _AT_R),
+    ("false && cd /alpha; cd /repo; git commit -m x", _AT_R),
     # a cd behind `||` after cds that are read as succeeding never runs
-    ("cd /a || cd /b && git commit -m x", _AT_A),
-    ("cd /a || cd /b; git commit -m x", _AT_A),
+    ("cd /alpha || cd /beta && git commit -m x", _AT_A),
+    ("cd /alpha || cd /beta; git commit -m x", _AT_A),
     # an ordinary statement's `||` branch ends with the list: the cd before it holds after `;`
-    ("cd /r && x || echo failed; git push", _AT_R),
+    ("cd /repo && x || echo failed; git push", _AT_R),
     # a substitution inside a statement does not end the list the cd guards
-    ('mkdir -p /t && cd /r && test "$(git branch --show-current)" = m && git commit -m x', _AT_R),
+    ('mkdir -p /tmpd && cd /repo && test "$(git branch --show-current)" = m && git commit -m x', _AT_R),
 ])
 def test_control_a_cd_the_verb_cannot_run_without_keeps_the_walk(command, lands):
     assert S.git_verb_dir(command, "/s", S.GATED_GIT_VERBS) == lands
@@ -1081,9 +1081,9 @@ def test_control_a_cd_the_verb_cannot_run_without_keeps_the_walk(command, lands)
 @pytest.mark.parametrize("command, lands", [
     # OPEN-WORK [1050] review: a subshell opened INSIDE the block closes inside it, so its cd
     # cannot reach a statement after the block, or the next pass of the loop
-    ("while x; do (cd /r); git push; done", "/s"),
-    ("if a; then (cd /r); fi; git commit -m x", "/s"),
-    ("for b in a; do (cd /r && git push); done", _AT_R),
+    ("while x; do (cd /repo); git push; done", "/s"),
+    ("if a; then (cd /repo); fi; git commit -m x", "/s"),
+    ("for b in a; do (cd /repo && git push); done", _AT_R),
 ])
 def test_a_subshell_cd_inside_a_block_stays_in_its_subshell(command, lands):
     assert S.git_verb_dir(command, "/s", S.GATED_GIT_VERBS) == lands
@@ -1091,19 +1091,19 @@ def test_a_subshell_cd_inside_a_block_stays_in_its_subshell(command, lands):
 
 def test_control_a_block_inside_a_subshell_still_hides_its_cd():
     """The subshell opened BEFORE the loop: the loop's cd reaches the verb inside it."""
-    assert S.git_verb_dir("(while x; do cd /r; done; git push)", "/s", S.GATED_GIT_VERBS) is None
+    assert S.git_verb_dir("(while x; do cd /repo; done; git push)", "/s", S.GATED_GIT_VERBS) is None
 
 
 def test_a_verb_only_a_failed_cd_reaches_is_not_answered_with_the_cd():
-    """`cd /r || git commit` commits only when the cd FAILED, so never in /r."""
-    assert S.git_verb_dir("cd /r || git commit -m x", "/s", S.GATED_GIT_VERBS) != _AT_R
+    """`cd /repo || git commit` commits only when the cd FAILED, so never in /repo."""
+    assert S.git_verb_dir("cd /repo || git commit -m x", "/s", S.GATED_GIT_VERBS) != _AT_R
 
 
 def test_git_verb_dir_sees_a_cd_behind_an_env_prefix_or_a_keyword():
     """The shared cd reader skips what stands in front of the program, as the git walk does."""
-    moved = os.path.normpath("/r")
-    assert S.git_verb_dir("X=1 cd /r && git push", "/s", S.GATED_GIT_VERBS) == moved
-    assert S.git_verb_dir("if cd /r; then git push; fi", "/s", S.GATED_GIT_VERBS) == moved
+    moved = os.path.normpath("/repo")
+    assert S.git_verb_dir("X=1 cd /repo && git push", "/s", S.GATED_GIT_VERBS) == moved
+    assert S.git_verb_dir("if cd /repo; then git push; fi", "/s", S.GATED_GIT_VERBS) == moved
 
 
 # ---- directory_change: THE cd reader every cd-tracking hook shares ----------------------------
@@ -1119,19 +1119,19 @@ def _norm(path):
 
 
 @pytest.mark.parametrize("statement,expected", [
-    ("cd /r", "/r"),
+    ("cd /repo", "/repo"),
     ("cd r", "/s/r"),
-    ("cd ../r", "/r"),
-    ('cd "/a b"', "/a b"),                  # quoted with a space: ONE word, kept whole
-    ("cd '/a b'", "/a b"),
-    ("cd -P /r", "/r"),                     # cd's own options are not the target
-    ("cd -- /r", "/r"),
-    ("X=1 cd /r", "/r"),                    # behind an env assignment
-    ("  (cd /r", "/r"),                     # a subshell's opening paren
-    ("then cd /r", "/r"),                   # a branch body
-    ("cd /r  # go there", "/r"),            # a trailing comment is not an operand
-    ("pushd /r", "/r"),
-    ("/usr/bin/cd /r", "/r"),
+    ("cd ../repo", "/repo"),
+    ('cd "/alpha b"', "/alpha b"),                  # quoted with a space: ONE word, kept whole
+    ("cd '/alpha b'", "/alpha b"),
+    ("cd -P /repo", "/repo"),                     # cd's own options are not the target
+    ("cd -- /repo", "/repo"),
+    ("X=1 cd /repo", "/repo"),                    # behind an env assignment
+    ("  (cd /repo", "/repo"),                     # a subshell's opening paren
+    ("then cd /repo", "/repo"),                   # a branch body
+    ("cd /repo  # go there", "/repo"),            # a trailing comment is not an operand
+    ("pushd /repo", "/repo"),
+    ("/usr/bin/cd /repo", "/repo"),
 ])
 def test_directory_change_reads_where_a_cd_lands(statement, expected):
     assert S.directory_change(statement, _HERE) == (True, _norm(expected))
@@ -1147,8 +1147,8 @@ def test_directory_change_refuses_a_destination_no_static_read_can_name(statemen
 
 
 @pytest.mark.parametrize("statement", [
-    "echo cd /r", "git -C /r log", "cdx /r", "abcd /r", "ls", "", "   ",
-    "git commit -m 'cd /r'", "grep -rn 'cd /r' .",
+    "echo cd /repo", "git -C /repo log", "cdx /repo", "abcd /repo", "ls", "", "   ",
+    "git commit -m 'cd /repo'", "grep -rn 'cd /repo' .",
 ])
 def test_directory_change_leaves_a_non_cd_statement_alone(statement):
     assert S.directory_change(statement, _HERE) == (False, _HERE)
@@ -1156,7 +1156,7 @@ def test_directory_change_leaves_a_non_cd_statement_alone(statement):
 
 def test_directory_change_needs_a_base_for_a_relative_target():
     assert S.directory_change("cd r", None) == (True, None)
-    assert S.directory_change("cd /r", None) == (True, _norm("/r"))
+    assert S.directory_change("cd /repo", None) == (True, _norm("/repo"))
 
 
 def test_directory_change_expands_home_only_when_asked(monkeypatch):
@@ -1200,18 +1200,75 @@ def test_msys_drive_path_spells_a_git_bash_drive_the_windows_way(path, windows, 
     assert S.msys_drive_path(path, windows) == expected
 
 
-def test_a_cd_into_a_git_bash_drive_path_lands_on_that_drive_when_asked():
-    """A caller that knows the text is Git Bash's on Windows passes msys_drives; the host decides
-    which arm runs, so each CI cell checks its own."""
-    windows = os.name == "nt"
-    expected = _norm("C:/temp/x" if windows else "/c/temp/x")
-    assert S.directory_change("cd /c/temp/x", _HERE, msys_drives=windows) == (True, expected)
-    assert S.directory_change("cd /c/temp/x", None, msys_drives=windows) == (True, expected)
+@pytest.mark.parametrize("tool, os_name, expected", [
+    ("Bash", "nt", True),            # Claude Code's Bash tool is Git Bash on Windows
+    (None, "nt", True),              # no tool name is the Bash tool
+    ("PowerShell", "nt", False),     # passes `/c/temp` on unchanged: the current drive's root
+    ("Bash", "posix", False),        # `/c` is an ordinary directory
+    ("PowerShell", "posix", False),
+])
+def test_the_drive_reading_is_decided_by_the_tool_and_the_host(tool, os_name, expected):
+    assert S.reads_msys_drives(tool, os_name) is expected
 
 
-def test_the_drive_reading_is_off_unless_a_caller_asks_for_it():
-    """The guards and nudges keep the reading they were tested against."""
-    assert S.directory_change("cd /c/temp/x", _HERE) == (True, _norm("/c/temp/x"))
+@pytest.mark.parametrize("windows, expected", [(True, "C:/temp/x"), (False, "/c/temp/x")])
+def test_a_cd_into_a_git_bash_drive_path_reads_each_arm_on_every_host(windows, expected):
+    """Both arms on every CI cell: a translated drive path is rooted wherever the test runs, so the
+    Windows arm does not need a Windows os.path to give its answer."""
+    for here in (_HERE, None):
+        assert S.directory_change("cd /c/temp/x", here, msys_drives=windows) == (True, _norm(expected))
+
+
+@pytest.mark.parametrize("tool", ["Bash", "PowerShell"])
+def test_every_caller_left_to_the_default_gets_the_host_s_drive_reading(tool):
+    """THE default, so a guard that does not think about drives still reads them right: before it,
+    every guard but one read `cd /c/temp` on Windows as C:\\c\\temp, a directory nobody was in."""
+    host = S.reads_msys_drives(tool, os.name)
+    assert S.directory_change("cd /c/temp/x", _HERE, tool) == S.directory_change(
+        "cd /c/temp/x", _HERE, tool, msys_drives=host)
+    assert S.git_verb_dir("cd /c/temp/x && git commit", _HERE, {"commit"}, tool) == S.git_verb_dir(
+        "cd /c/temp/x && git commit", _HERE, {"commit"}, tool, msys_drives=host)
+
+
+@pytest.mark.parametrize("tool", ["Bash", "PowerShell"])
+def test_the_default_lands_where_the_host_s_shell_lands(tool):
+    """The same question answered by value, not by the decider: on Windows the Bash tool's
+    `cd /c/temp/x` is C:\\temp\\x and the PowerShell tool's is the current drive's \\c\\temp\\x; on
+    any other host both are /c/temp/x. The Windows cell is the one that saw the defect."""
+    drive = os.name == "nt" and tool == "Bash"
+    expected = _norm("C:/temp/x" if drive else "/c/temp/x")
+    assert S.directory_change("cd /c/temp/x", _HERE, tool) == (True, expected)
+    assert S.git_verb_dir("git -C /c/temp/x push", _HERE, {"push"}, tool) == expected
+
+
+@pytest.mark.parametrize("command, windows, expected", [
+    ("cd /c/repo && git commit -m x", True, "C:/repo"),
+    ("cd /c/repo && git commit -m x", False, "/c/repo"),
+    ("git -C /d/work commit -m x", True, "D:/work"),        # a -C value is a path git.exe receives
+    ("git -C /d/work commit -m x", False, "/d/work"),
+    ("W=/e/w; cd \"$W\" && git commit", True, "E:/w"),     # a followed variable lands there too
+    ("cd /c && git -C repo commit", True, "C:/repo"),        # a relative -C after a drive cd
+])
+def test_the_git_verb_reader_reads_a_drive_path_in_each_arm(command, windows, expected):
+    assert S.git_verb_dir(command, _HERE, {"commit"}, "Bash", msys_drives=windows) == _norm(expected)
+
+
+def test_the_git_segment_reader_reads_a_drive_path_in_a_minus_c_value():
+    tokens = S.argv_for_match("git -C /d/work push", "Bash")
+    assert S.git_segment_dir(tokens, {"push"}, _HERE, msys_drives=True) == (True, _norm("D:/work"))
+    assert S.git_segment_dir(tokens, {"push"}, _HERE, msys_drives=False) == (True, _norm("/d/work"))
+
+
+@pytest.mark.parametrize("path, base, windows, expected", [
+    ("/c/temp/h.txt", "/s", True, "C:/temp/h.txt"),          # translated, base ignored
+    ("/c/temp/h.txt", None, True, "C:/temp/h.txt"),
+    ("/c/temp/h.txt", "/s", False, "/c/temp/h.txt"),         # rooted, kept as written
+    ("/temp/h.txt", "/s", True, "/temp/h.txt"),               # a name, not a drive letter
+    ("h.txt", "/s", True, os.path.join("/s", "h.txt")),
+    ("h.txt", None, True, None),                              # relative and no base: unknown
+])
+def test_resolve_path_finds_a_path_the_way_the_shell_hands_it_on(path, base, windows, expected):
+    assert S.resolve_path(path, base, msys_drives=windows) == expected
 
 
 # ---- past_command_prefix: the launcher walk, public -------------------------------------------
@@ -1290,7 +1347,7 @@ def test_drop_redirections_on_a_trailing_bare_operator_drops_it_alone():
 def test_git_verb_operands_keeps_redirections_so_callers_can_locate_the_verb():
     """The suffix invariant callers rely on (`tokens[len(tokens) - len(operands) - 1]` is the verb)
     is why redirections are dropped by the reader of the operands, not by the verb walk."""
-    tokens = ["git", "-C", "/r", "push", "origin", "v1", "2>&1"]
+    tokens = ["git", "-C", "/repo", "push", "origin", "v1", "2>&1"]
     operands = S.git_verb_operands(tokens, {"push"})
     assert tokens[len(tokens) - len(operands) - 1] == "push"
     assert S.drop_redirections(operands) == ["origin", "v1"]
@@ -1298,7 +1355,7 @@ def test_git_verb_operands_keeps_redirections_so_callers_can_locate_the_verb():
 
 def test_the_edge_of_a_substitution_before_an_and_does_not_end_the_list():
     """`B=$(git hash-object f) && git commit` - the text between the two statements is `) &&`."""
-    command = 'printf x > /t/m && cd /r && B=$(git hash-object -w f) && git commit -q -F /t/m'
+    command = 'printf x > /tmpd/m && cd /repo && B=$(git hash-object -w f) && git commit -q -F /tmpd/m'
     assert S.git_verb_dir(command, "/s", S.GATED_GIT_VERBS) == _AT_R
 
 
@@ -1353,7 +1410,7 @@ def test_masking_plain_text_does_not_probe_every_character():
 
 def _big_command():
     body = "\n".join(f"x = {i}  # it's $(not) a \"command\"" for i in range(400))
-    return f"cd /r && cat > f.py <<'EOF'\n{body}\nEOF\ngit commit -m \"a; b\" && git push  # c\n"
+    return f"cd /repo && cat > f.py <<'EOF'\n{body}\nEOF\ngit commit -m \"a; b\" && git push  # c\n"
 
 
 def test_each_whole_command_view_is_derived_once_however_often_it_is_asked():

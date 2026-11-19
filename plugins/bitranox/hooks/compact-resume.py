@@ -555,8 +555,7 @@ def bash_targets(command: object, cwd: str | None) -> dict[str, bool]:
     bases: set[str | None] = set()
     for statement in _statements(shell_text.strip_heredoc_bodies(command)):
         changed, landing = cast(tuple[bool, str | None],
-                                shell_text.directory_change(statement, here,
-                                                            msys_drives=os.name == "nt"))
+                                shell_text.directory_change(statement, here))
         if changed:
             here = landing
             continue
