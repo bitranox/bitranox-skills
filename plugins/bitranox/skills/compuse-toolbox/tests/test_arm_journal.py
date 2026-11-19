@@ -27,7 +27,7 @@ def root(tmp_path: Path) -> Path:
 @pytest.fixture
 def src(tmp_path: Path) -> Path:
     path = tmp_path / "src.py"
-    path.write_text(ORIGINAL, encoding="utf-8")
+    path.write_bytes(ORIGINAL.encode("utf-8"))
     return path
 
 
@@ -47,7 +47,10 @@ def _journal_as(journal: J.Journal, pid: int) -> Path:
 def _killed_run(src: Path, root: Path) -> Path:
     """What a SIGKILL mid-arm leaves: a journal of a dead process and the mutant on disk."""
     journal = J.Journal.create({src: MUTANT.encode("utf-8")}, root)
-    src.write_text(MUTANT, encoding="utf-8")
+    # The exact bytes the journal recorded, as mutation_arm writes them (newline=""): a text-mode
+    # write turns each \n into \r\n on Windows, and a file matching neither its original nor the
+    # recorded mutant is a conflict, never restored.
+    src.write_bytes(MUTANT.encode("utf-8"))
     return _journal_as(journal, _dead_pid())
 
 
@@ -92,7 +95,7 @@ def test_a_file_edited_after_the_kill_is_a_conflict_and_left_alone(src: Path, ro
 
 def test_a_file_already_back_to_its_original_just_drops_the_journal(src: Path, root: Path) -> None:
     directory = _killed_run(src, root)
-    src.write_text(ORIGINAL, encoding="utf-8")
+    src.write_bytes(ORIGINAL.encode("utf-8"))
     result = J.recover(root)
     assert (result.restored, result.conflicts) == ([], [])
     assert not directory.exists()
@@ -100,7 +103,7 @@ def test_a_file_already_back_to_its_original_just_drops_the_journal(src: Path, r
 
 def test_a_running_owners_journal_is_held_not_restored(src: Path, root: Path) -> None:
     journal = J.Journal.create({src: MUTANT.encode("utf-8")}, root)
-    src.write_text(MUTANT, encoding="utf-8")
+    src.write_bytes(MUTANT.encode("utf-8"))
     live = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
     try:
         directory = _journal_as(journal, live.pid)
