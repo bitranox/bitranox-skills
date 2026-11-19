@@ -118,7 +118,7 @@ def test_malformed_input_never_raises(capsys):
 
 
 def test_verdict_is_none_for_an_entry_with_no_sha():
-    assert hook.verdict([{"at": time.time()}]) is None
+    assert hook.verdict([state.Entry(sha="", session="s", at=time.time())]) is None
     assert hook.verdict([]) is None
 
 
@@ -186,7 +186,7 @@ def test_a_later_push_still_gets_its_own_reminders(tmp_path, capsys):
     hook.main(_event(tmp_path))           # a is spent and released, b still blocks
     payload = json.loads(capsys.readouterr().out)
     assert payload["decision"] == "block" and "b" * 12 in payload["reason"]
-    assert [e["sha"] for e in state.pending_for(str(tmp_path), "sess-1")] == ["b" * 40]
+    assert [e.sha for e in state.pending_for(str(tmp_path), "sess-1")] == ["b" * 40]
     # a's release must still be NAMED, not silently dropped because a newer push is still live -
     # otherwise the session never learns that a's CI went unchecked forever.
     assert "a" * 12 in payload["reason"]

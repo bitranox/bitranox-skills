@@ -54,18 +54,22 @@ def enabled() -> bool:
         return False
 
 
-def verdict(pending: list[dict], attempt: int = 1) -> str | None:
+def _recorded_at(entry: state.Entry) -> float:
+    return entry.at
+
+
+def verdict(pending: list[state.Entry], attempt: int = 1) -> str | None:
     """The block reason for these pending entries, or None when there is nothing to say."""
     if not pending:
         return None
-    newest = max(pending, key=state.entry_at)
-    sha = str(newest.get("sha") or "")
+    newest = max(pending, key=_recorded_at)
+    sha = newest.sha
     if not sha:
         return None
-    branch = str(newest.get("branch") or "HEAD")
+    branch = newest.branch or "HEAD"
     # The session cwd need not be the repo that was pushed. A worktree may be gone by Stop, and
     # ci_wait refuses a --repo path that no longer exists, so a vanished one is left out.
-    repo = str(newest.get("repo") or "")
+    repo = newest.repo
     anchor = " --repo %s" % shlex.quote(repo) if repo and os.path.isdir(repo) else ""
     left = state.MAX_BLOCKS - attempt
     remaining = ("\nThis is the last reminder for this push; the gate releases after it."
@@ -108,16 +112,15 @@ def main(raw: str | None = None) -> int:
         # One stop blocks for every pending push, so every one of them is charged: charging
         # only the newest let N unwatched pushes block N times over. A push made later has a
         # lower count and keeps its own reminders after the older ones are released.
-        fresh = {str(e.get("sha") or "") for e in pending}
-        charged = [e for e in state.bump_session_blocks(key, session)
-                   if str(e.get("sha") or "") in fresh]
-        spent = [e for e in charged if int(e.get("blocks") or 0) > state.MAX_BLOCKS]
-        live = [e for e in charged if int(e.get("blocks") or 0) <= state.MAX_BLOCKS]
+        fresh = {e.sha for e in pending}
+        charged = [e for e in state.bump_session_blocks(key, session) if e.sha in fresh]
+        spent = [e for e in charged if e.blocks > state.MAX_BLOCKS]
+        live = [e for e in charged if e.blocks <= state.MAX_BLOCKS]
         for entry in spent:
-            state.clear_sha(key, str(entry.get("sha") or ""), session=session)
+            state.clear_sha(key, entry.sha, session=session)
         if spent and not live:
             # Give up LOUDLY rather than silently: a gate that just stops speaking reads as broken.
-            shas = ", ".join(str(e.get("sha") or "")[:12] for e in spent)
+            shas = ", ".join(e.sha[:12] for e in spent)
             print(json.dumps({"hookSpecificOutput": {
                 "hookEventName": "Stop",
                 "additionalContext": ("CI for %s was never checked and the watch gate has now "
@@ -129,13 +132,13 @@ def main(raw: str | None = None) -> int:
             # never advances can never reach MAX_BLOCKS, so it would repeat on every stop until
             # the entry expired. A deliberate fail-open, the same one every IO error here takes.
             return 0
-        newest = max(live, key=state.entry_at)
-        reason = verdict(live, int(newest.get("blocks") or 1))
+        newest = max(live, key=_recorded_at)
+        reason = verdict(live, newest.blocks or 1)
         if reason and spent:
             # A push can be dropped here too, just not ALL of them (that path already returned
             # above with its own message): say so, or the session never learns that this one's
             # CI went unchecked forever - it just stops hearing about it.
-            shas = ", ".join(str(e.get("sha") or "")[:12] for e in spent)
+            shas = ", ".join(e.sha[:12] for e in spent)
             reason += ("\n\n(CI for %s was never checked and the watch gate has released it after "
                        "%d reminders. It will not ask again.)" % (shas, state.MAX_BLOCKS))
     except Exception:  # noqa: BLE001 - a gate that crashes must not wedge a turn

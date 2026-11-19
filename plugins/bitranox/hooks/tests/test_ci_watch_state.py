@@ -15,8 +15,8 @@ def test_record_then_pending_round_trips(tmp_path):
     proj = str(tmp_path)
     state.record_push(proj, "sess-a", "a" * 40, branch="master")
     pending = state.pending_for(proj, "sess-a")
-    assert [e["sha"] for e in pending] == ["a" * 40]
-    assert pending[0]["branch"] == "master"
+    assert [e.sha for e in pending] == ["a" * 40]
+    assert pending[0].branch == "master"
 
 
 def test_a_second_push_of_the_same_sha_does_not_duplicate(tmp_path):
@@ -31,7 +31,7 @@ def test_clear_sha_drops_only_that_sha(tmp_path):
     state.record_push(proj, "sess-a", "a" * 40)
     state.record_push(proj, "sess-a", "b" * 40)
     state.clear_sha(proj, "a" * 40)
-    assert [e["sha"] for e in state.pending_for(proj, "sess-a")] == ["b" * 40]
+    assert [e.sha for e in state.pending_for(proj, "sess-a")] == ["b" * 40]
 
 
 def test_clear_session_drops_only_that_session(tmp_path):
@@ -40,7 +40,7 @@ def test_clear_session_drops_only_that_session(tmp_path):
     state.record_push(proj, "sess-b", "b" * 40)
     state.clear_session(proj, "sess-a")
     assert state.pending_for(proj, "sess-a") == []
-    assert [e["sha"] for e in state.pending_for(proj, "sess-b")] == ["b" * 40]
+    assert [e.sha for e in state.pending_for(proj, "sess-b")] == ["b" * 40]
 
 
 def test_another_session_pending_is_invisible_to_this_one(tmp_path):
@@ -86,8 +86,52 @@ def test_two_sessions_pushing_the_same_sha_each_keep_their_entry(tmp_path):
     proj, sha = str(tmp_path), "a" * 40
     state.record_push(proj, "sess-a", sha)
     state.record_push(proj, "sess-b", sha)
-    assert [e["sha"] for e in state.pending_for(proj, "sess-a")] == [sha]
-    assert [e["sha"] for e in state.pending_for(proj, "sess-b")] == [sha]
+    assert [e.sha for e in state.pending_for(proj, "sess-a")] == [sha]
+    assert [e.sha for e in state.pending_for(proj, "sess-b")] == [sha]
+
+
+def test_pending_entries_are_typed_records(tmp_path):
+    proj = str(tmp_path)
+    state.record_push(proj, "sess-a", "a" * 40, repo="r", branch="tag v1")
+    (entry,) = state.pending_for(proj, "sess-a")
+    assert type(entry) is state.Entry
+    assert (entry.sha, entry.session, entry.repo, entry.branch, entry.blocks) == (
+        "a" * 40, "sess-a", "r", "tag v1", 0)
+    assert type(entry.at) is float
+    (charged,) = state.bump_session_blocks(proj, "sess-a")
+    assert type(charged) is state.Entry and charged.blocks == 1
+
+
+def test_the_state_file_keeps_the_shape_earlier_releases_wrote(tmp_path):
+    # Two hooks of possibly different releases share this file: keys in the same order, `at` a
+    # float, `blocks` absent until a stop was blocked and then an int.
+    proj = str(tmp_path)
+    path = state.state_path(proj)
+    path.write_text(json.dumps({"pending": [
+        {"sha": "c" * 40, "session": "s", "repo": "", "branch": "master", "at": 1700000100.25,
+         "blocks": 2},
+        {"sha": "d" * 40, "session": "s", "repo": "/x", "branch": "", "at": 1700000101},
+        {"sha": "e" * 40, "session": "other", "repo": "", "branch": "", "at": 1700000102.5}]}),
+        encoding="utf-8")
+    state.bump_session_blocks(proj, "s")
+    assert path.read_text(encoding="utf-8") == (
+        '{"pending": [{"sha": "' + "c" * 40 + '", "session": "s", "repo": "", "branch": "master",'
+        ' "at": 1700000100.25, "blocks": 3}, {"sha": "' + "d" * 40 + '", "session": "s",'
+        ' "repo": "/x", "branch": "", "at": 1700000101.0, "blocks": 1}, {"sha": "' + "e" * 40
+        + '", "session": "other", "repo": "", "branch": "", "at": 1700000102.5}]}')
+    state.record_push(proj, "s2", "f" * 40, repo="/r", branch="branch main")
+    written = json.loads(path.read_text(encoding="utf-8"))["pending"][-1]
+    assert list(written) == ["sha", "session", "repo", "branch", "at"]
+
+
+def test_an_item_no_release_wrote_is_left_out_and_a_bad_text_field_reads_as_unknown(tmp_path):
+    proj = str(tmp_path)
+    state.state_path(proj).write_text(json.dumps({"pending": [
+        "not-an-entry", {"sha": 7, "session": "s", "at": time.time()},
+        {"sha": "a" * 40, "session": ["s"], "at": time.time()},
+        {"sha": "b" * 40, "session": "s", "repo": 3, "branch": None, "at": time.time()}]}),
+        encoding="utf-8")
+    assert [(e.sha[0], e.repo, e.branch) for e in state.pending_for(proj, "s")] == [("b", "", "")]
 
 
 def test_re_recording_a_sha_keeps_its_block_count(tmp_path):
@@ -98,7 +142,7 @@ def test_re_recording_a_sha_keeps_its_block_count(tmp_path):
     state.bump_session_blocks(proj, "sess-a")
     state.bump_session_blocks(proj, "sess-a")
     state.record_push(proj, "sess-a", sha, repo="r")
-    assert [e["blocks"] for e in state.bump_session_blocks(proj, "sess-a")] == [3]
+    assert [e.blocks for e in state.bump_session_blocks(proj, "sess-a")] == [3]
 
 
 def test_the_same_sha_pushed_to_another_repo_counts_afresh(tmp_path):
@@ -107,7 +151,7 @@ def test_the_same_sha_pushed_to_another_repo_counts_afresh(tmp_path):
     state.record_push(proj, "sess-a", sha, repo="r1")
     state.bump_session_blocks(proj, "sess-a")
     state.record_push(proj, "sess-a", sha, repo="r2")
-    assert [e["blocks"] for e in state.bump_session_blocks(proj, "sess-a")] == [1]
+    assert [e.blocks for e in state.bump_session_blocks(proj, "sess-a")] == [1]
 
 
 def test_bump_counts_every_entry_of_this_session_and_no_other(tmp_path):
@@ -117,8 +161,8 @@ def test_bump_counts_every_entry_of_this_session_and_no_other(tmp_path):
     state.record_push(proj, "sess-b", "a" * 40)
     state.bump_session_blocks(proj, "sess-a")
     bumped = state.bump_session_blocks(proj, "sess-a")
-    assert sorted((e["sha"][0], e["blocks"]) for e in bumped) == [("a", 2), ("b", 2)]
-    assert [e["blocks"] for e in state.bump_session_blocks(proj, "sess-b")] == [1]
+    assert sorted((e.sha[0], e.blocks) for e in bumped) == [("a", 2), ("b", 2)]
+    assert [e.blocks for e in state.bump_session_blocks(proj, "sess-b")] == [1]
 
 
 def test_clear_sha_for_one_session_leaves_the_other_sessions_entry(tmp_path):
@@ -169,7 +213,7 @@ def test_a_rename_refused_by_an_open_reader_is_retried_not_dropped(tmp_path, mon
     monkeypatch.setattr(os, "replace", clashing_replace)
     state.record_push(proj, "sess-a", "b" * 40)
     assert refused
-    assert sorted(e["sha"][0] for e in state.pending_for(proj, "sess-a")) == ["a", "b"]
+    assert sorted(e.sha[0] for e in state.pending_for(proj, "sess-a")) == ["a", "b"]
 
 
 def test_session_key_falls_back_to_the_project_dir_env(monkeypatch):
@@ -197,15 +241,16 @@ def test_a_write_that_did_not_land_returns_the_default_not_the_unsaved_result(tm
     assert refused
     monkeypatch.undo()
     # Control: the same call with the rename working reports the charge it stored.
-    assert [e["blocks"] for e in state.bump_session_blocks(proj, "sess-a")] == [1]
+    assert [e.blocks for e in state.bump_session_blocks(proj, "sess-a")] == [1]
 
 
 @pytest.mark.parametrize(("raw", "expected"), [
     (12.5, 12.5), ("7", 7.0), (None, 0.0), ("x", 0.0), ([1], 0.0), (10 ** 400, 0.0),
     ("inf", 0.0), ("-inf", 0.0), ("nan", 0.0),
 ])
-def test_entry_at_coerces_every_unreadable_value_to_long_expired(raw, expected):
-    assert state.entry_at({"at": raw}) == expected
+def test_an_unreadable_at_is_coerced_to_long_expired(raw, expected):
+    entry = state.Entry.from_disk({"sha": "a", "session": "s", "at": raw})
+    assert entry is not None and entry.at == expected
 
 
 # ---- stale state files of OTHER projects are pruned when this one saves --------------------------
@@ -272,7 +317,7 @@ def test_a_candidate_that_vanishes_mid_scan_does_not_stop_the_prune_or_the_write
     stale = _plant(temp_dir, "claude-ci-watch-bbbbbbbbbbbbbbbb.json", state.STALE_FILE_SECONDS + 60)
     proj = str(tmp_path / "proj")
     state.record_push(proj, "sess-a", "a" * 40)
-    assert [e["sha"] for e in state.pending_for(proj, "sess-a")] == ["a" * 40]
+    assert [e.sha for e in state.pending_for(proj, "sess-a")] == ["a" * 40]
     assert not stale.exists()
 
 
@@ -295,11 +340,11 @@ def test_clearing_a_session_reaches_its_push_recorded_under_another_directory(tm
     state.record_push(pushed_from, "sess-b", "b" * 40)
     state.clear_session(watched_from, "sess-a")
     assert state.pending_for(pushed_from, "sess-a") == []
-    assert [e["sha"] for e in state.pending_for(pushed_from, "sess-b")] == ["b" * 40]
+    assert [e.sha for e in state.pending_for(pushed_from, "sess-b")] == ["b" * 40]
 
 
 def test_clearing_an_empty_session_id_leaves_other_directories_alone(tmp_path, temp_dir):
     pushed_from = str(tmp_path / "elsewhere")
     state.record_push(pushed_from, "", "a" * 40)
     state.clear_session(str(tmp_path / "here"), "")
-    assert [e["sha"] for e in state.pending_for(pushed_from, "")] == ["a" * 40]
+    assert [e.sha for e in state.pending_for(pushed_from, "")] == ["a" * 40]

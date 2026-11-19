@@ -77,7 +77,7 @@ def test_a_landed_push_is_recorded_and_announced(repo, capsys):
     assert payload["hookSpecificOutput"]["hookEventName"] == "PostToolUse"
     assert head[:12] in payload["hookSpecificOutput"]["additionalContext"]
     assert "ci_wait.py" in payload["hookSpecificOutput"]["additionalContext"]
-    assert [e["sha"] for e in state.pending_for(str(repo), "sess-1")] == [head]
+    assert [e.sha for e in state.pending_for(str(repo), "sess-1")] == [head]
 
 
 def test_a_push_that_did_not_land_is_not_recorded(repo, capsys):
@@ -190,7 +190,7 @@ def test_dash_c_records_the_sha_of_the_targeted_repo_not_the_cwd(tmp_path, repo,
                                text=True, check=True).stdout.strip()
     assert other_head[:12] in text
     assert repo_head[:12] not in text
-    assert [e["sha"] for e in state.pending_for(str(tmp_path), "sess-1")] == [other_head]
+    assert [e.sha for e in state.pending_for(str(tmp_path), "sess-1")] == [other_head]
 
 
 def test_dash_c_into_a_repo_without_workflows_does_not_fire(tmp_path, capsys):
@@ -243,7 +243,7 @@ def test_the_recorded_branch_field_keeps_its_written_form(repo, command, recorde
     entry a named ref writes keeps its `<kind> <name>` form and a bare push keeps the bare name."""
     _tag(repo, "v1.2.3")
     assert hook.main(_event(command, repo)) == 0
-    assert [e["branch"] for e in state.pending_for(str(repo), "sess-1")] == [recorded]
+    assert [e.branch for e in state.pending_for(str(repo), "sess-1")] == [recorded]
 
 
 def test_notice_returns_a_named_record(repo):
@@ -514,7 +514,7 @@ def test_a_branch_refspec_push_that_landed_is_recorded(repo, capsys):
     _git(repo, "push", "origin", "master")
     assert hook.main(_event("git push origin master 2>&1 | tail -3", repo)) == 0
     assert "branch master" in json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
-    assert [e["sha"] for e in state.pending_for(str(repo), "sess-1")] == [_head(repo)]
+    assert [e.sha for e in state.pending_for(str(repo), "sess-1")] == [_head(repo)]
 
 
 def test_an_unlanded_other_branch_does_not_fall_back_to_the_current_one(repo, capsys):
@@ -559,7 +559,7 @@ def test_a_heredoc_before_a_tag_push_still_records_the_tag(repo, capsys):
     assert hook.main(_event(_NOTES + "git push origin v9", repo)) == 0
     text = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
     assert "tag v9" in text and tag_sha[:12] in text
-    assert [e["sha"] for e in state.pending_for(str(repo), "sess-1")] == [tag_sha]
+    assert [e.sha for e in state.pending_for(str(repo), "sess-1")] == [tag_sha]
 
 
 def test_a_heredoc_before_a_dash_c_push_still_finds_the_repo(tmp_path, capsys):
@@ -567,7 +567,7 @@ def test_a_heredoc_before_a_dash_c_push_still_finds_the_repo(tmp_path, capsys):
     cmd = f"cat <<'EOF' > n.txt\nsome notes\nEOF\ngit -C {other.as_posix()} push"
     assert hook.main(_event(cmd, tmp_path)) == 0
     assert _head(other)[:12] in capsys.readouterr().out
-    assert [e["sha"] for e in state.pending_for(str(tmp_path), "sess-1")] == [_head(other)]
+    assert [e.sha for e in state.pending_for(str(tmp_path), "sess-1")] == [_head(other)]
 
 
 def test_a_heredoc_before_the_push_does_not_change_the_remote_read():
@@ -613,7 +613,7 @@ def test_a_heredoc_then_cd_into_a_ci_repo_records_that_repos_sha(tmp_path, repo,
     assert hook.main(_event(cmd, repo)) == 0
     out = capsys.readouterr().out
     assert _head(other)[:12] in out and _head(repo)[:12] not in out
-    assert [e["sha"] for e in state.pending_for(str(repo), "sess-1")] == [_head(other)]
+    assert [e.sha for e in state.pending_for(str(repo), "sess-1")] == [_head(other)]
 
 
 # --- which push, which source, which destination -------------------------------------------------
@@ -774,7 +774,7 @@ def test_a_branch_only_a_pull_request_trigger_could_build_says_so_and_stays_owed
     context = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
     assert "CI is now running" not in context
     assert "pull request" in context and "ci_wait.py" in context
-    assert [e["sha"] for e in state.pending_for(str(repo), "sess-1")] == [_head(repo)]
+    assert [e.sha for e in state.pending_for(str(repo), "sess-1")] == [_head(repo)]
 
 
 def test_one_workflow_that_runs_outweighs_one_that_cannot_be_judged(repo, capsys):

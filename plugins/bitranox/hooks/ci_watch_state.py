@@ -22,6 +22,10 @@ drop each other's entries.
 
 Every function here swallows its own IO errors and degrades to "nothing pending". A hook must never
 wedge a turn, and a state file that cannot be read is not evidence that a push needs watching.
+
+An entry is parsed into an `Entry` record where the file is read (`Entry.from_disk`) and written
+back by `Entry.to_disk`, in the key order and shape earlier releases wrote: `blocks` only once a
+stop was blocked for it. A key this release does not know is not carried over.
 """
 
 import contextlib
@@ -31,6 +35,8 @@ import math
 import os
 import tempfile
 import time
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 __all__ = [
@@ -41,7 +47,7 @@ __all__ = [
     "session_key",
     "clear_session",
     "clear_sha",
-    "entry_at",
+    "Entry",
     "pending_for",
     "record_push",
     "state_path",
@@ -87,22 +93,84 @@ def state_path(project_dir: str) -> Path:
     return Path(tempfile.gettempdir()) / ("claude-ci-watch-%s.json" % key)
 
 
-def entry_at(entry: dict) -> float:
-    """When this entry was recorded, as a finite float; 0.0 (long expired) when it is unreadable.
+def _recorded_at(value: object) -> float:
+    """An entry's `at` as a finite float; 0.0 (long expired) when it is unreadable.
 
     One entry whose `at` is text, a container, an int too large for a float or an infinity must
     not decide for the others: a raise inside the gate's try dropped the block for every valid
     push beside it, and an infinite `at` stayed pending, and newest, forever.
     """
+    if not isinstance(value, (int, float, str, bytes)):
+        return 0.0
     try:
-        value = float(entry.get("at") or 0)
+        number = float(value or 0)
     except (TypeError, ValueError, OverflowError):
         return 0.0
-    return value if math.isfinite(value) else 0.0
+    return number if math.isfinite(number) else 0.0
 
 
-def _load(path: Path) -> list[dict]:
-    """The pending entries, each with `at` already coerced by `entry_at`."""
+def _block_count(value: object) -> int:
+    """An entry's `blocks` as an int; 0 when it is unreadable, as a never-blocked entry counts."""
+    if not isinstance(value, (int, float, str, bytes)):
+        return 0
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def _text(raw: dict, key: str) -> str | None:
+    """The string at `key`, "" when absent or null, None when it holds anything else."""
+    value = raw.get(key)
+    if value is None:
+        return ""
+    return value if isinstance(value, str) else None
+
+
+@dataclass(frozen=True, slots=True)
+class Entry:
+    """One unwatched push: `session` pushed `sha` to `repo` (`branch` names what was pushed, as
+    the nudge displays it) at `at`, and `blocks` stops have been blocked for it since."""
+
+    sha: str
+    session: str
+    repo: str = ""
+    branch: str = ""
+    at: float = 0.0
+    blocks: int = 0
+
+    @classmethod
+    def from_disk(cls, raw: object) -> Entry | None:
+        """The entry a state file's list item holds, or None for an item no release wrote.
+
+        A `sha` or `session` holding anything but a string is such an item: a session id of
+        another type could otherwise read as the empty one. The other fields are coerced, never
+        refused, so one bad value does not drop the push it belongs to: a non-string `repo` or
+        `branch` reads as unknown (""), an unreadable `at` as long expired, `blocks` as 0."""
+        if not isinstance(raw, dict):
+            return None
+        sha, session = _text(raw, "sha"), _text(raw, "session")
+        if sha is None or session is None:
+            return None
+        return cls(sha=sha, session=session, repo=_text(raw, "repo") or "",
+                   branch=_text(raw, "branch") or "", at=_recorded_at(raw.get("at")),
+                   blocks=_block_count(raw.get("blocks")))
+
+    def to_disk(self) -> dict[str, object]:
+        """The list item a state file holds: `blocks` only once it is non-zero, as before."""
+        data: dict[str, object] = {"sha": self.sha, "session": self.session, "repo": self.repo,
+                                   "branch": self.branch, "at": self.at}
+        if self.blocks:
+            data["blocks"] = self.blocks
+        return data
+
+
+#: A read-modify-write step: the entries now in the file -> (the entries to store, its result).
+type Change[T] = Callable[[list[Entry]], tuple[list[Entry], T]]
+
+
+def _load(path: Path) -> list[Entry]:
+    """The pending entries the file holds; an item that is not an entry is left out."""
     try:
         raw = path.read_text(encoding="utf-8")
     except (OSError, ValueError):
@@ -114,13 +182,10 @@ def _load(path: Path) -> list[dict]:
     entries = data.get("pending") if isinstance(data, dict) else None
     if not isinstance(entries, list):
         return []
-    kept = [e for e in entries if isinstance(e, dict)]
-    for entry in kept:
-        entry["at"] = entry_at(entry)
-    return kept
+    return [entry for entry in map(Entry.from_disk, entries) if entry is not None]
 
 
-def _save(path: Path, entries: list[dict]) -> bool:
+def _save(path: Path, entries: list[Entry]) -> bool:
     """Replace the file atomically; True only when the new content is in place. The temp name is unique per call: a fixed one is shared by
     every concurrent writer, so one could rename another's half-written file into place.
 
@@ -137,7 +202,7 @@ def _save(path: Path, entries: list[dict]) -> bool:
     try:
         fd, tmp = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(json.dumps({"pending": entries}))
+            fh.write(json.dumps({"pending": [entry.to_disk() for entry in entries]}))
         self_improve_signals.retry_while_shared(os.replace, tmp, path)
         tmp = None
     except (OSError, ValueError):
@@ -149,7 +214,7 @@ def _save(path: Path, entries: list[dict]) -> bool:
     return True
 
 
-def _update(project_dir: str, change, default=None):
+def _update[T](project_dir: str, change: Change[T], default: T) -> T:
     """Run `change(entries) -> (entries, result)` as one locked read-modify-write; return result.
 
     A lock that cannot be had in time, or any IO failure, skips the write and returns `default`.
@@ -160,7 +225,7 @@ def _update(project_dir: str, change, default=None):
     return _update_path(state_path(project_dir), change, default)
 
 
-def _update_path(path: Path, change, default=None):
+def _update_path[T](path: Path, change: Change[T], default: T) -> T:
     """`_update` for a state file named by its path rather than by its project."""
     # Imported here, not at the top: the nudge runs after EVERY shell call and almost never
     # writes, so the lock's module is loaded only on the rare call that does.
@@ -216,13 +281,6 @@ def _prune_stale_files(keep: Path) -> None:
             _remove_if_stale(candidate, moment)
 
 
-def _blocks(entry: dict) -> int:
-    try:
-        return int(entry.get("blocks") or 0)
-    except (TypeError, ValueError):
-        return 0
-
-
 def record_push(project_dir: str, session: str, sha: str, repo: str = "", branch: str = "") -> None:
     """Remember that `sha` was pushed by `session` and its CI has not been looked at yet.
 
@@ -230,25 +288,24 @@ def record_push(project_dir: str, session: str, sha: str, repo: str = "", branch
     starts no new CI, so it must not buy that push a fresh set of reminders. A push of it to
     another repo does start new CI, and counts from zero.
     """
-    def change(entries):
-        mine = [e for e in entries if e.get("session") == session and e.get("sha") == sha]
-        kept = [e for e in entries if not (e.get("session") == session and e.get("sha") == sha)]
-        entry = {"sha": sha, "session": session, "repo": repo, "branch": branch, "at": time.time()}
-        carried = max((_blocks(e) for e in mine if e.get("repo", "") == repo), default=0)
-        if carried:
-            entry["blocks"] = carried
+    def change(entries: list[Entry]) -> tuple[list[Entry], None]:
+        mine = [e for e in entries if e.session == session and e.sha == sha]
+        kept = [e for e in entries if not (e.session == session and e.sha == sha)]
+        carried = max((e.blocks for e in mine if e.repo == repo), default=0)
+        entry = Entry(sha=sha, session=session, repo=repo, branch=branch, at=time.time(),
+                      blocks=carried)
         return kept + [entry], None
 
-    _update(project_dir, change)
+    _update(project_dir, change, None)
 
 
 def clear_sha(project_dir: str, sha: str, session: str | None = None) -> None:
     """Drop one sha - its CI was watched. With `session`, only that session's entry for it."""
-    def change(entries):
-        return [e for e in entries if not (e.get("sha") == sha
-                                           and (session is None or e.get("session") == session))], None
+    def change(entries: list[Entry]) -> tuple[list[Entry], None]:
+        return [e for e in entries if not (e.sha == sha
+                                           and (session is None or e.session == session))], None
 
-    _update(project_dir, change)
+    _update(project_dir, change, None)
 
 
 def clear_session(project_dir: str, session: str) -> None:
@@ -260,11 +317,11 @@ def clear_session(project_dir: str, session: str) -> None:
     watcher's file left the push pending, so the Stop gate blocked a turn whose CI was watched.
     An empty session id names no session, so it clears its own file only.
     """
-    def change(entries):
-        return [e for e in entries if e.get("session") != session], None
+    def change(entries: list[Entry]) -> tuple[list[Entry], None]:
+        return [e for e in entries if e.session != session], None
 
     own = state_path(project_dir)
-    _update_path(own, change)
+    _update_path(own, change, None)
     if not session:
         return
     try:
@@ -272,30 +329,25 @@ def clear_session(project_dir: str, session: str) -> None:
     except OSError:
         return
     for other in others:
-        if any(e.get("session") == session for e in _load(other)):
-            _update_path(other, change)
+        if any(e.session == session for e in _load(other)):
+            _update_path(other, change, None)
 
 
-def bump_session_blocks(project_dir: str, session: str) -> list[dict]:
+def bump_session_blocks(project_dir: str, session: str) -> list[Entry]:
     """Count one block against EVERY entry of this session; return those entries, updated.
 
     One stop blocked for all of them, so all of them are charged: charging only the newest let a
     session holding N unwatched pushes be blocked up to MAX_BLOCKS times N.
     """
-    def change(entries):
-        mine = []
-        for entry in entries:
-            if entry.get("session") == session:
-                entry["blocks"] = _blocks(entry) + 1
-                mine.append(dict(entry))
-        return entries, mine
+    def change(entries: list[Entry]) -> tuple[list[Entry], list[Entry]]:
+        updated = [replace(e, blocks=e.blocks + 1) if e.session == session else e for e in entries]
+        return updated, [e for e in updated if e.session == session]
 
-    return _update(project_dir, change, default=[])
+    return _update(project_dir, change, [])
 
 
-def pending_for(project_dir: str, session: str, now: float | None = None) -> list[dict]:
+def pending_for(project_dir: str, session: str, now: float | None = None) -> list[Entry]:
     """Unwatched pushes made by THIS session that are still recent enough to act on."""
     moment = time.time() if now is None else now
     return [e for e in _load(state_path(project_dir))
-            if e.get("session") == session
-            and moment - entry_at(e) < MAX_AGE_SECONDS]
+            if e.session == session and moment - e.at < MAX_AGE_SECONDS]
