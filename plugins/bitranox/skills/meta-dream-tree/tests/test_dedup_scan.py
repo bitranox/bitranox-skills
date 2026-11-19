@@ -24,6 +24,7 @@ from pathlib import Path
 
 import dedup_scan as DS
 import pytest
+import store_manifest as SM
 
 TOOL = Path(__file__).resolve().parents[1] / "dedup_scan.py"
 
@@ -562,3 +563,16 @@ def test_the_row_at_a_time_scan_finds_the_same_pairs_and_scores():
     assert got == want and result.compared_pairs == len(want)
     for c in result.candidates:
         assert c.score == DS.similarity(DS._scored(c.a), DS._scored(c.b))
+
+
+def test_the_scan_walks_the_level_set_the_backup_walks(tmp_path):
+    """The scan and the backup it is compared against read one level set: a level under a
+    pruned virtualenv shape or a nested project is in both or in neither."""
+    make_tree(tmp_path)
+    for rel in ("projects/app", ".venv-3.13/lib", "venv-user/x", "docs"):
+        (tmp_path / rel).mkdir(parents=True)
+        (tmp_path / rel / "CLAUDE.local.md").write_text("# Memory index\n", encoding="utf-8")
+    skipped: list[str] = []
+    assert DS._levels(tmp_path, skipped) == SM.levels_under(tmp_path)
+    assert tmp_path / "projects" / "app" in DS._levels(tmp_path, [])
+    assert skipped == []

@@ -58,8 +58,9 @@ import uuid_store
 # dir on sys.path the way running it directly does.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from tree_support import STORE_DIR, EnvelopeArgumentParser, store_anchor, utf8_stdio
-# The nap's chain is the one store_manifest backs up; one walk keeps the two scopes identical.
-from store_manifest import levels_on_chain
+# The levels store_manifest backs up, at both scopes: one walk keeps the scan and the backup
+# reading the same level set.
+from store_manifest import levels_on_chain, levels_under
 
 __all__ = ["Fact", "Candidate", "Control", "Result", "similarity", "run", "load_facts", "main"]
 
@@ -360,13 +361,6 @@ def run(facts: list[Fact], *, threshold: float = 0.5, scorer=similarity,
 
 # ---- reading the tree ---------------------------------------------------------------------------
 
-def _is_pruned(name: str) -> bool:
-    """A dir a curated memory tree never keeps facts in: the engine's rule
-    (`uuid_store.is_non_level_dirname`, every virtualenv shape included), so the scan reads the
-    level set the engine walks."""
-    return uuid_store.is_non_level_dirname(name)
-
-
 def anchor_dir(start: Path) -> Path:
     """The tree anchor the ENGINE uses for `start` (see tree_support.store_anchor)."""
     anchor = store_anchor(start, uuid_store.resolve_anchor)
@@ -377,33 +371,16 @@ def anchor_dir(start: Path) -> Path:
     return anchor
 
 
-def _list_dir(d: Path) -> list[Path]:
-    return list(d.iterdir())
-
-
 def _levels(anchor: Path, skipped: list[str], *,
-            list_dir: Callable[[Path], list[Path]] = _list_dir) -> list[Path]:
+            list_dir: Callable[[Path], list[Path]] | None = None) -> list[Path]:
     """Every level dir under `anchor`; a directory that cannot be listed goes into `skipped`.
 
-    One that no longer EXISTS is not unreadable - another process deleted it after its parent was
-    listed (a cache cleared mid-walk) - and it holds nothing, so it is passed over.
+    store_manifest's walk, so the scan and the backup it is compared against read the same level
+    set; a deleted-mid-walk directory is passed over there, not filed as unreadable.
     """
-    found, stack = [], [Path(anchor)]
-    while stack:
-        d = stack.pop()
-        try:
-            entries = list_dir(d)
-        except (FileNotFoundError, NotADirectoryError):
-            continue
-        except OSError as exc:
-            skipped.append(f"{d} ({type(exc).__name__})")
-            continue
-        for e in entries:
-            if e.is_dir() and not e.is_symlink() and not _is_pruned(e.name):
-                stack.append(e)
-            elif e.is_file() and e.name == LEVEL_FILE:
-                found.append(d)
-    return sorted(found)
+    if list_dir is None:
+        return levels_under(anchor, (), skipped)
+    return levels_under(anchor, (), skipped, list_dir=list_dir)
 
 
 def _read(path: Path, skipped: list[str]) -> str | None:

@@ -167,8 +167,12 @@ def _load(path, name):
 @pytest.mark.parametrize("name", [".venv", ".venv-3.12", "venv", "venv-foo", "venv_bar",
                                   "venvnotes", "myvenv", "target", "site-packages", "src",
                                   us.STORE_DIRNAME, us.STORE_DIRNAME + "-migration-backup-1"])
-def test_the_dream_s_level_walks_prune_by_the_engine_s_rule(name):
+def test_the_dream_s_level_walks_prune_by_the_engine_s_rule(name, tmp_path):
     manifest = _load(DREAM / "store_manifest.py", "store_manifest_venv_probe")
     dedup = _load(DREAM / "dedup_scan.py", "dedup_scan_venv_probe")
     want = us.is_non_level_dirname(name)
-    assert manifest.is_pruned_dir(name) is want and dedup._is_pruned(name) is want
+    assert manifest.is_pruned_dir(name) is want
+    # dedup_scan has no prune rule of its own: it walks with store_manifest's, so ask its walk.
+    (tmp_path / name).mkdir()
+    (tmp_path / name / "CLAUDE.local.md").write_text("# Memory index\n", encoding="utf-8")
+    assert (tmp_path / name in dedup._levels(tmp_path, [])) is not want
