@@ -126,7 +126,10 @@ violation.
    a capture carve-out write. Otherwise the manifest diff and the chain check never see the fold.
 2. **Back up + manifest** the CHAIN's levels only (per the core), widened to a descendant level
    step 1 wrote at (see step 1): `store_manifest.py backup --from <cwd> --scope chain --out <dir>`
-   (home: `<plugin>/skills/meta-dream-tree/`), with `<dir>` a new directory in the scratchpad.
+   (home: `<plugin>/skills/meta-dream-tree/`), with `<dir>` the core's durable backup home,
+   `~/.claude/self-improve-audit/backups/nap-<cwd dir name>-<timestamp>` (`<timestamp>` from
+   `date +%Y%m%d-%H%M%S`), never the session scratchpad: a reboot empties that, and a rollback
+   needs the backup after the session is gone.
    Only that command's backup counts: a hand-copied backup, or a manifest in any other layout,
    leaves step 6 nothing to verify, because `verify` and a rollback read only its `manifest.json`.
 2b. **Read the toolbox inventory** - `uv run ~/.claude/skills/toolbox/tools/toolbox.py list`, the
