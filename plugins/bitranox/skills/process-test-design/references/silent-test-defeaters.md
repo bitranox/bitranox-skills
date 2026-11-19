@@ -910,27 +910,36 @@ things, or it flakes just above its ceiling and each "widen the repeats" fix onl
    it faults in fresh pages on every scan while the n arm reuses its buffers. A linear scan then
    reads super-linear, and a "cache step" seen through `thread_time` is mostly this (measured: the
    large arm spent 33-35% of its time in the kernel, the small one 0%; the thread-time ratio read
-   24-27x where user time read 15-18x). On POSIX read
-   `resource.getrusage(resource.RUSAGE_THREAD).ru_utime` (`RUSAGE_SELF` where there is no
-   `RUSAGE_THREAD`, as on macOS, where it counts every thread of the process), which steps in
-   microseconds; `os.times().user` reads the same time in whole clock ticks, 10 ms on Linux
-   (`os.sysconf("SC_CLK_TCK")` is 100), too coarse for a short arm. Windows has no `resource`
-   module: `os.times().user` reads its process user time there. On any platform, measure the step
-   of the clock you pick (read it in a loop until it changes) and keep every arm well above it.
+   24-27x where user time read 15-18x). On POSIX, macOS included, read
+   `resource.getrusage(resource.RUSAGE_SELF).ru_utime`, which counts every thread of the process
+   (keep other threads idle while timing). Measured on Linux around a busy-loop arm: it read a
+   0.1 ms arm as 0.1 ms, while `RUSAGE_THREAD` (Linux only) read it as 0.0 or about 1 ms, and
+   `os.times().user` reads whole clock ticks, 10 ms there (`os.sysconf("SC_CLK_TCK")` is 100).
+   On Windows every CPU-time clock (`os.times().user`, `time.process_time()`,
+   `time.thread_time()`) stepped 15.625 ms, and a 2 ms arm read 0.0 in 18 of 20 runs: make each
+   arm run for hundreds of milliseconds there, and fall back to `time.perf_counter()` (accepting
+   the runner's load in both arms) only where an arm cannot be made that long. On any platform,
+   measure how the clock you pick reads an arm of known length (a busy loop, not a loop of clock
+   reads, which is mostly kernel time) and keep every arm far above its step.
 2. Give both arms EQUAL windows before taking the minimum of N: time the n arm as k back-to-back
    scans and divide by k. A short pass can fall wholly inside a fast moment of the runner, while a
    long one only averages over it.
 3. A test that must CAUSE page faults takes a fresh anonymous `mmap` per round: glibc hands a
-   freed large buffer straight back, already faulted in.
-4. Never divide by an arm that did no MEASURABLE work. A negative case whose input never enters
-   the costly path (a pattern that fails at the first character of its text) does constant work
-   in both arms, so both finish below the clock's step: the small arm can read 0.0 and the ratio
-   divides by zero (measured on macOS), or the ratio of two sub-microsecond readings passes by
-   luck. Such a case is cheap by design, so keep its input and change the check: return both arm
-   times rather than their ratio, let a large arm under a floor the bad case could never reach
-   (one the super-linear case over that arm exceeds by orders of magnitude) pass the linearity
-   check without a ratio, and guard the super-linear assertion with `small > 0`. RED the floor
-   with a known super-linear case at a small n: it must still read not-linear.
+   freed large buffer straight back, already faulted in. Fault handling is kernel time, which
+   user time leaves out (measured: faulting in 256 MiB of fresh pages cost 0.086 s of system time
+   and 0.008 s of user time), so where the faults ARE the cost under test, read
+   `ru_utime + ru_stime` and give every arm fresh pages, so all arms fault alike.
+4. Both arms must do MEASURABLE work. A negative case whose input never enters the costly path
+   (`^\s+x` on `"a" * N` fails at the first character) does constant work in both arms, so both
+   finish below the clock's step: the small arm can read 0.0 and the ratio divides by zero
+   (measured on macOS), or the ratio of two sub-microsecond readings passes by luck, and either
+   way the check asserts nothing about growth. First give the case an input that drives the
+   costly path, a run of what the pattern consumes (`" " * N` for `^\s+x`), sized so the small
+   arm stays far above the clock's step. Then keep a backstop for an arm that is still too fast:
+   return both arm times rather than their ratio, let a large arm under a floor the bad case could
+   never reach (one the super-linear case over that arm exceeds by orders of magnitude) pass the
+   linearity check without a ratio, and guard the super-linear assertion with `small > 0`. RED
+   the floor with a known super-linear case at a small n: it must still read not-linear.
 
 RED each with a virtual-clock test: a fast window placed inside the first short pass (for 2), and
 a simulated load keyed to work done rather than to the scan count, since a cost that raises its own
