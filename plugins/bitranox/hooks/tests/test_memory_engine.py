@@ -240,7 +240,7 @@ def test_heal_creates_missing_pointer_block(proj):
     local = sig.claude_local_md_path(proj).read_text(encoding="utf-8")
     assert us.INDEX_BEGIN in local                                   # pointer block wired in
     assert "@import" not in local
-    assert rep["levels"] >= 1
+    assert rep.levels >= 1
 
 
 def test_heal_normalizes_a_malformed_scope_block(proj):
@@ -262,14 +262,14 @@ def test_heal_reports_missing_central_body_not_fabricated(proj):
     assert body.is_file()
     body.unlink()                                                    # delete the body -> unreconstructable
     rep = E.heal(proj)
-    assert (proj, slug) in rep["orphans"]                            # reported...
+    assert (proj, slug) in rep.orphans                            # reported...
     assert not body.is_file()                                       # ...NOT fabricated
 
 
 def test_heal_idempotent(proj):
     E.heal(proj)
     rep2 = E.heal(proj)
-    assert rep2["healed"] == []                                      # second pass changes nothing
+    assert rep2.healed == []                                      # second pass changes nothing
 
 
 def test_heal_scaffolds_every_level_up_to_the_anchor(tmp_path):
@@ -411,7 +411,7 @@ def test_move_up_relocates_pointer_only_body_untouched(tmp_path):
     body = us.body_path(anchor, "shared-rule")
     before = body.read_text(encoding="utf-8")
     rep = E.move_entry(proj, mid, "shared-rule")
-    assert rep["moved"] is True and rep["refused"] is None and rep["direction"] == "up"
+    assert rep.moved is True and rep.refused is None and rep.direction == "up"
     assert body.read_text(encoding="utf-8") == before            # body file untouched
     _s, ptrs_from = us.parse_pointer_index((Path(proj) / "CLAUDE.local.md").read_text(encoding="utf-8"))
     assert "shared-rule" not in {p.slug for p in ptrs_from}      # gone at source
@@ -425,7 +425,7 @@ def test_move_down_works_without_refs(tmp_path):
     anchor, mid, proj = _three_levels(tmp_path)
     E.add_or_update_entry(anchor, "Proj detail", "belongs lower", body="B", scope_default="a")
     rep = E.move_entry(anchor, proj, "proj-detail")
-    assert rep["moved"] is True and rep["direction"] == "down"
+    assert rep.moved is True and rep.direction == "down"
     assert "proj-detail" in {p.slug for p in us.parse_pointer_index(
         (Path(proj) / "CLAUDE.local.md").read_text(encoding="utf-8"))[1]}
 
@@ -435,9 +435,9 @@ def test_move_down_refused_when_a_ref_would_dangle_force_overrides(tmp_path):
     E.add_or_update_entry(anchor, "Base rule", "the base", body="B", scope_default="a")
     E.add_or_update_entry(mid, "Citing fact", "builds on [[base-rule]]", body="B2", scope_default="m")
     rep = E.move_entry(anchor, proj, "base-rule")
-    assert rep["moved"] is False and "dangle" in (rep["refused"] or "")
+    assert rep.moved is False and "dangle" in (rep.refused or "")
     rep2 = E.move_entry(anchor, proj, "base-rule", force=True)
-    assert rep2["moved"] is True and rep2["warnings"]            # forced through, with a warning
+    assert rep2.moved is True and rep2.warnings            # forced through, with a warning
 
 
 def test_move_refusals_sibling_sametree_crosslevel(tmp_path):
@@ -445,15 +445,15 @@ def test_move_refusals_sibling_sametree_crosslevel(tmp_path):
     sib = Path(anchor) / "sibling"
     sib.mkdir(); (sib / "CLAUDE.md").write_text("x\n", encoding="utf-8")
     E.add_or_update_entry(proj, "F", "h", body="B", scope_default="p")
-    assert "sibling" in (E.move_entry(proj, str(sib), "f")["refused"] or "")
-    assert E.move_entry(proj, proj, "f")["refused"]              # same level
-    assert "not found" in (E.move_entry(mid, anchor, "nope")["refused"] or "")
+    assert "sibling" in (E.move_entry(proj, str(sib), "f").refused or "")
+    assert E.move_entry(proj, proj, "f").refused              # same level
+    assert "not found" in (E.move_entry(mid, anchor, "nope").refused or "")
 
 
 def test_move_refuses_cross_tree(two_trees):
     E.add_or_update_entry(str(two_trees.proj_a), "F", "h", body="B", scope_default="p")
     rep = E.move_entry(str(two_trees.proj_a), str(two_trees.top_b), "f")
-    assert rep["moved"] is False and "tree" in (rep["refused"] or "")
+    assert rep.moved is False and "tree" in (rep.refused or "")
 
 
 def test_move_completes_after_crash_duplicate(tmp_path):
@@ -463,7 +463,7 @@ def test_move_completes_after_crash_duplicate(tmp_path):
     E.add_or_update_entry(proj, "F", "h", body="B", scope_default="p")
     us.add_pointer(mid, slug="f", title="F", hook="h")   # simulated crash residue
     rep = E.move_entry(proj, mid, "f")
-    assert rep["moved"] is True
+    assert rep.moved is True
     _s, ptrs = us.parse_pointer_index((Path(mid) / "CLAUDE.local.md").read_text(encoding="utf-8"))
     assert len([p for p in ptrs if p.slug == "f"]) == 1          # merged to a single line
     assert "f" not in {p.slug for p in us.parse_pointer_index(
@@ -479,7 +479,7 @@ def test_move_refuses_divergent_duplicate_target_no_silent_overwrite(tmp_path):
     us.add_pointer(mid, slug="tell-sweep", title="Tell sweep",
                    hook="RICH target hook naming strip_typographic_tells.py and reformat_tables.py")
     rep = E.move_entry(proj, mid, "tell-sweep")
-    assert rep["moved"] is False and "duplicate" in (rep["refused"] or "")
+    assert rep.moved is False and "duplicate" in (rep.refused or "")
     tgt = {p.slug: p for p in us.parse_pointer_index((Path(mid) / "CLAUDE.local.md").read_text(encoding="utf-8"))[1]}
     assert tgt["tell-sweep"].hook.startswith("RICH target hook")          # target hook intact
     srcp = {p.slug: p for p in us.parse_pointer_index((Path(proj) / "CLAUDE.local.md").read_text(encoding="utf-8"))[1]}
@@ -494,7 +494,7 @@ def test_move_force_dedup_keeps_longer_hook_when_source_is_richer(tmp_path):
                           body="B", scope_default="p")
     us.add_pointer(mid, slug="fact", title="Fact", hook="thin")
     rep = E.move_entry(proj, mid, "fact", force=True)
-    assert rep["moved"] is True and rep["warnings"]
+    assert rep.moved is True and rep.warnings
     tgt = {p.slug: p for p in us.parse_pointer_index((Path(mid) / "CLAUDE.local.md").read_text(encoding="utf-8"))[1]}
     assert tgt["fact"].hook.startswith("a much longer richer hook")       # longer hook won
     assert "fact" not in {p.slug for p in us.parse_pointer_index(
@@ -508,7 +508,7 @@ def test_move_force_dedup_keeps_longer_hook_when_target_is_richer(tmp_path):
     E.add_or_update_entry(mid, "Fact", "thin", body="B", scope_default="m")           # source: thin
     us.add_pointer(proj, slug="fact", title="Fact", hook="the much longer richer target hook here")
     rep = E.move_entry(mid, proj, "fact", force=True)                                 # down-move dedup
-    assert rep["moved"] is True
+    assert rep.moved is True
     tgt = {p.slug: p for p in us.parse_pointer_index((Path(proj) / "CLAUDE.local.md").read_text(encoding="utf-8"))[1]}
     assert tgt["fact"].hook.startswith("the much longer richer target hook")
     assert "fact" not in {p.slug for p in us.parse_pointer_index(
@@ -525,7 +525,7 @@ def test_move_refuses_unmigrated_legacy_entry(tmp_path):
         "%s\n# Memory index\n- [Old](uuid:%s) - h <!-- bx:slug=old-fact -->\n%s\n"
         % (us.LEGACY_INDEX_BEGIN, u, us.LEGACY_INDEX_END), encoding="utf-8")
     rep = E.move_entry(proj, mid, "old-fact")
-    assert rep["moved"] is False and "migrate" in (rep["refused"] or "").lower()
+    assert rep.moved is False and "migrate" in (rep.refused or "").lower()
 
 
 # ---- move: a SET of slugs that moves TOGETHER (the mutually-citing pair the guard could not free)
@@ -553,8 +553,8 @@ def test_move_down_single_slug_deadlocks_on_a_mutually_citing_pair(tmp_path):
     # really would leave a ref above its target. The set form below is the correct way out.
     anchor, mid, proj = _three_levels(tmp_path)
     a, b = _citing_pair(anchor)
-    assert "dangle" in (E.move_entry(anchor, proj, a)["refused"] or "")
-    assert "dangle" in (E.move_entry(anchor, proj, b)["refused"] or "")
+    assert "dangle" in (E.move_entry(anchor, proj, a).refused or "")
+    assert "dangle" in (E.move_entry(anchor, proj, b).refused or "")
     assert _slugs_at(anchor) == {a, b}                     # neither moved, nothing lost
 
 
@@ -564,8 +564,8 @@ def test_move_down_multi_slug_releases_the_mutually_citing_pair(tmp_path):
     anchor, mid, proj = _three_levels(tmp_path)
     a, b = _citing_pair(anchor)
     rep = E.move_entry(anchor, proj, [a, b])
-    assert rep["moved"] is True and rep["refused"] is None and rep["direction"] == "down"
-    assert rep["slugs"] == [a, b] and rep["moved_slugs"] == [a, b]
+    assert rep.moved is True and rep.refused is None and rep.direction == "down"
+    assert rep.slugs == [a, b] and rep.moved_slugs == [a, b]
     assert _slugs_at(proj) == {a, b} and _slugs_at(anchor) == set()
     assert us.body_path(anchor, a).is_file()               # bodies never move, only pointers
 
@@ -579,7 +579,7 @@ def test_move_multi_slug_is_order_independent(tmp_path):
         anchor, _mid, proj = _three_levels(root)
         a, b = _citing_pair(anchor)
         rep = E.move_entry(anchor, proj, [{"a": a, "b": b}[k] for k in order])
-        return rep["moved"], _slugs_at(proj), _slugs_at(anchor)
+        return rep.moved, _slugs_at(proj), _slugs_at(anchor)
 
     assert run(["a", "b"]) == run(["b", "a"]) == (True, {"fact-a", "fact-b"}, set())
 
@@ -592,11 +592,11 @@ def test_move_multi_slug_still_refuses_a_citer_outside_the_set(tmp_path):
     a, b = _citing_pair(anchor)
     E.add_or_update_entry(mid, "Outsider", "also builds on [[fact-a]]", body="C", scope_default="m")
     rep = E.move_entry(anchor, proj, [a, b])
-    assert rep["moved"] is False and "dangle" in (rep["refused"] or "")
-    assert "outsider" in rep["refused"]                    # the blocking citer is named
+    assert rep.moved is False and "dangle" in (rep.refused or "")
+    assert "outsider" in rep.refused                    # the blocking citer is named
     assert _slugs_at(anchor) == {a, b} and _slugs_at(proj) == set()      # nothing moved
     rep2 = E.move_entry(anchor, proj, [a, b], force=True)  # --force still overrides, with a warning
-    assert rep2["moved"] is True and rep2["warnings"] and _slugs_at(proj) == {a, b}
+    assert rep2.moved is True and rep2.warnings and _slugs_at(proj) == {a, b}
 
 
 def test_move_multi_slug_exemption_covers_only_the_pointer_that_moves(tmp_path):
@@ -607,7 +607,7 @@ def test_move_multi_slug_exemption_covers_only_the_pointer_that_moves(tmp_path):
     a, b = _citing_pair(anchor)
     us.add_pointer(mid, slug=b, title="Fact b", hook="stray copy citing [[fact-a]]")
     rep = E.move_entry(anchor, proj, [a, b])
-    assert rep["moved"] is False and "dangle" in (rep["refused"] or "")
+    assert rep.moved is False and "dangle" in (rep.refused or "")
     assert _slugs_at(anchor) == {a, b}
 
 
@@ -618,7 +618,7 @@ def test_move_multi_slug_refusal_is_atomic_nothing_moves(tmp_path):
     anchor, mid, proj = _three_levels(tmp_path)
     a, b = _citing_pair(anchor)
     rep = E.move_entry(anchor, proj, [a, b, "no-such-fact"])
-    assert rep["moved"] is False and "not found" in (rep["refused"] or "")
+    assert rep.moved is False and "not found" in (rep.refused or "")
     assert _slugs_at(anchor) == {a, b} and _slugs_at(proj) == set()
 
 
@@ -630,7 +630,7 @@ def test_move_multi_slug_divergent_duplicate_refuses_before_any_write(tmp_path):
     a, b = _citing_pair(anchor)
     us.add_pointer(proj, slug=b, title="Fact b", hook="a DIFFERENT hook already at the target")
     rep = E.move_entry(anchor, proj, [a, b])
-    assert rep["moved"] is False and "duplicate" in (rep["refused"] or "")
+    assert rep.moved is False and "duplicate" in (rep.refused or "")
     assert _slugs_at(anchor) == {a, b}                     # a was NOT moved ahead of the refusal
 
 
@@ -647,8 +647,8 @@ def test_move_multi_slug_legacy_member_refuses_and_names_it(tmp_path):
         us.INDEX_END, "- [Old](uuid:%s) - h <!-- bx:slug=old-fact -->\n%s" % (u, us.INDEX_END)),
         encoding="utf-8")
     rep = E.move_entry(mid, proj, ["fresh", "old-fact"])
-    assert rep["moved"] is False and "migrate" in (rep["refused"] or "").lower()
-    assert "old-fact" in rep["refused"] and _slugs_at(proj) == set()
+    assert rep.moved is False and "migrate" in (rep.refused or "").lower()
+    assert "old-fact" in rep.refused and _slugs_at(proj) == set()
 
 
 def test_cli_move_accepts_a_set_and_keeps_the_single_slug_form(tmp_path, capsys):
@@ -743,16 +743,16 @@ def test_tree_top_reports_top_store_and_bootstrap(two_trees):
 
 def test_ensure_all_trees_dry_run_reports_and_writes_nothing(two_trees):
     rep = E.ensure_all_trees(roots=[str(two_trees.root)], apply=False)
-    assert {t["top"] for t in rep["trees"]} == {str(two_trees.top_a), str(two_trees.top_b)}
-    assert all(t["created"] == [] for t in rep["trees"])
+    assert {t.top for t in rep.trees} == {str(two_trees.top_a), str(two_trees.top_b)}
+    assert all(t.created == [] for t in rep.trees)
     # the gap level (campaigns/) got NO scaffold in dry-run
     assert not (two_trees.top_a / "campaigns" / "CLAUDE.local.md").exists()
 
 
 def test_ensure_all_trees_apply_scaffolds_every_member_chain(two_trees):
     rep = E.ensure_all_trees(roots=[str(two_trees.root)], apply=True)
-    for tr in rep["trees"]:
-        assert tr["status"] == "ok"
+    for tr in rep.trees:
+        assert tr.status is E.TreeStatus.OK
     # both trees fully prefilled: every rung between deepest CLAUDE.md and top has both files
     for lvl in (two_trees.proj_a, two_trees.top_a / "campaigns", two_trees.top_a,
                 two_trees.proj_b, two_trees.top_b / "recipes", two_trees.top_b):
@@ -766,12 +766,12 @@ def test_ensure_all_trees_refuses_stray_top_bootstrap(two_trees):
     # a stray CLAUDE.md ABOVE both store-bearing trees must never merge them
     (two_trees.root / "CLAUDE.md").write_text("stray\n", encoding="utf-8")
     rep = E.ensure_all_trees(roots=[str(two_trees.root)], apply=True)
-    by_top = {t["top"]: t for t in rep["trees"]}
+    by_top = {t.top: t for t in rep.trees}
     stray = by_top[str(two_trees.root)]
-    assert stray["status"] == "ambiguous" and "merge" in stray["why"]
-    assert stray["created"] == []
+    assert stray.status is E.TreeStatus.AMBIGUOUS and "merge" in stray.why
+    assert stray.created == []
     assert not (two_trees.root / "CLAUDE.local.md").exists()   # nothing scaffolded at the stray top
-    assert by_top[str(two_trees.top_a)]["status"] == "ok"      # real trees still scaffolded
+    assert by_top[str(two_trees.top_a)].status is E.TreeStatus.OK    # real trees still scaffolded
 
 
 def test_ensure_all_trees_scaffolds_isolated_bootstrap_tree(tmp_path, monkeypatch):
@@ -782,7 +782,7 @@ def test_ensure_all_trees_scaffolds_isolated_bootstrap_tree(tmp_path, monkeypatc
     (tmp_path / "solo" / "CLAUDE.md").write_text("x\n", encoding="utf-8")
     (solo / "CLAUDE.md").write_text("x\n", encoding="utf-8")
     rep = E.ensure_all_trees(roots=[str(tmp_path / "solo")], apply=True)
-    assert rep["trees"][0]["status"] == "ok"                   # bootstrap alone is legitimate
+    assert rep.trees[0].status is E.TreeStatus.OK                # bootstrap alone is legitimate
     assert (solo / "CLAUDE.local.md").is_file()
 
 
@@ -822,7 +822,7 @@ def test_heal_healthy_chain_takes_no_lock(proj, monkeypatch):
     real_lock = sig.memory_lock
     monkeypatch.setattr(sig, "memory_lock", lambda p: calls.append(str(p)) or real_lock(p))
     rep = E.heal(proj)
-    assert rep["healed"] == [] and calls == []                   # read-only pass, zero locks
+    assert rep.healed == [] and calls == []                   # read-only pass, zero locks
 
 
 def test_heal_still_repairs_when_needed(proj, monkeypatch):
@@ -831,7 +831,7 @@ def test_heal_still_repairs_when_needed(proj, monkeypatch):
     local.write_text(local.read_text(encoding="utf-8").replace("# Memory index", "# memory index"),
                      encoding="utf-8")
     rep = E.heal(proj)
-    assert rep["healed"]                                         # repaired via the lock path
+    assert rep.healed                                         # repaired via the lock path
     assert "# Memory index" in local.read_text(encoding="utf-8")
 
 
@@ -846,7 +846,7 @@ def test_heal_orphan_check_does_not_read_body_contents(proj, monkeypatch):
         return real_read(self, *a, **k)
     monkeypatch.setattr(Path, "read_text", spy)
     rep = E.heal(proj)
-    assert rep["orphans"] == [] and reads == []                  # stat-only, bodies never opened
+    assert rep.orphans == [] and reads == []                  # stat-only, bodies never opened
 
 
 # ---- authentic body shape: capture wraps bodies in the native memory-entry frame ----------------
@@ -1046,7 +1046,7 @@ def test_relocate_cross_tree_moves_body_and_leaves_no_duplicate(two_trees):
     E.add_or_update_entry(str(two_trees.proj_a), "Bakery Oven Rule", "When baking, preheat.",
                           body="The oven needs 20 minutes.", scope_default="p")
     rep = E.relocate_entry(str(two_trees.proj_a), str(two_trees.proj_b), "bakery-oven-rule")
-    assert rep["relocated"] is True and rep["cross_tree"] is True, rep
+    assert rep.relocated is True and rep.cross_tree is True, rep
 
     # present in the target tree: pointer + body
     _s, ptrs = us.parse_pointer_index(
@@ -1075,7 +1075,7 @@ def test_relocate_same_tree_delegates_to_move(tmp_path):
     anchor, mid, proj = _three_levels(tmp_path)
     E.add_or_update_entry(proj, "F", "h", body="B", scope_default="p")
     rep = E.relocate_entry(proj, mid, "f")
-    assert rep["relocated"] is True and rep["cross_tree"] is False
+    assert rep.relocated is True and rep.cross_tree is False
     assert us.body_path(us.resolve_anchor(proj), "f").is_file()   # body untouched, still live
     _s, ptrs = us.parse_pointer_index((Path(mid) / "CLAUDE.local.md").read_text(encoding="utf-8"))
     assert "f" in {p.slug for p in ptrs}
@@ -1087,7 +1087,7 @@ def test_relocate_refuses_when_target_tree_has_a_divergent_slug(two_trees):
     E.add_or_update_entry(str(two_trees.proj_b), "F", "hook two - different", body="B2",
                           scope_default="p")
     rep = E.relocate_entry(str(two_trees.proj_a), str(two_trees.proj_b), "f")
-    assert rep["relocated"] is False and "already" in (rep["refused"] or "").lower(), rep
+    assert rep.relocated is False and "already" in (rep.refused or "").lower(), rep
     # nothing destroyed on either side
     assert "B1" in _body_text(two_trees.proj_a, "f")
     assert "B2" in _body_text(two_trees.proj_b, "f")
@@ -1099,7 +1099,7 @@ def test_relocate_refuses_when_it_would_dangle_an_inbound_ref(two_trees):
     E.add_or_update_entry(str(two_trees.proj_a), "Citer", "c", body="see [[target]]",
                           scope_default="p")
     rep = E.relocate_entry(str(two_trees.proj_a), str(two_trees.proj_b), "target")
-    assert rep["relocated"] is False and "dangl" in (rep["refused"] or "").lower(), rep
+    assert rep.relocated is False and "dangl" in (rep.refused or "").lower(), rep
 
 
 def test_relocate_force_overrides_the_dangling_refusal_with_a_warning(two_trees):
@@ -1107,12 +1107,12 @@ def test_relocate_force_overrides_the_dangling_refusal_with_a_warning(two_trees)
     E.add_or_update_entry(str(two_trees.proj_a), "Citer", "c", body="see [[target]]",
                           scope_default="p")
     rep = E.relocate_entry(str(two_trees.proj_a), str(two_trees.proj_b), "target", force=True)
-    assert rep["relocated"] is True and any("dangl" in w.lower() for w in rep["warnings"]), rep
+    assert rep.relocated is True and any("dangl" in w.lower() for w in rep.warnings), rep
 
 
 def test_relocate_missing_slug_is_refused(two_trees):
     rep = E.relocate_entry(str(two_trees.proj_a), str(two_trees.proj_b), "nope")
-    assert rep["relocated"] is False and "not found" in (rep["refused"] or "")
+    assert rep.relocated is False and "not found" in (rep.refused or "")
 
 
 # ---- an empty body on a NEW fact is data loss, not a terse entry --------------------------------
@@ -1161,8 +1161,8 @@ def test_move_refusal_names_the_field_that_actually_differs(tmp_path):
     E.add_or_update_entry(proj, "Dag scheduler", same_hook, body="B", scope_default="p")
     us.add_pointer(mid, slug="dag-scheduler", title="The Dag scheduler", hook=same_hook)
     rep = E.move_entry(proj, mid, "dag-scheduler")
-    assert rep["moved"] is False
-    msg = rep["refused"] or ""
+    assert rep.moved is False
+    msg = rep.refused or ""
     assert "TITLE" in msg, msg
     assert "DIFFERENT hook" not in msg, msg
 
@@ -1174,8 +1174,8 @@ def test_move_refusal_still_names_the_hook_when_the_hook_differs(tmp_path):
     E.add_or_update_entry(proj, "Fact", "thin source hook", body="B", scope_default="p")
     us.add_pointer(mid, slug="fact", title="Fact", hook="a much richer target hook with detail")
     rep = E.move_entry(proj, mid, "fact")
-    assert rep["moved"] is False
-    assert "HOOK" in (rep["refused"] or ""), rep["refused"]
+    assert rep.moved is False
+    assert "HOOK" in (rep.refused or ""), rep.refused
 
 
 def test_update_with_a_new_body_keeps_the_stored_type(proj):

@@ -504,16 +504,16 @@ def test_scaffold_hands_a_refused_level_to_the_callers_list(tmp_path):
     _anchor, proj = _tree(tmp_path)
     _legacy_md(proj, SCOPE + "\nTOPICS: Not A Tag!")
     refused = []
-    E.scaffold(proj, refused=refused)
-    assert [level for level, _why in refused] == [proj]
-    assert "does not parse" in refused[0][1]
+    E.scaffold(proj, refused_levels=refused)
+    assert [left.level for left in refused] == [proj]
+    assert "does not parse" in refused[0].reason
 
 
 def test_ensure_all_trees_reports_a_member_it_refused(tmp_path):
     _anchor, proj = _tree(tmp_path)
     _legacy_md(proj, SCOPE + "\nTOPICS: Not A Tag!")
     rep = E.ensure_all_trees(roots=[str(tmp_path)], apply=True)
-    refused = [level for tr in rep["trees"] for level, _why in tr["refused"]]
+    refused = [left.level for tr in rep.trees for left in tr.refused_levels]
     assert refused == [proj]
 
 
@@ -521,8 +521,8 @@ def test_heal_names_the_legacy_level_it_refused_and_heals_the_rest(tmp_path, cap
     anchor, proj = _tree(tmp_path)
     md, before = _legacy_md(proj, SCOPE + "\nTOPICS: Not A Tag!")
     rep = E.heal(proj)
-    assert [level for level, _why in rep["refused"]] == [proj]
-    assert rep["unreadable"] == []
+    assert [level for level, _why in rep.refused_levels] == [proj]
+    assert rep.unreadable == []
     assert md.read_bytes() == before
     assert not sig.claude_local_md_path(proj).exists()
     assert sig.claude_local_md_path(anchor).exists()
@@ -534,7 +534,7 @@ def test_heal_names_the_legacy_level_it_refused_and_heals_the_rest(tmp_path, cap
 def test_heal_under_writes_off_carries_an_empty_refused_list(tmp_path, monkeypatch):
     _anchor, proj = _tree(tmp_path)
     monkeypatch.setenv("BITRANOX_MEMORY_WRITES", "off")
-    assert E.heal(proj)["refused"] == []
+    assert E.heal(proj).refused_levels == []
 
 
 def test_set_scope_carrying_the_legacy_blocks_own_topics_is_accepted(tmp_path, capsys):

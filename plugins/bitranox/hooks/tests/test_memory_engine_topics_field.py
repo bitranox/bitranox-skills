@@ -323,5 +323,5 @@ def test_a_same_tree_move_keeps_the_topics_line(tmp_path):
     _tag_raw(str(anchor), slug, "topics: []")
     before = us.body_path(anchor, slug).read_bytes()
     rep = E.relocate_entry(str(proj), str(anchor), slug)
-    assert rep["relocated"] and not rep["cross_tree"]
+    assert rep.relocated and not rep.cross_tree
     assert us.body_path(anchor, slug).read_bytes() == before

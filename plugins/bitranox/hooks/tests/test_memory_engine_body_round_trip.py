@@ -128,8 +128,8 @@ def test_a_sibling_move_refusal_names_the_common_ancestor_route(tmp_path):
     (anchor / us.STORE_DIRNAME).mkdir()
     ME.add_or_update_entry(str(a), "F", "When f, do g.", body="B", scope_default="a")
     rep = ME.move_entry(str(a), str(b), "f")
-    assert rep["moved"] is False
-    refused = rep["refused"] or ""
+    assert rep.moved is False
+    refused = rep.refused or ""
     assert "sibling" in refused
     # dept carries no CLAUDE.local.md, so the nearest LEVEL above both is the anchor.
     assert str(anchor.resolve()) in refused, refused
@@ -148,5 +148,5 @@ def test_the_route_names_a_nearer_common_level_when_one_exists(tmp_path):
     (anchor / us.STORE_DIRNAME).mkdir()
     ME.ensure_level(str(dept), scope_default="dept")
     ME.add_or_update_entry(str(a), "F", "When f, do g.", body="B", scope_default="a")
-    refused = ME.move_entry(str(a), str(b), "f")["refused"] or ""
+    refused = ME.move_entry(str(a), str(b), "f").refused or ""
     assert "--to-level %s" % Path(dept).resolve() in refused, refused

@@ -165,7 +165,7 @@ def test_a_move_ending_exactly_at_the_cap_goes_through(tmp_path):
     sizes = _moving(b)
     _fill(a, CAP - sizes["feedback-mv-big"])
     rep = E.move_entry(b, a, "feedback-mv-big")
-    assert rep["moved"] is True and rep["refused"] is None and _bytes(a) == CAP
+    assert rep.moved is True and rep.refused is None and _bytes(a) == CAP
 
 
 def test_a_down_move_is_held_to_the_cap_too(tmp_path):
@@ -173,7 +173,7 @@ def test_a_down_move_is_held_to_the_cap_too(tmp_path):
     _plant(a, [us.Pointer(slug="feedback-down", title="T", hook="k" * 200)])
     _fill(b, CAP - 50)
     rep = E.move_entry(a, b, "feedback-down")
-    assert rep["moved"] is False and "bytes over the %d bytes" % CAP in rep["refused"]
+    assert rep.moved is False and "bytes over the %d bytes" % CAP in rep.refused
     assert _slugs(a) == ["feedback-down"]
 
 
@@ -185,7 +185,7 @@ def test_completing_an_interrupted_move_onto_an_over_full_level_is_not_refused(t
     _fill(a, CAP + 100)
     _plant(a, [us.Pointer(slug="feedback-mv-big", title="T", hook="k" * 480)])
     rep = E.move_entry(b, a, "feedback-mv-big")
-    assert rep["moved"] is True and rep["refused"] is None
+    assert rep.moved is True and rep.refused is None
     assert "feedback-mv-big" not in _slugs(b) and _bytes(a) == CAP + 100 + sizes["feedback-mv-big"]
 
 
@@ -197,5 +197,5 @@ def test_a_forced_dedup_counts_the_kept_line_in_place_of_the_old_one(tmp_path):
     _plant(a, [us.Pointer(slug="feedback-dup", title="T", hook="k" * 300)])
     _fill(a, CAP - _bytes(a) - 100, prefix="feedback-fill")
     rep = E.move_entry(b, a, "feedback-dup", force=True)
-    assert rep["moved"] is True, rep["refused"]
+    assert rep.moved is True, rep.refused
     assert _bytes(a) == CAP and _slugs(b) == []

@@ -167,7 +167,7 @@ def test_a_set_holding_one_placed_fact_is_refused_whole(tmp_path):
     _anchor, levels = _rendered(tmp_path)
     _fact(levels["a/py"], "feedback-local")
     rep = E.move_entry(levels["a/py"], levels["a"], ["feedback-local", "feedback-py-rule"])
-    assert rep["moved"] is False and "placed by topic" in rep["refused"]
+    assert rep.moved is False and "placed by topic" in rep.refused
     assert _slugs(levels["a/py"]) == ["feedback-local", "feedback-py-rule"]
 
 
@@ -180,7 +180,7 @@ def test_move_still_moves_an_untagged_an_unbound_and_a_pinned_tagged_fact(tmp_pa
     us.put_body(anchor, "feedback-pinned", E._with_topics(path.read_text(encoding="utf-8"), ("python",)))
     for slug in ("feedback-local", "feedback-universal", "feedback-pinned"):
         rep = E.move_entry(levels["a/py"], levels["a"], slug)
-        assert rep["moved"] is True and rep["refused"] is None, slug
+        assert rep.moved is True and rep.refused is None, slug
     assert _slugs(levels["a"]) == ["feedback-local", "feedback-pinned", "feedback-universal"]
 
 
@@ -292,7 +292,7 @@ def test_an_ordinary_fact_is_written_as_before(tmp_path):
 def test_rename_reaches_every_line_without_calling_them_duplicates(tmp_path):
     anchor, levels = _rendered(tmp_path)
     rep = E.rename_entry(levels["a/py"], "feedback-py-rule", "feedback-py-rule-2")
-    assert rep["refused"] is None and not any("duplicate" in w for w in rep["warnings"])
+    assert rep.refused is None and not any("duplicate" in w for w in rep.warnings)
     assert _slugs(levels["a/py"]) == _slugs(levels["b/py"]) == ["feedback-py-rule-2"]
     assert E.read_body_topics(us.body_path(anchor, "feedback-py-rule-2")) == ("python",)
 
@@ -300,7 +300,7 @@ def test_rename_reaches_every_line_without_calling_them_duplicates(tmp_path):
 def test_retitle_reaches_every_line_without_calling_them_duplicates(tmp_path):
     anchor, levels = _rendered(tmp_path)
     rep = E.retitle_entry(levels["a/py"], "feedback-py-rule", "A better title")
-    assert rep["refused"] is None and not any("duplicate" in w for w in rep["warnings"])
+    assert rep.refused is None and not any("duplicate" in w for w in rep.warnings)
     assert _line(levels["b/py"], "feedback-py-rule").title == "A better title"
     assert E.render_topics(anchor, dry_run=True)["levels"] == {}
 
@@ -313,7 +313,7 @@ def test_a_real_duplicate_is_still_named_by_rename(tmp_path):
     pointers.append(us.Pointer(slug="feedback-plain", title="T feedback-plain", hook=HOOK))
     local.write_text(us.upsert_pointer_block(text, scope, pointers), encoding="utf-8")
     rep = E.rename_entry(anchor, "feedback-plain", "feedback-plain-2")
-    assert any("a pre-existing duplicate" in w for w in rep["warnings"])
+    assert any("a pre-existing duplicate" in w for w in rep.warnings)
 
 
 # ---- what "placed by topic" means: what the renderer manages --------------------------------------
@@ -334,7 +334,7 @@ def test_a_bound_fact_pinned_at_another_level_still_moves(tmp_path):
     us.add_pointer(levels["a/py"], "feedback-held", "T feedback-held", HOOK)
     us.add_pointer(levels["b"], "feedback-held", "T feedback-held", HOOK, pin=True)
     rep = E.move_entry(levels["a/py"], levels["a"], "feedback-held")
-    assert rep["moved"] is True and rep["refused"] is None
+    assert rep.moved is True and rep.refused is None
     assert "feedback-held" in _slugs(levels["a"]) and _line(levels["b"], "feedback-held").pin
 
 
@@ -349,7 +349,7 @@ def test_a_bound_fact_with_no_title_in_its_body_still_moves(tmp_path):
     us.put_body(anchor, "feedback-untitled", E._with_topics(untitled, ("python",)))
     assert E.read_body_topics(path) == ("python",)
     rep = E.move_entry(levels["a/py"], levels["a"], "feedback-untitled")
-    assert rep["moved"] is True and rep["refused"] is None
+    assert rep.moved is True and rep.refused is None
 
 
 def test_a_set_names_the_first_placed_member_in_the_order_given(tmp_path):
@@ -357,7 +357,7 @@ def test_a_set_names_the_first_placed_member_in_the_order_given(tmp_path):
     _fact(anchor, "feedback-py-two", ("python",))
     E.render_topics(anchor)
     rep = E.move_entry(levels["a/py"], levels["a"], ["feedback-py-two", "feedback-py-rule"])
-    assert rep["refused"].startswith("'feedback-py-two' is placed by topic")
+    assert rep.refused.startswith("'feedback-py-two' is placed by topic")
 
 
 @pytest.mark.parametrize("shape", ["pinned-elsewhere", "untitled"])

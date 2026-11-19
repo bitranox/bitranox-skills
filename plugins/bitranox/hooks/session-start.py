@@ -610,7 +610,7 @@ def _refused_heal_line(refused):
     """One context line naming the levels heal refused, or "" when it refused none."""
     if not refused:
         return ""
-    shown = ", ".join(str(level) for level, _why in refused[:_REFUSED_HEAL_SHOWN])
+    shown = ", ".join(str(left.level) for left in refused[:_REFUSED_HEAL_SHOWN])
     more = len(refused) - _REFUSED_HEAL_SHOWN
     rest = " and %d more" % more if more > 0 else ""
     return ("MEMORY STORE: the self-heal refused %d level(s) and left them untouched: %s%s. "
@@ -622,7 +622,7 @@ def _unreadable_heal_line(unreadable):
     """One context line naming the levels heal could not read, or "" when there were none."""
     if not unreadable:
         return ""
-    shown = ", ".join(str(level) for level, _why in unreadable[:_REFUSED_HEAL_SHOWN])
+    shown = ", ".join(str(left.level) for left in unreadable[:_REFUSED_HEAL_SHOWN])
     more = len(unreadable) - _REFUSED_HEAL_SHOWN
     rest = " and %d more" % more if more > 0 else ""
     return ("MEMORY STORE: the self-heal could not read %d level(s) and left them untouched: %s%s. "
@@ -644,8 +644,8 @@ def _self_heal(proj):
     try:
         import memory_engine
         report = memory_engine.heal(proj)
-        lines = (_refused_heal_line(report.get("refused") or []),
-                 _unreadable_heal_line(report.get("unreadable") or []))
+        lines = (_refused_heal_line(report.refused_levels),
+                 _unreadable_heal_line(report.unreadable))
         return "\n".join(line for line in lines if line)
     except Exception:  # noqa: BLE001 - a hook must never block a session
         return ""

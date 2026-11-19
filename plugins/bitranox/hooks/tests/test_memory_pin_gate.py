@@ -181,7 +181,7 @@ def test_pinned_fact_survives_move_and_the_gate_still_refuses_at_the_destination
                                  body="B", pin=True, scope_default="proj")
 
     rep = E.move_entry(proj, mid, slug)
-    assert rep["moved"] is True and rep["refused"] is None
+    assert rep.moved is True and rep.refused is None
 
     moved_ptr = _pointer(mid, slug)
     assert moved_ptr is not None and moved_ptr.pin is True   # pin threaded through the mover

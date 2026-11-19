@@ -147,13 +147,13 @@ def test_heal_reports_an_undecodable_level_instead_of_skipping_it(tree):
     the report without a word, which reads exactly like a healthy level."""
     bad = _spoil_level(tree / "sub")
     rep = E.heal(str(tree / "sub"))
-    assert [lvl for lvl, _why in rep["unreadable"]] == [str(tree / "sub")]
-    assert str(bad) in rep["unreadable"][0][1]
+    assert [lvl for lvl, _why in rep.unreadable] == [str(tree / "sub")]
+    assert str(bad) in rep.unreadable[0][1]
     assert bad.read_bytes().endswith(CP1252)            # nothing was rewritten over it
 
 
 def test_control_heal_reports_no_unreadable_level_on_a_utf8_tree(tree):
-    assert E.heal(str(tree / "sub"))["unreadable"] == []
+    assert E.heal(str(tree / "sub")).unreadable == []
 
 
 def test_the_heal_cli_prints_the_unreadable_level(tree, capsys):
@@ -230,7 +230,7 @@ def test_a_cross_tree_relocate_keeps_the_body_bytes(tree, tmp_path):
     body.write_bytes(raw)
     other = _second_tree(tmp_path)
     rep = E.relocate_entry(str(tree), str(other), "a-fact")
-    assert rep["relocated"], rep
+    assert rep.relocated, rep
     assert (other / ".claude-memory" / "facts" / "a-fact.md").read_bytes() == raw
 
 
@@ -239,5 +239,5 @@ def test_a_cross_tree_relocate_onto_an_undecodable_body_refuses_instead_of_crash
     clash = other / ".claude-memory" / "facts" / "a-fact.md"
     clash.write_bytes(BODY.encode("utf-8") + CP1252)
     rep = E.relocate_entry(str(tree), str(other), "a-fact")
-    assert not rep["relocated"] and "DIFFERENT body" in rep["refused"]
+    assert not rep.relocated and "DIFFERENT body" in rep.refused
     assert clash.read_bytes().endswith(CP1252)

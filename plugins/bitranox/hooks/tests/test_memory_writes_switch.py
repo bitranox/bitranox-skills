@@ -81,7 +81,7 @@ def test_every_write_verb_is_refused_at_the_cli(verb, tmp_path, monkeypatch, cap
 def test_heal_is_a_silent_no_op_when_off(tmp_path, monkeypatch):
     monkeypatch.setenv("BITRANOX_MEMORY_WRITES", "off")
     report = ME.heal(str(tmp_path))
-    assert report["skipped"] == sig.MEMORY_WRITES_OFF_LINE and report["healed"] == []
+    assert report.skipped == sig.MEMORY_WRITES_OFF_LINE and report.healed == []
     assert list(tmp_path.iterdir()) == []
 
 

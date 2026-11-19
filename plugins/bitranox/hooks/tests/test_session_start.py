@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+import memory_engine as ME
 import session_start as S
 import self_improve_signals as SIG
 
@@ -1335,7 +1336,7 @@ def test_a_cwd_in_a_tracked_subdir_still_scaffolds_its_levels(tmp_path, monkeypa
 
 # ---- a level the self-heal refused is named, not dropped ----------------------------------------
 # heal() leaves a level whose legacy CLAUDE.md scope block has a TOPICS line that does not parse
-# untouched and lists it under 'refused'. The SessionStart call once discarded that report, so the
+# untouched and lists it under `refused_levels`. The SessionStart call once discarded that report, so the
 # level stayed unscaffolded with nothing saying why until someone ran heal by hand.
 
 def _tree_with_a_refused_level(tmp_path, topics_line):
@@ -1372,8 +1373,8 @@ def test_a_healthy_level_adds_no_self_heal_line(tmp_path, monkeypatch, capsys):
 
 def test_a_level_the_self_heal_could_not_read_is_named_in_the_session_start_context(
         tmp_path, monkeypatch, capsys):
-    """heal() lists a level whose files are not UTF-8 under 'unreadable' and leaves it untouched;
-    SessionStart named only 'refused', so that level stayed broken with nothing said."""
+    """heal() lists a level whose files are not UTF-8 under `unreadable` and leaves it untouched;
+    SessionStart named only the refused levels, so that level stayed broken with nothing said."""
     _anchor, proj = _tree_with_a_refused_level(tmp_path, "TOPICS: python")
     (proj / "CLAUDE.local.md").write_bytes(b"# Memory index\n\xff\xfe not utf-8\n")
     assert S._self_heal(str(proj)) != ""
@@ -1386,7 +1387,7 @@ def test_a_level_the_self_heal_could_not_read_is_named_in_the_session_start_cont
 
 
 def test_self_heal_names_at_most_three_unreadable_levels_and_counts_the_rest():
-    unreadable = [("/t/u%d" % i, "why %d" % i) for i in range(4)]
+    unreadable = [ME.LevelReason("/t/u%d" % i, "why %d" % i) for i in range(4)]
     line = S._unreadable_heal_line(unreadable)
     assert line.count("\n") == 0
     assert "4 level(s)" in line and "/t/u2" in line and "/t/u3" not in line and "1 more" in line
@@ -1394,7 +1395,7 @@ def test_self_heal_names_at_most_three_unreadable_levels_and_counts_the_rest():
 
 
 def test_self_heal_names_at_most_three_levels_and_counts_the_rest():
-    refused = [("/t/l%d" % i, "why %d" % i) for i in range(5)]
+    refused = [ME.LevelReason("/t/l%d" % i, "why %d" % i) for i in range(5)]
     line = S._refused_heal_line(refused)
     assert line.count("\n") == 0
     assert "5 level(s)" in line and "/t/l0" in line and "/t/l2" in line and "/t/l3" not in line

@@ -57,7 +57,7 @@ def test_relocate_refuses_a_slug_the_target_tree_owns_at_another_level(tmp_path)
     E.add_or_update_entry(top2, "Shared name", "When T2, keep me", body="TREE2 ORIGINAL FACT")
     E.add_or_update_entry(sub1, "Shared name", "When T1, other", body="TREE1 FACT")
     rep = E.relocate_entry(sub1, sub2, "shared-name")
-    assert rep["relocated"] is False and rep["refused"], rep
+    assert rep.relocated is False and rep.refused, rep
     assert "TREE2 ORIGINAL FACT" in _body(top2, "shared-name")      # the owner's body survives
     assert "shared-name" in _slugs(sub1)                             # nothing moved at the source
     assert "shared-name" not in _slugs(sub2)
@@ -70,7 +70,7 @@ def test_relocate_refuses_a_same_level_duplicate_whose_body_differs(tmp_path):
     E.add_or_update_entry(sub2, "Same", "When same, do same", body="TREE2 BODY")
     E.add_or_update_entry(sub1, "Same", "When same, do same", body="TREE1 BODY")
     rep = E.relocate_entry(sub1, sub2, "same")
-    assert rep["relocated"] is False and rep["refused"], rep
+    assert rep.relocated is False and rep.refused, rep
     assert "TREE2 BODY" in _body(top2, "same")
     assert "TREE1 BODY" in _body(top1, "same")
 
@@ -81,7 +81,7 @@ def test_relocate_refuses_to_overwrite_a_dangling_body_in_the_target_tree(tmp_pa
     us.put_body(top2, "lonely", "---\nname: lonely\n---\n\nDANGLING TREE2 BODY")
     E.add_or_update_entry(sub1, "Lonely", "When lonely, do x", body="TREE1 BODY")
     rep = E.relocate_entry(sub1, sub2, "lonely")
-    assert rep["relocated"] is False and rep["refused"], rep
+    assert rep.relocated is False and rep.refused, rep
     assert "DANGLING TREE2 BODY" in _body(top2, "lonely")
 
 
@@ -94,7 +94,7 @@ def test_relocate_completes_when_the_target_already_holds_an_identical_body(tmp_
     us.put_body(top2, "resumed", _body(top1, "resumed"))
     us.add_pointer(sub2, slug="resumed", title="Resumed", hook="When resumed, finish")
     rep = E.relocate_entry(sub1, sub2, "resumed")
-    assert rep["relocated"] is True and rep["refused"] is None, rep
+    assert rep.relocated is True and rep.refused is None, rep
     assert "THE BODY" in _body(top2, "resumed")
     assert "resumed" not in _slugs(sub1)
     assert not us.body_path(top1, "resumed").exists()
@@ -106,7 +106,7 @@ def test_relocate_into_a_tree_without_the_slug_still_works(tmp_path):
     top2, sub2 = _tree(tmp_path, "tree2")
     E.add_or_update_entry(sub1, "Mover", "When moving, move", body="MOVER BODY")
     rep = E.relocate_entry(sub1, sub2, "mover")
-    assert rep["relocated"] is True, rep
+    assert rep.relocated is True, rep
     assert "MOVER BODY" in _body(top2, "mover") and "mover" in _slugs(sub2)
 
 
@@ -169,7 +169,7 @@ def test_rename_refuses_a_traversal_target_and_leaves_the_body_in_the_store(tmp_
     top, sub = _tree(tmp_path, "tree")
     E.add_or_update_entry(sub, "Keep", "When x, do y", body="KEEP BODY")
     rep = E.rename_entry(sub, "keep", "../../renamed-out")
-    assert rep["renamed"] is False and "not a valid slug" in (rep["refused"] or ""), rep
+    assert rep.renamed is False and "not a valid slug" in (rep.refused or ""), rep
     assert not (Path(top) / "renamed-out.md").exists()
     assert "KEEP BODY" in _body(top, "keep") and _slugs(sub) == ["keep"]
 
@@ -179,7 +179,7 @@ def test_rename_to_a_plain_slug_still_works(tmp_path):
     top, sub = _tree(tmp_path, "tree")
     E.add_or_update_entry(sub, "Keep", "When x, do y", body="KEEP BODY")
     rep = E.rename_entry(sub, "keep", "kept-v1.2")
-    assert rep["renamed"] is True, rep
+    assert rep.renamed is True, rep
     assert "KEEP BODY" in _body(top, "kept-v1.2")
 
 
@@ -189,7 +189,7 @@ def test_relocate_refuses_a_traversal_slug_planted_in_a_pointer(tmp_path):
     (Path(top1) / "CLAUDE.md").write_text("tree1 top\n", encoding="utf-8")
     _plant_pointer(sub1, "../../CLAUDE")
     rep = E.relocate_entry(sub1, sub2, "../../CLAUDE")
-    assert rep["relocated"] is False and "not a valid slug" in (rep["refused"] or ""), rep
+    assert rep.relocated is False and "not a valid slug" in (rep.refused or ""), rep
     assert (Path(top2) / "CLAUDE.md").read_text(encoding="utf-8") == "x\n"
 
 
@@ -429,7 +429,7 @@ def test_an_invalid_pointer_is_skipped_on_read_and_flagged(tmp_path):
     assert [r.slug for r in us.resolve(sub)] == ["real"]
     assert E.lint_tree(top)["invalid_pointers"] == [(sub, bad)]
     rep = E.heal(sub)
-    assert (sub, bad) in rep["invalid_pointers"]
+    assert (sub, bad) in rep.invalid_pointers
 
 
 def test_control_valid_pointers_are_not_flagged(tmp_path):
@@ -449,7 +449,7 @@ def test_relocate_refuses_when_another_target_level_points_at_an_identical_body(
     E.add_or_update_entry(asub, "Dup", "When A, do a", body="SAME", slug="dup")
     us.body_path(a, "dup").write_text(_body(b, "dup"), encoding="utf-8")   # byte-identical bodies
     rep = E.relocate_entry(asub, bsub, "dup")
-    assert rep["relocated"] is False and rep["refused"], rep
+    assert rep.relocated is False and rep.refused, rep
     assert _slugs(b) == ["dup"] and _slugs(bsub) == []
     assert _slugs(asub) == ["dup"]
 
@@ -461,7 +461,7 @@ def test_relocate_refuses_to_rebind_another_target_levels_bodiless_pointer(tmp_p
     us.body_path(b, "ghost").unlink()
     E.add_or_update_entry(asub, "Ghost", "When A, other rule", body="A BODY", slug="ghost")
     rep = E.relocate_entry(asub, bsub, "ghost")
-    assert rep["relocated"] is False and rep["refused"], rep
+    assert rep.relocated is False and rep.refused, rep
     assert not us.body_path(b, "ghost").exists()
     assert _slugs(asub) == ["ghost"] and _slugs(bsub) == []
 
@@ -480,7 +480,7 @@ def test_relocate_archives_beside_an_earlier_archived_body_of_the_same_slug(tmp_
     (arch / "keep.md").write_text("EARLIER ARCHIVED FACT\n", encoding="utf-8")
     E.add_or_update_entry(asub, "Keep", "When k, do k", body="LIVE", slug="keep")
     rep = E.relocate_entry(asub, bsub, "keep")
-    assert rep["relocated"] is True, rep
+    assert rep.relocated is True, rep
     assert (arch / "keep.md").read_text(encoding="utf-8") == "EARLIER ARCHIVED FACT\n"
     assert any("LIVE" in p.read_text(encoding="utf-8") for p in arch.iterdir() if p.name != "keep.md")
 
@@ -492,7 +492,7 @@ def test_rename_archives_beside_an_earlier_archived_body_of_the_same_slug(tmp_pa
     (arch / "keep.md").write_text("EARLIER ARCHIVED FACT\n", encoding="utf-8")
     E.add_or_update_entry(sub, "Keep", "When k, do k", body="LIVE", slug="keep")
     rep = E.rename_entry(sub, "keep", "kept")
-    assert rep["renamed"] is True, rep
+    assert rep.renamed is True, rep
     assert (arch / "keep.md").read_text(encoding="utf-8") == "EARLIER ARCHIVED FACT\n"
     assert any("LIVE" in p.read_text(encoding="utf-8") for p in arch.iterdir() if p.name != "keep.md")
 

@@ -200,7 +200,7 @@ def test_a_cross_tree_relocate_that_would_pass_the_cap_is_refused(tmp_path, caps
     rc, said = _run_route(tmp_path, "%s %s --slug feedback-kept00000" % (free.group(1), dest))
     assert rc == 0, said
     rep = E.relocate_entry(str(source / "a"), str(target), "feedback-new")
-    assert rep["relocated"] is True, rep["refused"]
+    assert rep.relocated is True, rep.refused
     assert _block_bytes(str(target)) <= CAP
 
 
@@ -209,7 +209,7 @@ def test_a_cross_tree_relocate_that_fits_goes_through(tmp_path):
     dest = _tree(tmp_path, "dest")
     E.add_or_update_entry(str(source / "a"), title="T", hook=HOOK, body="b2", slug="feedback-new")
     rep = E.relocate_entry(str(source / "a"), str(dest / "a"), "feedback-new")
-    assert rep["relocated"] is True and rep["refused"] is None
+    assert rep.relocated is True and rep.refused is None
 
 
 def test_placed_elsewhere_names_its_levels_in_level_order(tmp_path):

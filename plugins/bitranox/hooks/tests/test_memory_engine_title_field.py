@@ -94,7 +94,7 @@ def test_a_retitle_changes_the_body_title_and_nothing_else_in_the_body(tmp_path)
     anchor, proj = _tree(tmp_path)
     slug = E.add_or_update_entry(proj, "Stale title", "When x, do y.", body="the body")
     before = _body(anchor, slug)
-    assert E.retitle_entry(proj, slug, "Accurate title")["retitled"] is True
+    assert E.retitle_entry(proj, slug, "Accurate title").retitled is True
     after = _body(anchor, slug)
     assert E._body_title(after) == "Accurate title"
     assert after == before.replace("title: Stale title", "title: Accurate title")
@@ -107,7 +107,7 @@ def test_a_retitle_of_a_fact_whose_body_is_missing_creates_no_body_file(tmp_path
     anchor, proj = _tree(tmp_path)
     slug = E.add_or_update_entry(proj, "Old title", "When x, do y.", body="B")
     us.body_path(anchor, slug).unlink()
-    assert E.retitle_entry(proj, slug, "New title")["retitled"] is True
+    assert E.retitle_entry(proj, slug, "New title").retitled is True
     assert not us.body_path(anchor, slug).exists()
 
 
@@ -152,7 +152,7 @@ def test_a_retitle_keeps_prose_another_session_wrote_while_it_ran(tmp_path):
     profile, fired = _on_first_call("add_pointer", "uuid_store.py", session_b_writes)
     rep = _run_profiled(profile, lambda: E.retitle_entry(proj, slug, "New title"))
     assert fired, "the observer never saw add_pointer: the interleaving was not exercised"
-    assert rep["retitled"] is True
+    assert rep.retitled is True
     body = _body(anchor, slug)
     assert "Prose two." in body, body
     assert "Prose one." not in body, body
@@ -173,7 +173,7 @@ def test_a_retitle_writes_the_body_while_holding_the_level_lock(tmp_path):
             held.append(lock.exists())
 
     profile, fired = _on_first_call("put_body", "uuid_store.py", record_lock)
-    assert _run_profiled(profile, lambda: E.retitle_entry(proj, slug, "New title"))["retitled"]
+    assert _run_profiled(profile, lambda: E.retitle_entry(proj, slug, "New title")).retitled
     assert fired and held == [True], held
     assert not lock.exists()
 
@@ -182,7 +182,7 @@ def test_a_move_leaves_the_body_and_its_title_byte_identical(tmp_path):
     anchor, proj = _tree(tmp_path)
     slug = E.add_or_update_entry(proj, "Moving fact", "When x, do y.", body="B")
     before = us.body_path(anchor, slug).read_bytes()
-    assert E.move_entry(proj, anchor, slug)["moved"] is True
+    assert E.move_entry(proj, anchor, slug).moved is True
     assert us.body_path(anchor, slug).read_bytes() == before
     assert E._body_title(before.decode("utf-8")) == "Moving fact"
 
@@ -313,7 +313,7 @@ def test_a_retitle_leaves_an_unframed_body_byte_identical(tmp_path):
     anchor, proj = _tree(tmp_path)
     slug = E.add_or_update_entry(proj, "Old title", "When x, do y.", body="B")
     us.body_path(anchor, slug).write_text("just prose, no frame\n", encoding="utf-8")
-    assert E.retitle_entry(proj, slug, "New title")["retitled"] is True
+    assert E.retitle_entry(proj, slug, "New title").retitled is True
     assert _body(anchor, slug) == "just prose, no frame\n"
     assert _pointer_title(proj, slug) == "New title"
 
