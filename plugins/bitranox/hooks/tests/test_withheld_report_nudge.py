@@ -132,11 +132,23 @@ def test_unsafe_agent_id_is_ignored(tmp_path):
     assert hook.assess(_event(main, _response(agent_id="../../etc"))) is None
 
 
-def test_large_transcript_is_read_from_its_tail(tmp_path, monkeypatch):
-    monkeypatch.setattr(hook, "TAIL_BYTES", 2048)
+def test_large_transcript_is_read_from_its_tail(tmp_path):
+    """Only the last tail_bytes are parsed: the head is skipped, the cut first line is dropped."""
+    early = _assistant({"type": "text", "text": "EARLY record " + "pad " * 100})
     filler = [_assistant({"type": "text", "text": "pad " * 100}) for _ in range(40)]
-    main, _ = _session(tmp_path, filler + [_assistant(_handback("REPORT at the end"))])
-    assert "REPORT at the end" in hook.assess(_event(main))
+    _, agent = _session(tmp_path, [early, *filler, _assistant(_handback("REPORT at the end"))])
+    records = list(hook.transcript_records(agent, tail_bytes=2048))
+    texts = json.dumps(records)
+    assert "REPORT at the end" in texts
+    assert "EARLY record" not in texts
+    assert 0 < len(records) < 42
+    assert hook.report_from_records(records) == "REPORT at the end"
+
+
+def test_small_transcript_is_read_whole(tmp_path):
+    _, agent = _session(tmp_path, [_assistant({"type": "text", "text": "first"}),
+                                   _assistant(_handback("REPORT"))])
+    assert len(list(hook.transcript_records(agent))) == 2
 
 
 def test_script_emits_post_tool_use_context(tmp_path):

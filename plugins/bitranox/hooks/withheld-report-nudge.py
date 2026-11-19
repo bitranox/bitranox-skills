@@ -87,11 +87,11 @@ def withheld_agent_id(tool_response) -> str | None:
     return agent_id
 
 
-def _records(path: Path):
-    """The JSON records of a transcript, reading only its tail when it is large."""
+def transcript_records(path: Path, *, tail_bytes: int = TAIL_BYTES):
+    """The JSON records in the last `tail_bytes` of a transcript (the whole file when smaller)."""
     with path.open("rb") as handle:
         handle.seek(0, 2)
-        handle.seek(max(0, handle.tell() - TAIL_BYTES))
+        handle.seek(max(0, handle.tell() - tail_bytes))
         data = handle.read()
     # The first line of a tail read is a fragment of a record; it fails to parse and is skipped.
     for line in data.decode("utf-8", errors="replace").splitlines():
@@ -164,7 +164,7 @@ def assess(event) -> str | None:
     report = None
     if path is not None:
         try:
-            report = report_from_records(_records(path))
+            report = report_from_records(transcript_records(path))
         except OSError:
             report = None
     return message_for(agent_id, path, report)
