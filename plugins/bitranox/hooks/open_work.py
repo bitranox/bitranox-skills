@@ -20,17 +20,33 @@ import os
 import re
 import subprocess
 import unicodedata
+from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
 import self_improve_signals as sig
 
 FILENAME = "OPEN-WORK.md"
-ORIGINS = ("USER", "FOUND")
+
+
+class Origin(StrEnum):
+    """Who raised an item: the backlog's two origins, spelled as a line writes them."""
+
+    USER = "USER"
+    FOUND = "FOUND"
+
+
+class ItemState(StrEnum):
+    """An item line's checkbox: `- [ ]` is open, `- [x]` (an older release's solved line) closed."""
+
+    OPEN = "open"
+    CLOSED = "closed"
+
+
+ORIGINS = tuple(Origin)
 STATES = ("open", "closed", "all")
 #: the largest rank a line may carry: a bound keeps the free-tens suggestion finite
 MAX_RANK = 999999
-#: the labelled fields of a line, in the order a written line carries them
-LABELS = ("size", "open", "next", "closed")
 
 HEADER = (
     "# Open work\n\n"
@@ -53,6 +69,30 @@ _FENCE_RX = re.compile(r" {0,3}(`{3,}|~{3,})")
 _CHECKBOX_RX = re.compile(r"-\s*\[([ xX])\]\s")
 #: a rank an item's text cites, e.g. "same blocker as [60]"; at most MAX_RANK's six digits
 _CITED_RX = re.compile(r"\[(\d{1,6})\]")
+
+
+@dataclass(frozen=True, slots=True)
+class Item:
+    """One backlog line as data. A field the line does not carry is None.
+
+    `open` and `next` keep the line's own label names: they are the keys `to_data` writes, which
+    the backlog_list tool relays as its `items`."""
+
+    rank: int
+    raised: str
+    state: ItemState
+    origin: Origin | None
+    what: str
+    size: str | None
+    open: str | None
+    next: str | None
+    closed: str | None
+
+    def to_data(self) -> dict[str, object]:
+        """The item as the backlog_list JSON carries it: keys in this order, enum values as strings."""
+        return {"rank": self.rank, "raised": self.raised, "state": self.state.value,
+                "origin": None if self.origin is None else self.origin.value, "what": self.what,
+                "size": self.size, "open": self.open, "next": self.next, "closed": self.closed}
 
 
 class BacklogError(ValueError):
@@ -91,14 +131,15 @@ class BacklogElsewhere(BacklogError):
     pass
 
 
-def parse_line(line):
+def parse_line(line: str) -> Item | None:
     """The item a line holds, or None for anything that is not an item line."""
     m = _ITEM_RX.match(line.strip())
     if not m:
         return None
     box, raised, rank, rest = m.groups()
     parts = _FIELD_RX.split(rest)
-    fields, current = {}, None
+    fields: dict[str, str] = {}
+    current = ""
     for label, text in zip(parts[1::2], parts[2::2]):
         if label in fields:
             # the label's own words inside an earlier field: keep them there, never drop them
@@ -108,13 +149,12 @@ def parse_line(line):
         current = label
     head = parts[0].strip()
     om = _ORIGIN_RX.match(head)
-    item = {"rank": int(rank), "raised": raised.strip(),
-            "state": "open" if box == " " else "closed",
-            "origin": om.group(1) if om else None,
-            "what": (om.group(2) if om else head).strip()}
-    for label in LABELS:
-        item[label] = fields.get(label)
-    return item
+    return Item(rank=int(rank), raised=raised.strip(),
+                state=ItemState.OPEN if box == " " else ItemState.CLOSED,
+                origin=Origin(om.group(1)) if om else None,
+                what=(om.group(2) if om else head).strip(),
+                size=fields.get("size"), open=fields.get("open"), next=fields.get("next"),
+                closed=fields.get("closed"))
 
 
 def item_text(line):
@@ -150,7 +190,7 @@ def iter_items(lines):
             yield i, item
 
 
-def list_items(path, state="open"):
+def list_items(path, state="open") -> list[Item]:
     """The items of the backlog at `path` in file order; [] when the file does not exist."""
     if state not in STATES:
         raise MalformedField("state must be one of %s, got %r" % (", ".join(STATES), state))
@@ -158,7 +198,7 @@ def list_items(path, state="open"):
     if not path.is_file():
         return []
     lines = path.read_text(encoding="utf-8").split("\n")
-    return [it for _, it in iter_items(lines) if state == "all" or it["state"] == state]
+    return [it for _, it in iter_items(lines) if state == "all" or it.state == state]
 
 
 def unranked_lines(path, state="open"):
@@ -325,6 +365,7 @@ def add_item(path, rank, origin, what, size, open_, next_, raised=None, today=No
     rank = _require_rank(rank)
     if not isinstance(origin, str) or origin not in ORIGINS:
         raise MalformedField("origin must be USER or FOUND, got %r" % (origin,))
+    origin = Origin(origin)
     fields = [require_line(v, n) for v, n in ((what, "what"), (size, "size"),
                                               (open_, "open"), (next_, "next"))]
     line = "- [ ] (%s) [%d] %s: %s | size: %s | open: %s | next: %s" % (
@@ -337,17 +378,18 @@ def add_item(path, rank, origin, what, size, open_, next_, raised=None, today=No
         lines = text.split("\n")
         items = list(iter_items(lines))
         # a cited number is taken too: the citing line would otherwise point at the new item
-        taken = {it["rank"] for _, it in items} | {int(n) for ln in lines for n in _CITED_RX.findall(ln)}
+        taken = {it.rank for _, it in items} | {int(n) for ln in lines for n in _CITED_RX.findall(ln)}
         if rank in taken:
             raise RankTaken("rank %d is already held or cited by a line (closed lines count); free "
                             "tens nearby: %s"
                             % (rank, ", ".join(map(str, _free_tens_near(rank, taken)))))
-        users = [it["rank"] for _, it in items if it["state"] == "open" and it["origin"] == "USER"]
-        if origin == "FOUND" and users and rank < max(users):
+        users = [it.rank for _, it in items
+                 if it.state == ItemState.OPEN and it.origin == Origin.USER]
+        if origin == Origin.FOUND and users and rank < max(users):
             raise RankOrder("rank %d would put a FOUND item above open USER item %d; a USER item "
                             "outranks every FOUND one. Next free ten below it: %d"
                             % (rank, max(users), _free_ten_after(max(users), taken)))
-        smaller = [(it["rank"], i) for i, it in items if it["rank"] < rank]
+        smaller = [(it.rank, i) for i, it in items if it.rank < rank]
         if smaller:
             at = max(smaller)[1] + 1
         elif items:
@@ -377,10 +419,10 @@ def close_item(path, rank, reason):
             raise UnknownRank("no %s here, so there is no rank %d" % (FILENAME, rank))
         text, eol = _read(path)
         lines = text.split("\n")
-        hits = [(i, it) for i, it in iter_items(lines) if it["rank"] == rank]
+        hits = [(i, it) for i, it in iter_items(lines) if it.rank == rank]
         if not hits:
             raise UnknownRank("no line holds rank %d" % rank)
-        open_hits = [(i, it) for i, it in hits if it["state"] == "open"]
+        open_hits = [(i, it) for i, it in hits if it.state == ItemState.OPEN]
         if not open_hits:
             raise AlreadyClosed("rank %d is already closed" % rank)
         if len(open_hits) > 1:

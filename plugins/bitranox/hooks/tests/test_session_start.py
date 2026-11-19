@@ -886,7 +886,7 @@ def test_an_item_line_inside_a_code_fence_is_not_listed(tmp_path):
     block = S.open_work_context(str(proj))
     assert "the real item" in block
     assert "inside a fence" not in block
-    assert [it["rank"] for it in open_work.list_items(proj / "OPEN-WORK.md")] == [9]
+    assert [it.rank for it in open_work.list_items(proj / "OPEN-WORK.md")] == [9]
 
 
 def test_a_rank_shared_only_with_a_fenced_line_raises_no_warning(tmp_path):

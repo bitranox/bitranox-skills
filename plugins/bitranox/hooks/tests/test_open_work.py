@@ -36,7 +36,7 @@ def test_every_item_line_of_the_live_backlog_parses():
     # closes; any open item at all proves the parser met real lines.
     assert LIVE.is_file() and raw
     assert len(items) == len(raw)
-    assert all(it["what"] for it in items)
+    assert all(it.what for it in items)
     # an extraction that shares nothing with the parser's regexes: plain string positions
     for line, it in zip(raw, items):
         s = line.strip()
@@ -46,14 +46,33 @@ def test_every_item_line_of_the_live_backlog_parses():
         tail = rest[rest.index(")") + 1:]
         rank = tail[tail.index("[") + 1:tail.index("]")]
         origin = tail[tail.index("]") + 1:].split(":", 1)[0].strip()
-        assert (it["state"] == "open") == (state_char == " ")
-        assert (it["raised"], it["rank"], it["origin"]) == (raised, int(rank), origin)
+        assert (it.state == "open") == (state_char == " ")
+        assert (it.raised, it.rank, it.origin) == (raised, int(rank), origin)
 
 
 def test_a_full_line_parses_into_its_fields():
     it = ow.parse_line("- [ ] (2026-10-05) [17] USER: build it | size: 3 | open: why | next: do")
-    assert it == {"rank": 17, "raised": "2026-10-05", "state": "open", "origin": "USER",
-                  "what": "build it", "size": "3", "open": "why", "next": "do", "closed": None}
+    assert it == ow.Item(rank=17, raised="2026-10-05", state=ow.ItemState.OPEN,
+                         origin=ow.Origin.USER, what="build it", size="3", open="why", next="do",
+                         closed=None)
+
+
+def test_a_parsed_item_is_a_typed_record():
+    it = ow.parse_line("- [x] (2026-10-05) [17] FOUND: done | closed: in 1.0")
+    assert type(it) is ow.Item
+    assert type(it.state) is ow.ItemState and it.state is ow.ItemState.CLOSED
+    assert type(it.origin) is ow.Origin and it.origin is ow.Origin.FOUND
+    assert ow.parse_line("- [ ] (2026-10-05) [18] no origin").origin is None
+
+
+def test_an_item_exports_the_backlog_list_keys_in_order():
+    it = ow.parse_line("- [ ] (2026-10-05) [17] USER: build it | next: do")
+    data = it.to_data()
+    assert list(data) == ["rank", "raised", "state", "origin", "what", "size", "open", "next",
+                          "closed"]
+    assert (type(data["state"]), type(data["origin"])) == (str, str)
+    assert data == {"rank": 17, "raised": "2026-10-05", "state": "open", "origin": "USER",
+                    "what": "build it", "size": None, "open": None, "next": "do", "closed": None}
 
 
 def test_item_text_is_the_line_after_its_rank_as_written():
@@ -66,24 +85,24 @@ def test_item_text_is_the_line_after_its_rank_as_written():
 
 def test_a_closed_line_carries_its_reason():
     it = ow.parse_line(_item(10, "x") + " | closed: done in 8.5.0")
-    assert it["state"] == "closed" and it["closed"] == "done in 8.5.0"
+    assert it.state == "closed" and it.closed == "done in 8.5.0"
 
 
 def test_a_label_repeated_inside_a_field_stays_in_that_field():
     it = ow.parse_line("- [ ] (2026-10-05) [3] FOUND: a | size: 1 | open: see | next: x | next: y")
-    assert it["next"] == "x | next: y"
+    assert it.next == "x | next: y"
 
 
 def test_prose_and_the_fenced_template_are_not_items(tmp_path):
     p = _backlog(tmp_path, "```", "- [ ] (2026-01-01) [40] USER: inside a fence", "```", _item(10))
-    assert [it["rank"] for it in ow.list_items(p, state="all")] == [10]
+    assert [it.rank for it in ow.list_items(p, state="all")] == [10]
 
 
 def test_list_filters_by_state(tmp_path):
     p = _backlog(tmp_path, _item(10), _item(20, "x"), _item(30))
-    assert [it["rank"] for it in ow.list_items(p)] == [10, 30]
-    assert [it["rank"] for it in ow.list_items(p, state="closed")] == [20]
-    assert [it["rank"] for it in ow.list_items(p, state="all")] == [10, 20, 30]
+    assert [it.rank for it in ow.list_items(p)] == [10, 30]
+    assert [it.rank for it in ow.list_items(p, state="closed")] == [20]
+    assert [it.rank for it in ow.list_items(p, state="all")] == [10, 20, 30]
 
 
 def test_a_missing_backlog_lists_nothing(tmp_path):
@@ -152,7 +171,7 @@ def test_an_add_keeps_a_crlf_backlog_crlf_on_every_line(tmp_path):
     _add(p, 20)
     raw = p.read_bytes()
     assert raw.count(b"\n") == raw.count(b"\r\n") > 0
-    assert [it["rank"] for _, it in ow.iter_items(_lines(p))] == [10, 20, 30]
+    assert [it.rank for _, it in ow.iter_items(_lines(p))] == [10, 20, 30]
 
 
 def test_a_close_keeps_a_crlf_backlog_crlf_and_deletes_only_its_line(tmp_path):
@@ -184,14 +203,14 @@ def test_a_rewrite_is_flushed_to_disk_before_it_replaces_the_backlog(tmp_path, m
 def test_a_new_line_goes_after_the_largest_smaller_rank(tmp_path):
     p = _backlog(tmp_path, _item(10), _item(30), _item(20))      # unsorted, as the live file is
     _add(p, 25)
-    ranks = [it["rank"] for _, it in ow.iter_items(_lines(p))]
+    ranks = [it.rank for _, it in ow.iter_items(_lines(p))]
     assert ranks == [10, 30, 20, 25]
 
 
 def test_a_rank_below_every_item_goes_before_the_first(tmp_path):
     p = _backlog(tmp_path, _item(10), _item(20))
     _add(p, 5)
-    assert [it["rank"] for _, it in ow.iter_items(_lines(p))] == [5, 10, 20]
+    assert [it.rank for _, it in ow.iter_items(_lines(p))] == [5, 10, 20]
     assert p.read_text(encoding="utf-8").startswith(ow.HEADER)
 
 
@@ -212,9 +231,9 @@ def test_a_written_line_parses_back_to_what_was_given(tmp_path):
     p = _backlog(tmp_path)
     _add(p, 40, origin="FOUND", what="a thing", size="2 files", open_="why", next_="do it",
          raised="2026-09-30")
-    assert ow.list_items(p) == [{"rank": 40, "raised": "2026-09-30", "state": "open",
-                                 "origin": "FOUND", "what": "a thing", "size": "2 files",
-                                 "open": "why", "next": "do it", "closed": None}]
+    assert ow.list_items(p) == [ow.Item(rank=40, raised="2026-09-30", state=ow.ItemState.OPEN,
+                                        origin=ow.Origin.FOUND, what="a thing", size="2 files",
+                                        open="why", next="do it", closed=None)]
 
 
 def test_a_missing_file_is_created_with_the_header(tmp_path):
@@ -222,7 +241,7 @@ def test_a_missing_file_is_created_with_the_header(tmp_path):
     _add(p, 10)
     text = p.read_text(encoding="utf-8")
     assert text.startswith(ow.HEADER) and text.endswith("\n")
-    assert [it["rank"] for it in ow.list_items(p)] == [10]
+    assert [it.rank for it in ow.list_items(p)] == [10]
 
 
 @pytest.mark.parametrize("field,value", [
@@ -260,7 +279,7 @@ def test_close_deletes_the_line_and_returns_it_with_the_reason(tmp_path):
     assert out == {"rank": 10, "line": _item(10), "reason": "shipped in 8.6.0", "deleted": True}
     after = p.read_text(encoding="utf-8")
     assert after == before.replace(_item(10) + "\n", "", 1)
-    assert [it["rank"] for it in ow.list_items(p, state="all")] == [20]
+    assert [it.rank for it in ow.list_items(p, state="all")] == [20]
     assert "closed:" not in after
 
 
@@ -361,7 +380,7 @@ def test_add_refuses_a_rank_another_lines_text_cites(tmp_path):
     _add(p, 20, what="same blocker as [170]")
     with pytest.raises(ow.RankTaken, match="held or cited"):
         _add(p, 170)
-    assert [it["rank"] for it in ow.list_items(p)] == [20]
+    assert [it.rank for it in ow.list_items(p)] == [20]
 
 
 def test_free_ten_suggestion_skips_a_cited_rank(tmp_path):
@@ -377,7 +396,7 @@ def test_add_refuses_a_found_item_above_an_open_user_item(tmp_path):
     _add(p, 60)
     with pytest.raises(ow.RankOrder, match="FOUND item above open USER item 60.*70"):
         _add(p, 35, origin="FOUND")
-    assert [it["rank"] for it in ow.list_items(p)] == [40, 60]
+    assert [it.rank for it in ow.list_items(p)] == [40, 60]
 
 
 def test_add_takes_a_found_item_below_every_open_user_item(tmp_path):

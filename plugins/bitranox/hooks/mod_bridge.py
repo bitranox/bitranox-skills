@@ -68,7 +68,7 @@ class ContribQueued:
 def _backlog_list(inp, cwd):
     path = ow.backlog_path(cwd)
     state = inp.get("state", "open")
-    data = {"path": str(path), "items": ow.list_items(path, state=state)}
+    data = {"path": str(path), "items": [it.to_data() for it in ow.list_items(path, state=state)]}
     if not path.is_file():
         data["note"] = "no OPEN-WORK.md at %s yet; backlog_add creates it" % path.parent
     unranked = ow.unranked_lines(path, state=state)

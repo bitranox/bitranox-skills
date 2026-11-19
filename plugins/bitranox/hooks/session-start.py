@@ -327,8 +327,8 @@ def _parse_open_work(text, today=None):
     survive - a trailing "?" and the bare word "unknown" both.
     """
     today = today or datetime.date.today()
-    items = [(item["rank"], _parse_raised(item["raised"]), open_work.item_text(line))
-             for line, item in _backlog_items(text) if item["state"] == "open"]
+    items = [(item.rank, _parse_raised(item.raised), open_work.item_text(line))
+             for line, item in _backlog_items(text) if item.state == open_work.ItemState.OPEN]
     # An undated item sorts last within its rank: it makes no age claim, so it cannot displace one
     # that does. datetime.date.max is the sentinel because None will not compare against a date.
     items.sort(key=lambda it: (it[0], it[1] or datetime.date.max))
@@ -342,7 +342,7 @@ def _shared_rank_warning(text):
     """
     states = {}
     for _line, item in _backlog_items(text):
-        states.setdefault(item["rank"], []).append(item["state"] == "open")
+        states.setdefault(item.rank, []).append(item.state == open_work.ItemState.OPEN)
     shared = sorted(rank for rank, opened in states.items() if len(opened) > 1 and any(opened))
     if not shared:
         return ""

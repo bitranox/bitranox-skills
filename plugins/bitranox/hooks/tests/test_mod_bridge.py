@@ -120,6 +120,25 @@ def test_backlog_close(repo, env):
     assert rc == 0 and [it["rank"] for it in out["data"]["items"]] == []
 
 
+def test_backlog_list_items_keep_their_json_bytes(repo, env):
+    # The items are typed records inside the hooks; what the mod relays must not move with that:
+    # every key in the same order, a missing field as null, the state and origin as plain strings.
+    (repo / "OPEN-WORK.md").write_bytes(
+        b"- [ ] (2026-10-05) [10] USER: build it | size: 3 | open: why | next: do\n"
+        b"- [x] (2026-10-01) [20] FOUND: old | size: 1 | open: o | next: n | closed: done\n"
+        b"- [ ] (unknown) [30] no origin | next: only next\n")
+    p = run(repo, env, json.dumps({"tool": "backlog_list", "input": {"state": "all"}}).encode())
+    items = (
+        '"items": ['
+        '{"rank": 10, "raised": "2026-10-05", "state": "open", "origin": "USER", "what": "build it",'
+        ' "size": "3", "open": "why", "next": "do", "closed": null}, '
+        '{"rank": 20, "raised": "2026-10-01", "state": "closed", "origin": "FOUND", "what": "old",'
+        ' "size": "1", "open": "o", "next": "n", "closed": "done"}, '
+        '{"rank": 30, "raised": "unknown", "state": "open", "origin": null, "what": "no origin",'
+        ' "size": null, "open": null, "next": "only next", "closed": null}]')
+    assert p.returncode == 0 and items in p.stdout.decode("ascii")
+
+
 def test_list_of_a_backlog_with_no_ranks_reports_the_lines(repo, env):
     (repo / "OPEN-WORK.md").write_text("- [ ] (2026-10-01) USER: an item\n", encoding="utf-8")
     rc, out = call(repo, env, "backlog_list")
