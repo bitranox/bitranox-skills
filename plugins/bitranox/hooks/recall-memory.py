@@ -271,9 +271,8 @@ def _shadow_recall(prompt, sid, by_score, ranked, hits, keywords, transcript="")
 
 
 def _relevance(result):
-    """The `relevant` score of one logged result, or None when it carries none."""
-    value = (((result or {}).get("answers") or {}).get("relevant") or {}).get("value")
-    return value if isinstance(value, (int, float)) else None
+    """The `relevant` score of one answer, or None when it went unanswered or carries none."""
+    return None if result is None else result.number("relevant")
 
 
 def _decide_recall(prompt, sid, by_score, ranked, hits, keywords, transcript, cfg):
@@ -288,13 +287,14 @@ def _decide_recall(prompt, sid, by_score, ranked, hits, keywords, transcript, cf
                                                  transcript)
     picks = []
     try:
-        row = classifier.ask_in_hook("recall_rerank", sid, regex, requests, cfg,
-                                     transcript=transcript, workers=len(requests))
+        asked = classifier.ask_in_hook("recall_rerank", sid, regex, requests, cfg,
+                                       transcript=transcript, workers=len(requests))
     except Exception as exc:  # noqa: BLE001 - a failure to ask is a failure to answer
         row = classifier.error_row("recall_rerank", sid, exc)
         path = "fallback-error: %s" % type(exc).__name__
     else:
-        scores = [_relevance(r) for r in row.get("results") or []]
+        row = asked.row
+        scores = [_relevance(r) for r in asked.results]
         if all(s is None for s in scores):
             path = "fallback-%s" % (row.get("reason") or "no answer")
         else:

@@ -461,6 +461,54 @@ def _only_log(audit):
     return files[0]
 
 
+def test_ask_in_hook_hands_back_the_typed_results_beside_the_row(tmp_path, fake, monkeypatch):
+    # A deciding hook reads the parsed answers, never the row's JSON copy of them; the row is
+    # still the record the shadow log keeps, written from the same results.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("TYPESAFE_API_KEY", "k" * 20)
+    monkeypatch.setenv(cl.BASE_URL_ENV, fake.url)
+    cfg = {"classifier_backend": "jev", "classifier_stop_signal": "decide"}
+    request = {"fields": {"user_message": "no, wrong"},
+               "questions": [NOUL, CHOICE]}
+    asked = cl.ask_in_hook("stop_signal", "s1", {"fires": False}, [request, request], cfg)
+    assert type(asked) is cl.Asked and len(asked.results) == 2
+    result = asked.first()
+    assert type(result) is cl.Result and type(result.answers["lang"]) is cl.Answer
+    assert result.number("correction") == 0.9 and result.number("lang") is None
+    assert result.answers["lang"].value == "en"
+    assert asked.row["results"] == [r.to_json() if r else None for r in asked.results]
+
+
+def test_an_unanswered_ask_in_hook_has_no_first_result(tmp_path, fake_jev, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("TYPESAFE_API_KEY", "k" * 20)
+    monkeypatch.setenv(cl.BASE_URL_ENV, fake_jev(status=529, body={"error": "x"}).url)
+    cfg = {"classifier_backend": "jev", "classifier_stop_signal": "decide"}
+    asked = cl.ask_in_hook("stop_signal", "s1", {}, [{"fields": {"user_message": "x"},
+                                                       "questions": [NOUL]}], cfg)
+    assert asked.results == (None,) and asked.first() is None
+    assert asked.row["results"] == [None] and asked.row["reason"] == "http 529"
+    assert cl.Asked(row={}, results=()).first() is None
+
+
+def _typed(**answers):
+    return cl.Result(answers=answers, latency_ms=1, input_tokens=1, model="m")
+
+
+def test_the_deciding_readers_take_a_typed_result():
+    noul = cl.QuestionType.NOUL
+    result = _typed(correction=cl.Answer(type=noul, value=0.95),
+                    root_cause=cl.Answer(type=noul, value=0.5),
+                    endorsement=cl.Answer(type=noul, value=0.99))
+    assert cl.stop_signal_firings(result, user_message="x" * 40) == ["correction"]
+    assert cl.stop_signal_firings(None, user_message="x" * 40) == []
+    router = _typed(**{cl.NEW_TASK_ID: cl.Answer(type=noul, value=0.2),
+                       cl.PICK_ID: cl.Answer(type=cl.QuestionType.CHOICE, value="git",
+                                             probabilities={"git": 0.7})})
+    assert cl.choice_answer(router) == (0.2, "git", {"git": 0.7})
+    assert cl.choice_answer(None) == (None, None, {})
+
+
 def test_the_shadow_child_logs_both_verdicts_and_only_redacted_state(tmp_path, fake):
     payload = {"site": "stop_signal", "session_id": "s1", "regex": {"fires": True},
                "requests": [{"fields": {"user_message": "no! use %s" % GHP},

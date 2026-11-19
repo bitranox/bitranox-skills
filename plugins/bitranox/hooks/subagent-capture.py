@@ -258,21 +258,21 @@ def _shadow(event, session, msgs=None):
 def _jev_families(result):
     """The questions one answered message fires on, sorted: each at least the site threshold."""
     threshold = classifier.SITE_THRESHOLDS[SITE]
-    answers = (result or {}).get("answers") or {}
-    return sorted(k for k, a in answers.items()
-                  if isinstance(a, dict) and isinstance(a.get("value"), (int, float))
-                  and a["value"] >= threshold)
+    return sorted(k for k, a in result.answers.items()
+                  if (score := a.number()) is not None and score >= threshold)
 
 
 def _ask(session, regex, requests, cfg, transcript):
     """(row, results) from asking every request at once; results None where Jev did not answer."""
     try:
-        row = classifier.ask_in_hook(SITE, session, regex, requests, cfg, transcript=transcript,
-                                     workers=max(1, len(requests)))
+        asked = classifier.ask_in_hook(SITE, session, regex, requests, cfg, transcript=transcript,
+                                       workers=max(1, len(requests)))
     except Exception as exc:  # noqa: BLE001 - a failure to ask is a failure to answer
         row = classifier.error_row(SITE, session, exc)
         row["reason"] = "error: %s" % type(exc).__name__
-    results = list(row.get("results") or [])
+        results = []
+    else:
+        row, results = asked.row, list(asked.results)
     return row, (results + [None] * len(requests))[:len(requests)]
 
 

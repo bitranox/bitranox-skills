@@ -357,13 +357,13 @@ def _decide_stop_signal(event, regex, request, cfg):
         row, path = _classifier.decided_row("stop_signal", sid, regex, transcript), "regex"
     else:
         try:
-            row = _classifier.ask_in_hook("stop_signal", sid, regex, [request], cfg,
-                                          transcript=transcript)
+            asked = _classifier.ask_in_hook("stop_signal", sid, regex, [request], cfg,
+                                            transcript=transcript)
         except Exception as exc:  # noqa: BLE001 - a failure to ask is a failure to answer
             row = _classifier.error_row("stop_signal", sid, exc)
             path = "fallback-error: %s" % type(exc).__name__
         else:
-            result = (row.get("results") or [None])[0]
+            row, result = asked.row, asked.first()
             if result is None:
                 path = "fallback-%s" % (row.get("reason") or "no answer")
             else:

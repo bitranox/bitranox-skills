@@ -245,8 +245,9 @@ def _ask_jev(prompt, sid, triggers, transcript, cwd, cfg):
     including "fallback-stale pick", a pick from a cached roster the session may no longer have,
     which would send the model after a skill that does not exist."""
     regex, request, skills = _router_request(prompt, sid, triggers, transcript, cwd)
-    row = classifier.ask_in_hook("skill_router", sid, regex, [request], cfg, transcript=transcript)
-    result = (row.get("results") or [None])[0]
+    asked = classifier.ask_in_hook("skill_router", sid, regex, [request], cfg,
+                                   transcript=transcript)
+    row, result = asked.row, asked.first()
     if result is None:
         return row, "fallback-%s" % (row.get("reason") or "no answer"), None, skills
     gate, winner, probabilities = classifier.choice_answer(result)

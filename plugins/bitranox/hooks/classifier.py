@@ -208,18 +208,28 @@ class Question:
 
 @dataclass(frozen=True)
 class Answer:
-    type: str
+    type: QuestionType
     value: object  # float for noul/score, the chosen key for choice
     probabilities: object = None
     confidence: object = None
 
+    def number(self) -> float | None:
+        """The value when it is a number (a noul or score answer), else None."""
+        value = self.value
+        return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
 
 @dataclass(frozen=True)
 class Result:
-    answers: dict
+    answers: dict[str, Answer]
     latency_ms: int
     input_tokens: int
     model: str
+
+    def number(self, question_id: str) -> float | None:
+        """The numeric answer to `question_id`, or None when it has none."""
+        answer = self.answers.get(question_id)
+        return None if answer is None else answer.number()
 
     def to_json(self):
         return {"answers": {k: {"type": a.type, "value": a.value, "probabilities": a.probabilities,
@@ -938,8 +948,29 @@ def error_row(site, session_id, exc):
     return _error_record({"site": site, "session_id": session_id}, exc)
 
 
+@dataclass(frozen=True)
+class Asked:
+    """One site's question to Jev: the log `row`, and the typed `results` it was written from,
+    one per request in request order, None where Jev did not answer.
+
+    A deciding caller reads `results`; the row is the shadow-log record, so the caller adds how
+    it used the answers to it and appends it with `append_row`. Offline readers see only the row."""
+
+    row: dict[str, object]
+    results: tuple[Result | None, ...]
+
+    def first(self) -> Result | None:
+        """The answer to the first request, or None when it went unanswered or none was asked."""
+        return self.results[0] if self.results else None
+
+
 def run_shadow(payload, cfg, env=None, home=None, deadline=SHADOW_DEADLINE, workers=8):
     """Ask Jev for one site's comparison and return the log record (the caller appends it)."""
+    return _ask(payload, cfg, env=env, home=home, deadline=deadline, workers=workers).row
+
+
+def _ask(payload, cfg, env=None, home=None, deadline=SHADOW_DEADLINE, workers=8) -> Asked:
+    """Ask Jev for one site's comparison: the typed results and the log record built from them."""
     site = str(payload.get("site") or "")
     requests = payload.get("requests") or []
     clf = get_classifier(cfg, site, env=env, home=home, deadline=deadline)
@@ -951,9 +982,9 @@ def run_shadow(payload, cfg, env=None, home=None, deadline=SHADOW_DEADLINE, work
         redactions += n
     items = [(s, [Question.from_json(q) for q in r.get("questions") or []])
              for s, r in zip(states, requests)]
-    results = clf.ask_many(items, workers=workers)
+    results = tuple(clf.ask_many(items, workers=workers))
     first_text = " ".join(str(v) for v in (requests[0].get("fields") or {}).values()) if requests else ""
-    return _stamp({
+    return Asked(row=_stamp({
         "ts": datetime.now(UTC).isoformat(timespec="seconds"),
         "site": site,
         "session_id": payload.get("session_id"),
@@ -965,18 +996,19 @@ def run_shadow(payload, cfg, env=None, home=None, deadline=SHADOW_DEADLINE, work
         "latency_ms": max([r.latency_ms for r in results if r] or [0]),
         "results": [r.to_json() if r else None for r in results],
         "states": states,
-    }, payload)
+    }, payload), results=results)
 
 
-def ask_in_hook(site, session_id, regex, requests, cfg, transcript="", workers=8):
-    """Decide mode: ask Jev from inside the hook, under DEFAULT_DEADLINE, and return the row a
-    shadow child would have logged for the same request - same redaction, same fields. The caller
-    reads the answer from its `results`, adds how it used it, and appends it with `append_row`.
-    An unanswered request comes back with `results` of [None] and the cause in `reason`.
+def ask_in_hook(site, session_id, regex, requests, cfg, transcript="", workers=8) -> Asked:
+    """Decide mode: ask Jev from inside the hook, under DEFAULT_DEADLINE. The `Asked` it returns
+    carries the typed answers in `results` and, in `row`, the record a shadow child would have
+    logged for the same request - same redaction, same fields. The caller decides on `results`,
+    adds how it used them to `row`, and appends that with `append_row`. An unanswered request
+    comes back as None in `results`, with the cause in the row's `reason`.
     `workers` bounds the requests in flight at once; a site asking one request per candidate
     passes their count, since waves of 8 do not fit 30 requests into the deadline."""
-    return run_shadow(_payload(site, session_id, regex, requests, transcript), cfg,
-                      deadline=DEFAULT_DEADLINE, workers=workers)
+    return _ask(_payload(site, session_id, regex, requests, transcript), cfg,
+                deadline=DEFAULT_DEADLINE, workers=workers)
 
 
 def decided_row(site, session_id, regex, transcript=""):
@@ -989,26 +1021,28 @@ def decided_row(site, session_id, regex, transcript=""):
                    "states": []}, payload)
 
 
-def stop_signal_firings(result, *, user_message, threshold=None):
+def stop_signal_firings(result: Result | None, *, user_message, threshold=None) -> list[str]:
     """The learning families one Stop-gate answer fires on, sorted: each scored at least
     `threshold` (the site's own by default), `NON_FIRING_FAMILIES` excluded, and a family in
     `MIN_PROMPT_CHARS` only when `user_message` is at least that long once stripped."""
     threshold = SITE_THRESHOLDS["stop_signal"] if threshold is None else threshold
-    answers = (result or {}).get("answers") or {}
+    if result is None:
+        return []
     typed = len((user_message or "").strip())
-    return sorted(k for k, a in answers.items()
+    return sorted(k for k, a in result.answers.items()
                   if k not in NON_FIRING_FAMILIES and typed >= MIN_PROMPT_CHARS.get(k, 0)
-                  and isinstance(a, dict)
-                  and isinstance(a.get("value"), (int, float)) and a["value"] >= threshold)
+                  and (score := a.number()) is not None and score >= threshold)
 
 
-def choice_answer(result):
-    """(gate, winner, probabilities) from one logged router result, None for what it lacks."""
-    answers = (result or {}).get("answers") or {}
-    gate = (answers.get(NEW_TASK_ID) or {}).get("value")
-    pick = answers.get(PICK_ID) or {}
-    probabilities = pick.get("probabilities")
-    return gate, pick.get("value"), probabilities if isinstance(probabilities, dict) else {}
+def choice_answer(result: Result | None) -> tuple[object, object, dict[str, object]]:
+    """(gate, winner, probabilities) from one router answer, None (or {}) for what it lacks."""
+    if result is None:
+        return None, None, {}
+    gate = result.answers.get(NEW_TASK_ID)
+    pick = result.answers.get(PICK_ID)
+    probabilities = pick.probabilities if pick is not None else None
+    return (None if gate is None else gate.value, None if pick is None else pick.value,
+            probabilities if isinstance(probabilities, dict) else {})
 
 
 def append_row(record):
