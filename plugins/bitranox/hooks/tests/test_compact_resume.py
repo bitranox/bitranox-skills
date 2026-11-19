@@ -646,6 +646,64 @@ def test_a_bash_edit_before_the_own_write_does_not_attribute(tmp_path, monkeypat
     assert "BASH-ONLY-43" not in ctx
 
 
+# ---- the paths Git Bash really reaches -----------------------------------------------------------
+# Measured on a Windows box: Git Bash spells a drive as `/c/...` (its `pwd` prints it, cygpath -u
+# gives it), and `cd /c/temp/x && sed -i ... handover.md` edits C:\temp\x\handover.md. The hook read
+# that cd as C:\c\temp\x (os.path roots `/c` at the current drive), so the session's own re-stamp of
+# the checkpoint it had just written never matched the Write and the checkpoint resumed as
+# unattributed. The other direction: unquoted, a backslash is an escape, so bash edits
+# `C:tempxhandover.md` for `sed -i ... C:\temp\x\handover.md`, while the hook read the real file and
+# let a call that changed nothing vouch for whatever is on disk now.
+
+_DRIVE_PATH = "C:/temp/x/handover.md" if os.name == "nt" else "/c/temp/x/handover.md"
+
+
+@pytest.mark.parametrize("command", [
+    "cd /c/temp/x && sed -i '1s/12:00/12:03/' handover.md",
+    "sed -i '1s/12:00/12:03/' /c/temp/x/handover.md",
+    "cd /c/temp && sed -i '1s/12:00/12:03/' x/handover.md",
+])
+def test_a_git_bash_drive_path_names_the_file_bash_edits(tmp_path, command):
+    assert H.bash_targets(command, str(tmp_path)) == {H._norm(_DRIVE_PATH): False}
+
+
+def test_a_script_body_keeps_its_own_reading_of_a_drive_path(tmp_path):
+    """A heredoc feeds a native interpreter: Windows Python opens `/c/temp/...` under the current
+    drive root, so only the shell's own words get Git Bash's reading."""
+    command = "python3 - <<'PY'\nopen('/c/temp/x/handover.md', 'w').write('x')\nPY"
+    assert H.bash_targets(command, str(tmp_path)) == {H._norm("/c/temp/x/handover.md"): False}
+
+
+@pytest.mark.parametrize("command, reached", [
+    (r"sed -i '1s/a/b/' C:\temp\x\handover.md", False),       # bash reads C:tempxhandover.md
+    (r"cd /c/temp && sed -i '1s/a/b/' x\handover.md", False),  # bash reads xhandover.md
+    (r"sed -i '1s/a/b/' 'C:\temp\x\handover.md'", True),
+    (r'sed -i "1s/a/b/" "C:\temp\x\handover.md"', True),
+])
+def test_an_unquoted_backslash_path_is_not_the_file_bash_edits(tmp_path, command, reached):
+    """Only a Windows host reads a backslash as a separator; on POSIX no spelling here names a
+    checkpoint at all, so the quoted controls are expected to reach it only there."""
+    expected = {H._norm(r"C:\temp\x\handover.md"): False} if reached and os.name == "nt" else {}
+    assert H.bash_targets(command, str(tmp_path)) == expected
+
+
+def _git_bash_spelling(path):
+    """`path` as Git Bash's `pwd` prints it: C:\\a\\b -> /c/a/b."""
+    drive, rest = os.path.splitdrive(str(path))
+    return "/" + drive[0].lower() + rest.replace("\\", "/")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="a drive letter exists only on Windows")
+def test_an_own_edit_after_a_git_bash_drive_cd_keeps_the_checkpoint_ours(tmp_path, monkeypatch,
+                                                                       capsys):
+    repo = _repo(tmp_path)
+    command = f"cd {_git_bash_spelling(repo)} && sed -i '1s/12:00/12:03/' handover.md"
+    _cp, tr = _own_then_bash(tmp_path, repo, command, bash_cwd=tmp_path)
+    ctx = _context(_run(monkeypatch, capsys, _event(repo, transcript=str(tr))))
+    assert "OWN-RESTAMPED-41" in ctx, "the session's own re-stamped checkpoint must come back"
+    assert "replace its first line" in ctx
+
+
 # ---- a prefix name: handover-<topic>.md with the checkpoint heading ------------------------------
 # Measured: a session kept its checkpoint in the scratchpad as handover-<topic>.md (heading
 # included) across five compactions, and none was handed back; the suffix rule above did not cover

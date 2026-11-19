@@ -541,15 +541,17 @@ _REPO_OPTIONS = ("--git-dir", "--work-tree")
 _REPO_ENV = ("GIT_DIR=", "GIT_WORK_TREE=")
 
 
-def _readable_dir(target, base):
+def _readable_dir(target, base, msys_drives=False):
     """Where `cd target` (or `git -C target`) lands from `base`, or None when it cannot be read.
 
     Unreadable: no target (a bare `cd` goes to HOME), `-` ($OLDPWD), a tilde path (the HOME of the
     shell that runs it), or a variable, substitution or glob. An absolute target is readable even
-    when `base` is not. A path that does not exist is left for git to refuse.
+    when `base` is not. A path that does not exist is left for git to refuse. With `msys_drives` a
+    Git Bash drive path (`/c/temp`) is read as that drive (see `msys_drive_path`).
     """
     if not target or target == "-" or target.startswith("~") or _UNKNOWABLE_DIR.search(target):
         return None
+    target = msys_drive_path(target, msys_drives)
     if is_rooted(target):
         return os.path.normpath(target)
     return os.path.normpath(os.path.join(base, target)) if base else None
@@ -564,6 +566,28 @@ def is_rooted(path):
     statement read `\\r`, without a base it read "unknown", decided by the host's Python version.
     """
     return os.path.isabs(path) or (os.sep == "\\" and path[:1] in ("/", "\\"))
+
+
+#: A Git Bash drive prefix: one letter right under `/`, followed by `/` or nothing.
+_MSYS_DRIVE = re.compile(r"^/([A-Za-z])(?=/|$)/*")
+
+
+def msys_drive_path(path, windows):
+    """`path` with a Git Bash drive prefix spelled as Windows spells it (`/c/temp` -> `C:/temp`)
+    when `windows` is True, else `path` unchanged. PURE.
+
+    Git for Windows mounts every drive at `/` (its fstab reads `none / cygdrive ...`), so its
+    `pwd` prints `/c/temp` and `cd /c/temp` lands in C:\\temp, either letter case. os.path has no
+    such mount and roots `/c/temp` at the CURRENT drive, C:\\c\\temp - a directory the shell never
+    entered. Only the drive form is translated: `/cygdrive/c` does not resolve in Git Bash at all,
+    and the other mounts (`/tmp`, `/usr`) need the mount table, which a static read does not have.
+    The caller decides `windows` (the host is Windows AND the text is Git Bash's, not PowerShell's
+    or a script's), so both arms are testable on every host.
+    """
+    match = _MSYS_DRIVE.match(path) if windows else None
+    if not match:
+        return path
+    return match.group(1).upper() + ":/" + path[match.end():]
 
 
 def is_work_tree_root(directory):
@@ -602,7 +626,7 @@ def _cd_target(args):
 _STACK_ROTATION = re.compile(r"^[+-]\d+$")
 
 
-def directory_change(statement, here, tool_name="Bash", *, expand_home=False):
+def directory_change(statement, here, tool_name="Bash", *, expand_home=False, msys_drives=False):
     """(changes, landing) for ONE statement: does it move the shell's directory, and to where.
 
     THE cd reader. Four nudges once carried a private regex each, and they had drifted in every
@@ -621,14 +645,17 @@ def directory_change(statement, here, tool_name="Bash", *, expand_home=False):
     come from `argv_for_match`, so `cd "a b"` is one word and a trailing comment is not one. Loop
     and branch keywords, a subshell paren and `NAME=value` prefixes in front of the program are
     skipped. `expand_home` resolves `~` and `~/...` against this process's HOME, for a caller that
-    has decided the hook and the shell share one.
+    has decided the hook and the shell share one. `msys_drives` reads a Git Bash drive path
+    (`cd /c/temp`) as that drive, for a caller that has decided the text is Git Bash's on a Windows
+    host (see `msys_drive_path`); it is off by default, because the guards and nudges here were
+    written and tested against the current-drive reading, and moving them is its own change.
     """
     tool = tool_name or "Bash"
     tokens = argv_for_match((statement or "").strip().lstrip("(").strip(), tool)
-    return _directory_change_tokens(tokens, here, tool, expand_home)
+    return _directory_change_tokens(tokens, here, tool, expand_home, msys_drives)
 
 
-def _directory_change_tokens(tokens, here, tool, expand_home=False):
+def _directory_change_tokens(tokens, here, tool, expand_home=False, msys_drives=False):
     """`directory_change` on an argv the caller already split."""
     idx = 0
     while idx < len(tokens) and (
@@ -648,7 +675,7 @@ def _directory_change_tokens(tokens, here, tool, expand_home=False):
         return True, None
     if expand_home and target and (target == "~" or target.startswith(("~/", "~\\"))):
         target = os.path.expanduser(target)
-    return True, _readable_dir(target, here)
+    return True, _readable_dir(target, here, msys_drives)
 
 
 def _apply_git_options(prefix, here, tool):
