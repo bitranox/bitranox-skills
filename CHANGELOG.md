@@ -30,6 +30,12 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.13.4]
+
+### Changed
+
+- process-test-design: the growth-ratio check now says what comes first (make the negative input reach the costly path; the too-fast floor is only the backstop), gives clock steps measured on the Windows dev box, and says a test whose cost is page faulting reads user plus system time (ru_utime + ru_stime).
+
 ## [11.13.3]
 
 ### Fixed
