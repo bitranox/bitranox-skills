@@ -235,11 +235,11 @@ def test_parse_clean_in_sync():
         "# branch.ab +0 -0\n"
     )
     s = G.parse_branch_status(out)
-    assert s["branch"] == "master"
-    assert s["upstream"] == "origin/master"
-    assert s["ahead"] == 0 and s["behind"] == 0
-    assert s["dirty"] == 0 and s["staged"] == []
-    assert s["in_sync"] is True
+    assert s.branch == "master"
+    assert s.upstream == "origin/master"
+    assert s.ahead == 0 and s.behind == 0
+    assert s.dirty == 0 and s.staged == ()
+    assert s.in_sync is True
 
 
 def test_parse_dirty_ahead_and_staged():
@@ -252,25 +252,25 @@ def test_parse_dirty_ahead_and_staged():
         "? untracked.txt\n"
     )
     s = G.parse_branch_status(out)
-    assert s["branch"] == "feature"
-    assert s["ahead"] == 2 and s["behind"] == 1
-    assert s["in_sync"] is False
-    assert s["dirty"] == 3            # 2 tracked changes + 1 untracked
-    assert "tools/x.py" in s["staged"] and "tools/y.py" not in s["staged"]
+    assert s.branch == "feature"
+    assert s.ahead == 2 and s.behind == 1
+    assert s.in_sync is False
+    assert s.dirty == 3               # 2 tracked changes + 1 untracked
+    assert "tools/x.py" in s.staged and "tools/y.py" not in s.staged
 
 
 def test_parse_detached_no_upstream():
     out = "# branch.head (detached)\n"
     s = G.parse_branch_status(out)
-    assert s["branch"] == "(detached)"
-    assert s["upstream"] is None
-    assert s["in_sync"] is False      # no upstream -> not verifiably in sync
+    assert s.branch == "(detached)"
+    assert s.upstream is None
+    assert s.in_sync is False         # no upstream -> not verifiably in sync
 
 
 def test_git_state_on_non_repo_returns_error(tmp_path):
     s = G.git_state(str(tmp_path))     # a plain dir, not a git repo
-    assert "error" in s
-    assert s["repo"] == str(tmp_path)
+    assert s.error and s.status is None
+    assert s.repo == str(tmp_path)
 
 
 def test_find_repos_discovers_git_dirs_and_skips_nested_git(tmp_path):
@@ -293,10 +293,10 @@ def test_main_error_path_exits_nonzero_and_does_not_crash(tmp_path, capsys):
 
 def test_main_survives_none_branch(monkeypatch, capsys):
     # regression: a repo whose parsed branch is None must not crash the f-string formatting
-    monkeypatch.setattr(G, "git_state", lambda repo, fetch=False: {
-        "repo": repo, "branch": None, "upstream": None, "ahead": 0, "behind": 0,
-        "dirty": 0, "staged": [], "in_sync": False,
-    })
+    monkeypatch.setattr(G, "git_state", lambda repo, fetch=False: G.RepoState(
+        repo=repo, status=G.BranchStatus(branch=None, upstream=None, gone=False, ahead=0,
+                                         behind=0, dirty=0, staged=(), in_sync=False),
+    ))
     rc = G.main(["somerepo"])
     assert rc == 1                     # no-upstream -> out of sync
     assert "None" in capsys.readouterr().out   # printed, did not raise
@@ -325,18 +325,18 @@ def test_an_upstream_deleted_on_the_remote_is_not_in_sync(tmp_path, capsys):
     _git(clone, "push", "-q", "origin", "--delete", "feat")
     _git(clone, "fetch", "-q", "--prune")
     s = G.git_state(clone)
-    assert s["upstream"] == "origin/feat" and s["gone"] is True
-    assert s["in_sync"] is False
+    assert s.status.upstream == "origin/feat" and s.status.gone is True
+    assert s.in_sync is False
     assert G.main([str(clone)]) == 1
     assert "gone" in capsys.readouterr().out
 
 
 def test_parse_an_upstream_with_no_ab_line_is_gone():
     s = G.parse_branch_status("# branch.head feat\n# branch.upstream origin/feat\n")
-    assert s["gone"] is True and s["in_sync"] is False
+    assert s.gone is True and s.in_sync is False
     ok = G.parse_branch_status("# branch.head feat\n# branch.upstream origin/feat\n"
                                "# branch.ab +0 -0\n")
-    assert ok["gone"] is False and ok["in_sync"] is True
+    assert ok.gone is False and ok.in_sync is True
 
 
 def test_repo_mode_with_a_missing_root_is_an_error(tmp_path, capsys):
@@ -419,7 +419,7 @@ def test_staged_paths_keep_their_spaces():
            "1 A. N... 000000 100644 100644 0000 aaaa my file.md\n"
            "2 R. N... 100644 100644 100644 aaaa aaaa R100 new draft.md\told draft.md\n"
            "1 A. N... 000000 100644 100644 0000 bbbb plain2.md\n")
-    assert G.parse_branch_status(out)["staged"] == ["my file.md", "new draft.md", "plain2.md"]
+    assert G.parse_branch_status(out).staged == ("my file.md", "new draft.md", "plain2.md")
 
 
 def test_parse_does_not_split_a_path_on_a_form_feed_or_line_separator():
@@ -427,7 +427,7 @@ def test_parse_does_not_split_a_path_on_a_form_feed_or_line_separator():
            "1 A. N... 000000 100644 100644 0000 aaaa odd\u2028name.md\n"
            "1 A. N... 000000 100644 100644 0000 aaaa feed\x0cname.md\n")
     s = G.parse_branch_status(out)
-    assert s["staged"] == ["odd\u2028name.md", "feed\x0cname.md"] and s["dirty"] == 2
+    assert s.staged == ("odd\u2028name.md", "feed\x0cname.md") and s.dirty == 2
 
 
 def test_repo_mode_prints_the_staged_files(tmp_path, capsys):
@@ -584,10 +584,10 @@ def _foreign(tmp_path, push=True):
 def test_a_foreign_upstream_whose_namesake_equals_head_is_in_sync_but_flagged(tmp_path, capsys):
     clone, base = _foreign(tmp_path)
     s = G.git_state(clone)
-    assert s["upstream"] == "origin/" + base and s["foreign_upstream"] is True
-    assert s["own_upstream"] == "origin/feat" and s["own_exists"] is True
-    assert (s["own_ahead"], s["own_behind"]) == (0, 0)
-    assert s["in_sync"] is True
+    assert s.status.upstream == "origin/" + base and s.own.foreign_upstream is True
+    assert s.own.own_upstream == "origin/feat" and s.own.own_exists is True
+    assert (s.own.own_ahead, s.own.own_behind) == (0, 0)
+    assert s.in_sync is True
     assert G.main([str(clone)]) == 0
     out = capsys.readouterr().out
     assert "upstream origin/%s is not origin/feat" % base in out
@@ -596,8 +596,8 @@ def test_a_foreign_upstream_whose_namesake_equals_head_is_in_sync_but_flagged(tm
 def test_a_foreign_upstream_with_no_namesake_is_out_of_sync(tmp_path, capsys):
     clone, _base = _foreign(tmp_path, push=False)
     s = G.git_state(clone)
-    assert s["foreign_upstream"] is True and s["own_exists"] is False
-    assert s["in_sync"] is False
+    assert s.own.foreign_upstream is True and s.own.own_exists is False
+    assert s.in_sync is False
     assert G.main([str(clone)]) == 1
     out = capsys.readouterr().out
     assert "origin/feat" in out and "absent" in out
@@ -608,7 +608,7 @@ def test_a_foreign_upstream_is_counted_against_the_namesake(tmp_path, capsys):
     (clone / "u.md").write_text("u\n", encoding="utf-8")
     _commit(clone, "u.md", message="unpushed")
     s = G.git_state(clone)
-    assert (s["own_ahead"], s["own_behind"]) == (1, 0) and s["in_sync"] is False
+    assert (s.own.own_ahead, s.own.own_behind) == (1, 0) and s.in_sync is False
     assert G.main([str(clone), "--json"]) == 1
     [repo] = json.loads(capsys.readouterr().out)["data"]["repos"]
     assert repo["own_ahead"] == 1 and repo["foreign_upstream"] is True
@@ -618,8 +618,42 @@ def test_a_matching_upstream_is_not_foreign(tmp_path):
     """Control: `push -u` set origin/feat, so nothing is flagged and the counts are porcelain's."""
     _origin, clone = _origin_and_clone(tmp_path)
     s = G.git_state(clone)
-    assert s["upstream"] == "origin/feat" and s["foreign_upstream"] is False
-    assert s["in_sync"] is True
+    assert s.status.upstream == "origin/feat" and s.own.foreign_upstream is False
+    assert s.in_sync is True
+
+
+_REPO_RECORD_KEYS = ["branch", "upstream", "gone", "ahead", "behind", "dirty", "staged", "in_sync",
+                     "repo", "foreign_upstream", "own_upstream", "own_exists", "own_ahead",
+                     "own_behind"]
+
+
+def test_git_state_returns_a_typed_record(tmp_path):
+    """The state is a frozen record whose fields a reader names, not a dict of conditional keys
+    every reader re-spells; a repo git cannot read has no status at all rather than a dict that
+    lacks the keys a careless reader indexes."""
+    _origin, clone = _origin_and_clone(tmp_path)
+    s = G.git_state(clone)
+    assert isinstance(s, G.RepoState) and isinstance(s.status, G.BranchStatus)
+    assert (s.status.branch, s.status.upstream, s.in_sync) == ("feat", "origin/feat", True)
+    assert s.own == G.OwnUpstream()
+    unreadable = G.git_state(str(tmp_path))
+    assert unreadable.status is None and unreadable.error and unreadable.in_sync is False
+
+
+@pytest.mark.parametrize("fetch", [False, True])
+def test_the_json_repo_record_keeps_its_keys_and_their_order(tmp_path, capsys, fetch):
+    """The --json record is the wire contract: same keys, same order, fetch_error only when a
+    fetch was asked for, and an unreadable repo as just repo + error."""
+    _origin, clone = _origin_and_clone(tmp_path)
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    argv = [str(clone), str(plain), "--json"] + (["--fetch"] if fetch else [])
+    assert G.main(argv) == 2
+    good, bad = json.loads(capsys.readouterr().out)["data"]["repos"]
+    tail = ["fetch_error"] if fetch else []
+    assert list(good) == _REPO_RECORD_KEYS + tail
+    assert list(bad) == ["repo", "error"] + tail
+    assert good["staged"] == [] and good["in_sync"] is True and good["own_ahead"] is None
 
 
 def _advance_origin(origin, tmp_path):

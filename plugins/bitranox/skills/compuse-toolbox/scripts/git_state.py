@@ -75,14 +75,86 @@ import json
 import os
 import subprocess
 import sys
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
 from _cli_envelope import EnvelopeArgumentParser, run_guarded
 
 
-def parse_branch_status(text: str) -> dict:
-    """Parse `git status --porcelain=v2 --branch` output into a state dict (pure; unit-testable).
+@dataclass(frozen=True)
+class BranchStatus:
+    """What `git status --porcelain=v2 --branch` says about one repo.
+
+    in_sync is porcelain's own verdict: an upstream that is not gone, with ahead and behind 0.
+    RepoState.in_sync re-judges it for a foreign upstream."""
+
+    branch: str | None
+    upstream: str | None
+    gone: bool
+    ahead: int
+    behind: int
+    dirty: int
+    staged: tuple[str, ...]
+    in_sync: bool
+
+
+@dataclass(frozen=True)
+class OwnUpstream:
+    """The branch's namesake on its remote, read only when the configured upstream is FOREIGN
+    (see the module doc). own_ahead/own_behind are None when not foreign or not countable."""
+
+    foreign_upstream: bool = False
+    own_upstream: str | None = None
+    own_exists: bool | None = None
+    own_ahead: int | None = None
+    own_behind: int | None = None
+
+
+@dataclass(frozen=True)
+class RepoState:
+    """One repo's state: `status` is None exactly when git could not read it, and `error` says why.
+
+    `fetched` records that a fetch was asked for, so the JSON record carries `fetch_error` (None
+    on success) exactly when it did; to_json() is the --json record, whose keys and order are
+    the wire contract."""
+
+    repo: str
+    status: BranchStatus | None = None
+    error: str | None = None
+    own: OwnUpstream = field(default_factory=OwnUpstream)
+    fetched: bool = False
+    fetch_error: str | None = None
+
+    @property
+    def in_sync(self) -> bool:
+        """Porcelain's verdict, or for a foreign upstream: HEAD equals the namesake. Never true for
+        a repo git could not read."""
+        if self.status is None:
+            return False
+        if self.own.foreign_upstream:
+            return self.own.own_ahead == 0 and self.own.own_behind == 0
+        return self.status.in_sync
+
+    def to_json(self) -> dict[str, object]:
+        record: dict[str, object] = {}
+        if self.status is None:
+            record.update(repo=self.repo, error=self.error)
+        else:
+            s = self.status
+            record.update(branch=s.branch, upstream=s.upstream, gone=s.gone, ahead=s.ahead,
+                          behind=s.behind, dirty=s.dirty, staged=list(s.staged),
+                          in_sync=self.in_sync, repo=self.repo,
+                          foreign_upstream=self.own.foreign_upstream,
+                          own_upstream=self.own.own_upstream, own_exists=self.own.own_exists,
+                          own_ahead=self.own.own_ahead, own_behind=self.own.own_behind)
+        if self.fetched:
+            record["fetch_error"] = self.fetch_error
+        return record
+
+
+def parse_branch_status(text: str) -> BranchStatus:
+    """Parse `git status --porcelain=v2 --branch` output (pure; unit-testable).
 
     `gone` is an upstream git still names but can no longer compare against: after the branch is
     deleted on the remote and pruned, porcelain keeps `# branch.upstream` and drops
@@ -117,8 +189,8 @@ def parse_branch_status(text: str) -> dict:
             dirty += 1
     gone = upstream is not None and not saw_ab
     in_sync = upstream is not None and not gone and ahead == 0 and behind == 0
-    return {"branch": branch, "upstream": upstream, "gone": gone, "ahead": ahead,
-            "behind": behind, "dirty": dirty, "staged": staged, "in_sync": in_sync}
+    return BranchStatus(branch=branch, upstream=upstream, gone=gone, ahead=ahead, behind=behind,
+                        dirty=dirty, staged=tuple(staged), in_sync=in_sync)
 
 
 def _changed_path(line: str) -> str:
@@ -132,19 +204,18 @@ def _changed_path(line: str) -> str:
     return line.split(" ", 9)[9].split("\t")[0]
 
 
-def git_state(repo, fetch: bool = False) -> dict:
-    """Run git in `repo` and return its parsed state (adds "repo" + "error").
+def git_state(repo, fetch: bool = False) -> RepoState:
+    """Run git in `repo` and return its state; `error` is set when git could not read it.
 
-    With `fetch`, `git fetch --prune` runs first; its failure is "fetch_error" (the state is still
+    With `fetch`, `git fetch --prune` runs first; its failure is `fetch_error` (the state is still
     read, from the refs as they were)."""
     fetch_error = _fetch(repo) if fetch else None
     state = _read_state(repo)
-    if fetch:
-        state["fetch_error"] = fetch_error
-    return state
+    return RepoState(repo=state.repo, status=state.status, error=state.error, own=state.own,
+                     fetched=fetch, fetch_error=fetch_error)
 
 
-def _read_state(repo) -> dict:
+def _read_state(repo) -> RepoState:
     try:
         # quotePath off so a staged non-ASCII name prints as itself rather than as octal escapes;
         # decoded as UTF-8 with replacement so an undecodable name cannot crash the check.
@@ -152,13 +223,11 @@ def _read_state(repo) -> dict:
                               "--porcelain=v2", "--branch"],
                              capture_output=True, encoding="utf-8", errors="replace", timeout=30)
     except (OSError, subprocess.SubprocessError) as exc:
-        return {"repo": str(repo), "error": str(exc)}
+        return RepoState(repo=str(repo), error=str(exc))
     if out.returncode != 0:
-        return {"repo": str(repo), "error": (out.stderr or "not a git repo").strip()}
-    state = parse_branch_status(out.stdout)
-    state["repo"] = str(repo)
-    _judge_own_upstream(repo, state)
-    return state
+        return RepoState(repo=str(repo), error=(out.stderr or "not a git repo").strip())
+    status = parse_branch_status(out.stdout)
+    return RepoState(repo=str(repo), status=status, own=_judge_own_upstream(repo, status))
 
 
 _FETCH_TIMEOUT = 120
@@ -209,30 +278,26 @@ def _git_out(repo, *args) -> str | None:
     return res.stdout if res.returncode == 0 else None
 
 
-def _judge_own_upstream(repo, state: dict) -> None:
-    """Flag a FOREIGN upstream and re-judge in_sync against <remote>/<branch> (see module doc).
-
-    Adds foreign_upstream, own_upstream, own_exists, own_ahead, own_behind (None when not
-    foreign or not countable)."""
-    state.update(foreign_upstream=False, own_upstream=None, own_exists=None, own_ahead=None,
-                 own_behind=None)
-    branch = state.get("branch")
-    if not state.get("upstream") or not branch or branch == "(detached)":
-        return
+def _judge_own_upstream(repo, status: BranchStatus) -> OwnUpstream:
+    """Detect a FOREIGN upstream and count HEAD against <remote>/<branch> (see module doc);
+    RepoState.in_sync judges a foreign upstream by these counts."""
+    branch = status.branch
+    if not status.upstream or not branch or branch == "(detached)":
+        return OwnUpstream()
     line = (_git_out(repo, "for-each-ref", "--format=%(upstream:remotename)%09"
                      "%(upstream:remoteref)", "refs/heads/" + branch) or "").strip("\n")
     remote, _tab, remote_ref = line.partition("\t")
     if not remote_ref or remote_ref.removeprefix("refs/heads/") == branch:
-        return
+        return OwnUpstream()
     own = "%s/%s" % (remote if remote and remote != "." else "origin", branch)
     exists = _git_out(repo, "rev-parse", "--verify", "-q", "refs/remotes/" + own) is not None
-    state.update(foreign_upstream=True, own_upstream=own, own_exists=exists)
     counts = _git_out(repo, "rev-list", "--left-right", "--count",
                       "HEAD...refs/remotes/" + own) if exists else None
     if counts is not None and len(counts.split()) == 2:
         ahead, behind = (int(n) for n in counts.split())
-        state.update(own_ahead=ahead, own_behind=behind)
-    state["in_sync"] = state["own_ahead"] == 0 and state["own_behind"] == 0
+        return OwnUpstream(foreign_upstream=True, own_upstream=own, own_exists=exists,
+                           own_ahead=ahead, own_behind=behind)
+    return OwnUpstream(foreign_upstream=True, own_upstream=own, own_exists=exists)
 
 
 def find_repos(root, errors: list[str] | None = None) -> list[str]:
@@ -591,27 +656,28 @@ def _repo_targets(repos, root) -> tuple[list[str], list[str]]:
     return found, walk_errors
 
 
-def _sync_flag(s: dict) -> str | None:
-    if s.get("foreign_upstream"):
-        return _foreign_flag(s)
-    if s["in_sync"]:
+def _sync_flag(s: RepoState, status: BranchStatus) -> str | None:
+    if s.own.foreign_upstream:
+        return _foreign_flag(s, status)
+    if s.in_sync:
         return None
-    if not s["upstream"]:
+    if not status.upstream:
         return "no-upstream"
-    if s.get("gone"):
-        return "upstream %s gone" % s["upstream"]
-    return f"ahead {s['ahead']}/behind {s['behind']}"
+    if status.gone:
+        return "upstream %s gone" % status.upstream
+    return f"ahead {status.ahead}/behind {status.behind}"
 
 
-def _foreign_flag(s: dict) -> str:
-    note = "upstream %s is not %s" % (s["upstream"], s["own_upstream"])
-    if not s["own_exists"]:
-        return "%s (%s absent)" % (note, s["own_upstream"])
-    if s["in_sync"]:
+def _foreign_flag(s: RepoState, status: BranchStatus) -> str:
+    own = s.own
+    note = "upstream %s is not %s" % (status.upstream, own.own_upstream)
+    if not own.own_exists:
+        return "%s (%s absent)" % (note, own.own_upstream)
+    if s.in_sync:
         return "OK (%s)" % note
-    if s["own_ahead"] is None:
+    if own.own_ahead is None or own.own_behind is None:
         return "%s (not countable)" % note
-    return "ahead %d/behind %d vs %s (%s)" % (s["own_ahead"], s["own_behind"], s["own_upstream"],
+    return "ahead %d/behind %d vs %s (%s)" % (own.own_ahead, own.own_behind, own.own_upstream,
                                               note)
 
 
@@ -621,22 +687,23 @@ def _main_repos(repos, root, as_json, fetch=False) -> int:
     unreadable directory - a pre-push guard that looked at nothing must not read as a pass."""
     targets, problems = _repo_targets(repos, root)
     rc = 2 if problems else 0
-    states = []
+    states: list[RepoState] = []
     for repo in targets:
         s = git_state(repo, fetch=fetch)
         states.append(s)
-        if "error" in s or s.get("fetch_error"):
+        if s.status is None or s.fetch_error:
             rc = 2
-        if "error" not in s and not s["in_sync"]:
+        if s.status is not None and not s.in_sync:
             rc = max(rc, 1)
     if as_json:
         print(json.dumps({"ok": rc != 2, "command": "git-state",
-                          "data": {"root": root, "fetched": fetch, "repos": states},
+                          "data": {"root": root, "fetched": fetch,
+                                   "repos": [s.to_json() for s in states]},
                           "skipped": problems}, indent=2))
     else:
         for s in states:
             _print_repo_state(s)
-        if not fetch and any(s.get("upstream") for s in states):
+        if not fetch and any(s.status is not None and s.status.upstream for s in states):
             print("git_state: ahead/behind are as of each repo's last fetch (--fetch refreshes)",
                   file=sys.stderr)
     for problem in problems:
@@ -644,15 +711,17 @@ def _main_repos(repos, root, as_json, fetch=False) -> int:
     return rc
 
 
-def _print_repo_state(s: dict) -> None:
-    if "error" in s:
-        print(f"{s['repo']:40} ERROR: {s['error']}")
+def _print_repo_state(s: RepoState) -> None:
+    status = s.status
+    if status is None:
+        print(f"{s.repo:40} ERROR: {s.error}")
         return
-    flags = [f for f in (_sync_flag(s), f"dirty {s['dirty']}" if s["dirty"] else None) if f]
-    print(f"{s['repo']:40} {str(s['branch']):20} {'OK' if not flags else ' '.join(flags)}")
-    if s.get("fetch_error"):
-        print(f"    fetch failed: {s['fetch_error']}")
-    for path in s.get("staged", ()):
+    flags = [f for f in (_sync_flag(s, status), f"dirty {status.dirty}" if status.dirty else None)
+             if f]
+    print(f"{s.repo:40} {str(status.branch):20} {'OK' if not flags else ' '.join(flags)}")
+    if s.fetch_error:
+        print(f"    fetch failed: {s.fetch_error}")
+    for path in status.staged:
         print(f"    staged  {path}")
 
 
