@@ -1612,3 +1612,150 @@ def test_every_verdict_has_its_own_exit_code_and_keeps_its_string():
     summary = "=== short test summary info ===\nFAILED t.py::x - AssertionError: boom\n"
     assert json.dumps(M.verdict_for(1, summary)) == '"killed"'
     assert M.verdict_for(1, summary).upper() == "KILLED"
+
+
+# --------------------------------------------------------------------------
+# Killed from OUTSIDE: the caller's own timeout, a closed terminal, a SIGKILL
+# --------------------------------------------------------------------------
+
+POSIX_ONLY = pytest.mark.skipif(os.name == "nt", reason="sends POSIX signals to a process")
+
+# Waits for classify(0) to say "zero" and writes its pid first, so a test knows the mutation is
+# on disk AND the arm's pytest is running. Bounded by itself (30 s), so the pytest a SIGKILL
+# orphans cannot outlive the test by long even if the cleanup misses it.
+WAITING_TEST = TEST + '''
+
+def test_waits_for_zero():
+    import os, time
+    (__import__("pathlib").Path(__file__).parent / "arm.pid").write_text(str(os.getpid()))
+    deadline = time.monotonic() + 30
+    while classify(0) != "zero" and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert classify(0) == "zero"
+'''
+
+ZERO_TO_UPPER = ('return "zero"', 'return "ZERO"')
+
+
+@pytest.fixture(autouse=True)
+def journal_dir(tmp_path, monkeypatch):
+    """Every run in this module journals under the test's own directory, never the user's."""
+    d = tmp_path / "journals"
+    monkeypatch.setenv("MUTATION_ARM_STATE_DIR", str(d))
+    return d
+
+
+def _waiting_project(tmp_path):
+    (tmp_path / "proj").mkdir()
+    p = make_project(tmp_path / "proj")
+    (p / "test_src.py").write_text(WAITING_TEST, encoding="utf-8")
+    (p / "old.txt").write_text(ZERO_TO_UPPER[0], encoding="utf-8")
+    (p / "new.txt").write_text(ZERO_TO_UPPER[1], encoding="utf-8")
+    return p
+
+
+def _start_waiting_arm(p):
+    """mutation_arm running the waiting arm, returned once its pytest has started on the mutant."""
+    proc = subprocess.Popen(
+        [sys.executable, str(TOOL), "--mutate", "src.py", "old.txt", "new.txt",
+         "--test", "test_src.py::test_waits_for_zero", "--timeout", "120"],
+        cwd=str(p), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        encoding="utf-8", errors="replace")
+    deadline = time.monotonic() + 60
+    while not (p / "arm.pid").exists():
+        if proc.poll() is not None or time.monotonic() > deadline:
+            proc.kill()
+            pytest.fail(f"the arm never started: {proc.communicate()}")
+        time.sleep(0.05)
+    assert 'return "ZERO"' in (p / "src.py").read_text(encoding="utf-8"), "premise: mutated"
+    return proc
+
+
+def _gone(pid, within=15.0):
+    deadline = time.monotonic() + within
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def _kill_orphan(p):
+    try:
+        os.kill(int((p / "arm.pid").read_text()), 9)
+    except (OSError, ValueError):
+        pass
+
+
+@POSIX_ONLY
+@pytest.mark.parametrize("signame", ["SIGTERM", "SIGHUP", "SIGINT"])
+def test_a_signal_to_mutation_arm_itself_restores_the_source(tmp_path, journal_dir, signame):
+    """Measured: a battery killed by its caller's tool timeout left a mutation in a source about
+    to be committed - the restore ran only on mutation_arm's OWN --timeout path."""
+    import signal
+
+    p = _waiting_project(tmp_path)
+    before = SOURCE.encode("utf-8")
+    proc = _start_waiting_arm(p)
+    child = int((p / "arm.pid").read_text())
+    try:
+        proc.send_signal(getattr(signal, signame))
+        _, err = proc.communicate(timeout=30)
+    finally:
+        _kill_orphan(p)
+    assert proc.returncode == 128 + getattr(signal, signame), (proc.returncode, err)
+    assert (p / "src.py").read_bytes() == before
+    assert "restored" in err, err
+    assert _gone(child), "the arm's own pytest must not keep running on a source being restored"
+    assert not any(journal_dir.iterdir()), "a restored arm leaves no journal behind"
+
+
+@POSIX_ONLY
+def test_a_sigkilled_run_is_restored_by_the_next_start(tmp_path):
+    p = _waiting_project(tmp_path)
+    proc = _start_waiting_arm(p)
+    proc.kill()
+    proc.communicate(timeout=30)
+    _kill_orphan(p)
+    assert 'return "ZERO"' in (p / "src.py").read_text(encoding="utf-8"), "premise: left mutated"
+
+    nxt = run(p, "--mutate", "src.py", "old.txt", "new.txt", "--test", "test_src.py::test_zero",
+              "--json")
+    assert "RESTORED" in nxt.stderr and "src.py" in nxt.stderr, nxt.stderr
+    assert json.loads(nxt.stdout)["data"]["verdict"] == "killed", nxt.stdout
+    assert (p / "src.py").read_text(encoding="utf-8") == SOURCE
+
+
+@POSIX_ONLY
+def test_a_sigkilled_run_whose_file_was_edited_since_is_refused_not_overwritten(tmp_path):
+    p = _waiting_project(tmp_path)
+    proc = _start_waiting_arm(p)
+    proc.kill()
+    proc.communicate(timeout=30)
+    _kill_orphan(p)
+    edited = SOURCE.replace('return "positive"', 'return "plus"').replace(*ZERO_TO_UPPER)
+    (p / "src.py").write_text(edited, encoding="utf-8")
+
+    nxt = run(p, "--mutate", "src.py", "new.txt", "old.txt", "--test", "test_src.py::test_zero")
+    assert nxt.returncode == 2, (nxt.stdout, nxt.stderr)
+    assert "differs from both" in nxt.stderr, nxt.stderr
+    assert (p / "src.py").read_text(encoding="utf-8") == edited, "a later edit is never destroyed"
+
+
+@POSIX_ONLY
+def test_a_second_run_on_a_file_a_live_run_is_mutating_is_refused(tmp_path):
+    """Its 'original' would be the first run's MUTANT, and its restore would put that back."""
+    p = _waiting_project(tmp_path)
+    first = _start_waiting_arm(p)
+    try:
+        second = run(p, "--mutate", "src.py", "new.txt", "old.txt",
+                     "--test", "test_src.py::test_zero")
+    finally:
+        first.terminate()
+        first.communicate(timeout=30)
+        _kill_orphan(p)
+    assert second.returncode == 2, (second.stdout, second.stderr)
+    assert "another mutation_arm run" in second.stderr, second.stderr
+    assert (p / "src.py").read_text(encoding="utf-8") == SOURCE

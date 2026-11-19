@@ -33,6 +33,17 @@ restores from HEAD and so discards any uncommitted work in that file. The restor
 happens, and the bytes are compared afterwards - a failed restore is reported loudly, because it
 is the one outcome worse than a wrong verdict.
 
+* **The tool itself was killed from outside.** A caller's own timeout (a tool cap around a
+  `--battery` run) killed mutation_arm, the `finally` never ran, and a mutation stayed in a source
+  about to be committed. So SIGTERM, SIGHUP, SIGINT (and SIGBREAK on Windows) stop the arm's
+  process tree and restore before the process ends, which then exits 128 + the signal number with
+  a stderr line saying whether every source is back (no envelope, as for a Ctrl-C). For the kill
+  nothing can catch (SIGKILL), the copies are an ON-DISK journal (see `_arm_journal.py`; under
+  `MUTATION_ARM_STATE_DIR`, else the per-user state dir), written before the first edit: every
+  start first restores a file that still holds exactly a dead run's mutant (a `RESTORED` line on
+  stderr), and refuses, with nothing written, to mutate a file that holds anything else since
+  (its original's copy is named), or one a still-running mutation_arm is mutating right now.
+
 * **The arm's bytecode outlived the arm.** CPython validates a `.pyc` against the source's
   mtime SECOND and SIZE, so a length-preserving mutation applied in the same second the file was
   last edited leaves a cached mutant that the RESTORED source does not invalidate: the next run
@@ -44,7 +55,7 @@ is the one outcome worse than a wrong verdict.
 
 * **The arm SPUN instead of failing.** A mutation can make a test loop forever rather than go
   red, when the test's only exit is the behaviour being mutated. Unbounded, that hangs this tool
-  and the whole battery behind it, and killing it by hand skips the restore. `--timeout` bounds
+  and the whole battery behind it. `--timeout` bounds
   the arm and reports the hang as its own verdict, never as `killed`. The restore still runs when
   the timeout fires: the copy is taken before the first edit and put back in a `finally`.
 
@@ -118,7 +129,9 @@ and was restored; the verdict is still reported, and the leftover files are name
 error (an absent anchor, a file that is not UTF-8, a test that never ran, a pytest that exited 1
 without reporting a failure, an arm still running at --timeout, a runner that does not exist), a
 sibling anchor_edit.py that cannot be imported, or an internal error - never Python's traceback
-exit 1, which would read as SURVIVED.
+exit 1, which would read as SURVIVED. A stop signal exits 128 + its number (143 for SIGTERM, 130
+for Ctrl-C) once the sources are restored, and 2 is also a refusal to touch a file a killed run's
+journal still holds.
 """
 from __future__ import annotations
 
@@ -132,10 +145,14 @@ import shutil
 import signal
 import subprocess
 import sys
-import tempfile
+from collections.abc import Generator, Iterable
+from contextlib import contextmanager
 from enum import Enum
 from pathlib import Path
+from types import FrameType
+from typing import Any, NoReturn
 
+from _arm_journal import Journal, Recovery, recover
 from _cli_envelope import (EXIT_ERROR, EXIT_NO, EXIT_YES, EnvelopeArgumentParser, emit,
                            envelope_for_exit, guarded, render)
 
@@ -685,6 +702,99 @@ def plan_text_mutations(specs):
     return _plan(specs, _match_endings)
 
 
+#: Journals this process wrote and has not yet seen restored; what an interrupt reports on.
+_LIVE_JOURNALS: list[Journal] = []
+
+#: Signals that stop this tool from outside. Each is turned into ArmInterrupted, so the arm's
+#: `finally` kills the arm's process tree and restores the sources before the process ends.
+_STOP_SIGNALS: tuple[int, ...] = tuple(
+    int(getattr(signal, name)) for name in ("SIGTERM", "SIGHUP", "SIGINT", "SIGBREAK")
+    if hasattr(signal, name))
+
+
+class ArmInterrupted(BaseException):
+    """A stop signal arrived. A BaseException, so no `except Exception` or `except OSError` on
+    the way out can swallow it and carry on with a mutated source."""
+
+    def __init__(self, signum: int) -> None:
+        super().__init__(signum)
+        self.signum = signum
+
+
+def _on_stop_signal(signum: int, _frame: FrameType | None) -> NoReturn:
+    # A second signal while the restore runs would cut it half-way: ignore every stop signal from
+    # here on; the process ends as soon as the restore is done.
+    for sig in _STOP_SIGNALS:
+        signal.signal(sig, signal.SIG_IGN)
+    raise ArmInterrupted(signum)
+
+
+@contextmanager
+def _restore_on_stop_signals() -> Generator[None]:
+    """Install the stop handlers for the duration of a run; the previous ones afterwards."""
+    previous: dict[int, Any] = {}
+    try:
+        for sig in _STOP_SIGNALS:
+            try:
+                previous[sig] = signal.signal(sig, _on_stop_signal)
+            except (ValueError, OSError):   # not the main thread, or not settable here
+                continue
+        yield
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+
+def _interrupted(signum: int) -> int:
+    """What a stop signal ends with: a line saying whether the sources are back, 128 + signum.
+
+    No envelope under --json, as for a Ctrl-C: nothing was answered."""
+    name = signal.Signals(signum).name
+    if _LIVE_JOURNALS:
+        paths = ", ".join(entry["path"] for j in _LIVE_JOURNALS for entry in j.entries)
+        print(f"mutation_arm: stopped by {name}; RESTORE FAILED for {paths} - the originals are "
+              f"kept in {', '.join(str(j.directory) for j in _LIVE_JOURNALS)}, and the next "
+              f"mutation_arm start restores them", file=sys.stderr)
+    else:
+        print(f"mutation_arm: stopped by {name}; every mutated source was restored",
+              file=sys.stderr)
+    return 128 + signum
+
+
+def _report_recovery(recovery: Recovery) -> None:
+    for path in recovery.restored:
+        print(f"mutation_arm: RESTORED {path} - an earlier run was killed with its mutation on "
+              f"disk; its journal held the original", file=sys.stderr)
+    for conflict in recovery.conflicts:
+        print(f"mutation_arm: WARNING {conflict.path} holds neither its original nor the mutation "
+              f"a killed run (pid {conflict.pid}) left in it; its original is {conflict.original}",
+              file=sys.stderr)
+    for directory in recovery.unreadable:
+        print(f"mutation_arm: WARNING unreadable restore journal {directory} - inspect it by hand",
+              file=sys.stderr)
+
+
+def _blocked(recovery: Recovery, paths: Iterable[str], *, as_json: bool) -> int | None:
+    """Refuse, before anything is written, a plan touching a file a journal leaves unsafe."""
+    lines = recovery.blocking(paths)
+    if not lines:
+        return None
+    return _refuse("refused, nothing written - " + "; ".join(lines), as_json=as_json)
+
+
+def _mutant_texts(planned: list[tuple[Path, str | None, str]]) -> dict[Path, str]:
+    """Each source's full mutated text by resolved path, computed BEFORE anything is written.
+
+    The journal records the exact bytes each file will hold, and writing each file once leaves no
+    half-applied state between two mutations to the same file that a kill could freeze."""
+    texts: dict[Path, str] = {}
+    for path, old, new in planned:
+        key = Path(path).resolve()
+        current = texts[key] if key in texts else _read_source(key)
+        texts[key] = new if old is None else replace_exact(current, old, new)
+    return texts
+
+
 def run_arm(planned, nodeid, *, runner=None, timeout=None, command=False, log_path=None):
     """Apply every mutation, run the arm, restore from copies taken first. Returns a report.
 
@@ -702,42 +812,43 @@ def run_arm(planned, nodeid, *, runner=None, timeout=None, command=False, log_pa
     # the mutation preserves the file's size and lands in the same second, which reports a test as
     # SURVIVED though the mutant never ran.
     purged = purge_bytecode([path for path, _, _ in planned])
-    # ignore_cleanup_errors: the cleanup runs AFTER the arm, and a raise there would reach main()
-    # as "refused before mutating" about an arm that mutated, ran and restored.
-    with tempfile.TemporaryDirectory(prefix="mutation-arm-", ignore_cleanup_errors=True) as tmp:
-        saved = {}
-        for index, (path, _, _) in enumerate(planned):
-            # Index-prefixed: two mutations may target the same file, and two files in different
-            # directories may share a basename. Either collision would restore the wrong bytes.
-            copy = Path(tmp) / f"{index}-{path.name}"
-            shutil.copy2(path, copy)
-            saved.setdefault(path, copy)
-        returncode, output, error = None, "", None
+    mutants = _mutant_texts(planned)
+    # The originals go to an ON-DISK journal before the first write, not a temp dir: a kill this
+    # process cannot catch (SIGKILL, a caller's tree kill) skips every finally, and only a record
+    # the next start can find puts the source back. See _arm_journal.
+    journal = Journal.create({path: text.encode("utf-8") for path, text in mutants.items()})
+    _LIVE_JOURNALS.append(journal)
+    saved = {Path(entry["path"]): journal.original(entry) for entry in journal.entries}
+    returncode, output, error = None, "", None
+    try:
         try:
+            for path, text in mutants.items():
+                _write_source(path, text)
+        except OSError as exc:
+            # An unwritable source must not escape as a traceback: its exit 1 reads as
+            # SURVIVED. The restore below still runs for whatever was already written.
+            error = f"could not apply the mutation: {exc}"
+        else:
             try:
-                for path, old, new in planned:
-                    _write_source(path, new if old is None
-                                  else replace_exact(_read_source(path), old, new))
+                returncode, output = (_run_command(runner, timeout) if command
+                                      else _run_pytest(runner, nodeid, timeout))
             except OSError as exc:
-                # An unwritable source must not escape as a traceback: its exit 1 reads as
-                # SURVIVED. The restore below still runs for whatever was already written.
-                error = f"could not apply the mutation: {exc}"
-            else:
-                try:
-                    returncode, output = (_run_command(runner, timeout) if command
-                                          else _run_pytest(runner, nodeid, timeout))
-                except OSError as exc:
-                    # The mutation is ON DISK by now, so this must not escape to main(), whose
-                    # handler says the arm was refused before mutating.
-                    error = f"could not start the arm: {exc}"
-        finally:
-            restored = _restore(saved)
-            # Belt and braces: the flag above stops this arm writing bytecode, but a caller
-            # supplying its own runner can put the writing back. Reported, never raised: the
-            # arm has run and been restored, and a raise here reached main() as "refused
-            # before mutating" and dropped the verdict the arm earned.
-            removed, left = remove_bytecode(list(saved))
-            purged += removed
+                # The mutation is ON DISK by now, so this must not escape to main(), whose
+                # handler says the arm was refused before mutating.
+                error = f"could not start the arm: {exc}"
+    finally:
+        # Also on a signal turned into ArmInterrupted: that is how a caller's kill restores.
+        restored = _restore(saved)
+        if restored:
+            # Kept on a failed restore, so the next start retries it from the same copies.
+            journal.discard()
+            _LIVE_JOURNALS.remove(journal)
+        # Belt and braces: the flag above stops this arm writing bytecode, but a caller
+        # supplying its own runner can put the writing back. Reported, never raised: the
+        # arm has run and been restored, and a raise here reached main() as "refused
+        # before mutating" and dropped the verdict the arm earned.
+        removed, left = remove_bytecode(list(saved))
+        purged += removed
     if error:
         verdict, reason = Verdict.ERROR, error
     elif command:
@@ -919,12 +1030,20 @@ def main(argv=None) -> int:
         return _refuse(f"refused, nothing written - {exc}", as_json=args.json)
     if not args.json:
         print(f"mutation_arm: runner {' '.join(runner)} ({source})", file=sys.stderr)
-    if args.battery:
-        return _main_battery(args, runner, source)
-    return _main_single(args, runner, source)
+    # Before any source is read: a file an earlier killed run left mutated would otherwise be
+    # planned against, copied as this run's "original", and restored to the MUTANT.
+    recovery = recover()
+    _report_recovery(recovery)
+    with _restore_on_stop_signals():
+        try:
+            if args.battery:
+                return _main_battery(args, runner, source, recovery)
+            return _main_single(args, runner, source, recovery)
+        except ArmInterrupted as exc:
+            return _interrupted(exc.signum)
 
 
-def _main_single(args, runner, source) -> int:
+def _main_single(args, runner, source, recovery: Recovery | None = None) -> int:
     if not args.mutate and not args.revert:
         return _refuse("no --mutate or --revert given", as_json=args.json)
     command = args.cmd is not None
@@ -938,6 +1057,10 @@ def _main_single(args, runner, source) -> int:
     except ValueError as exc:
         return _refuse(f"refused, nothing written - {exc}", as_json=args.json)
     shown = args.cmd if command else " ".join(tests)
+    targets = [m[0] for m in args.mutate or []] + [r[0] for r in args.revert or []]
+    refused = _blocked(recovery or Recovery(), targets, as_json=args.json)
+    if refused is not None:
+        return refused
 
     try:
         reverted, reverts = plan_reverts(args.revert or [])
@@ -1194,13 +1317,17 @@ def battery_code(result) -> int:
     return EXIT_NO if EXIT_NO in codes else EXIT_YES
 
 
-def _main_battery(args, runner, source) -> int:
+def _main_battery(args, runner, source, recovery: Recovery | None = None) -> int:
     try:
         command = args.cmd is not None
         if command and args.test:
             raise BatteryError("--test names a pytest node; with --cmd the command itself is the arm: drop --test")
         tests, arms_spec = load_battery(args.battery, args.test or None,
                                         need_tests=not command)
+        targets = [file for _, mutations, _ in arms_spec for file, _, _ in mutations]
+        refused = _blocked(recovery or Recovery(), targets, as_json=args.json)
+        if refused is not None:
+            return refused
         arms = []
         for label, mutations, arm_tests in arms_spec:
             try:
