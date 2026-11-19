@@ -30,6 +30,17 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.13.2]
+
+### Fixed
+
+- coding-python-performance-review tests: a regex that does constant work on the timing text
+  (`^\s+x` fails at the first character) no longer fails the linearity check. Both of its arms
+  finished below the clock's resolution, so macOS read 0 for the small arm and the growth ratio
+  divided by zero; on Linux the same ratio was noise. An arm that finishes in under 5 ms now
+  counts as not quadratic without a ratio, since a quadratic match over that input runs for
+  minutes.
+
 ## [11.13.1]
 
 ### Fixed

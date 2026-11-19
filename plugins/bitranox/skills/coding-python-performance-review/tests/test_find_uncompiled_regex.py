@@ -169,8 +169,16 @@ NEWLINE_START_FIXED = r"(?<=[;&|\n])[^\S\n]*grep"
 _CLOCK = time.perf_counter if sys.platform == "win32" else time.process_time
 
 
-def _growth(pattern, unit, n, tail=""):
-    """finditer time over unit * 8n + tail divided by unit * n + tail, each the best of 3 runs."""
+# A pattern can do constant work on the test text (r"^\s+x" fails at the first character), and
+# then both arms finish below the clock's resolution: macOS process_time read 0.0 for the small
+# arm and the ratio divided by zero, and on Linux the ratio of two sub-microsecond readings is
+# noise. A large arm under this bound cannot be quadratic - a quadratic match over the large
+# arm's 8 * 50000 units runs for minutes - so such a pattern counts as linear without a ratio.
+TOO_FAST_TO_BE_QUADRATIC = 0.005  # seconds
+
+
+def _arm_times(pattern, unit, n, tail=""):
+    """finditer time over unit * n + tail and over unit * 8n + tail, each the best of 3 runs."""
     compiled = re.compile(pattern)
 
     def best(text):
@@ -181,19 +189,29 @@ def _growth(pattern, unit, n, tail=""):
             times.append(_CLOCK() - start)
         return min(times)
 
-    return best(unit * 8 * n + tail) / best(unit * n + tail)
+    return best(unit * n + tail), best(unit * 8 * n + tail)
+
+
+def _is_quadratic(pattern, unit, n, tail=""):
+    small, big = _arm_times(pattern, unit, n, tail)
+    return small > 0 and big / small > QUADRATIC_FLOOR
+
+
+def _is_linear(pattern, unit, n, tail=""):
+    small, big = _arm_times(pattern, unit, n, tail)
+    return big < TOO_FAST_TO_BE_QUADRATIC or big < LINEAR_CEILING * small
 
 
 def test_class_run_before_suffix_is_flagged_and_is_quadratic():
     verdict = fur.quadratic_verdict(CLASS_RUN)
     assert verdict is not None and verdict.shape == "class-run-before-suffix"
     assert "'a' * N (end of text)" in verdict.witnesses
-    assert _growth(CLASS_RUN, "a", 2000) > QUADRATIC_FLOOR
+    assert _is_quadratic(CLASS_RUN, "a", 2000)
 
 
 def test_same_class_lookbehind_is_not_flagged_and_is_linear():
     assert fur.quadratic_verdict(CLASS_RUN_FIXED) is None
-    assert _growth(CLASS_RUN_FIXED, "a", 50000) < LINEAR_CEILING
+    assert _is_linear(CLASS_RUN_FIXED, "a", 50000)
 
 
 def test_narrower_lookbehind_is_flagged_on_the_characters_it_omits():
@@ -201,19 +219,19 @@ def test_narrower_lookbehind_is_flagged_on_the_characters_it_omits():
     verdict = fur.quadratic_verdict(pattern)
     assert verdict is not None
     assert set(verdict.witnesses) == {"'-' * N (end of text)", "'/' * N (end of text)"}
-    assert _growth(pattern, "/", 2000) > QUADRATIC_FLOOR
+    assert _is_quadratic(pattern, "/", 2000)
 
 
 def test_newline_start_then_blanks_is_flagged_and_is_quadratic():
     verdict = fur.quadratic_verdict(NEWLINE_START)
     assert verdict is not None and verdict.shape == "newline-start-then-blanks"
     assert verdict.witnesses == ("'\\n' * N (end of text)",)
-    assert _growth(NEWLINE_START, "\n", 2000) > QUADRATIC_FLOOR
+    assert _is_quadratic(NEWLINE_START, "\n", 2000)
 
 
 def test_blanks_that_stop_at_a_newline_are_not_flagged_and_are_linear():
     assert fur.quadratic_verdict(NEWLINE_START_FIXED) is None
-    assert _growth(NEWLINE_START_FIXED, " \n", 50000) < LINEAR_CEILING
+    assert _is_linear(NEWLINE_START_FIXED, " \n", 50000)
 
 
 def test_multiline_caret_is_a_newline_start():
@@ -231,7 +249,7 @@ def test_multiline_caret_is_a_newline_start():
 ])
 def test_ordinary_regexes_are_not_flagged(pattern):
     assert fur.quadratic_verdict(pattern) is None
-    assert _growth(pattern, "a", 50000) < LINEAR_CEILING
+    assert _is_linear(pattern, "a", 50000)
 
 
 def test_word_boundary_does_not_hold_back_a_mixed_run():
@@ -246,8 +264,8 @@ def test_trailing_blanks_fail_only_before_a_terminator():
     verdict = fur.quadratic_verdict(r"\s+$")
     assert verdict is not None and "' ' * N + 'x'" in verdict.witnesses
     assert "' ' * N (end of text)" not in verdict.witnesses
-    assert _growth(r"\s+$", " ", 2000, tail="x") > QUADRATIC_FLOOR
-    assert _growth(r"\s+$", " ", 50000) < LINEAR_CEILING
+    assert _is_quadratic(r"\s+$", " ", 2000, tail="x")
+    assert _is_linear(r"\s+$", " ", 50000)
 
 
 def test_bytes_and_inline_flags_are_read():
