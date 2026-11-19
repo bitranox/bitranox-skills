@@ -70,6 +70,11 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   byte-identical: open_work `Item` (`Origin`, `ItemState`), ci_watch_state `Entry`, classifier
   `ask_in_hook` returning `Asked` with typed `Result`s, skill_decisions `Entry`, git_state
   `RepoState`/`BranchStatus`/`OwnUpstream`, procsig `ProcessMatch`/`PeerHolder`.
+- The memory engine's `move`, `relocate`, `rename`, `retitle`, `heal` and `ensure-all-trees`
+  return typed records instead of string-keyed dicts. `refused` always means the whole action was
+  declined (text or `None`); the levels heal or a scaffold left untouched are `refused_levels`,
+  a list of `LevelReason`, and `scaffold()` takes `refused_levels=` where it took `refused=`. The
+  CLI output of these verbs is unchanged.
 - repo-gate: a comment records why checked-out bytes are read one git process per file (the
   cat-file batch header carries the unfiltered size).
 - Test fixtures, docstrings and dated records use neutral project names.
@@ -105,6 +110,22 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   tree dream does, instead of the session scratchpad, which a reboot empties.
 - `heal --backfill-titles` names each legacy `uuid:` pointer it skips, so a tree holding
   unmigrated facts no longer reads as fully back-filled.
+- compuse-toolbox: the `mutation_arm` row no longer says a kill leaves a mutated file. It says
+  that SIGTERM, SIGHUP, SIGINT and SIGBREAK restore the sources and exit 128 + the signal, that a
+  battery stops at the signalled arm, that after a SIGKILL the next start restores the file from
+  the journal, and that a run is refused with exit 2 for a file edited since the kill, a file a
+  live run is mutating, or a journal dir that cannot be written.
+- dream-core and the nap step say that a bare `session-reviewed` refuses (exit 2) when this
+  session ran no session-review for the cwd, and that the offset to pass to `--to` is the "from"
+  value of the success line.
+- Hooks no longer slow down on a long run of blank lines or a long token: toolbox-nudge, which
+  reads every Bash command, took 342 ms on a blanked 4,000-line heredoc and grew quadratically.
+  The same fix covers git-footgun-guard, harness_checks, jig-repetition-nudge,
+  missing-mechanism-nudge, open_work, repo-gate, self_improve_signals, subagent-model-gate,
+  block-write-after-sibling-cd and compact-resume; results are unchanged.
+- The skill scripts ci_triage, gate, abtrace (cubic before: 43 s on 4,000 blank lines),
+  adopt_skill, hookdoc_stamp, claudemd_variance and pfsense run in linear time on long runs, with
+  unchanged results.
 
 ## [11.12.0]
 
