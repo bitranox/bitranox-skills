@@ -2380,14 +2380,19 @@ def test_a_tool_repo_push_with_no_worktree_holding_the_text_keeps_the_regenerate
 # accepts a tool-repo linked worktree: its committed text for a commit and a push, its uncommitted
 # text for a commit only.
 
-def _tool_worktree(tool, where):
-    _g(tool, "worktree", "add", "-q", "-b", "twt", str(where))
+def _tool_worktree(tool, where, *, branch):
+    """A linked worktree of the tool repo at `where`, on a new `branch` from HEAD.
+
+    One definition for the whole module: a second module-level `def` of this name used to
+    replace the first for every caller, so the tests written for branch "twt" ran on "wt".
+    """
+    _g(tool, "worktree", "add", "-q", "-b", branch, str(where))
     return where
 
 
 def test_a_marketplace_commit_passes_when_a_tool_worktree_committed_the_same_edit(tmp_path):
     public, root, tool = _published_pair(tmp_path)
-    twt = _tool_worktree(tool, public / "libs" / "thing-wt-edit")
+    twt = _tool_worktree(tool, public / "libs" / "thing-wt-edit", branch="twt")
     _drift(twt / TW_SKILL, TWIN_BODY)
     _g(twt, "commit", "-qam", "edit in the tool worktree")
     _drift(root / MP_SKILL, MIRROR_BODY)
@@ -2400,7 +2405,7 @@ def test_a_marketplace_commit_passes_when_a_tool_worktree_committed_the_same_edi
 
 def test_a_marketplace_push_passes_when_a_tool_worktree_committed_the_same_edit(tmp_path):
     public, root, tool = _published_pair(tmp_path)
-    twt = _tool_worktree(tool, public / "libs" / "thing-wt-edit")
+    twt = _tool_worktree(tool, public / "libs" / "thing-wt-edit", branch="twt")
     _drift(twt / TW_SKILL, TWIN_BODY)
     _g(twt, "commit", "-qam", "edit in the tool worktree")
     _drift(root / MP_SKILL, MIRROR_BODY)
@@ -2411,7 +2416,7 @@ def test_a_marketplace_push_passes_when_a_tool_worktree_committed_the_same_edit(
 
 def test_a_marketplace_commit_accepts_an_uncommitted_tool_worktree_edit_and_names_it(tmp_path):
     public, root, tool = _published_pair(tmp_path)
-    twt = _tool_worktree(tool, public / "libs" / "thing-wt-edit")
+    twt = _tool_worktree(tool, public / "libs" / "thing-wt-edit", branch="twt")
     _drift(twt / TW_SKILL, TWIN_BODY)                       # uncommitted in the tool worktree
     _drift(root / MP_SKILL, MIRROR_BODY)
     _g(root, "add", "-A")
@@ -2423,7 +2428,7 @@ def test_a_marketplace_commit_accepts_an_uncommitted_tool_worktree_edit_and_name
 
 def test_a_marketplace_push_never_accepts_an_uncommitted_tool_worktree_edit(tmp_path):
     public, root, tool = _published_pair(tmp_path)
-    twt = _tool_worktree(tool, public / "libs" / "thing-wt-edit")
+    twt = _tool_worktree(tool, public / "libs" / "thing-wt-edit", branch="twt")
     _drift(twt / TW_SKILL, TWIN_BODY)                       # uncommitted in the tool worktree
     _drift(root / MP_SKILL, MIRROR_BODY)
     _g(root, "commit", "-qam", "edit")
@@ -2434,7 +2439,7 @@ def test_a_marketplace_push_never_accepts_an_uncommitted_tool_worktree_edit(tmp_
 def test_a_marketplace_commit_still_blocks_when_no_tool_worktree_holds_the_edit(tmp_path):
     # Control: a tool worktree exists, but it carries a different edit.
     public, root, tool = _published_pair(tmp_path)
-    twt = _tool_worktree(tool, public / "libs" / "thing-wt-edit")
+    twt = _tool_worktree(tool, public / "libs" / "thing-wt-edit", branch="twt")
     write(twt / TW_SKILL, TWIN_BODY.replace("One paragraph of content.", "A DIFFERENT edit."))
     _g(twt, "commit", "-qam", "a different edit")
     _drift(root / MP_SKILL, MIRROR_BODY)
@@ -2453,15 +2458,9 @@ def test_a_marketplace_commit_still_blocks_when_no_tool_worktree_holds_the_edit(
 # the gate was silent and `--mirror-of .` printed "ships no skill mirrored" with exit 0 while the
 # pair had drifted. Only a later push from the main checkout caught it.
 
-def _tool_worktree(tool, where):
-    """A linked worktree of the tool repo at `where`, on its own branch from HEAD."""
-    _g(tool, "worktree", "add", "-q", "-b", "wt", str(where))
-    return where
-
-
 def test_a_tool_repo_commit_from_a_linked_worktree_blocks_on_drift(tmp_path, monkeypatch, capsys):
     public, _root, tool = _published_pair(tmp_path)
-    wt = _tool_worktree(tool, tool / ".claude" / "worktrees" / "wt")
+    wt = _tool_worktree(tool, tool / ".claude" / "worktrees" / "wt", branch="wt")
     _drift(wt / TW_SKILL, TWIN_BODY)
     _g(wt, "add", "-A")
     _tool_repo_commit(monkeypatch, public, wt)
@@ -2477,7 +2476,7 @@ def test_a_tool_repo_commit_from_a_linked_worktree_reads_the_worktree_not_the_ma
     # commit ships the worktree's text, so a gate that recognised the worktree but still read the
     # twin at the main checkout's path would block an in-sync commit.
     public, _root, tool = _published_pair(tmp_path)
-    wt = _tool_worktree(tool, tool / ".claude" / "worktrees" / "wt")
+    wt = _tool_worktree(tool, tool / ".claude" / "worktrees" / "wt", branch="wt")
     _drift(tool / TW_SKILL, TWIN_BODY)
     _g(tool, "commit", "-qam", "drift in the main checkout")
     _touch_tool_skill(wt)                                   # each commit ships a change to the skill
@@ -2492,7 +2491,7 @@ def test_a_tool_repo_commit_from_a_linked_worktree_reads_the_worktree_not_the_ma
 
 def test_mirror_of_run_in_a_linked_worktree_compares_that_worktree(tmp_path, monkeypatch, capsys):
     _public, _root, tool = _published_pair(tmp_path)
-    wt = _tool_worktree(tool, tool / ".claude" / "worktrees" / "wt")
+    wt = _tool_worktree(tool, tool / ".claude" / "worktrees" / "wt", branch="wt")
     _drift(wt / TW_SKILL, TWIN_BODY)
 
     rc = RG.audit_mirror_of(wt, mirrors=THING)
@@ -2506,7 +2505,7 @@ def test_mirror_of_run_in_a_linked_worktree_compares_that_worktree(tmp_path, mon
 def test_mirror_of_finds_the_tree_through_a_worktree_outside_it(tmp_path, monkeypatch, capsys):
     # A worktree may live anywhere; the public/ tree is found from the main checkout it belongs to.
     _public, _root, tool = _published_pair(tmp_path)
-    wt = _tool_worktree(tool, tmp_path / "elsewhere" / "wt")
+    wt = _tool_worktree(tool, tmp_path / "elsewhere" / "wt", branch="wt")
     _drift(wt / TW_SKILL, TWIN_BODY)
 
     assert RG.audit_mirror_of(wt, mirrors=THING) == 1
@@ -3680,7 +3679,12 @@ def test_version_bumped_ignores_a_peers_unstaged_plugin_edit(tmp_path):
     assert any("still 1.0.0" in f for f in RG.check_version_bumped(tmp_path, stage=selection))
 
 
-def _commit_all(root, msg):
+def _commit_tracked(root, msg):
+    """`git commit -am`: commit the index plus every tracked file's edit, never an untracked file.
+
+    Distinct from `_commit_all` further down (`add -A` first): a second module-level `def` of one
+    name used to replace this one for every caller, so these tests ran with `add -A`.
+    """
     subprocess.run(["git", "-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit",
                     "-q", "--no-verify", "-am", msg], cwd=root, check=True)
 
@@ -3692,7 +3696,7 @@ def _origin_moves_on(root, version, rel="plugins/bitranox/hooks/peer.py"):
                           text=True, check=True).stdout.strip()
     _stage(root, rel, "peer = 1\n")
     _stage(root, "plugins/bitranox/.claude-plugin/plugin.json", '{"version": "%s"}\n' % version)
-    _commit_all(root, "peer release")
+    _commit_tracked(root, "peer release")
     subprocess.run(["git", "update-ref", "refs/remotes/origin/master", "HEAD"], cwd=root, check=True)
     subprocess.run(["git", "reset", "-q", "--hard", head], cwd=root, check=True)
 
@@ -3738,10 +3742,10 @@ def test_version_bumped_on_a_push_reads_head(tmp_path):
     git_repo_with_origin(tmp_path, {pj: '{"version": "1.0.0"}\n',
                                     "plugins/bitranox/hooks/x.py": "x = 1\n"})
     _stage(tmp_path, "plugins/bitranox/hooks/x.py", "x = 2\n")
-    _commit_all(tmp_path, "change")
+    _commit_tracked(tmp_path, "change")
     _stage(tmp_path, pj, '{"version": "1.0.1"}\n')           # staged, not committed: not pushed
     assert any("still 1.0.0" in f for f in RG.check_version_bumped(tmp_path, stage=RG.STAGE_HEAD))
-    _commit_all(tmp_path, "bump")
+    _commit_tracked(tmp_path, "bump")
     assert RG.check_version_bumped(tmp_path, stage=RG.STAGE_HEAD) == []
 
 
@@ -5573,7 +5577,7 @@ _UNFORMATTED = _SHARED + "A tail line, as the marketplace wrote it."
 
 
 def _twin_formatted_in_a_worktree(public, root, tool):
-    twt = _tool_worktree(tool, public / "libs" / "thing-wt-fmt")
+    twt = _tool_worktree(tool, public / "libs" / "thing-wt-fmt", branch="twt")
     write(twt / TW_SKILL, TWIN_BODY.replace("One paragraph of content.", _FORMATTED))
     _g(twt, "commit", "-qam", "the twin's edit, as its gate formatted it")
     write(root / MP_SKILL, MIRROR_BODY.replace("One paragraph of content.", _UNFORMATTED))
@@ -5601,7 +5605,7 @@ def test_a_drift_message_keeps_the_published_diff_when_no_worktree_is_closer(tmp
     # Control: a tool worktree exists, but it is farther from the marketplace text than the
     # published twin, so the published diff stays the one shown and the worktree goes unnamed.
     public, root, tool = _published_pair(tmp_path)
-    twt = _tool_worktree(tool, public / "libs" / "thing-wt-far")
+    twt = _tool_worktree(tool, public / "libs" / "thing-wt-far", branch="twt")
     write(twt / TW_SKILL, TWIN_BODY.replace("One paragraph of content.", "Far\naway\nfrom\nit."))
     _g(twt, "commit", "-qam", "unrelated")
     _drift(root / MP_SKILL, MIRROR_BODY)
@@ -5691,7 +5695,7 @@ def test_a_drift_header_lists_the_files_of_the_reading_its_first_lines_come_from
     # The worktree's SKILL.md matches the marketplace but it carries one extra file: it is the
     # closest reading, so the header must list ITS differing file, not the published SKILL.md.
     public, root, tool = _published_pair(tmp_path)
-    twt = _tool_worktree(tool, public / "libs" / "thing-wt-extra")
+    twt = _tool_worktree(tool, public / "libs" / "thing-wt-extra", branch="twt")
     _drift(twt / TW_SKILL, TWIN_BODY)
     write(twt / "skills/python-thing/references/extra.md", "extra\n")
     _g(twt, "add", "-A")
