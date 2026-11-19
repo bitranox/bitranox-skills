@@ -195,7 +195,20 @@ def _write_target(tokens, here, tool_name):
 
 _RELATIVE_PATH = re.compile(r"^(?:\.{1,2}/|[\w.-]+/)[^=]*$")
 _ASSIGNMENT = re.compile(r"^[A-Za-z_]\w*=")
-_SEPARATED = re.compile(r"\s*(&&|\|\||;|\n|&|\|)\s*$")
+_SEPARATORS = ("&&", "||", ";", "&", "|")
+
+
+def _separator(gap: str) -> str | None:
+    """The separator `gap` ends with: a shell operator, a newline for a line break, or None.
+
+    A trailing operator wins over a line break after it, and `&&`/`||` over a lone `&`/`|`. Plain
+    string work rather than an end-anchored regex search, which rescans a long blank run from
+    every position in it."""
+    body = gap.rstrip()
+    for token in _SEPARATORS:
+        if body.endswith(token):
+            return token
+    return "\n" if "\n" in gap[len(body):] else None
 
 
 def _jobs(command, tool_name):
@@ -210,11 +223,11 @@ def _jobs(command, tool_name):
             current.append((stripped, tokens))
         end = segments[index + 1][0] if index + 1 < len(segments) else len(text)
         gap = text[at + len(segment):end]
-        sep = _SEPARATED.search(gap)
-        if sep and sep.group(1) in ("&&", "||", "|"):
+        sep = _separator(gap)
+        if sep in ("&&", "||", "|"):
             continue
         if current:
-            jobs.append((current, bool(sep) and sep.group(1) == "&"))
+            jobs.append((current, sep == "&"))
         current = []
     if current:
         jobs.append((current, False))

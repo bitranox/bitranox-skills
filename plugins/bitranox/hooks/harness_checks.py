@@ -557,7 +557,7 @@ _RETIRED_RX = re.compile(r"\bRETIRED\b")
 # A string argument exits 1 too - Python prints it and exits 1 - so a shim that says WHY it is
 # retired (`raise SystemExit("use x.py")`) exits non-zero; reading only digits called it success.
 _NONZERO_EXIT_RX = re.compile(
-    r"(?:SystemExit|sys\.exit)\(\s*(?:[1-9]|[rRbBfFuU]{0,2}[\"'])|^\s*exit\s+[1-9]", re.M)
+    r"(?:SystemExit|sys\.exit)\(\s*(?:[1-9]|[rRbBfFuU]{0,2}[\"'])|^[^\S\n]*exit\s+[1-9]", re.M)
 
 
 def is_retired_shim(path):
@@ -569,8 +569,12 @@ def is_retired_shim(path):
     return bool(_RETIRED_RX.search(head))
 
 
-_SCRIPT_PATH_RX = re.compile(r"(?:[\w.-]+/)+[\w.-]+\.(?:py|sh)\b")
-_SCRIPT_NAME_RX = re.compile(r"[\w.-]+\.(?:py|sh)\b")
+# Only ever asked WHETHER a path is named, so one character before the last slash is as good as
+# the whole leading path, and each component is then scanned once rather than once per start.
+_SCRIPT_PATH_RX = re.compile(r"[\w.-]/[\w.-]+\.(?:py|sh)\b")
+# A name starts where its run starts (the leftmost match always did), so a long run without a
+# script suffix is not rescanned from each of its characters.
+_SCRIPT_NAME_RX = re.compile(r"(?<![\w.-])[\w.-]+\.(?:py|sh)\b")
 
 
 def _names_replacement(text, own_name):

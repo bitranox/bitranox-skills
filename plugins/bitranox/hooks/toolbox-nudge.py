@@ -68,9 +68,12 @@ def _names_referenced(text, names):
 # options (`git -C <repo> -c k=v`) may sit between that anchor and `push`. Measured over 79,213
 # recorded calls: a push on a later line or behind one of those prefixes was about 30 un-nudged
 # pushes. Quoted option values reach this pattern blanked to spaces, hence the quoted alternatives.
-_PUSHCHECK_RX = re.compile(r"(?m)(?:^|[;&|])\s*"
-                           r"(?:(?:if|then|elif|else|do|while|until|!)\s+|[({]\s*)*"
-                           r"(?:(?:[A-Za-z_]\w*=\S*|env(?:\s+-u\s+\w+)*)\s+)*"
+# The blanks between the anchor and `git` never cross a newline: a newline there is itself a line
+# start the anchor matches, so the verdict is the same, while `\s` let every line start of a run
+# of blank lines (a blanked heredoc) rescan the whole run - quadratic in the command's length.
+_PUSHCHECK_RX = re.compile(r"(?m)(?:^|[;&|])[^\S\n]*"
+                           r"(?:(?:if|then|elif|else|do|while|until|!)[^\S\n]+|[({][^\S\n]*)*"
+                           r"(?:(?:[A-Za-z_]\w*=\S*|env(?:\s+-u\s+\w+)*)[^\S\n]+)*"
                            r"git(?:\s+-[Cc]\s+(?:[^\s'\"]|'[^']*'|\"[^\"]*\")+)*\s+push\b"
                            r"|\bmake\s+push\b|\bgh\s+pr\s+create\b")
 _CI_WAIT_RX = re.compile(r"\bgh\s+run\s+(?:watch|list|view)\b|\bgh\s+pr\s+checks\b")

@@ -3093,10 +3093,10 @@ def tool_matches(text):
 # "Found 2 errors." from a type checker used to switch off the argparse error on the line after it.
 _ANSI = r"(?:\x1b\[[0-9;]*m)*"
 _RUN_OPENS = re.compile(
-    r"=+ (?:FAILURES|ERRORS|test session starts|short test summary)"
+    r"(?<!=)=+ (?:FAILURES|ERRORS|test session starts|short test summary)"
     r"|\bcollected \d+ item"
     r"|::test_\w+"                                                    # a pytest node id
-    r"|-{2,} (?:RED|GREEN) -{2,}"                                     # the repo's own TDD-cycle markers
+    r"|(?<!-)-{2,} (?:RED|GREEN) -{2,}"                                     # the repo's own TDD-cycle markers
     # The tail's own shapes, which arrive without the banner when only the tail was captured: a
     # summary-list line and pytest's exception detail. Both were read as live tool output.
     r"|^" + _ANSI + r"(?:FAILED|ERROR)" + _ANSI + r"\s+\S+\.py"

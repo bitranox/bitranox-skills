@@ -363,7 +363,10 @@ _REV_VERBS = frozenset({
     "revert", "blame", "archive",
 })
 # git matches the `@{upstream}` / `@{u}` suffix case-insensitively (at_mark uses strncasecmp).
-_UPSTREAM_MARK = re.compile(r"([A-Za-z0-9._/+-]*)@\{(?:u|upstream)\}", re.IGNORECASE)
+# The lookbehind starts a match only where a ref starts: the leftmost match always did, so the
+# captured ref is the same, and a long token no longer rescans from each of its characters.
+_UPSTREAM_MARK = re.compile(r"(?<![A-Za-z0-9._/+-])([A-Za-z0-9._/+-]*)@\{(?:u|upstream)\}",
+                            re.IGNORECASE)
 _CURRENT = frozenset({"", "HEAD", "@"})
 
 

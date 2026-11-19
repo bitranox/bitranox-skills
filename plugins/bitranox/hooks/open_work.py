@@ -64,7 +64,7 @@ HEADER = (
 _ITEM_RX = re.compile(r"-\s*\[([ xX])\]\s*\(([^)]*)\)\s*\[(\d+)\]\s*(.*)$")
 _CHECKBOX_RX = re.compile(r"-\s*\[([ xX])\]\s*(.*)$")
 _ORIGIN_RX = re.compile(r"(USER|FOUND):\s*(.*)$")
-_FIELD_RX = re.compile(r"\s+\|\s+(size|open|next|closed):\s*")
+_FIELD_RX = re.compile(r"(?<!\s)\s+\|\s+(size|open|next|closed):\s*")
 _FENCE_RX = re.compile(r" {0,3}(`{3,}|~{3,})")
 _CHECKBOX_RX = re.compile(r"-\s*\[([ xX])\]\s")
 #: a rank an item's text cites, e.g. "same blocker as [60]"; at most MAX_RANK's six digits

@@ -72,7 +72,10 @@ _CLAIM = re.compile(
 
 # Evidence that the init path WAS read: a concrete file, module path, or line reference.
 _EVIDENCE = re.compile(
-    r"\b[\w./-]+\.(?:py|rs|ts|js|go|sh|ps1|toml|json)\b|\bline \d+|\b__init__\b|\bcomposition/",
+    # A path is found from the start of its run, skipping leading punctuation to the word
+    # character the old `\b` start needed; starting anywhere in the run rescanned it per start.
+    r"(?<![\w./-])[./-]*\w[\w./-]*\.(?:py|rs|ts|js|go|sh|ps1|toml|json)\b"
+    r"|\bline \d+|\b__init__\b|\bcomposition/",
     re.IGNORECASE,
 )
 

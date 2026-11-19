@@ -1869,7 +1869,7 @@ MIRRORED_SKILLS = mirrored_skills.MIRRORED_SKILLS
 #: line-at-a-time rule leaves the continuation behind and reports it as drift.
 _SELF_INSTALL_RX = re.compile(r"/plugin marketplace add|/plugin install", re.I)
 #: a trailing parenthetical on an H1, the per-repo part of a mirrored skill's title
-_H1_PAREN_RX = re.compile(r"\s*\([^()]*\)\s*$")
+_H1_PAREN_RX = re.compile(r"(?<!\s)\s*\([^()]*\)\s*$")
 
 
 def _public_tree(root):

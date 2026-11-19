@@ -135,7 +135,7 @@ _LEADING_REVIEW_RE = re.compile(_LABEL + _REVIEW_RE.pattern, re.I)
 # judges a finished draft). Synthesis words only: "synthetic" and "synthesizer" name no synthesis.
 _SYNTHESIS_RE = re.compile(r"\bsynthes(?:[ei]s|i[sz](?:e[sd]?|ing))\b", re.I)
 # The jev-judge product name (btx-skill-jev-judge, ai-llm-jev-judge) is not the act of judging.
-_PRODUCT_RE = re.compile(r"[\w:-]*jev-judge[\w-]*", re.I)
+_PRODUCT_RE = re.compile(r"(?<![\w:-])[\w:-]*jev-judge[\w-]*", re.I)
 
 _REVIEW_MESSAGE = (
     "Review-shaped dispatch: every judging review (task/final/code review, skeptic or adversarial "

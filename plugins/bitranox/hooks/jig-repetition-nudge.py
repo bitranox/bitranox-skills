@@ -162,7 +162,9 @@ def here_string_writes(command):
     return out
 
 
-_COMMENT = re.compile(r"(^\s*#.*$)|(^\s*//.*$)", re.M)
+# `[^\S\n]*`, not `\s*`: a blank-line run before a comment stays in the text (whitespace, so the
+# tokens are the same), and no line start rescans the run.
+_COMMENT = re.compile(r"(^[^\S\n]*#.*$)|(^[^\S\n]*//.*$)", re.M)
 _TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_.\-]{2,}")
 
 
@@ -275,7 +277,7 @@ def same_file(a, b):
     return long_[-len(short):] == short
 
 
-_TRAILING_DIGITS = re.compile(r"\d+$")
+_TRAILING_DIGITS = re.compile(r"(?<!\d)\d+$")
 
 
 def numbered_retry(a, b):
