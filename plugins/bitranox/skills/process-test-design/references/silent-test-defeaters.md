@@ -2,25 +2,26 @@
 
 Read this when a test patches a name, parses tool output, asserts on an exception message (a
 reworded one included) or on rendered output, loops until a condition holds or times how long that
-takes, pins or clears an environment variable (one a library reads at import included), redirects or
-deletes coverage data from a conftest, simulates a race between a check and an open, blocks a stub
-so it can be signalled, plants a marker to prove a process ran, starts a fixture process that must
-carry a given `/proc/<pid>/comm` name, asserts a descriptor was closed or a file is held only
-through a memory map, binds a unix socket under `tmp_path`, builds a test double by subclassing a
-`@dataclass`, configures a logger in a fixture, checks that an event from another thread wakes an
-asyncio consumer, races a call on a helper thread, mints synthetic identifiers (ids that something
-later truncates included), carries a skip or an exclusion, judges an artifact, compares against a
-git ref, guards against cost, or tests environment isolation - or when you are about to claim a code
-path is untested, or a mutation survives. Also when a unit suite's code can reach a real host or a
-user-facing service, a test guards a secret it might print, a test spawns a nested test runner or
-several writers to one file, asserts a real tool's verdict, relies on conftest fixtures reaching
-`src/` doctests or on fixtures ported from a template, isolates the suite in an autouse fixture
-(an override or fallback knob it sets, a file it plants), feeds a FIFO from a writer thread, times a
-cost ratio or a growth ratio, or verifies a fix for a rare flake. Also when a test proves an input
-was refused before any side effect, proves a timed wake or poll fires, or runs `git commit` under a
-sandboxed or fresh home directory, or cancels an operation at every await or step to check what
-it leaves behind. Each entry names the trigger, the mechanism that makes the test
-pass (or fail) for the wrong reason, and the fix.
+takes, pins or clears an environment variable (one a library reads at import included), redirects
+or deletes coverage data from a conftest, simulates a race between a check and an open, blocks a
+stub so it can be signalled, plants a marker to prove a process ran, starts a fixture process that
+must carry a given `/proc/<pid>/comm` name, asserts a descriptor was closed or a file is held only
+through a memory map, binds a unix socket under `tmp_path`, adds a module-level helper to a test
+module, builds a test double by subclassing a `@dataclass`, configures a logger in a fixture,
+checks that an event from another thread wakes an asyncio consumer, races a call on a helper
+thread, mints synthetic identifiers (ids that something later truncates included), carries a skip
+or an exclusion, judges an artifact, compares against a git ref, guards against cost, or tests
+environment isolation - or when you are about to claim a code path is untested, or a mutation
+survives. Also when a unit suite's code can reach a real host or a user-facing service, a test
+guards a secret it might print, a test spawns a nested test runner or several writers to one file,
+asserts a real tool's verdict, relies on conftest fixtures reaching `src/` doctests or on fixtures
+ported from a template, isolates the suite in an autouse fixture (an override or fallback knob it
+sets, a file it plants), feeds a FIFO from a writer thread, times a cost ratio or a growth ratio,
+or verifies a fix for a rare flake. Also when a test proves an input was refused before any side
+effect, proves a timed wake or poll fires, or runs `git commit` under a sandboxed or fresh home
+directory, or cancels an operation at every await or step to check what it leaves behind. Each
+entry names the trigger, the mechanism that makes the test pass (or fail) for the wrong reason, and
+the fix.
 
 ## Determinism and environment
 
@@ -343,6 +344,24 @@ through the fake, and the test then measures the fake's call log. Prefer injecti
 you must patch, patch a name the module owns (`from subprocess import run` in the module, then
 patch `pkg.mod.run`), or make the fake dispatch on `argv[0]` and raise on any command it was not
 written for.
+
+### A second module-level `def` of a helper replaces the first for every caller
+
+A module that defines one top-level function or class name twice keeps only the LAST definition,
+and every call looks the name up when it runs, so the tests written against the first helper call
+the second. The usual source is a helper added with new tests further down a big test file, under a
+name already used above. The tests stay green while both helpers happen to behave alike for their
+inputs, and fail far from the cause when they do not (measured: a POSIX-only `_gone` replaced a
+Windows-safe one, and only the Windows cell failed). Do not count on ruff's F811 to see it: F811
+skips every name matching `dummy-variable-rgx`, whose default matches any name starting with `_`,
+which is exactly the private helpers a test module defines, and it skips a redefinition whose name
+is used at module level between the two defs. Grep the file for a helper's name before adding one,
+and close the shape with a repo test that parses every `.py` with `ast` and fails on a module whose
+body defines a top-level def or class name twice. Count only the statements directly in the module
+body (`tree.body`): that leaves out definitions inside a module-level `if` or `try`, where a
+platform branch or an import fallback defines one name per path on purpose. Skip `typing.overload`
+stubs too, and make the test report how many files it examined and fail on zero. This plugin's own
+guard is `hooks/tests/test_no_duplicate_module_defs.py`.
 
 ### A dataclass double that redefines a field as a property fails at construction
 
@@ -881,22 +900,37 @@ per-byte loop at least 10.7x, limit 3), and prove RED by swapping the regression
 the regression's cost from a comment or docstring: one claimed about 100x and measured 11x, so a
 limit derived from the claim would have kept the thin margin.
 
-### A growth-ratio check: user CPU time, equal windows, fresh pages
+### A growth-ratio check: user CPU time, equal windows, fresh pages, measurable work
 
-A check that compares the time at n with the time at k*n (linear, not quadratic) needs three
+A check that compares the time at n with the time at k*n (linear, not quadratic) needs four
 things, or it flakes just above its ceiling and each "widen the repeats" fix only moves the flake:
 
-1. Read USER CPU time (`os.times().user`), not `time.thread_time()` or `time.process_time()`.
-   Those count kernel time too, including page faults, and the k*n arm allocates above the
-   allocator's mmap threshold, so it faults in fresh pages on every scan while the n arm reuses
-   its buffers. A linear scan then reads super-linear, and a "cache step" seen through
-   `thread_time` is mostly this (measured: the large arm spent 33-35% of its time in the kernel,
-   the small one 0%; the thread-time ratio read 24-27x where user time read 15-18x).
+1. Read USER CPU time, not `time.thread_time()` or `time.process_time()`. Those count kernel time
+   too, including page faults, and the k*n arm allocates above the allocator's mmap threshold, so
+   it faults in fresh pages on every scan while the n arm reuses its buffers. A linear scan then
+   reads super-linear, and a "cache step" seen through `thread_time` is mostly this (measured: the
+   large arm spent 33-35% of its time in the kernel, the small one 0%; the thread-time ratio read
+   24-27x where user time read 15-18x). On POSIX read
+   `resource.getrusage(resource.RUSAGE_THREAD).ru_utime` (`RUSAGE_SELF` where there is no
+   `RUSAGE_THREAD`, as on macOS, where it counts every thread of the process), which steps in
+   microseconds; `os.times().user` reads the same time in whole clock ticks, 10 ms on Linux
+   (`os.sysconf("SC_CLK_TCK")` is 100), too coarse for a short arm. Windows has no `resource`
+   module: `os.times().user` reads its process user time there. On any platform, measure the step
+   of the clock you pick (read it in a loop until it changes) and keep every arm well above it.
 2. Give both arms EQUAL windows before taking the minimum of N: time the n arm as k back-to-back
    scans and divide by k. A short pass can fall wholly inside a fast moment of the runner, while a
    long one only averages over it.
 3. A test that must CAUSE page faults takes a fresh anonymous `mmap` per round: glibc hands a
    freed large buffer straight back, already faulted in.
+4. Never divide by an arm that did no MEASURABLE work. A negative case whose input never enters
+   the costly path (a pattern that fails at the first character of its text) does constant work
+   in both arms, so both finish below the clock's step: the small arm can read 0.0 and the ratio
+   divides by zero (measured on macOS), or the ratio of two sub-microsecond readings passes by
+   luck. Such a case is cheap by design, so keep its input and change the check: return both arm
+   times rather than their ratio, let a large arm under a floor the bad case could never reach
+   (one the super-linear case over that arm exceeds by orders of magnitude) pass the linearity
+   check without a ratio, and guard the super-linear assertion with `small > 0`. RED the floor
+   with a known super-linear case at a small n: it must still read not-linear.
 
 RED each with a virtual-clock test: a fast window placed inside the first short pass (for 2), and
 a simulated load keyed to work done rather than to the scan count, since a cost that raises its own
