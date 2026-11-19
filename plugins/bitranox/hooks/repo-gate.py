@@ -1972,6 +1972,11 @@ def _checked_out_bytes(directory, commit, rel, env=None):
 
     ``commit`` "" names the INDEX (``:./rel``), which is what the next commit will carry; with
     ``env`` naming a ``GIT_INDEX_FILE``, that index."""
+    # One git process per file, not one `cat-file --batch --filters` for all of them: fed its
+    # "<object> <path>" lines, the batch writes each file filtered but heads it with the
+    # UNFILTERED blob size (git 2.53.0: an eol=crlf file of 8 bytes came back as 10 under a
+    # "blob 8" header), so the stream cannot be split wherever a filter changes the length -
+    # exactly the Windows autocrlf case this reader exists for.
     try:
         out = subprocess.run(["git", "cat-file", "--filters", "%s:./%s" % (commit, rel)],
                              cwd=str(directory), capture_output=True, env=env)
