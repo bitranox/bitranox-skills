@@ -30,6 +30,17 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.13.6]
+
+### Changed
+
+- infra-proxmox-bindsnap: on a build the guard refuses, the safety snapshot also covers a RUNNING
+  CT whose managed volumes are all on ZFS: one script on the node maps the managed volumes, copies
+  the CT config, freezes the CT with `lxc-freeze`, takes ONE `zfs snapshot` of every volume and
+  thaws it from an EXIT trap. The skill states the result is crash-consistent and keeps `vzdump`
+  for a managed volume on other storage. It also says the guard gates only creating a snapshot:
+  `pct delsnapshot` and `pct rollback` of an existing snapshot run on any build.
+
 ## [11.13.5]
 
 ### Fixed
