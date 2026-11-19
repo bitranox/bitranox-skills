@@ -1,4 +1,9 @@
-"""find_uncompiled_regex: which call sites are flagged, source decoding, and the CLI contract."""
+"""find_uncompiled_regex: which call sites are flagged, source decoding, the quadratic-start
+shapes, and the CLI contract."""
+import re
+import sys
+import time
+
 import pytest
 
 import find_uncompiled_regex as fur
@@ -143,3 +148,141 @@ def test_cli_non_ansi_path_under_cp1252_stdout_is_written_as_utf8(tmp_path, run_
     r = run_script(SCRIPT, str(p), env=clean_env(PYTHONIOENCODING="cp1252"))
     assert r.returncode == 0, r.stderr
     assert "proj_\u7530\u4e2d" in r.stdout.decode("utf-8")
+
+
+# --- quadratic starts: the two shapes Step 4b names ------------------------------------------
+# Each positive is proved quadratic by timing and each negative (the anchored fix) linear, so the
+# detector's verdict is checked against the behaviour it claims rather than against itself.
+
+QUADRATIC_FLOOR = 24.0  # growth at 8x the input: quadratic is about 64x, linear about 8x
+LINEAR_CEILING = 16.0   # between the two, with room for a loaded machine
+
+CLASS_RUN = r"[\w./-]+\.(?:py|sh)\b"
+CLASS_RUN_FIXED = r"(?<![\w./-])[\w./-]+\.(?:py|sh)\b"
+NEWLINE_START = r"(?<=[;&|\n])\s*grep"
+NEWLINE_START_FIXED = r"(?<=[;&|\n])[^\S\n]*grep"
+
+# CPU time, not wall time: on a machine running other suites, wall time charges this process for
+# time it spent waiting for a core (measured: ratios of 18x for a 64x pattern at a load of 30 on
+# 16 cores). Windows reports process CPU time in 15.6 ms ticks, too coarse for the small arm, so
+# it keeps the wall clock; its CI runners are not shared.
+_CLOCK = time.perf_counter if sys.platform == "win32" else time.process_time
+
+
+def _growth(pattern, unit, n, tail=""):
+    """finditer time over unit * 8n + tail divided by unit * n + tail, each the best of 3 runs."""
+    compiled = re.compile(pattern)
+
+    def best(text):
+        times = []
+        for _ in range(3):
+            start = _CLOCK()
+            list(compiled.finditer(text))
+            times.append(_CLOCK() - start)
+        return min(times)
+
+    return best(unit * 8 * n + tail) / best(unit * n + tail)
+
+
+def test_class_run_before_suffix_is_flagged_and_is_quadratic():
+    verdict = fur.quadratic_verdict(CLASS_RUN)
+    assert verdict is not None and verdict.shape == "class-run-before-suffix"
+    assert "'a' * N (end of text)" in verdict.witnesses
+    assert _growth(CLASS_RUN, "a", 2000) > QUADRATIC_FLOOR
+
+
+def test_same_class_lookbehind_is_not_flagged_and_is_linear():
+    assert fur.quadratic_verdict(CLASS_RUN_FIXED) is None
+    assert _growth(CLASS_RUN_FIXED, "a", 50000) < LINEAR_CEILING
+
+
+def test_narrower_lookbehind_is_flagged_on_the_characters_it_omits():
+    pattern = r"(?<![\w.])[\w./-]+\.py"
+    verdict = fur.quadratic_verdict(pattern)
+    assert verdict is not None
+    assert set(verdict.witnesses) == {"'-' * N (end of text)", "'/' * N (end of text)"}
+    assert _growth(pattern, "/", 2000) > QUADRATIC_FLOOR
+
+
+def test_newline_start_then_blanks_is_flagged_and_is_quadratic():
+    verdict = fur.quadratic_verdict(NEWLINE_START)
+    assert verdict is not None and verdict.shape == "newline-start-then-blanks"
+    assert verdict.witnesses == ("'\\n' * N (end of text)",)
+    assert _growth(NEWLINE_START, "\n", 2000) > QUADRATIC_FLOOR
+
+
+def test_blanks_that_stop_at_a_newline_are_not_flagged_and_are_linear():
+    assert fur.quadratic_verdict(NEWLINE_START_FIXED) is None
+    assert _growth(NEWLINE_START_FIXED, " \n", 50000) < LINEAR_CEILING
+
+
+def test_multiline_caret_is_a_newline_start():
+    verdict = fur.quadratic_verdict(r"^\s*grep", re.MULTILINE)
+    assert verdict is not None and verdict.shape == "newline-start-then-blanks"
+    assert fur.quadratic_verdict(r"^\s*grep") is None  # no MULTILINE: one start only
+
+
+@pytest.mark.parametrize("pattern", [
+    r"\w+",              # nothing after the repeat: a match takes the whole run
+    r"\d{4}-\d{2}",      # bounded repeats
+    r"\bfoo\w*",         # leading literal, not a class repeat
+    r"^\s+x",            # anchored to the start of the text
+    r"\w+\w",            # the suffix matches inside the run
+])
+def test_ordinary_regexes_are_not_flagged(pattern):
+    assert fur.quadratic_verdict(pattern) is None
+    assert _growth(pattern, "a", 50000) < LINEAR_CEILING
+
+
+def test_word_boundary_does_not_hold_back_a_mixed_run():
+    verdict = fur.quadratic_verdict(r"\b[\w.]+\.py")
+    assert verdict is not None and verdict.witnesses == ("'0.' * N (end of text)",)
+    assert fur.quadratic_verdict(r"\b\w+\.py") is None  # a pure word run has no inner boundary
+
+
+def test_trailing_blanks_fail_only_before_a_terminator():
+    # A run of blanks at the end of the text matches \s+$ from its first start; the run is
+    # rescanned only when something other than a blank follows it.
+    verdict = fur.quadratic_verdict(r"\s+$")
+    assert verdict is not None and "' ' * N + 'x'" in verdict.witnesses
+    assert "' ' * N (end of text)" not in verdict.witnesses
+    assert _growth(r"\s+$", " ", 2000, tail="x") > QUADRATIC_FLOOR
+    assert _growth(r"\s+$", " ", 50000) < LINEAR_CEILING
+
+
+def test_bytes_and_inline_flags_are_read():
+    assert fur.quadratic_verdict(rb"[a-z]+\.py") is not None
+    verdict = fur.quadratic_verdict(r"(?i)[A-Z]+:")
+    assert verdict is not None and "'a' * N (end of text)" in verdict.witnesses
+
+
+QUADRATIC_MODULE = (
+    "import re\n"                                                     # 1
+    "_START = r'(?:^|(?<=[;&|\\n]))'\n"                               # 2
+    "_PATTERN = re.compile(_START + r'\\s*' + r'grep')\n"             # 3: built from constants
+    "_FIXED = re.compile(_START + r'[^\\S\\n]*grep')\n"              # 4: the fix
+    "_TOKEN = re.compile(r'[\\w./-]+\\.py')\n"                        # 5
+    "_ONE_START = re.compile(r'[\\w./-]+\\.py')\n"                    # 6: only ever .match()ed
+    "_LINES = re.compile(r'^\\s*x', re.M)\n"                          # 7: flags argument
+    "def f(s):\n"                                                     # 8
+    "    _ONE_START.match(s)\n"                                       # 9
+    "    re.fullmatch(r'[\\w./-]+\\.py', s)\n"                        # 10: one start
+    "    return re.findall(r'\\d+-\\d+', s)\n"                        # 11
+)
+
+
+def test_file_scan_reports_each_quadratic_call_site(tmp_path):
+    p = tmp_path / "m.py"
+    p.write_text(QUADRATIC_MODULE, encoding="utf-8")
+    found = {(f["line"], f["shape"]) for f in fur.find_quadratic_regex(str(p))}
+    assert found == {(3, "newline-start-then-blanks"), (5, "class-run-before-suffix"),
+                     (7, "newline-start-then-blanks"), (11, "class-run-before-suffix")}
+
+
+def test_cli_prints_the_quadratic_section(tmp_path, run_script):
+    p = tmp_path / "m.py"
+    p.write_text(QUADRATIC_MODULE, encoding="utf-8")
+    r = run_script(SCRIPT, str(p))
+    assert r.returncode == 0, r.stderr
+    assert b"Found 4 patterns whose search can rescan one run from every start" in r.stdout
+    assert b"m.py:5 - re.compile('[\\\\w./-]+\\\\.py', ...) [class-run-before-suffix]" in r.stdout

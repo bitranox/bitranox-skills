@@ -48,7 +48,7 @@ Use the Read tool to load referenced files for full details.
 | Hotspot profiler              | find_hotspots.py                                     | Find frequently-called functions from cProfile data        |
 | Candidate prioritizer         | prioritize_cache_candidates.py                       | Cross-reference pure functions with hotspots               |
 | Cache profiling template      | profile_with_cache_template.py                       | Before/after profiling with lru_cache monkey-patch         |
-| Uncompiled regex finder (AST) | find_uncompiled_regex.py                             | Flag re.match/search/findall with string literal patterns  |
+| Uncompiled regex finder (AST) | find_uncompiled_regex.py                             | Flag literal re calls; any re pattern with quadratic start |
 | Unbounded memory finder (AST) | find_unbounded_memory.py                             | Flag whole-file/DB/log reads that materialize large data   |
 | Performance claims extractor  | ../coding-performance-review/validate_perf_claims.py | Extract claims from a diff; YOU validate each by profiling |
 | Before/after comparator       | compare_performance.py                               | Git-based before/after test-suite timing comparison        |
@@ -326,7 +326,9 @@ beside an `ERROR` line is not a clean result.
 
 #### 4b: Find Uncompiled Regex Patterns
 
-Run `find_uncompiled_regex.py` and scan for `re.match()`, `re.search()`, `re.findall()`, etc. called with string literal patterns instead of pre-compiled objects:
+Run `find_uncompiled_regex.py` and scan for `re.match()`, `re.search()`, `re.findall()`, etc.
+called with string literal patterns instead of pre-compiled objects. Its output has a second
+section, `# Quadratic Regex Starts`, read as described below:
 
 ```bash
 # Re-load paths from session.json (see Step 2 for read_field / BX_PERF_SESSION).
@@ -360,7 +362,8 @@ Every `re.match(r'...', ...)` inside a function body should become a module-leve
 `search`, `sub` and `findall` retry the pattern at every position, so when a start can sit at
 many positions of one run and the pattern then reads to the run's end before it fails, N
 characters cost about N squared steps. Short test inputs and a profile of normal data never show
-it, and `find_uncompiled_regex.py` does not look for it. Two shapes, one cause:
+it; the `# Quadratic Regex Starts` section of `find_uncompiled_regex.py` reports it. Two shapes,
+one cause:
 
 - `CLASS+` before a required suffix, such as `[\w./-]+\.(?:py|sh)\b`, over a long token with no
   suffix: every start inside the token rescans to its end. Anchor the start with a negative
@@ -383,6 +386,22 @@ and 223 ms at 16,000 (64x), against 0.02 and 0.16 ms anchored. File it as an Uns
 finding. It is SEVERE when the scanned text can grow without bound (a transcript, a log, a
 pasted command) or real input already costs seconds per run, and MEDIUM when it only costs
 measurably on a hot path.
+
+**Reading the `# Quadratic Regex Starts` section.** It covers compiled and uncompiled patterns in
+any scope, including a pattern built with `+` from module-level string constants, and skips a
+compiled pattern whose name the file only calls `.match` or `.fullmatch` on (one start). Each hit
+is `file:line - re.func(pattern, ...) [shape]`, where the shape is `class-run-before-suffix` or
+`newline-start-then-blanks`, then a `Runs that fail from every start:` line listing runs such as
+`'a' * N (end of text)` or `' ' * N + 'x'`, then the `Fix:` for its shape. The finder parses
+the pattern with the `re` module's own parser and runs it once on a short witness of each listed
+run, so a hit is a pattern that rescans that run from every start. Before filing it, time the
+pattern on those runs at N and 8N, for example 2,000 and 16,000 (they are the growth test's
+inputs, one per kind of character the class accepts), then read what text the call site is
+given: the severity rules above decide on that input. A hit that times near 8x is a finder
+false positive: drop it and report the pattern as a defect of the finder. Hand review still
+covers what the finder does not model: a literal before the repeat (`/[^\s]+X` over a run of
+`/`), flags passed through a variable, a pattern assembled any other way, and a compiled pattern
+skipped as match-only in its own file that another module imports and searches with.
 
 #### 4c: Profile to Find Hot Functions
 
@@ -504,7 +523,9 @@ fi
 Parse the six output files from Step 4. Output format reference:
 
 - `cache_candidates.txt`: `file:line - function()` + `Reason: ...`
-- `uncompiled_regex.txt`: `file:line - re.func(pattern, ...)` + `Fix: ...`
+- `uncompiled_regex.txt`: `file:line - re.func(pattern, ...)` + `Fix: ...`; after the
+  `# Quadratic Regex Starts` heading, `file:line - re.func(pattern, ...) [shape]` +
+  `Runs that fail from every start: ...` + `Fix: ...` (Unsafe Input, see 4b)
 - `hotspots.txt`: `file:line - function()` + `Calls: N, Cumtime: Xs`
 - `priority_cache_candidates.txt`: `**file:line - function()**` + `Action: ...` (the emitter
   wraps this line in markdown bold; strip the `**` before lifting it into a finding)

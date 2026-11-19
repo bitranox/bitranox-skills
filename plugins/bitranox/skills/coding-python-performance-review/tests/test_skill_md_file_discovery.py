@@ -144,7 +144,10 @@ def spaced_project(tmp_path):
 def test_discovered_path_with_a_space_is_scanned_as_one_file(step, spaced_project):
     out = _run_step(step, spaced_project)
     assert "ERROR" not in out, out
-    assert "Found 0 " not in out or step == "4a", out
+    # The finder's FIRST count is the one SOURCE trips; 4b prints a second report after it (the
+    # quadratic-start scan), which finds nothing in SOURCE.
+    first_count = next(line for line in out.splitlines() if line.startswith("Found "))
+    assert not first_count.startswith("Found 0 ") or step == "4a", out
 
 
 @pytest.mark.parametrize("step", sorted(STEPS))
