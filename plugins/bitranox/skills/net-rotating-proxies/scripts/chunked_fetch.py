@@ -1,6 +1,6 @@
 """Download one large file as byte-range chunks spread over a rotating proxy pool.
 
-Used by ``proxy_pool.py fetch``. The pool is a parameter - anything with acquire(n),
+Used by ``proxy_pool.py fetch``. The pool is a parameter - anything with acquire(n, exclude=),
 mark_in_use(p), record(p, ok), evict(p), ban(p) and active(), i.e. proxy_pool.ProxyPool - so
 this module never imports proxy_pool and its tests drive the real pool.
 
@@ -512,7 +512,9 @@ def probe(url, pool, timeout, attempts, warn=None, ssl_context=None):
     One proxy's answer is not trusted alone: an injecting proxy answers 200 with a page, and one
     that rewrites ETag would plant an identity every honest proxy then contradicts. So each reply
     is a vote, and the probe stops at `attempts` probes, at once when a view reaches two distinct
-    proxies, or when every proxy still active has answered. Otherwise, at the end, the view with
+    proxies, or when every proxy still active has answered. A proxy that answered is not asked
+    again: its second answer adds no vote, and the attempt it took could have reached a proxy
+    not heard yet (one that only failed may be asked again). Otherwise, at the end, the view with
     the most votes wins, and a ranged view wins a tie against whole-file ones; a top count shared
     by two ranged views (or two whole-file ones) is no decision, and the probe refuses rather than
     let whichever answered first plant its view. A view resting on one proxy is warned as not
@@ -528,8 +530,8 @@ def _probe_views(url, pool, timeout, attempts, warn, ssl_context):
     loop, kept only to be named when nothing was decided."""
     votes, errors, answered = {}, {}, set()
     for _ in range(attempts):
-        picks = pool.acquire(1)
-        if not picks:
+        picks = pool.acquire(1, exclude=answered)
+        if not picks:                       # every active proxy has answered, or none is left
             break
         proxy = picks[0]
         pool.mark_in_use(proxy)
@@ -557,8 +559,6 @@ def _probe_views(url, pool, timeout, attempts, warn, ssl_context):
             votes.setdefault(key, set()).add(proxy)
             if len(votes[key]) >= 2:
                 return _decide(key), errors
-        if pool.active() <= answered:
-            break
     return _tally(votes, warn), errors
 
 

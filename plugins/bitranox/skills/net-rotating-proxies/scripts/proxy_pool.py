@@ -471,17 +471,20 @@ class ProxyPool:
         with self._lock:
             return set(self._active)
 
-    def acquire(self, n):
+    def acquire(self, n, *, exclude=frozenset()):
         """Pick up to n proxies for one item, rotated so no proxy is hammered.
 
         Refills the active set first if it has dropped below target, then draws a
         speed-weighted, cool-down-respecting pick and stamps each with the current time so
-        the next acquire rests them. Returns the ordered fallback chain to try for the item."""
+        the next acquire rests them. Returns the ordered fallback chain to try for the item.
+        Proxies in ``exclude`` are never picked: a caller that already has a proxy's answer
+        (fetch's probe) asks the others instead; [] when every active proxy is excluded."""
         now = time.monotonic()
         with self._lock:
             if len(self._active) < (self.need or 1):
                 self._refill_active_locked()
-            picks = _weighted_lru_pick(self._weights_locked(), self._last_used, now, self.cooldown, n)
+            weights = {p: w for p, w in self._weights_locked().items() if p not in exclude}
+            picks = _weighted_lru_pick(weights, self._last_used, now, self.cooldown, n)
             for p in picks:
                 self._last_used[p] = now
             return picks
