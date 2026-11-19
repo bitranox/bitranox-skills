@@ -35,6 +35,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from types import MappingProxyType
 from typing import NoReturn
 
 import claude_paths
@@ -44,9 +45,8 @@ LEDGER_REL = ".skillwriter/decisions.jsonl"
 
 
 class Kind(StrEnum):
-    """An entry's `kind`. The values are the strings the ledger holds; entries stay dicts and
-    validate_entry checks membership, so comparing against a member is what makes a misspelt kind
-    an AttributeError at import rather than a comparison that is false for every entry."""
+    """An entry's `kind`. The values are the strings the ledger holds; validate_entry checks a
+    draft's membership, and a parsed `Entry` holds the member."""
 
     RULE = "rule"
     REMOVED = "removed"
@@ -54,9 +54,27 @@ class Kind(StrEnum):
     VOID = "void"
 
 
+class Tier(StrEnum):
+    """How an entry's evidence was established; the values are the strings the ledger holds."""
+
+    MEASURED = "measured"
+    USER = "user"
+    ARGUED = "argued"
+    INHERITED = "inherited"
+
+
+class Origin(StrEnum):
+    """Where an entry came from; the values are the strings the ledger holds."""
+
+    AUTHORED = "authored"
+    IMPORTED = "imported"
+    BASELINE = "baseline"
+    AB = "ab"
+
+
 KINDS = tuple(Kind)
-TIERS = ("measured", "user", "argued", "inherited")
-ORIGINS = ("authored", "imported", "baseline", "ab")
+TIERS = tuple(Tier)
+ORIGINS = tuple(Origin)
 FIELDS = ("v", "id", "date", "kind", "topic", "decision", "why", "evidence", "reopen_if",
           "anchors", "supersedes", "refs", "origin")
 ANCHOR_MIN, ANCHOR_MAX = 20, 200
@@ -78,6 +96,41 @@ class LedgerError(ValueError):
     def __init__(self, line_no: int, reason: str) -> None:
         super().__init__("line %d: %s" % (line_no, reason))
         self.line_no, self.reason = line_no, reason
+
+
+@dataclass(frozen=True)
+class Entry:
+    """One ledger line that `validate_entry` accepted, as data.
+
+    `stored` is the line as written, the object the id hashes: `show` prints it, so the bytes a
+    ledger holds are what a reader sees, a void's absent `reopen_if` included (read here as "")."""
+
+    id: str
+    v: int
+    date: str
+    kind: Kind
+    topic: str
+    decision: str
+    why: str
+    reopen_if: str
+    tier: Tier
+    evidence_text: str
+    anchors: tuple[str, ...]
+    supersedes: tuple[str, ...]
+    refs: tuple[str, ...]
+    origin: Origin
+    stored: Mapping[str, object]
+
+    @classmethod
+    def from_valid(cls, line: dict) -> Entry:
+        """The entry a line holds; `line` must already pass `validate_entry`."""
+        evidence = line["evidence"]
+        return cls(id=line["id"], v=line["v"], date=line["date"], kind=Kind(line["kind"]),
+                   topic=line["topic"], decision=line["decision"], why=line["why"],
+                   reopen_if=line.get("reopen_if") or "", tier=Tier(evidence["tier"]),
+                   evidence_text=evidence["text"], anchors=tuple(line["anchors"]),
+                   supersedes=tuple(line["supersedes"]), refs=tuple(line["refs"]),
+                   origin=Origin(line["origin"]), stored=MappingProxyType(line))
 
 
 def normalise(text: str) -> str:
@@ -253,7 +306,7 @@ def file_lines(path: str | Path) -> Iterator[bytes]:
         yield from fh
 
 
-def parse_entries(lines: Iterable[str | bytes]) -> Iterator[dict]:
+def parse_entries(lines: Iterable[str | bytes]) -> Iterator[Entry]:
     """Yield each entry of `lines` (str or bytes), validated; blank lines are skipped.
 
     Raises:
@@ -277,10 +330,10 @@ def parse_entries(lines: Iterable[str | bytes]) -> Iterator[dict]:
         problems = validate_entry(entry)
         if problems:
             raise LedgerError(line_no, "; ".join(problems))
-        yield entry
+        yield Entry.from_valid(entry)
 
 
-def live_entries(lines_factory: LinesFactory) -> Iterator[dict]:
+def live_entries(lines_factory: LinesFactory) -> Iterator[Entry]:
     """Entries no later entry supersedes, voids excluded. Two passes over `lines_factory()`.
 
     A void withdraws its targets AND what they did: a voided entry's own `supersedes` count for
@@ -288,18 +341,18 @@ def live_entries(lines_factory: LinesFactory) -> Iterator[dict]:
     the first void's target back (`append_entries` refuses one), so no fixpoint is needed.
     """
     voided: set[str] = set()
-    supersedes: dict[str, list[str]] = {}     # ids only, never an entry's text
+    supersedes: dict[str, tuple[str, ...]] = {}     # ids only, never an entry's text
     for entry in parse_entries(lines_factory()):
-        if entry["kind"] == Kind.VOID:
-            voided.update(entry["supersedes"])
-        elif entry["supersedes"]:
-            supersedes[entry["id"]] = entry["supersedes"]
+        if entry.kind == Kind.VOID:
+            voided.update(entry.supersedes)
+        elif entry.supersedes:
+            supersedes[entry.id] = entry.supersedes
     superseded = set(voided)
     for entry_id, targets in supersedes.items():
         if entry_id not in voided:
             superseded.update(targets)
     for entry in parse_entries(lines_factory()):
-        if entry["id"] not in superseded and entry["kind"] != Kind.VOID:
+        if entry.id not in superseded and entry.kind != Kind.VOID:
             yield entry
 
 
@@ -361,12 +414,12 @@ class Finding:
 def _integrity_findings(lines_factory: LinesFactory) -> list[Finding]:
     findings, seen = [], set()
     for entry in parse_entries(lines_factory()):
-        if entry["id"] in seen:
-            findings.append(Finding(entry["id"], "duplicate id"))
-        unknown = [s for s in entry["supersedes"] if s not in seen]
+        if entry.id in seen:
+            findings.append(Finding(entry.id, "duplicate id"))
+        unknown = [s for s in entry.supersedes if s not in seen]
         if unknown:
-            findings.append(Finding(entry["id"], "supersedes unknown or later id %s" % ", ".join(unknown)))
-        seen.add(entry["id"])
+            findings.append(Finding(entry.id, "supersedes unknown or later id %s" % ", ".join(unknown)))
+        seen.add(entry.id)
     return findings
 
 
@@ -376,20 +429,20 @@ def check_ledger(lines_factory: LinesFactory, corpus: str) -> list[Finding]:
         findings = _integrity_findings(lines_factory)
         text = normalise(corpus)
         for entry in live_entries(lines_factory):
-            for anchor in entry["anchors"]:
+            for anchor in entry.anchors:
                 # anchor_occurs, with the corpus normalised once: keep the two tests identical.
                 if normalise(anchor) not in text:
-                    findings.append(Finding(entry["id"], "anchor no longer in the skill text:", anchor,
-                                            entry["decision"], entry["why"], entry["reopen_if"]))
+                    findings.append(Finding(entry.id, "anchor no longer in the skill text:", anchor,
+                                            entry.decision, entry.why, entry.reopen_if))
     except LedgerError as exc:
         return [Finding("", str(exc))]
     return findings
 
 
-def _brief_block(entry: dict) -> str:
+def _brief_block(entry: Entry) -> str:
     return ("- [%s] %s (%s, %s)\n  why: %s\n  reopen if: %s"
-            % (entry["kind"], entry["decision"], entry["id"], entry["evidence"]["tier"],
-               entry["why"], entry["reopen_if"]))
+            % (entry.kind.value, entry.decision, entry.id, entry.tier.value, entry.why,
+               entry.reopen_if))
 
 
 def render_brief(lines_factory: LinesFactory, *, skill: str, budget_chars: int = 6000,
@@ -403,7 +456,7 @@ def render_brief(lines_factory: LinesFactory, *, skill: str, budget_chars: int =
     """
     blocks, used, left = [], 0, 0
     for entry in live_entries(lines_factory):
-        if entry["kind"] not in (Kind.REJECTED, Kind.REMOVED):
+        if entry.kind not in (Kind.REJECTED, Kind.REMOVED):
             continue
         block = None if left else _brief_block(entry)
         # A strict oldest-first prefix: once one block does not fit, every later entry is counted,
@@ -543,9 +596,9 @@ def prepare_entries(skill_dir: str | Path, entries: list[dict], *,
     path = ledger_path(skill_dir)
     known = _Known(set(), set())
     for e in parse_entries(file_lines(path)):
-        known.ids.add(e["id"])
-        if e["kind"] == Kind.VOID:
-            known.voids.add(e["id"])
+        known.ids.add(e.id)
+        if e.kind == Kind.VOID:
+            known.voids.add(e.id)
     corpus = normalise(corpus_from_dir(skill_dir))
     untracked_md = _untracked_markdown(Path(skill_dir))
     problems, chunks, ids = [], [], []
@@ -786,7 +839,8 @@ _ALL_HINT = ("%s show: void and superseded entries are listed only with --all"
              % _PROG)
 
 
-def _shown(entries: Iterable[dict], args: argparse.Namespace, kinds: set[str]) -> Iterator[dict]:
+def _shown(entries: Iterable[Entry], args: argparse.Namespace,
+           kinds: set[str]) -> Iterator[dict[str, object]]:
     """The entries `show` prints, streamed one at a time and never held together.
 
     Without --all, a show asking for voids, or for an id that matched nothing, ends with a stderr
@@ -794,9 +848,9 @@ def _shown(entries: Iterable[dict], args: argparse.Namespace, kinds: set[str]) -
     """
     count = 0
     for e in entries:
-        if e["kind"] in kinds and args.topic in (None, e["topic"]) and args.id in (None, e["id"]):
+        if e.kind in kinds and args.topic in (None, e.topic) and args.id in (None, e.id):
             count += 1
-            yield e if args.full else {k: e[k] for k in _SHORT_FIELDS}
+            yield dict(e.stored) if args.full else {k: e.stored[k] for k in _SHORT_FIELDS}
     if not args.all and ((args.kind and Kind.VOID in kinds) or (args.id and not count)):
         print(_ALL_HINT, file=sys.stderr)
 

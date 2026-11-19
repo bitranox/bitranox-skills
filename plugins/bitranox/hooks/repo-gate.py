@@ -1582,7 +1582,7 @@ def _ids_missing_from(ledger, named):
     missing = set(named)
     try:
         for entry in skill_decisions.parse_entries(_ledger_lines(ledger)):
-            missing.discard(entry["id"])
+            missing.discard(entry.id)
             if not missing:
                 break
     except skill_decisions.LedgerError:

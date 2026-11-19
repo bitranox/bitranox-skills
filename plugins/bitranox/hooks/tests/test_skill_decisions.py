@@ -187,7 +187,29 @@ def test_a_raw_line_separator_inside_a_json_string_stays_one_ledger_line(tmp_pat
     entry = _rejected(why="first half" + LINE_SEPARATOR + "second half")
     path = tmp_path / "decisions.jsonl"
     path.write_bytes((json.dumps(entry, ensure_ascii=False) + "\n").encode("utf-8"))
-    assert [e["id"] for e in SD.parse_entries(SD.file_lines(path))] == [entry["id"]]
+    assert [e.id for e in SD.parse_entries(SD.file_lines(path))] == [entry["id"]]
+
+
+def test_a_parsed_entry_is_a_typed_record_that_keeps_its_stored_line():
+    entry = _rule()
+    [parsed] = SD.parse_entries(_lines(entry))
+    assert type(parsed) is SD.Entry
+    assert (type(parsed.kind), type(parsed.tier), type(parsed.origin)) == (SD.Kind, SD.Tier,
+                                                                          SD.Origin)
+    assert (parsed.kind, parsed.tier, parsed.origin) == (SD.Kind.RULE, SD.Tier.MEASURED,
+                                                         SD.Origin.AUTHORED)
+    assert parsed.anchors == ("bmk alone, shared across projects",) and parsed.supersedes == ()
+    assert parsed.evidence_text == entry["evidence"]["text"]
+    assert dict(parsed.stored) == entry and SD.entry_id(dict(parsed.stored)) == parsed.id
+
+
+def test_a_void_without_reopen_if_reads_as_empty_and_keeps_the_key_absent():
+    old = _rule()
+    void = _rule(kind="void", anchors=[], supersedes=[old["id"]], why="written in error")
+    del void["reopen_if"]
+    void["id"] = SD.entry_id(void)
+    [_old, parsed] = SD.parse_entries(_lines(old, void))
+    assert parsed.reopen_if == "" and "reopen_if" not in parsed.stored
 
 
 @pytest.mark.parametrize("field", ["anchors", "supersedes"])
@@ -203,7 +225,7 @@ def test_a_list_field_holding_a_number_is_a_problem_not_a_crash(field):
 def test_a_superseded_entry_and_a_void_are_not_live():
     old = _rule()
     new = _rule(decision="bmk installs alone, reworded.", supersedes=[old["id"]])
-    assert [e["id"] for e in SD.live_entries(_factory(old, new))] == [new["id"]]
+    assert [e.id for e in SD.live_entries(_factory(old, new))] == [new["id"]]
     void = _rule(kind="void", anchors=[], reopen_if="", supersedes=[old["id"]],
                  why="written against the wrong skill")
     assert list(SD.live_entries(_factory(old, void))) == []
@@ -217,7 +239,7 @@ def test_voiding_a_superseding_entry_withdraws_its_supersede_too():
                 supersedes=[old["id"]])
     void = _rule(kind="void", anchors=[], reopen_if="", supersedes=[new["id"]],
                  why="written against the wrong skill")
-    assert [e["id"] for e in SD.live_entries(_factory(old, new, void))] == [old["id"]]
+    assert [e.id for e in SD.live_entries(_factory(old, new, void))] == [old["id"]]
     [finding] = SD.check_ledger(_factory(old, new, void), "Intro, with neither rule.\n")
     assert finding.entry_id == old["id"]
 
@@ -318,8 +340,9 @@ def test_the_brief_lists_rejected_and_removed_in_full_and_counts_the_rest():
 def test_the_brief_stops_at_the_first_block_that_does_not_fit():
     a, b, c = _rejected(why="why A"), _rejected(why="why B " + "x" * 300), _rejected(why="why C")
     budget = 300
+    blocks = [SD._brief_block(e) for e in SD.parse_entries(_lines(a, b, c))]
     # Precondition: A and C together fit, so only a strict oldest-first prefix leaves C out.
-    assert len(SD._brief_block(a)) + len(SD._brief_block(c)) <= budget < len(SD._brief_block(b))
+    assert len(blocks[0]) + len(blocks[2]) <= budget < len(blocks[1])
     brief = SD.render_brief(_factory(a, b, c), skill="devops-bmk", budget_chars=budget)
     assert "why A" in brief and "why B" not in brief and "why C" not in brief
     assert "2 more not shown" in brief
@@ -401,8 +424,8 @@ def test_append_assigns_id_and_date_and_writes_one_line(tmp_path):
     _repo, skill = _skill(tmp_path)
     [new_id] = SD.append_entries(skill, [_draft()], today="2026-11-06")
     [stored] = list(SD.parse_entries(SD.file_lines(SD.ledger_path(skill))))
-    assert stored["id"] == new_id and new_id.startswith("d-20261106-")
-    assert stored["v"] == 1 and stored["date"] == "2026-11-06"
+    assert stored.id == new_id and new_id.startswith("d-20261106-")
+    assert stored.v == 1 and stored.date == "2026-11-06"
 
 
 def test_a_draft_that_carries_its_own_date_keeps_it(tmp_path):
@@ -670,7 +693,7 @@ def test_cli_add_takes_a_single_object_and_strips_the_skill_field(tmp_path, caps
     rc, out, _ = _cli(capsys, "add", "--from-file", str(src), "--json")
     [new_id] = json.loads(out)["data"]["written"]["devops-bmk"]
     [stored] = list(SD.parse_entries(SD.file_lines(SD.ledger_path(skill))))
-    assert rc == 0 and stored["id"] == new_id and "skill" not in stored
+    assert rc == 0 and stored.id == new_id and "skill" not in stored.stored
 
 
 def test_cli_add_across_skills_is_all_or_nothing(tmp_path, capsys, monkeypatch):
