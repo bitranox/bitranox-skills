@@ -45,7 +45,7 @@ SKILL_DIR_PLACEHOLDER = 'SKILL_DIR="/absolute/path/to/skills/coding-python-perfo
 # A command word `python` (not python3, not the `read_field python` field argument): at the start
 # of a line or right after a pipe, a list operator, a subshell, a brace group or a command
 # substitution.
-BARE_PYTHON = re.compile(r"(?:^|[;&|(`{]|\$\()\s*python(?=\s|$)", re.MULTILINE)
+BARE_PYTHON = re.compile(r"(?:^|[;&|(`{]|\$\()[^\S\n]*python(?=\s|$)", re.MULTILINE)
 
 pytestmark = pytest.mark.skipif(
     os.name == "nt" or shutil.which("bash") is None,

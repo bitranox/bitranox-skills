@@ -27,7 +27,7 @@ def _registered():
     for event, groups in hooks.items():
         for group in groups:
             for handler in group["hooks"]:
-                for script in re.findall(r"([A-Za-z0-9_.-]+\.py)", handler.get("command", "")):
+                for script in re.findall(r"(?<![A-Za-z0-9_.-])([A-Za-z0-9_.-]+\.py)", handler.get("command", "")):
                     found.setdefault(script, set()).add(event)
     return found
 

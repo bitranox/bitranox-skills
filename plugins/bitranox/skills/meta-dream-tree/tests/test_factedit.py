@@ -1078,7 +1078,7 @@ def test_an_explicit_stage_dir_is_never_removed(tmp_path):
 _TOOLBOX_SKILL_MD = (Path(__file__).resolve().parents[2] / "compuse-toolbox" / "SKILL.md")
 _ROW_RX = re.compile(r"^\| `(?P<name>[a-zA-Z0-9_]+)`\s*\|(?P<desc>.*)\|(?P<launch>[^|]*)\|\s*$")
 _LAUNCH_CMD_RX = re.compile(r"`([^`]*\.py[^`]*)`")
-_SCRIPT_RX = re.compile(r"(\S+\.py)")
+_SCRIPT_RX = re.compile(r"(?<!\S)(\S+\.py)")
 _RUN_SECTION_RX = re.compile(r"Run \([^\n]*\):\s*\n((?:[ \t]+`[^\n]*`\n?)+)")
 
 

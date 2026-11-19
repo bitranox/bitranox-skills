@@ -186,7 +186,7 @@ MUTANTS: tuple[Mutant, ...] = (
 
 FAILED_RX = re.compile(r"^FAILED [^:]+::(\w+)", re.M)
 # pytest always prints a counts line when it actually collected and ran something.
-SUMMARY_RX = re.compile(r"\d+ (passed|failed|error)", re.M)
+SUMMARY_RX = re.compile(r"(?<!\d)\d+ (passed|failed|error)", re.M)
 
 
 def run_mutant(mutant: Mutant, workdir: Path) -> set[str]:

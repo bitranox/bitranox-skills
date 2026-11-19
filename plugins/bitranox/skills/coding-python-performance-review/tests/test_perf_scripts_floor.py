@@ -15,7 +15,7 @@ import setup_env as se
 
 SKILL = Path(__file__).resolve().parent.parent
 _HEADER_FLOOR = re.compile(r'^# requires-python = ">=(\d+)\.(\d+)"$', re.M)
-_NEWER = re.compile(r"^\s*import tomllib\b|\bdatetime\.UTC\b|from datetime import [^\n]*\bUTC\b", re.M)
+_NEWER = re.compile(r"^[^\S\n]*import tomllib\b|\bdatetime\.UTC\b|from datetime import [^\n]*\bUTC\b", re.M)
 
 
 def test_min_python_is_below_the_plugin_floor():
