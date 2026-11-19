@@ -66,16 +66,16 @@ explicitly when you know where they live.
 """
 
 import argparse
+import itertools
 import json
 import math
 import os
 import re
-import statistics
 import sys
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 
 __all__ = [
     "audit",
@@ -85,6 +85,8 @@ __all__ = [
     "Telegraph",
     "distinctive_terms",
     "cascade_chain",
+    "iter_cascade_corpus",
+    "iter_corpus",
     "load_cascade_corpus",
     "load_corpus",
 ]
@@ -334,8 +336,48 @@ class _CorpusStats:
         return min_shared * -math.log(self.limit / self.documents)
 
 
+@dataclass
+class _CorpusTally:
+    """What the weighting needs from the WHOLE corpus, gathered one document at a time.
+
+    Only the scenario's own terms are counted: a weight is only ever asked of a term the scenario
+    shares with a document, so the frequency of any other term never reaches a verdict. Sizes are
+    kept as a histogram for the median. Neither grows with the number of documents (the scenario
+    bounds the first, the distinct document sizes the second), so a corpus of any size is read
+    without holding its texts or term sets at once.
+    """
+
+    documents: int = 0
+    frequency: Counter[str] = field(default_factory=Counter)
+    sizes: Counter[int] = field(default_factory=Counter)
+
+    def add(self, terms: set[str], scenario_terms: set[str]) -> None:
+        self.documents += 1
+        self.frequency.update(terms & scenario_terms)
+        self.sizes[len(terms)] += 1
+
+
+def _median_of_counts(counts: Counter[int]) -> float:
+    """statistics.median of the values a histogram describes, without expanding it.
+
+    >>> _median_of_counts(Counter({3: 2, 10: 1}))
+    3.0
+    >>> _median_of_counts(Counter({1: 1, 4: 1}))
+    2.5
+    """
+    total = counts.total()
+    middle = ((total - 1) // 2, total // 2)  # the two middle positions; equal when total is odd
+    found: list[int] = []
+    passed = 0
+    for value in sorted(counts):
+        passed += counts[value]
+        while len(found) < 2 and passed > middle[len(found)]:
+            found.append(value)
+    return (found[0] + found[1]) / 2
+
+
 def _corpus_stats(
-    documents: Sequence[tuple[str, set[str]]],
+    tally: _CorpusTally,
     max_fraction: float = RARITY_MAX_FRACTION,
 ) -> _CorpusStats | None:
     """The corpus's rare terms and the frequencies behind them, or None if it is too small.
@@ -344,15 +386,21 @@ def _corpus_stats(
     absolute threshold once a corpus is large. Returning None means "do not filter":
     with a handful of documents the document-frequency estimate says nothing.
     """
-    if len(documents) < MIN_CORPUS_FOR_RARITY:
+    if tally.documents < MIN_CORPUS_FOR_RARITY:
         return None
-    frequency: Counter[str] = Counter()
-    for _, terms in documents:
-        frequency.update(terms)
-    limit = max(1, int(len(documents) * max_fraction))
-    rare = {term for term, count in frequency.items() if count <= limit}
-    median_size = max(1.0, float(statistics.median(len(terms) for _, terms in documents)))
-    return _CorpusStats(rare, frequency, len(documents), limit, median_size)
+    limit = max(1, int(tally.documents * max_fraction))
+    rare = {term for term, count in tally.frequency.items() if count <= limit}
+    median_size = max(1.0, _median_of_counts(tally.sizes))
+    return _CorpusStats(rare, tally.frequency, tally.documents, limit, median_size)
+
+
+@dataclass(frozen=True)
+class _Candidate:
+    """A document sharing enough of the scenario's terms to be judged once the corpus is read."""
+
+    label: str
+    size: int
+    shared: frozenset[str]
 
 
 def audit(
@@ -372,7 +420,8 @@ def audit(
         corpus: (label, text) pairs the agent already has - e.g. the config cascade and
             the shipped reference material it starts a session with. Injected rather
             than discovered, so the core is testable and the caller decides what the
-            agent can actually see.
+            agent can actually see. Read once, one document at a time: pass a generator
+            (iter_corpus, iter_cascade_corpus) and no two texts are held at once.
         min_shared: distinct shared terms before a document counts as coverage.
         rarity_max_fraction: a term in more than this share of the corpus carries no evidence
             and is ignored. Corpus-shape dependent - see RARITY_MAX_FRACTION.
@@ -386,19 +435,31 @@ def audit(
     """
     scenario_terms = distinctive_terms(scenario)
 
-    documents = [(label, distinctive_terms(text)) for label, text in corpus]
-    stats = _corpus_stats(documents, rarity_max_fraction)
+    # One pass: the rarity weighting needs the whole corpus's frequencies before any document can
+    # be judged, so each document leaves only its tally and - if it shares enough terms to count
+    # at all - its shared terms. Rarity filtering only removes terms, so a document below
+    # min_shared here can never become a hit.
+    tally = _CorpusTally()
+    candidates: list[_Candidate] = []
+    for label, text in corpus:
+        terms = distinctive_terms(text)
+        tally.add(terms, scenario_terms)
+        overlap = scenario_terms & terms
+        if len(overlap) >= min_shared:
+            candidates.append(_Candidate(label, len(terms), frozenset(overlap)))
+    stats = _corpus_stats(tally, rarity_max_fraction)
 
     inherited: list[InheritedHit] = []
-    for label, terms in documents:
-        shared = scenario_terms & terms
+    for candidate in candidates:
+        label = candidate.label
+        shared = set(candidate.shared)
         if stats is not None:
             shared &= stats.rare
         if len(shared) < min_shared:
             continue
         evidence = needed = None
         if stats is not None:
-            evidence = sum(stats.weight(term, len(terms)) for term in shared)
+            evidence = sum(stats.weight(term, candidate.size) for term in shared)
             needed = stats.needed(min_shared)
             # The tolerance keeps a document scored exactly at the bar (an ordinary-sized one
             # with min_shared terms at the cutoff) on the side the count alone put it.
@@ -429,7 +490,7 @@ def audit(
             if overlap >= ANSWER_LEAK_THRESHOLD:
                 answer_leak = AnswerLeak(overlap, tuple(sorted(shared)))
 
-    corpus_empty = require_corpus and not documents
+    corpus_empty = require_corpus and not tally.documents
 
     reasons = []
     if corpus_empty or answer_unchecked:
@@ -443,71 +504,114 @@ def audit(
         inherited=inherited,
         telegraphs=telegraphs,
         answer_leak=answer_leak,
-        corpus_documents=len(documents),
+        corpus_documents=tally.documents,
         corpus_empty=corpus_empty,
         answer_unchecked=answer_unchecked,
     )
 
 
-def _markdown_files(root: Path, warn, *, normcase=os.path.normcase) -> list[Path]:
-    """Every *.md under `root`, sorted, with an unreadable directory reported.
+def _iter_markdown(root: Path, warn, *, normcase=os.path.normcase) -> Iterator[Path]:
+    """Every *.md under `root` in sorted path order, with an unreadable directory reported.
 
-    os.walk with onerror rather than Path.rglob: rglob skips a directory it cannot list without a
-    word, and a document missing from the corpus is a hole in a "clean" verdict nobody would see.
+    Each directory is listed on its own and its entries sorted by name, descending into a
+    subdirectory where its name sorts: that is the order sorted() gives whole paths (component by
+    component), without building the whole tree's path list first. What is held at any moment is
+    one name list per directory on the current branch, never a Path per file of the tree.
+
+    A directory that cannot be listed is reported, never skipped silently (Path.rglob skips one
+    without a word), because a document missing from the corpus is a hole in a "clean" verdict
+    nobody would see. A symlinked directory is not entered, as os.walk does not by default.
 
     The suffix is matched the way the platform's filesystem matches names, through `normcase`:
     case-insensitively on Windows, where an agent opening note.md reads NOTE.MD, and exactly on
     POSIX, where it does not.
     """
-    def report(exc: OSError) -> None:
-        warn(f"unreadable directory, skipping: {exc.filename}: {exc.strerror}")
-
     suffix = normcase(".md")
-    found: list[Path] = []
-    for dirpath, _dirnames, filenames in os.walk(root, onerror=report):
-        found.extend(Path(dirpath) / name for name in filenames
-                     if normcase(name).endswith(suffix))
-    return sorted(found)
-
-
-def _first_sighting(path: Path, seen: set[Path]) -> bool:
-    """True the first time a file is met; a document reached twice would skew rarity."""
     try:
-        key = path.resolve()
+        with os.scandir(root) as listing:
+            entries = sorted(_markdown_entries(listing, normcase, suffix))
+    except OSError as exc:
+        warn(f"unreadable directory, skipping: {exc.filename}: {exc.strerror}")
+        return
+    for _key, name, is_dir in entries:
+        if is_dir:
+            yield from _iter_markdown(root / name, warn, normcase=normcase)
+        else:
+            yield root / name
+
+
+def _markdown_entries(listing, normcase, suffix) -> Iterator[tuple[str, str, bool]]:
+    """(sort key, name, is a directory to enter) for each entry that can hold or be a document."""
+    for entry in listing:
+        try:
+            is_dir = entry.is_dir()
+            enter = is_dir and not entry.is_symlink()
+        except OSError:
+            is_dir = enter = False
+        if enter:
+            yield normcase(entry.name), entry.name, True
+        elif not is_dir and normcase(entry.name).endswith(suffix):
+            yield normcase(entry.name), entry.name, False
+
+
+def _markdown_files(root: Path, warn, *, normcase=os.path.normcase) -> list[Path]:
+    """_iter_markdown as a list."""
+    return list(_iter_markdown(Path(root), warn, normcase=normcase))
+
+
+def _first_sighting(path: Path, seen: set[str]) -> bool:
+    """True the first time a file is met; a document reached twice would skew rarity.
+
+    The key is the resolved path as a normcased string, the identity Path.resolve() compares by,
+    held without a Path object per file read."""
+    try:
+        key = os.path.realpath(path, strict=False)
     except OSError:
-        key = path
+        key = os.fspath(path)
+    key = os.path.normcase(key)
     if key in seen:
         return False
     seen.add(key)
     return True
 
 
-def load_corpus(
+def iter_corpus(
     dirs: Sequence[Path],
     *,
     warn=lambda m: None,
-    seen: set[Path] | None = None,
-) -> list[tuple[str, str]]:
-    """Read every markdown document under each directory, each file at most once.
+    seen: set[str] | None = None,
+) -> Iterator[tuple[str, str]]:
+    """Yield every markdown document under each directory, each file at most once, read only
+    when the consumer asks for the next one, so audit() holds one text at a time.
 
-    Pass the same `seen` set to load_cascade_corpus: a file reached by both --corpus and
+    Pass the same `seen` set to iter_cascade_corpus: a file reached by both --corpus and
     --corpus-cascade would otherwise count twice, and in a corpus of 20-39 documents that one
     extra copy pushes the lesson's terms over the rarity cut and turns a hit into "clean".
     """
     seen = set() if seen is None else seen
-    out: list[tuple[str, str]] = []
     for d in dirs:
         if not d.is_dir():
             warn(f"corpus directory not found, skipping: {d}")
             continue
-        for path in _markdown_files(d, warn):
+        for path in _iter_markdown(d, warn):
             if not _first_sighting(path, seen):
                 continue
             try:
-                out.append((str(path), path.read_text(encoding="utf-8", errors="replace")))
+                text = path.read_text(encoding="utf-8", errors="replace")
             except OSError as exc:
                 warn(f"unreadable, skipping: {path}: {exc}")
-    return out
+                continue
+            yield str(path), text
+
+
+def load_corpus(
+    dirs: Sequence[Path],
+    *,
+    warn=lambda m: None,
+    seen: set[str] | None = None,
+) -> list[tuple[str, str]]:
+    """iter_corpus as a list, for a caller that wants every document at once."""
+    return list(iter_corpus(dirs, warn=warn, seen=seen))
 
 
 def cascade_chain(start: Path | str, *, top: Path | str | None = None) -> list[Path]:
@@ -533,42 +637,53 @@ def cascade_chain(start: Path | str, *, top: Path | str | None = None) -> list[P
     return chain[: chain.index(ceiling) + 1]
 
 
-def _add_document(
-    path: Path,
-    documents: list[tuple[str, str]],
-    seen: set[Path],
-    warn,
-) -> None:
-    """Read one document into the corpus - at most once, and never fatally.
+def _read_document(path: Path, seen: set[str], warn) -> tuple[str, str] | None:
+    """Read one document for the corpus - at most once, and never fatally.
 
     A file that cannot be decoded costs that file and nothing else: one stray latin-1 byte in
     one note must not take down a walk over a whole tree. The skip is reported rather than
     swallowed, because a document missing from the corpus is a hole in a "clean" verdict.
     """
     if not path.is_file():
-        return
+        return None
     # Overlapping start dirs share ancestors, and --corpus can name a cascade dir too.
     if not _first_sighting(path, seen):
-        return
+        return None
     try:
         text = path.read_text(encoding="utf-8")
     except UnicodeDecodeError as exc:
         warn(f"not valid UTF-8, skipping: {path}: {exc.reason}")
-        return
+        return None
     except OSError as exc:
         warn(f"unreadable, skipping: {path}: {exc}")
-        return
-    documents.append((str(path), text))
+        return None
+    return str(path), text
 
 
-def load_cascade_corpus(
+def _cascade_paths(starts: Iterable[Path | str], top: Path | str | None, warn) -> Iterator[Path]:
+    """Every file the cascade of each start directory offers, nearest level first."""
+    for start in starts:
+        directory = Path(start)
+        if not directory.is_dir():
+            warn(f"cascade start is not a directory, skipping: {directory}")
+            continue
+        for level in cascade_chain(directory, top=top):
+            for name in CASCADE_FILENAMES:
+                yield level / name
+            facts = level / MEMORY_STORE_DIRNAME / MEMORY_FACTS_SUBDIR
+            if facts.is_dir():
+                yield from _iter_markdown(facts, warn)
+
+
+def iter_cascade_corpus(
     starts: Iterable[Path | str],
     *,
     top: Path | str | None = None,
     warn=lambda m: None,
-    seen: set[Path] | None = None,
-) -> list[tuple[str, str]]:
-    """Assemble the always-loaded context an agent dispatched from each `starts` dir inherits.
+    seen: set[str] | None = None,
+) -> Iterator[tuple[str, str]]:
+    """Yield the always-loaded context an agent dispatched from each `starts` dir inherits, one
+    document at a time, read only when the consumer asks for the next one.
 
     Collected per directory on the chain: `CLAUDE.md`, `CLAUDE.local.md`, and every markdown
     fact body under a `.claude-memory/facts/`. Labels are absolute paths, because the label is
@@ -578,22 +693,27 @@ def load_cascade_corpus(
     to a search tool. Project `CLAUDE.md` files, the memory pointer blocks and the fact bodies
     are all commonly gitignored, and a gitignore-aware search drops them with no warning: the
     corpus comes back small, everything looks clean, and nothing says why.
+
+    Raises:
+        ValueError: `top` does not bound a start directory (see cascade_chain); raised when the
+            walk reaches that start.
     """
-    documents: list[tuple[str, str]] = []
     seen = set() if seen is None else seen
-    for start in starts:
-        directory = Path(start)
-        if not directory.is_dir():
-            warn(f"cascade start is not a directory, skipping: {directory}")
-            continue
-        for level in cascade_chain(directory, top=top):
-            for name in CASCADE_FILENAMES:
-                _add_document(level / name, documents, seen, warn)
-            facts = level / MEMORY_STORE_DIRNAME / MEMORY_FACTS_SUBDIR
-            if facts.is_dir():
-                for body in _markdown_files(facts, warn):
-                    _add_document(body, documents, seen, warn)
-    return documents
+    for path in _cascade_paths(starts, top, warn):
+        document = _read_document(path, seen, warn)
+        if document is not None:
+            yield document
+
+
+def load_cascade_corpus(
+    starts: Iterable[Path | str],
+    *,
+    top: Path | str | None = None,
+    warn=lambda m: None,
+    seen: set[str] | None = None,
+) -> list[tuple[str, str]]:
+    """iter_cascade_corpus as a list, for a caller that wants every document at once."""
+    return list(iter_cascade_corpus(starts, top=top, warn=warn, seen=seen))
 
 
 def _read(spec: str) -> str:
@@ -738,27 +858,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         answer = _read(args.answer) if args.answer else None
         if answer is not None and not distinctive_terms(answer):
             warn("the --answer yielded no distinctive terms: the answer-leak check did not run.")
-        seen: set[Path] = set()
-        corpus = load_corpus([Path(d) for d in args.corpus], warn=warn, seen=seen)
+        seen: set[str] = set()
         cascade_requested = bool(args.corpus_cascade)
         # EITHER flag is the caller promising a corpus, so either one arms the unchecked verdict.
         # --corpus is the mistype-prone form - a path typed by hand rather than a directory walked
         # from the cwd - and without this it warned on stderr and still exited 0 verdict clean,
         # which is what a gate reads.
         corpus_requested = cascade_requested or bool(args.corpus)
-        if cascade_requested:
-            corpus += load_cascade_corpus(
-                args.corpus_cascade,
-                top=args.corpus_cascade_top,
-                warn=warn,
-                seen=seen,
-            )
-        if not corpus and cascade_requested:
-            warn("the cascade assembled 0 documents: the inherited-coverage check did not run.")
-        elif not corpus and corpus_requested:
-            warn("the named corpus dirs assembled 0 documents: the inherited-coverage check did not run.")
-        elif not corpus:
-            warn("no corpus given: the inherited-coverage check did not run.")
+        # Lazy on purpose: audit() reads each document as it scores it, so the corpus is never
+        # held at once. Both iterators share `seen`, so a file both flags reach is read once.
+        corpus = itertools.chain(
+            iter_corpus([Path(d) for d in args.corpus], warn=warn, seen=seen),
+            iter_cascade_corpus(
+                args.corpus_cascade, top=args.corpus_cascade_top, warn=warn, seen=seen,
+            ),
+        )
         result = audit(
             scenario,
             answer=answer,
@@ -767,6 +881,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             rarity_max_fraction=args.rarity_max_fraction,
             require_corpus=corpus_requested,
         )
+        if not result.corpus_documents and cascade_requested:
+            warn("the cascade assembled 0 documents: the inherited-coverage check did not run.")
+        elif not result.corpus_documents and corpus_requested:
+            warn("the named corpus dirs assembled 0 documents: the inherited-coverage check did not run.")
+        elif not result.corpus_documents:
+            warn("no corpus given: the inherited-coverage check did not run.")
     except (OSError, ValueError) as exc:
         if args.json:
             print(json.dumps(

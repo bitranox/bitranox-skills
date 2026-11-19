@@ -11,6 +11,7 @@ import posixpath
 import shutil
 import subprocess
 import sys
+import tracemalloc
 from pathlib import Path
 
 import pytest
@@ -969,3 +970,44 @@ def test_an_unreadable_corpus_subdir_is_warned_about(tmp_path: Path) -> None:
         locked.chmod(0o755)
     assert len(docs) == 1
     assert any("locked" in w for w in warnings), warnings
+
+
+# --- peak memory does not grow with the corpus -------------------------------------------------
+
+
+def _filler_document(index: int) -> str:
+    """About 4 KB of words no scenario here uses, distinct per document so each one carries a
+    large term set of its own (the thing a whole-corpus list of term sets held at once)."""
+    return " ".join(f"filler{index}word{n} unrelatedterm{n % 97}" for n in range(220))
+
+
+def _peak_of_a_run(tmp_path: Path, documents: int) -> int:
+
+    corpus_dir = tmp_path / f"corpus{documents}"
+    corpus_dir.mkdir()
+    for index in range(documents):
+        (corpus_dir / f"note{index:05d}.md").write_text(_filler_document(index), encoding="utf-8")
+    (corpus_dir / "zz-teaches.md").write_text(SKILL_ALREADY_TEACHING[1], encoding="utf-8")
+    scenario = tmp_path / f"scenario{documents}.txt"
+    scenario.write_text(CONTAMINATED_SCENARIO, encoding="utf-8")
+    tracemalloc.start()
+    try:
+        code = R.main(["--scenario", str(scenario), "--corpus", str(corpus_dir), "--json"])
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert code == R.EXIT_LEAK  # the planted document is still found at both sizes
+    return peak
+
+
+def test_a_run_does_not_hold_the_whole_corpus_at_once(tmp_path: Path, capsys) -> None:
+    """Each document is read, scored against the scenario and dropped: what stays per document
+    is its file name (the sorted listing and the read-once set), never its text or term set."""
+    small = _peak_of_a_run(tmp_path, 40)
+    large = _peak_of_a_run(tmp_path, 320)
+    capsys.readouterr()
+    # 8x the documents: a file's name costs a few hundred bytes (measured about 500); holding
+    # every text and term set at once cost about 70 KB a file.
+    assert large - small < 280 * 1024, (
+        f"8x the corpus raised the peak from {small} to {large} bytes"
+    )
