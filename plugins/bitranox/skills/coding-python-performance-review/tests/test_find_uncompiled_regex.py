@@ -374,6 +374,102 @@ def test_cli_prints_the_quadratic_section(tmp_path, run_script):
     assert b"m.py:5 - re.compile('[\\\\w./-]+\\\\.py', ...) [class-run-before-suffix]" in r.stdout
 
 
+# --- quadratic starts the leading-class rule cannot see -----------------------------------------
+# A repeated GROUP before a suffix, and a repeat reached past an optional prefix. The positives
+# are real hook patterns that measured 54x to 65x for 8x the input; the negatives are their fixes.
+
+SCRIPT_PATH_OLD = r"(?:[\w.-]+/)+[\w.-]+\.(?:py|sh)\b"
+SCRIPT_PATH_FIXED = r"[\w.-]/[\w.-]+\.(?:py|sh)\b"         # one character before the last slash
+SCRIPT_PATH_ANCHORED = r"(?<![\w./-])(?:[\w.-]+/)+[\w.-]+\.(?:py|sh)\b"  # the shape's own fix
+
+PUSHCHECK_OLD = (r"(?m)(?:^|[;&|])\s*"
+                 r"(?:(?:if|then|elif|else|do|while|until|!)\s+|[({]\s*)*"
+                 r"(?:(?:[A-Za-z_]\w*=\S*|env(?:\s+-u\s+\w+)*)\s+)*"
+                 r"git(?:\s+-[Cc]\s+(?:[^\s'\"]|'[^']*'|\"[^\"]*\")+)*\s+push\b"
+                 r"|\bmake\s+push\b|\bgh\s+pr\s+create\b")
+PUSHCHECK_FIXED = (r"(?m)(?:^|[;&|])[^\S\n]*"
+                   r"(?:(?:if|then|elif|else|do|while|until|!)[^\S\n]+|[({][^\S\n]*)*"
+                   r"(?:(?:[A-Za-z_]\w*=\S*|env(?:\s+-u\s+\w+)*)[^\S\n]+)*"
+                   r"git(?:\s+-[Cc]\s+(?:[^\s'\"]|'[^']*'|\"[^\"]*\")+)*\s+push\b"
+                   r"|\bmake\s+push\b|\bgh\s+pr\s+create\b")
+KEYWORD_PREFIX = r"(?m)^[^\S\n]*(?:then\s+)*git"
+KEYWORD_PREFIX_FIXED = r"(?m)^[^\S\n]*(?:then[^\S\n]+)*git"
+
+
+def test_repeated_group_before_suffix_is_flagged_and_is_quadratic():
+    verdict = fur.quadratic_verdict(SCRIPT_PATH_OLD)
+    assert verdict is not None and verdict.shape == "group-run-before-suffix"
+    assert {"'a/' * N (end of text)", "'a' * N (end of text)"} <= set(verdict.witnesses)
+    assert _is_quadratic(SCRIPT_PATH_OLD, "a/", 500)
+
+
+@pytest.mark.parametrize("pattern", [SCRIPT_PATH_FIXED, SCRIPT_PATH_ANCHORED])
+def test_repeated_group_fixes_are_not_flagged_and_are_linear(pattern):
+    assert fur.quadratic_verdict(pattern) is None
+    assert _is_linear(pattern, "a/", 25000)
+
+
+def test_repeat_after_optional_prefix_is_flagged_and_is_quadratic():
+    verdict = fur.quadratic_verdict(KEYWORD_PREFIX)
+    assert verdict is not None and verdict.shape == "repeat-after-optional-prefix"
+    assert "'then\\n' * N (end of text)" in verdict.witnesses
+    assert _is_quadratic(KEYWORD_PREFIX, "then\n", 400)
+
+
+def test_repeat_after_optional_prefix_fix_is_not_flagged_and_is_linear():
+    assert fur.quadratic_verdict(KEYWORD_PREFIX_FIXED) is None
+    assert _is_linear(KEYWORD_PREFIX_FIXED, "then \n", 10000)
+
+
+def test_old_push_check_names_every_prefix_run():
+    verdict = fur.quadratic_verdict(PUSHCHECK_OLD)
+    assert verdict is not None and verdict.shape == "newline-start-then-blanks"
+    assert {"'\\n' * N (end of text)", "'if\\n' * N (end of text)", "'(\\n' * N (end of text)",
+            "'a=\\n' * N (end of text)", "'env\\n' * N (end of text)"} <= set(verdict.witnesses)
+    assert _is_quadratic(PUSHCHECK_OLD, "a=\n", 400)
+
+
+def test_fixed_push_check_is_not_flagged_and_is_linear():
+    assert fur.quadratic_verdict(PUSHCHECK_FIXED) is None
+    assert _is_linear(PUSHCHECK_FIXED, "then\n", 10000)
+
+
+def test_optional_prefix_before_a_class_run_is_flagged():
+    verdict = fur.quadratic_verdict(r"v?\d+\.\d+")
+    assert verdict is not None and verdict.shape == "class-run-before-suffix"
+    assert "'0' * N (end of text)" in verdict.witnesses
+    assert _is_quadratic(r"v?\d+\.\d+", "0", 2000)
+    assert fur.quadratic_verdict(r"(?<!\d)v?\d+\.\d+") is None
+
+
+def test_repeated_body_that_matches_its_whole_run_is_not_flagged():
+    # nothing after the repeat, so a match takes the whole run from its first start
+    assert fur.quadratic_verdict(r"(?:ab)+") is None
+    assert fur.quadratic_verdict(r"(?:\w+)+") is None
+
+
+# --- how much a scan examined ---------------------------------------------------------------
+
+def test_cli_reports_how_many_call_sites_it_examined(tmp_path, run_script):
+    p = tmp_path / "m.py"
+    p.write_text(QUADRATIC_MODULE + "def g(s, pat):\n    return re.search(pat, s)\n",
+                 encoding="utf-8")
+    r = run_script(SCRIPT, str(p))
+    assert r.returncode == 0, r.stderr
+    # lines 3-7 compile, 10 fullmatch, 11 findall, plus g's search; line 9 is a method call
+    assert (b"Examined 8 regex call sites in 1 file: 5 checked for quadratic starts, "
+            b"0 in a shape not modelled, 1 built at run time") in r.stdout
+
+
+def test_cli_zero_call_sites_exits_2(tmp_path, run_script):
+    p = tmp_path / "plain.py"
+    p.write_text("def f(s):\n    return s.strip()\n", encoding="utf-8")
+    r = run_script(SCRIPT, str(p))
+    assert r.returncode == 2
+    assert b"examined 0 regex call sites" in r.stderr
+    assert b"Examined 0 regex call sites in 1 file" in r.stdout
+
+
 # --- the timing helper itself (process-test-design, growth-ratio rules 1 and 2) -----------------
 
 class _VirtualCPU:

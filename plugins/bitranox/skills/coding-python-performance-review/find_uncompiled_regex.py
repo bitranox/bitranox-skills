@@ -11,23 +11,34 @@ level runs once, so it is not reported.
 Quadratic starts: a pattern (compiled or not, in any scope) whose search can START at every
 position of one long run and then read to the run's end before it fails, so N characters cost
 about N squared steps under search, finditer, findall, sub, subn and split. The pattern SOURCE is
-parsed with the re module's own parser; the shape is a leading unbounded repeat of one character
-class (``[\\w./-]+``, ``\\s*``, ``.*``) whose starts no guard holds back inside a run of its own
-characters (a ``^`` without MULTILINE, a negative lookbehind of the same class), followed by more
-pattern. Whether a start inside the run then fails is confirmed by running the compiled pattern
-once on a short witness run of each character the class accepts; the report names those runs, so
-a growth test (the same run at N and 8N) can be built from it. Two shapes are named:
+parsed with the re module's own parser; the shape is an unbounded repeat a match can begin with,
+of one character class (``[\\w./-]+``, ``\\s*``, ``.*``) or of a longer body
+(``(?:[\\w.-]+/)+``), whose starts no guard holds back inside a run of what it repeats (a ``^``
+without MULTILINE, a negative lookbehind of the same class), followed by more pattern. An optional
+node before it (``v?``, ``\\s*``, ``(?:x)?``) matches empty there, so the repeat after it is a
+start too. Whether a start inside the run then fails is confirmed by running the compiled pattern
+once on a short witness run of each character the class accepts, or of sample units the body
+matches; the report names those runs, so a growth test (the same run at N and 8N) can be built
+from it. Four shapes are named:
 
 - ``class-run-before-suffix``: ``[\\w./-]+\\.(?:py|sh)\\b`` over a long token with no suffix.
   Fix: a negative lookbehind of the SAME class before the repeat.
 - ``newline-start-then-blanks``: a start alternative that matches after every newline
   (``(?<=[;&|\\n])``, ``(?m)^``) followed by ``\\s*``, over many blank lines. Fix: ``[^\\S\\n]*``
   after the anchor, so each newline is a start of its own.
+- ``group-run-before-suffix``: ``(?:[\\w.-]+/)+[\\w.-]+\\.py`` over ``a/a/a/...`` with no suffix.
+  Fix: a negative lookbehind of every character the body's run holds, or one fixed piece before
+  the suffix instead of the whole run.
+- ``repeat-after-optional-prefix``: a repeated body after an optional prefix, as in
+  ``(?m)^[^\\S\\n]*(?:then\\s+)*git`` over ``then\\n`` lines: the anchor holds at every unit.
+  Fix: keep the body from crossing what the anchor needs (``[^\\S\\n]`` for ``\\s``).
 
 A compiled pattern bound to a name the file only ever calls ``.match`` or ``.fullmatch`` on is not
 reported: those try one start. Patterns built by ``+`` from module-level string constants are
 resolved. Not modelled: a leading literal before the repeat, a mixed run under ``\\b`` beyond one
-word/non-word pair, and flags passed through a variable (inline flags are read).
+word/non-word pair, a lookaround or backreference inside a repeated body, and flags passed through
+a variable (inline flags are read). The report opens with how many regex call sites it examined,
+how many patterns it checked for quadratic starts, and how many it could not read or model.
 
 Recognised spellings: ``re.match(...)``, ``import re as X`` then ``X.match(...)``,
 ``from re import match [as m]`` then ``match(...)``, and the ``pattern=`` keyword.
@@ -36,7 +47,17 @@ Usage: python find_uncompiled_regex.py FILE [FILE ...]
 
 Exit codes: 0 every file was scanned (whether or not calls were found), 2 at least one
 path was missing or could not be read or parsed (its ERROR line goes to stderr; the report
-for the files that were scanned is still printed), or the arguments were invalid.
+for the files that were scanned is still printed), the scan examined no regex call site at all
+(nothing was checked, so "Found 0" would read as a clean result), or the arguments were invalid.
+
+Decisions:
+- A class run reached past an optional prefix keeps the class shape: a lookbehind of its class
+  fixes it wherever the run starts. Pinned by test_optional_prefix_before_a_class_run_is_flagged.
+- The shape of a pattern with a leading repeated body is ``group-run-before-suffix`` even when
+  the first class inside the body also yields witnesses: a lookbehind of that class alone leaves
+  the body's own run quadratic (``a/a/a/``). Pinned by test_repeated_group_before_suffix_*.
+- Zero call sites examined exits 2, not 0: a finder over files with no regex call has checked
+  nothing. Pinned by test_cli_zero_call_sites_exits_2.
 """
 
 from __future__ import annotations
@@ -45,11 +66,13 @@ import argparse
 import ast
 import contextlib
 import importlib
+import itertools
 import os
 import re
 import sys
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
+from enum import Enum
 from typing import Protocol, TypedDict, cast
 
 # re module functions that accept a pattern string
@@ -300,12 +323,21 @@ def _convert_item(op: str, arg: object, ctx: _Context) -> _Node:
 
 # --- where a match can start -----------------------------------------------------------------
 
+class _StartKind(Enum):
+    GROUP = 'group'  # a leading unbounded repeat of a longer body: `(?:[\w.-]+/)+`
+    CLASS = 'class'  # a leading unbounded repeat of one character class
+    INNER = 'inner'  # a repeated body reached past an optional prefix: `\s*(?:then\s+)*`
+
+
 @dataclass(frozen=True)
 class _Start:
-    """A leading unbounded class repeat: the guards before it, its class, the pattern after it."""
+    """An unbounded repeat a match can begin with: the guards before it, what it repeats (one
+    character class, or a longer body), the pattern after it, and how it was reached."""
     guards: tuple[_Node, ...]
-    chars: frozenset[str]
+    chars: frozenset[str]  # empty for a repeated body
     rest: tuple[_Node, ...]
+    body: tuple[_Node, ...] = ()  # the repeated body; empty for a class repeat
+    kind: _StartKind = _StartKind.CLASS
 
 
 _MAX_STARTS = 32
@@ -327,23 +359,44 @@ def _repeat_class(node: _Node) -> frozenset[str] | None:
     return body.members if isinstance(body, _Chars) else None
 
 
-def _starts(seq: tuple[_Node, ...], guards: tuple[_Node, ...] = ()) -> Iterator[_Start]:
+def _starts(seq: tuple[_Node, ...], guards: tuple[_Node, ...] = (), *,
+            inner: bool = False) -> Iterator[_Start]:
+    """Every unbounded repeat a match can begin with, lazily (a caller takes the first few).
+
+    *inner* marks a start reached past an optional prefix node, which matched empty there."""
     if not seq:
         return
     head, tail = seq[0], seq[1:]
     if isinstance(head, _Look) and not head.behind:
-        yield from _starts(tail, guards)  # a lookahead holds back no start inside a run
+        yield from _starts(tail, guards, inner=inner)  # a lookahead holds back no start in a run
     elif _is_guard(head):
-        yield from _starts(tail, (*guards, head))
+        yield from _starts(tail, (*guards, head), inner=inner)
     elif isinstance(head, _Group):
-        yield from _starts((*head.body, *tail), guards)
+        yield from _starts((*head.body, *tail), guards, inner=inner)
     elif isinstance(head, _Branch):
         for alt in head.alts:
-            yield from _starts((*alt, *tail), guards)
+            yield from _starts((*alt, *tail), guards, inner=inner)
+    elif isinstance(head, _Repeat):
+        yield from _repeat_starts(head, tail, guards, inner=inner)
+
+
+def _repeat_starts(head: _Repeat, tail: tuple[_Node, ...], guards: tuple[_Node, ...], *,
+                   inner: bool) -> Iterator[_Start]:
+    chars = _repeat_class(head)
+    if chars:
+        # A class run is the same shape wherever it starts: a lookbehind of its class fixes it.
+        yield _Start(guards, chars, tail)
     else:
-        chars = _repeat_class(head)
-        if chars:
-            yield _Start(guards, chars, tail)
+        if head.high is None:
+            # The repeated body is a run of its own: each start at one of its units reads the
+            # remaining units before the rest of the pattern can fail.
+            kind = _StartKind.INNER if inner else _StartKind.GROUP
+            yield _Start(guards, frozenset(), tail, body=head.body, kind=kind)
+        # The first iteration starts where the repeat starts: `(?:[\w.-]+/)+` begins with a
+        # class run of its own, whose starts rescan it when no `/` follows.
+        yield from _starts((*head.body, *tail), guards, inner=inner)
+    if head.low == 0:
+        yield from _starts(tail, guards, inner=True)  # the repeat may match empty here
 
 
 # --- guards, evaluated on a concrete witness text ---------------------------------------------
@@ -417,9 +470,60 @@ def _terminators(chars: frozenset[str]) -> list[str]:
     return ['', *[t for t in _TERMINATOR_PREFERENCE if t not in chars][:3]]
 
 
-def _admits_inner_starts(start: _Start, run: str, ctx: _Context) -> bool:
-    admitted = sum(all(_guard_holds(g, run, i, ctx) for g in start.guards) for i in range(1, len(run)))
-    return admitted >= len(run) // 2
+# Sample strings a repeated body matches, built from its parse tree. Each class contributes a few
+# representatives, a newline and a blank first: a start anchored after a newline (`(?m)^`) holds
+# at every unit only when the unit ends in one.
+_REPRESENTATIVE_PREFERENCE = ('\n', ' ', 'a', '0', '_', '.', '-', '/', '(')
+_REPRESENTATIVES = 3
+_MAX_UNITS = 48
+
+
+def _representatives(members: frozenset[str]) -> list[str]:
+    preferred = [c for c in _REPRESENTATIVE_PREFERENCE if c in members]
+    others = sorted(members - set(preferred), key=_unit_order)
+    return (preferred + others)[:_REPRESENTATIVES]
+
+
+def _round_robin(lists: list[list[str]]) -> list[str]:
+    """Interleave *lists*, so a cap keeps some of every alternative rather than the first one's."""
+    out: list[str] = []
+    for row in itertools.zip_longest(*lists):
+        out.extend(s for s in row if s is not None and s not in out)
+    return out[:_MAX_UNITS]
+
+
+def _node_samples(node: _Node) -> list[str]:
+    if isinstance(node, _Chars):
+        return _representatives(node.members)
+    if isinstance(node, _Group):
+        return _seq_samples(node.body)
+    if isinstance(node, _Branch):
+        return _round_robin([_seq_samples(alt) for alt in node.alts])
+    if isinstance(node, _Repeat):
+        counts = [c for c in (node.low, node.low + 1) if node.high is None or c <= node.high]
+        body = _seq_samples(node.body)
+        return _round_robin([[s * count for s in body] for count in counts])
+    raise _Unsupported(type(node).__name__)  # an assertion inside a body: no sample is sure
+
+
+def _seq_samples(nodes: tuple[_Node, ...]) -> list[str]:
+    combos = itertools.product(*(_node_samples(n) for n in nodes))
+    return list(dict.fromkeys(''.join(c) for c in itertools.islice(combos, _MAX_UNITS)))
+
+
+def _group_units(start: _Start) -> list[str]:
+    """Units a repeated body matches; each one repeated is a run the repeat reads to its end."""
+    try:
+        return [u for u in _seq_samples(start.body) if u]
+    except _Unsupported:
+        return []
+
+
+def _admits_inner_starts(start: _Start, run: str, unit_len: int, ctx: _Context) -> bool:
+    """Whether the guards hold at at least half of the unit boundaries inside *run*."""
+    boundaries = range(unit_len, len(run), unit_len)
+    admitted = sum(all(_guard_holds(g, run, i, ctx) for g in start.guards) for i in boundaries)
+    return admitted >= (len(run) // unit_len) // 2
 
 
 def _inner_starts_fail(compiled: re.Pattern[str] | re.Pattern[bytes], text: str, run_len: int,
@@ -435,10 +539,13 @@ def _inner_starts_fail(compiled: re.Pattern[str] | re.Pattern[bytes], text: str,
 
 def _witness(start: _Start, unit: str, compiled: re.Pattern[str] | re.Pattern[bytes],
              ctx: _Context) -> str | None:
-    run = unit * (_RUN // len(unit))
-    if not _admits_inner_starts(start, run, ctx):
+    if start.body:
+        run, unit_len, inside = unit * _RUN, len(unit), frozenset(unit)
+    else:
+        run, unit_len, inside = unit * (_RUN // len(unit)), 1, start.chars
+    if not _admits_inner_starts(start, run, unit_len, ctx):
         return None
-    for terminator in _terminators(start.chars):
+    for terminator in _terminators(inside):
         if _inner_starts_fail(compiled, run + terminator, len(run), ctx):
             end = f' + {terminator!r}' if terminator else ' (end of text)'
             return f'{unit!r} * N{end}'
@@ -453,19 +560,70 @@ class QuadraticVerdict:
 
 _NEWLINE_SHAPE = 'newline-start-then-blanks'
 _CLASS_SHAPE = 'class-run-before-suffix'
+_GROUP_SHAPE = 'group-run-before-suffix'
+_INNER_SHAPE = 'repeat-after-optional-prefix'
+
+# A repeated body yields many sample units; a few witnesses name the run, more add only noise.
+_MAX_GROUP_WITNESSES = 4
+
+
+def _start_witnesses(start: _Start, compiled: re.Pattern[str] | re.Pattern[bytes],
+                     ctx: _Context) -> list[str]:
+    if not start.rest:
+        return []  # a bare repeat consumes the whole run: one start per run
+    units = _group_units(start) if start.body else _units(start, ctx)
+    limit = _MAX_GROUP_WITNESSES if start.body else len(units)
+    found: list[str] = []
+    for unit in units:
+        witness = _witness(start, unit, compiled, ctx)
+        if witness and witness not in found:
+            found.append(witness)
+            if len(found) >= limit:
+                break
+    return found
 
 
 def _witnesses(starts: list[_Start], compiled: re.Pattern[str] | re.Pattern[bytes],
-               ctx: _Context) -> list[str]:
-    found: list[str] = []
+               ctx: _Context) -> dict[_StartKind, list[str]]:
+    """The witness runs found, by the kind of start that produced them."""
+    found: dict[_StartKind, list[str]] = {kind: [] for kind in _StartKind}
     for start in starts:
-        if not start.rest:
-            continue  # a bare class repeat consumes the whole run: one start per run
-        for unit in _units(start, ctx):
-            witness = _witness(start, unit, compiled, ctx)
-            if witness and witness not in found:
-                found.append(witness)
+        bucket = found[start.kind]
+        bucket.extend(w for w in _start_witnesses(start, compiled, ctx) if w not in bucket)
     return found
+
+
+def _shape(found: dict[_StartKind, list[str]], starts: list[_Start]) -> str:
+    """A leading repeated body names the shape first: its fix must cover the run of the whole
+    body, which a lookbehind of the first class inside it does not."""
+    if found[_StartKind.GROUP]:
+        return _GROUP_SHAPE
+    class_found = found[_StartKind.CLASS]
+    if class_found:
+        only_newline = all(w.startswith("'\\n' * N") for w in class_found)
+        guarded = any(s.guards for s in starts if s.kind is _StartKind.CLASS)
+        return _NEWLINE_SHAPE if only_newline and guarded else _CLASS_SHAPE
+    return _INNER_SHAPE
+
+
+class _Check(Enum):
+    MODELLED = 'modelled'
+    NOT_MODELLED = 'not-modelled'  # the parse tree holds a shape this checker does not model
+
+
+def _check_pattern(pattern: str | bytes, flags: int) -> tuple[QuadraticVerdict | None, _Check]:
+    compiled = re.compile(pattern, flags)
+    parsed = _PARSER.parse(pattern, flags)
+    ctx = _Context(parsed.state.flags, isinstance(pattern, bytes))
+    try:
+        starts = list(itertools.islice(_starts(_convert(parsed, ctx)), _MAX_STARTS))
+    except _Unsupported:
+        return None, _Check.NOT_MODELLED
+    found = _witnesses(starts, compiled, ctx)
+    ordered = list(dict.fromkeys(w for kind in _StartKind for w in found[kind]))
+    if not ordered:
+        return None, _Check.MODELLED
+    return QuadraticVerdict(_shape(found, starts), tuple(ordered)), _Check.MODELLED
 
 
 def quadratic_verdict(pattern: str | bytes, flags: int = 0) -> QuadraticVerdict | None:
@@ -477,21 +635,12 @@ def quadratic_verdict(pattern: str | bytes, flags: int = 0) -> QuadraticVerdict 
     'class-run-before-suffix'
     >>> quadratic_verdict(r'(?<![\\w./-])[\\w./-]+\\.py') is None
     True
+    >>> quadratic_verdict(r'(?:[\\w.-]+/)+[\\w.-]+\\.py').shape
+    'group-run-before-suffix'
+    >>> quadratic_verdict(r'(?m)^[^\\S\\n]*(?:then\\s+)*git').shape
+    'repeat-after-optional-prefix'
     """
-    compiled = re.compile(pattern, flags)
-    parsed = _PARSER.parse(pattern, flags)
-    ctx = _Context(parsed.state.flags, isinstance(pattern, bytes))
-    try:
-        starts = list(_starts(_convert(parsed, ctx)))[:_MAX_STARTS]
-    except _Unsupported:
-        return None
-    found = _witnesses(starts, compiled, ctx)
-    if not found:
-        return None
-    only_newline = all(w.startswith("'\\n' * N") for w in found)
-    guarded = any(s.guards for s in starts)
-    shape = _NEWLINE_SHAPE if only_newline and guarded else _CLASS_SHAPE
-    return QuadraticVerdict(shape, tuple(found))
+    return _check_pattern(pattern, flags)[0]
 
 
 _SHAPE_FIX = {
@@ -499,6 +648,12 @@ _SHAPE_FIX = {
                   'repeat, e.g. (?<![\\w./-])[\\w./-]+',
     _NEWLINE_SHAPE: 'After the newline start, use [^\\S\\n]* instead of \\s*, so each newline is a '
                     'start of its own',
+    _GROUP_SHAPE: 'Anchor the start with a negative lookbehind of EVERY character the repeated '
+                  'group\'s run holds, e.g. (?<![\\w./-])(?:[\\w.-]+/)+, or match one fixed piece '
+                  'before the suffix instead of the whole run',
+    _INNER_SHAPE: 'A repeat after an optional prefix starts at every unit of its own run: make '
+                  'the start unable to hold inside that run (no \\s that crosses a newline after a '
+                  'newline start), or anchor it with a negative lookbehind of the run\'s characters',
 }
 
 
@@ -699,25 +854,88 @@ def _call_text(call: ast.Call, name: str, pattern: ast.expr) -> str:
     return f're.{name}({source}, ...)'
 
 
-def _quadratic_finding(file_path: str, call: ast.Call, scan: _ScanContext) -> QuadraticFinding | None:
+class _Site(Enum):
+    """What the quadratic check did with one call."""
+    NOT_A_SITE = 'not-a-site'      # not an re call, or no pattern argument
+    SINGLE_START = 'single-start'  # match/fullmatch, or a name only ever matched: one start
+    UNREADABLE = 'unreadable'      # the pattern is built at run time
+    NOT_COMPILED = 'not-compiled'  # the pattern does not compile
+    NOT_MODELLED = 'not-modelled'  # its parse tree holds a shape the checker does not model
+    CHECKED = 'checked'
+
+
+@dataclass
+class ScanCounts:
+    """How much a scan examined, so an empty report can be told from a scan of nothing."""
+    files: int = 0
+    sites: int = 0         # re calls with a pattern argument, in any scope
+    checked: int = 0       # multi-start patterns read and checked for quadratic starts
+    not_modelled: int = 0
+    unreadable: int = 0    # multi-start patterns built at run time, so never read
+
+    def record(self, site: _Site) -> None:
+        if site is _Site.NOT_A_SITE:
+            return
+        self.sites += 1
+        if site is _Site.CHECKED:
+            self.checked += 1
+        elif site is _Site.NOT_MODELLED:
+            self.not_modelled += 1
+        elif site is _Site.UNREADABLE:
+            self.unreadable += 1
+
+    def merge(self, other: ScanCounts) -> None:
+        self.files += other.files
+        self.sites += other.sites
+        self.checked += other.checked
+        self.not_modelled += other.not_modelled
+        self.unreadable += other.unreadable
+
+
+def _quadratic_check(file_path: str, call: ast.Call,
+                     scan: _ScanContext) -> tuple[QuadraticFinding | None, _Site]:
     name = _re_function(call, scan.modules, scan.functions)
     pattern_node = _pattern_arg(call)
-    if name not in _MULTI_START_FLAGS_INDEX or pattern_node is None:
-        return None
-    if scan.targets.get(id(call)) in scan.single_start:
-        return None
+    if pattern_node is None or name not in (RE_FUNCTIONS | {'compile'}):
+        return None, _Site.NOT_A_SITE
+    if name not in _MULTI_START_FLAGS_INDEX or scan.targets.get(id(call)) in scan.single_start:
+        return None, _Site.SINGLE_START
     pattern = _fold(pattern_node, scan.constants)
     if pattern is None:
-        return None
+        return None, _Site.UNREADABLE
     try:
-        verdict = quadratic_verdict(pattern, _flags_value(_flags_arg(call, name), scan.modules))
+        verdict, check = _check_pattern(pattern, _flags_value(_flags_arg(call, name), scan.modules))
     except (re.error, ValueError, TypeError, OverflowError):
-        return None  # a pattern that does not compile is not this checker's finding
+        return None, _Site.NOT_COMPILED  # a pattern that does not compile is not this finding
+    if check is _Check.NOT_MODELLED:
+        return None, _Site.NOT_MODELLED
     if verdict is None:
-        return None
-    return {'file': file_path, 'line': call.lineno, 'call': _call_text(call, name, pattern_node),
-            'shape': verdict.shape, 'witnesses': list(verdict.witnesses),
-            'suggestion': _SHAPE_FIX[verdict.shape]}
+        return None, _Site.CHECKED
+    finding: QuadraticFinding = {
+        'file': file_path, 'line': call.lineno, 'call': _call_text(call, name, pattern_node),
+        'shape': verdict.shape, 'witnesses': list(verdict.witnesses),
+        'suggestion': _SHAPE_FIX[verdict.shape]}
+    return finding, _Site.CHECKED
+
+
+def scan_quadratic_regex(file_path: str) -> tuple[list[QuadraticFinding], ScanCounts]:
+    """Return the quadratic findings in *file_path* and how many call sites were examined.
+
+    Raises OSError, SyntaxError or ValueError when the file cannot be read or parsed.
+    """
+    tree = _parse(file_path)
+    scan = _scan_context(tree)
+    findings: list[QuadraticFinding] = []
+    counts = ScanCounts(files=1)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        finding, site = _quadratic_check(file_path, node, scan)
+        counts.record(site)
+        if finding:
+            findings.append(finding)
+    findings.sort(key=lambda f: f['line'])
+    return findings, counts
 
 
 def find_quadratic_regex(file_path: str) -> list[QuadraticFinding]:
@@ -725,15 +943,7 @@ def find_quadratic_regex(file_path: str) -> list[QuadraticFinding]:
 
     Raises OSError, SyntaxError or ValueError when the file cannot be read or parsed.
     """
-    tree = _parse(file_path)
-    scan = _scan_context(tree)
-    findings: list[QuadraticFinding] = []
-    for node in ast.walk(tree):
-        finding = _quadratic_finding(file_path, node, scan) if isinstance(node, ast.Call) else None
-        if finding:
-            findings.append(finding)
-    findings.sort(key=lambda f: f['line'])
-    return findings
+    return scan_quadratic_regex(file_path)[0]
 
 
 # --- CLI ------------------------------------------------------------------------------------
@@ -748,10 +958,18 @@ def _utf8_output() -> None:
             reconfigure(encoding='utf-8', errors='backslashreplace')
 
 
-def _scan(paths: list[str]) -> tuple[list[UncompiledFinding], list[QuadraticFinding], int]:
-    """Scan *paths*; return (uncompiled, quadratic, number of paths that could not be scanned)."""
+@dataclass(frozen=True)
+class _ScanResult:
+    uncompiled: list[UncompiledFinding]
+    quadratic: list[QuadraticFinding]
+    counts: ScanCounts
+    failed: int  # paths that could not be scanned
+
+
+def _scan(paths: list[str]) -> _ScanResult:
     found: list[UncompiledFinding] = []
     quadratic: list[QuadraticFinding] = []
+    counts = ScanCounts()
     failed = 0
     for filepath in paths:
         if not os.path.exists(filepath):
@@ -759,12 +977,23 @@ def _scan(paths: list[str]) -> tuple[list[UncompiledFinding], list[QuadraticFind
             failed += 1
             continue
         try:
-            found.extend(find_uncompiled_regex(filepath))
-            quadratic.extend(find_quadratic_regex(filepath))
+            uncompiled = find_uncompiled_regex(filepath)
+            file_quadratic, file_counts = scan_quadratic_regex(filepath)
         except (OSError, SyntaxError, ValueError) as e:
             print(f"ERROR parsing {filepath}: {e}", file=sys.stderr)
             failed += 1
-    return found, quadratic, failed
+            continue
+        found.extend(uncompiled)
+        quadratic.extend(file_quadratic)
+        counts.merge(file_counts)
+    return _ScanResult(found, quadratic, counts, failed)
+
+
+def _print_counts(counts: ScanCounts) -> None:
+    files = f"{counts.files} file" + ("" if counts.files == 1 else "s")
+    print(f"Examined {counts.sites} regex call sites in {files}: {counts.checked} "
+          f"checked for quadratic starts, {counts.not_modelled} in a shape not modelled, "
+          f"{counts.unreadable} built at run time\n")
 
 
 _WITNESSES_SHOWN = 6
@@ -790,16 +1019,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('files', nargs='+', metavar='FILE', help="Python source files to scan")
     args = parser.parse_args(argv)
 
-    all_findings, quadratic, failed = _scan(cast(list[str], args.files))
+    result = _scan(cast(list[str], args.files))
 
+    _print_counts(result.counts)
     print("# Uncompiled Regex Analysis\n")
-    print(f"Found {len(all_findings)} uncompiled regex calls\n")
+    print(f"Found {len(result.uncompiled)} uncompiled regex calls\n")
 
-    for f in all_findings:
+    for f in result.uncompiled:
         print(f"{f['file']}:{f['line']} - {f['call']}")
         print(f"  Fix: {f['suggestion']}\n")
-    _print_quadratic(quadratic)
-    return 2 if failed else 0
+    _print_quadratic(result.quadratic)
+    if result.counts.sites == 0:
+        # "Found 0" over files holding no regex call reads like a clean result; it checked nothing.
+        print("ERROR examined 0 regex call sites: nothing was checked", file=sys.stderr)
+        return 2
+    return 2 if result.failed else 0
 
 
 if __name__ == '__main__':
