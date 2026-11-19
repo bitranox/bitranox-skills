@@ -107,7 +107,10 @@ _COPY_PROGRAMS = frozenset({"cp", "install"})
 #: The statement removes or moves away a file it names.
 _BASH_REMOVES = re.compile(r"\b(?:rm|mv|unlink)\b")
 #: A word in a command naming a checkpoint-like file, with any directory part in front of it.
-_BASH_PATH = re.compile(r"""[^\s'"`;|&<>()=,]*handover[^\s'"`;|&<>()=,/]*\.md(?![\w.-])""")
+#: Matched only from where the word starts (the leftmost match always did): a start anywhere inside
+#: a long word rescanned it from each character.
+_BASH_PATH = re.compile(
+    r"""(?<![^\s'"`;|&<>()=,])[^\s'"`;|&<>()=,]*handover[^\s'"`;|&<>()=,/]*\.md(?![\w.-])""")
 #: The harness attachments that name the session's plan file while plan mode is on or ending.
 _PLAN_ATTACHMENTS = frozenset({"plan_mode", "plan_mode_reentry", "plan_mode_exit"})
 #: A file with an improvised name counts only when one of its lines is exactly this heading.

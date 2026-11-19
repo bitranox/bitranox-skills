@@ -15,6 +15,7 @@ import time
 import pytest
 
 import block_write_after_sibling_cd as BW
+import compact_resume as CR
 import git_footgun_guard as GF
 import harness_checks as HC
 import jig_repetition_nudge as JR
@@ -63,6 +64,7 @@ _CASES = [
     ("toolbox-nudge pushcheck: assignment lines", lambda t: TN._PUSHCHECK_RX.search(t), "A=1\n"),
     ("toolbox-nudge pushcheck: env lines", lambda t: TN._PUSHCHECK_RX.search(t), "env\n-u\nX\n"),
     ("block-write separator: blanks", lambda t: BW._separator(t), " "),
+    ("compact-resume checkpoint path", lambda t: list(CR._BASH_PATH.finditer(t)), "0"),
     ("git-footgun upstream mark", lambda t: GF._UPSTREAM_MARK.search(t), "0"),
     ("harness_checks non-zero exit", lambda t: HC._NONZERO_EXIT_RX.search(t), "\n"),
     ("harness_checks script name", lambda t: list(HC._SCRIPT_NAME_RX.finditer(t)), "0"),
