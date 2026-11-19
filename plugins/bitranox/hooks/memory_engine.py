@@ -2963,30 +2963,53 @@ def _body_unlabelled(body):
     return "**Why:**" not in (body or "") or "**How to apply:**" not in (body or "")
 
 
-def lint_tree(anchor):
+class OverCapHook(NamedTuple):
+    """A hook longer than the HARD cap at one level, with its length in characters."""
+
+    level: str
+    slug: str
+    length: int
+
+
+@dataclass
+class LintReport:
+    """What `lint_tree` found under `anchor`; every list is empty on a clean store."""
+
+    anchor: str
+    over_cap: list[OverCapHook] = field(default_factory=list[OverCapHook])
+    no_trigger: list[LevelSlug] = field(default_factory=list[LevelSlug])
+    unlabelled: list[LevelSlug] = field(default_factory=list[LevelSlug])
+    invalid_pointers: list[LevelLine] = field(default_factory=list[LevelLine])
+
+    @property
+    def found(self) -> bool:
+        """True when any list holds something: the lint is a check, and this is its "no"."""
+        return bool(self.over_cap or self.no_trigger or self.unlabelled or self.invalid_pointers)
+
+
+def lint_tree(anchor: str | os.PathLike[str]) -> LintReport:
     """READ-ONLY voice/frame sweep over every curated level under `anchor` (defect J - the store had
     no sweep verb, so the debt was rediscovered every dream). Reports: hooks over the HARD cap
     (the write path refuses one, so any that exist are hand-edited or legacy), hooks missing a
     trigger phrase (never fire during
     reasoning), and bodies missing the `**Why:**`/`**How to apply:**` labels (style only, see
     `_body_unlabelled`). Advisory, never a failure. Also lists pointer lines whose slug is not a plain filename
-    (`invalid_pointers`): the parser skips them and the next write drops them. Returns a report dict."""
-    anchor = _anchor(str(anchor))
-    over_cap, no_trigger, unlabelled, invalid = [], [], [], []
-    for lvl in curated_levels_under(anchor):
+    (`invalid_pointers`): the parser skips them and the next write drops them. Returns a
+    LintReport."""
+    top = _anchor(str(anchor))
+    rep = LintReport(anchor=str(top))
+    for lvl in curated_levels_under(top):
         text = read_store_text(sig.claude_local_md_path(lvl))
-        invalid.extend((lvl, raw) for raw in us.invalid_pointer_lines(text))
+        rep.invalid_pointers.extend(LevelLine(lvl, raw) for raw in us.invalid_pointer_lines(text))
         _scope, entries, bodies = read_store(lvl)
         for e in entries:
             if len(e.hook or "") > us.HOOK_HARD_MAX:
-                over_cap.append((lvl, e.slug, len(e.hook)))
+                rep.over_cap.append(OverCapHook(lvl, e.slug, len(e.hook)))
             if us.hook_missing_trigger(e.hook):
-                no_trigger.append((lvl, e.slug))
+                rep.no_trigger.append(LevelSlug(lvl, e.slug))
             if _body_unlabelled(bodies.get(e.slug, "")):
-                unlabelled.append((lvl, e.slug))
-    return {"anchor": str(anchor), "over_cap": over_cap, "no_trigger": no_trigger,
-            "unlabelled": unlabelled,
-            "invalid_pointers": invalid}
+                rep.unlabelled.append(LevelSlug(lvl, e.slug))
+    return rep
 
 
 # ---- topics: which facts and levels a rule is about ------------------------------------------
@@ -4926,22 +4949,21 @@ def _main(argv=None):
 
     if args.cmd == "lint":
         rep = lint_tree(args.tree)
-        print("voice/frame lint: %s" % rep["anchor"])
-        for lvl, slug, n in rep["over_cap"]:
+        print("voice/frame lint: %s" % rep.anchor)
+        for lvl, slug, n in rep.over_cap:
             print("    ! hook over HARD cap (%d chars, hand-edited past the refusal): %s [%s]"
                   % (n, slug, lvl))
-        for lvl, slug in rep["no_trigger"]:
+        for lvl, slug in rep.no_trigger:
             print("    ~ hook missing trigger: %s [%s]" % (slug, lvl))
-        for lvl, slug in rep["unlabelled"]:
+        for lvl, slug in rep.unlabelled:
             print("    ~ body missing the **Why:**/**How to apply:** labels: %s [%s]" % (slug, lvl))
-        for lvl, raw in rep["invalid_pointers"]:
+        for lvl, raw in rep.invalid_pointers:
             print("    ! pointer whose slug is not a plain filename (skipped, dropped on the next "
                   "write): %s [%s]" % (raw, lvl))
         print("TOTAL over-cap hooks: %d | trigger-less hooks: %d | bodies without Why/How labels: %d"
-              " (style advisory)" % (len(rep["over_cap"]), len(rep["no_trigger"]),
-                                     len(rep["unlabelled"])))
-        found = rep["over_cap"] or rep["no_trigger"] or rep["unlabelled"] or rep["invalid_pointers"]
-        return 1 if found else 0
+              " (style advisory)" % (len(rep.over_cap), len(rep.no_trigger),
+                                     len(rep.unlabelled)))
+        return 1 if rep.found else 0
 
     if args.cmd == "move":
         # `--slug a --slug b` and `--slug a b` both land as a list of groups; flatten to the set

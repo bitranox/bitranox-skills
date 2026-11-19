@@ -427,7 +427,9 @@ def test_an_invalid_pointer_is_skipped_on_read_and_flagged(tmp_path):
     assert us.invalid_pointer_lines(text) == [bad]
     assert [e.slug for e in E.read_store(sub)[1]] == ["real"]
     assert [r.slug for r in us.resolve(sub)] == ["real"]
-    assert E.lint_tree(top)["invalid_pointers"] == [(sub, bad)]
+    lint = E.lint_tree(top)
+    assert lint.invalid_pointers == [(sub, bad)]
+    assert type(lint.invalid_pointers[0]) is E.LevelLine and lint.invalid_pointers[0].line == bad
     rep = E.heal(sub)
     assert (sub, bad) in rep.invalid_pointers
 
@@ -437,7 +439,7 @@ def test_control_valid_pointers_are_not_flagged(tmp_path):
     E.add_or_update_entry(sub, "Real", "When r, do r", body="REAL", slug="real-1.2")
     text = sig.claude_local_md_path(sub).read_text(encoding="utf-8")
     assert us.invalid_pointer_lines(text) == []
-    assert E.lint_tree(top)["invalid_pointers"] == []
+    assert E.lint_tree(top).invalid_pointers == []
 
 
 # ---- relocate: the target TREE must not already point at the slug from another level ------------
