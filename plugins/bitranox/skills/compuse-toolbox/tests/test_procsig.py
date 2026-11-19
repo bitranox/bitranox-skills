@@ -30,28 +30,36 @@ def _mkproc(root, pid, exe="/usr/local/bin/openvmm", comm=None, cmdline=None, pp
 
 
 # ---- the pure scanner ---------------------------------------------------------------------------
+def test_scan_returns_typed_match_records(tmp_path):
+    """A match is a frozen record with named fields, not a dict whose keys every reader re-spells."""
+    _mkproc(tmp_path, 100, exe="/usr/local/bin/openvmm", cmdline=["openvmm", "--vm", "x"])
+    assert P.scan(tmp_path, exe="openvmm") == [
+        P.ProcessMatch(pid=100, exe="/usr/local/bin/openvmm", comm="openvmm", cmdline="openvmm --vm x"),
+    ]
+
+
 def test_scan_by_exe_basename(tmp_path):
     _mkproc(tmp_path, 100, exe="/usr/local/bin/openvmm")
     _mkproc(tmp_path, 101, exe="/usr/bin/bash")
     hits = P.scan(tmp_path, exe="openvmm")
-    assert [h["pid"] for h in hits] == [100]
+    assert [h.pid for h in hits] == [100]
 
 
 def test_scan_by_exe_full_path(tmp_path):
     _mkproc(tmp_path, 100, exe="/usr/local/bin/openvmm")
-    assert [h["pid"] for h in P.scan(tmp_path, exe="/usr/local/bin/openvmm")] == [100]
+    assert [h.pid for h in P.scan(tmp_path, exe="/usr/local/bin/openvmm")] == [100]
 
 
 def test_scan_by_comm(tmp_path):
     _mkproc(tmp_path, 200, exe="/x/vmworker", comm="vmworker")
     _mkproc(tmp_path, 201, exe="/x/other", comm="other")
-    assert [h["pid"] for h in P.scan(tmp_path, comm="vmworker")] == [200]
+    assert [h.pid for h in P.scan(tmp_path, comm="vmworker")] == [200]
 
 
 def test_scan_by_cmdline_substring(tmp_path):
     _mkproc(tmp_path, 300, exe="/x/openvmm", cmdline=["openvmm", "--vm", "vm-79099-disk-0"])
     _mkproc(tmp_path, 301, exe="/x/openvmm", cmdline=["openvmm", "--vm", "vm-64000-disk-0"])
-    assert [h["pid"] for h in P.scan(tmp_path, cmdline="79099")] == [300]
+    assert [h.pid for h in P.scan(tmp_path, cmdline="79099")] == [300]
 
 
 # ---- the safety property: exclusion of self + ancestors -----------------------------------------
@@ -71,7 +79,7 @@ def test_resolve_targets_excludes_self_and_ancestors(tmp_path):
             cmdline=["openvmm-supervisor", "--watch", "openvmm"], ppid=1)
     _mkproc(tmp_path, 300, exe="/x/openvmm", cmdline=["openvmm"], ppid=1)
     procs = P.scan(tmp_path, cmdline="openvmm")            # matches BOTH
-    assert {p["pid"] for p in procs} == {20, 300}
+    assert {p.pid for p in procs} == {20, 300}
     targets = P.resolve_targets(procs, exclude={20, 1})    # self/ancestor set
     assert targets == [300]
 
@@ -85,7 +93,7 @@ def test_a_caller_shell_holding_the_needle_never_even_matches(tmp_path):
     """
     _mkproc(tmp_path, 20, exe="/bin/bash", cmdline=["bash", "-c", "pkill openvmm"], ppid=1)
     _mkproc(tmp_path, 300, exe="/x/openvmm", cmdline=["openvmm"], ppid=1)
-    assert [p["pid"] for p in P.scan(tmp_path, cmdline="openvmm")] == [300]
+    assert [p.pid for p in P.scan(tmp_path, cmdline="openvmm")] == [300]
 
 
 # ---- main() find + kill -------------------------------------------------------------------------
@@ -130,7 +138,7 @@ def test_scan_by_cmdline_skips_a_sibling_shell_carrying_the_needle(tmp_path):
     """
     _mkproc(tmp_path, 400, exe="/usr/bin/python3", cmdline=["python3", "watchdog.py"])
     _mkproc(tmp_path, 401, exe="/bin/bash", cmdline=["bash", "-c", "python3 watchdog.py & sleep 1"])
-    assert [h["pid"] for h in P.scan(tmp_path, cmdline="watchdog.py")] == [400]
+    assert [h.pid for h in P.scan(tmp_path, cmdline="watchdog.py")] == [400]
 
 
 def test_scan_by_cmdline_skips_a_shell_behind_a_forking_wrapper(tmp_path):
@@ -142,14 +150,14 @@ def test_scan_by_cmdline_skips_a_shell_behind_a_forking_wrapper(tmp_path):
     _mkproc(tmp_path, 500, exe="/usr/bin/python3", cmdline=["python3", "watchdog.py"])
     _mkproc(tmp_path, 501, exe="/usr/bin/timeout",
             cmdline=["timeout", "30", "ssh", "host", "python3 watchdog.py"])
-    assert [h["pid"] for h in P.scan(tmp_path, cmdline="watchdog.py")] == [500]
+    assert [h.pid for h in P.scan(tmp_path, cmdline="watchdog.py")] == [500]
 
 
 def test_scan_by_cmdline_still_matches_a_plain_argv(tmp_path):
     """The carve-out must not swallow the ordinary case it exists to protect."""
     _mkproc(tmp_path, 600, exe="/x/openvmm", cmdline=["openvmm", "--vm", "vm-79099-disk-0"])
     _mkproc(tmp_path, 601, exe="/x/openvmm", cmdline=["openvmm", "--vm", "vm-64000-disk-0"])
-    assert [h["pid"] for h in P.scan(tmp_path, cmdline="vm-79099")] == [600]
+    assert [h.pid for h in P.scan(tmp_path, cmdline="vm-79099")] == [600]
 
 
 # ---- a short-option CLUSTER ending in c hands over a command string too -------------------------
@@ -237,7 +245,7 @@ def test_a_proc_with_an_unreadable_exe_never_matches_by_exe(tmp_path):
     _no_exe_proc(tmp_path, 2)
     _mkproc(tmp_path, 300, exe="/x/worker", cmdline=["worker"])
     assert P.scan(tmp_path, exe="") == []
-    assert [h["pid"] for h in P.scan(tmp_path, exe="worker")] == [300]
+    assert [h.pid for h in P.scan(tmp_path, exe="worker")] == [300]
 
 
 # ---- names the kernel reports differently from the name you know -------------------------------
@@ -246,8 +254,8 @@ def test_a_replaced_binary_still_matches_by_exe(tmp_path):
     """After a package upgrade the old daemon's exe link reads `<path> (deleted)` - and the old
     daemons are exactly the processes one goes looking for."""
     _mkproc(tmp_path, 300, exe="/usr/sbin/worker (deleted)", comm="worker", cmdline=["worker"])
-    assert [h["pid"] for h in P.scan(tmp_path, exe="worker")] == [300]
-    assert [h["pid"] for h in P.scan(tmp_path, exe="/usr/sbin/worker")] == [300]
+    assert [h.pid for h in P.scan(tmp_path, exe="worker")] == [300]
+    assert [h.pid for h in P.scan(tmp_path, exe="/usr/sbin/worker")] == [300]
     assert P.scan(tmp_path, exe="worker (deleted)") == []
 
 
@@ -255,8 +263,8 @@ def test_a_long_name_matches_by_comm_despite_kernel_truncation(tmp_path):
     """The kernel keeps 15 bytes of comm, so `backup-scheduler` is `backup-schedule` there."""
     _mkproc(tmp_path, 300, exe="/opt/backup-scheduler", comm="backup-schedule",
             cmdline=["./backup-scheduler"])
-    assert [h["pid"] for h in P.scan(tmp_path, comm="backup-scheduler")] == [300]
-    assert [h["pid"] for h in P.scan(tmp_path, comm="backup-schedule")] == [300]
+    assert [h.pid for h in P.scan(tmp_path, comm="backup-scheduler")] == [300]
+    assert [h.pid for h in P.scan(tmp_path, comm="backup-schedule")] == [300]
 
 
 def test_a_truncated_comm_alone_does_not_match_a_different_long_name(tmp_path):
@@ -429,13 +437,29 @@ def test_scan_peer_names_the_holder_and_its_claude_session(tmp_path):
     _socket_fd(tmp_path, 70, 3, 4242)
     _net(tmp_path, rows4=[_tcp_row(("192.0.2.10", 40000), ("192.0.2.52", 9100), 4242)])
     found = P.scan_peer(tmp_path, {"192.0.2.52"}, 9100)
-    assert [h["pid"] for h in found.holders] == [70]
+    assert [h.pid for h in found.holders] == [70]
     holder = found.holders[0]
-    assert holder["remote"] == "192.0.2.52:9100"
-    assert holder["state"] == "ESTABLISHED"
-    assert holder["claude_pid"] == 50
-    assert holder["claude_cwd"] == "/opt/work/repo"
+    assert holder.remote == "192.0.2.52:9100"
+    assert holder.state == "ESTABLISHED"
+    assert holder.claude_pid == 50
+    assert holder.claude_cwd == "/opt/work/repo"
     assert found.unowned == 0
+
+
+def test_scan_peer_returns_typed_holder_records(tmp_path):
+    """A holder is a frozen record with named fields, so a misspelt field is an error where it is
+    written, not a KeyError (or a silent .get default) wherever the dict is read."""
+    _mkproc(tmp_path, 70, exe="/usr/bin/python3", cmdline=["python3", "print.py"])
+    _socket_fd(tmp_path, 70, 3, 4242)
+    _net(tmp_path, rows4=[_tcp_row(("192.0.2.10", 40000), ("192.0.2.52", 9100), 4242)])
+    holder = P.scan_peer(tmp_path, {"192.0.2.52"}, 9100).holders[0]
+    assert holder == P.PeerHolder(
+        pid=70, exe="/usr/bin/python3", comm="python3", cmdline="python3 print.py",
+        local="192.0.2.10:40000", remote="192.0.2.52:9100", state="ESTABLISHED",
+        claude_pid=None, claude_cwd="",
+    )
+    with pytest.raises(AttributeError):
+        holder.pid = 1  # type: ignore[misc] - proving the record is frozen
 
 
 def test_scan_peer_filters_on_host_and_port(tmp_path):
@@ -450,8 +474,8 @@ def test_scan_peer_filters_on_host_and_port(tmp_path):
         _tcp_row(("192.0.2.10", 40001), ("192.0.2.52", 515), 1002),
         _tcp_row(("192.0.2.10", 40002), ("192.0.2.99", 9100), 1003),
     ])
-    assert [h["pid"] for h in P.scan_peer(tmp_path, {"192.0.2.52"}, 9100).holders] == [70]
-    assert [h["pid"] for h in P.scan_peer(tmp_path, {"192.0.2.52"}, None).holders] == [70, 71]
+    assert [h.pid for h in P.scan_peer(tmp_path, {"192.0.2.52"}, 9100).holders] == [70]
+    assert [h.pid for h in P.scan_peer(tmp_path, {"192.0.2.52"}, None).holders] == [70, 71]
 
 
 def test_scan_peer_reads_tcp6_and_ipv4_mapped_rows(tmp_path):
@@ -463,8 +487,8 @@ def test_scan_peer_reads_tcp6_and_ipv4_mapped_rows(tmp_path):
         _tcp_row(("2001:db8::1", 50000), ("2001:db8::7", 22), 2001, v6=True),
         _tcp_row(("::ffff:192.0.2.10", 50001), ("::ffff:192.0.2.52", 9100), 2002, v6=True),
     ])
-    assert [h["pid"] for h in P.scan_peer(tmp_path, {"2001:db8::7"}, 22).holders] == [80]
-    assert [h["pid"] for h in P.scan_peer(tmp_path, {"192.0.2.52"}, 9100).holders] == [81]
+    assert [h.pid for h in P.scan_peer(tmp_path, {"2001:db8::7"}, 22).holders] == [80]
+    assert [h.pid for h in P.scan_peer(tmp_path, {"192.0.2.52"}, 9100).holders] == [81]
 
 
 def test_scan_peer_ignores_a_listening_socket_and_a_socket_with_no_inode(tmp_path):
@@ -548,7 +572,7 @@ def test_scan_peer_finds_this_process_on_a_real_loopback_connection():
     accepted, _ = server.accept()
     try:
         found = P.scan_peer(Path("/proc"), {"127.0.0.1"}, port)
-        assert os.getpid() in [h["pid"] for h in found.holders]
+        assert os.getpid() in [h.pid for h in found.holders]
     finally:
         for s in (accepted, client, server):
             s.close()
@@ -586,8 +610,8 @@ def test_scan_by_exe_opens_no_comm_or_cmdline_file_of_a_process_it_does_not_repo
         _mkproc(tmp_path, pid, exe="/usr/bin/bash")
     _mkproc(tmp_path, 200, exe="/usr/local/bin/openvmm", cmdline=["openvmm", "--vm", "a"])
     hits, opened = _files_opened_by(tmp_path, exe="openvmm")
-    assert hits == [{"pid": 200, "exe": "/usr/local/bin/openvmm", "comm": "openvmm",
-                     "cmdline": "openvmm --vm a"}]
+    assert hits == [P.ProcessMatch(pid=200, exe="/usr/local/bin/openvmm", comm="openvmm",
+                                   cmdline="openvmm --vm a")]
     assert opened == ["cmdline", "comm"]
 
 
@@ -596,7 +620,7 @@ def test_scan_by_a_short_comm_reads_only_comm_for_a_process_it_does_not_report(t
         _mkproc(tmp_path, pid, exe="/usr/bin/bash")
     _mkproc(tmp_path, 200, exe="/x/vmworker", comm="vmworker")
     hits, opened = _files_opened_by(tmp_path, comm="vmworker")
-    assert [h["pid"] for h in hits] == [200]
+    assert [h.pid for h in hits] == [200]
     assert opened == ["cmdline"] + ["comm"] * 11
 
 
@@ -605,4 +629,4 @@ def test_scan_by_a_truncated_comm_still_confirms_it_against_argv(tmp_path):
             cmdline=["backup-scheduler"])
     _mkproc(tmp_path, 301, exe="/x/backup-scheduler-v2", comm="backup-schedule",
             cmdline=["backup-scheduler-v2"])
-    assert [h["pid"] for h in P.scan(tmp_path, comm="backup-scheduler")] == [300]
+    assert [h.pid for h in P.scan(tmp_path, comm="backup-scheduler")] == [300]

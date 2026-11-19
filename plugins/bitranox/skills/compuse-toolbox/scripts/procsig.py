@@ -116,6 +116,7 @@ import re
 import signal
 import socket
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple
 
@@ -525,7 +526,17 @@ def _comm_matches(p_comm: str, needle: str, p_exe: str, parts: list[str]) -> boo
     return p_comm == truncated and needle in full_names
 
 
-def scan(proc_root, *, exe=None, comm=None, cmdline=None) -> list[dict]:
+@dataclass(frozen=True)
+class ProcessMatch:
+    """One process a filter matched: its pid, exe path, comm name and space-joined argv."""
+
+    pid: int
+    exe: str
+    comm: str
+    cmdline: str
+
+
+def scan(proc_root, *, exe=None, comm=None, cmdline=None) -> list[ProcessMatch]:
     """Processes under `proc_root` matching the one given filter. PURE over proc_root - unit-testable.
 
     exe matches the exe path OR its basename; comm matches exactly (or confirmed-truncated, see
@@ -535,7 +546,7 @@ def scan(proc_root, *, exe=None, comm=None, cmdline=None) -> list[dict]:
     """
     if _is_blank(exe) or _is_blank(comm) or _is_blank(cmdline):
         return []
-    hits = []
+    hits: list[ProcessMatch] = []
     for pdir in sorted(Path(proc_root).glob("[0-9]*"), key=lambda p: int(p.name)):
         proc = _ProcFiles(pdir)
         if exe is not None:
@@ -546,8 +557,8 @@ def scan(proc_root, *, exe=None, comm=None, cmdline=None) -> list[dict]:
             searchable = _cmdline_search_text(proc.parts, proc.exe, proc.comm)
             ok = bool(cmdline) and searchable is not None and cmdline in searchable
         if ok:
-            hits.append({"pid": int(pdir.name), "exe": proc.exe, "comm": proc.comm,
-                         "cmdline": " ".join(proc.parts).strip()})
+            hits.append(ProcessMatch(pid=int(pdir.name), exe=proc.exe, comm=proc.comm,
+                                     cmdline=" ".join(proc.parts).strip()))
     return hits
 
 
@@ -637,7 +648,7 @@ def resolve_peer(host: str) -> set[str]:
         return {str(ipaddress.ip_address(host))}
     except ValueError:
         infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
-    return {str(ipaddress.ip_address(info[4][0].partition("%")[0])) for info in infos}
+    return {str(ipaddress.ip_address(str(info[4][0]).partition("%")[0])) for info in infos}
 
 
 def _decode_address(hex_addr: str) -> str:
@@ -733,17 +744,39 @@ def _claude_ancestor(pid: int, proc_root: Path) -> tuple[int | None, str]:
     return None, ""
 
 
+@dataclass(frozen=True)
+class PeerHolder:
+    """One (process, connection) pair holding a TCP connection to the peer.
+
+    Attributes:
+        pid, exe, comm, cmdline: the holding process, as in ProcessMatch.
+        local, remote: the connection's endpoints as ADDRESS:PORT ([V6]:PORT for IPv6).
+        state: the TCP state name (ESTABLISHED, SYN_SENT, ...).
+        claude_pid: the nearest ancestor `claude` process, None when there is none.
+        claude_cwd: that process's working directory, "" when unknown or there is none.
+    """
+
+    pid: int
+    exe: str
+    comm: str
+    cmdline: str
+    local: str
+    remote: str
+    state: str
+    claude_pid: int | None
+    claude_cwd: str
+
+
 class PeerScan(NamedTuple):
     """Holders of TCP connections to a peer, and how many matching connections had no readable owner.
 
     Attributes:
-        holders: One dict per (process, connection): pid, exe, cmdline, local, remote, state,
-            claude_pid (None when no `claude` process is an ancestor) and claude_cwd.
+        holders: One PeerHolder per (process, connection), sorted by pid then remote.
         unowned: Matching connections whose socket appears in no readable /proc/<pid>/fd, which
             is another user's process when not running as root. Not the same as no holder.
     """
 
-    holders: list[dict]
+    holders: list[PeerHolder]
     unowned: int
 
 
@@ -760,7 +793,7 @@ def scan_peer(proc_root, addresses: set[str], port: int | None) -> PeerScan:
     rows = [r for r in _tcp_rows(root)
             if r.remote_ip in addresses and (port is None or r.remote_port == port)]
     owners = _socket_owners(root, {r.inode for r in rows})
-    holders = []
+    holders: list[PeerHolder] = []
     for row in rows:
         pid = owners.get(row.inode)
         if pid is None:
@@ -768,12 +801,12 @@ def scan_peer(proc_root, addresses: set[str], port: int | None) -> PeerScan:
         pdir = root / str(pid)
         claude_pid, claude_cwd = _claude_ancestor(pid, root)
         remote = (f"[{row.remote_ip}]" if ":" in row.remote_ip else row.remote_ip) + f":{row.remote_port}"
-        holders.append({
-            "pid": pid, "exe": _read_exe(pdir), "comm": _read_comm(pdir),
-            "cmdline": " ".join(_read_cmdline_parts(pdir)).strip(), "local": row.local,
-            "remote": remote, "state": row.state, "claude_pid": claude_pid, "claude_cwd": claude_cwd,
-        })
-    holders.sort(key=lambda h: (h["pid"], h["remote"]))
+        holders.append(PeerHolder(
+            pid=pid, exe=_read_exe(pdir), comm=_read_comm(pdir),
+            cmdline=" ".join(_read_cmdline_parts(pdir)).strip(), local=row.local,
+            remote=remote, state=row.state, claude_pid=claude_pid, claude_cwd=claude_cwd,
+        ))
+    holders.sort(key=lambda h: (h.pid, h.remote))
     return PeerScan(holders=holders, unowned=sum(1 for r in rows if r.inode not in owners))
 
 
@@ -791,9 +824,9 @@ def _main_peer(peer: str) -> int:
         print(f"procsig: cannot list TCP connections: {exc}", file=sys.stderr)
         return 2
     for h in found.holders:
-        session = f"claude={h['claude_pid']} cwd={h['claude_cwd'] or '?'}" if h["claude_pid"] else "claude=-"
-        print(f"{h['pid']:>8}  {h['state']:<11}  {h['local']} -> {h['remote']}  {session}  "
-              f"{(h['exe'] or h['comm'] or '?')[:30]}  {h['cmdline'][:60]}")
+        session = f"claude={h.claude_pid} cwd={h.claude_cwd or '?'}" if h.claude_pid else "claude=-"
+        print(f"{h.pid:>8}  {h.state:<11}  {h.local} -> {h.remote}  {session}  "
+              f"{(h.exe or h.comm or '?')[:30]}  {h.cmdline[:60]}")
     if found.unowned:
         print(f"procsig: {found.unowned} connection(s) to {peer} belong to a process whose fd table is "
               "not readable (another user's; run as root to see it)", file=sys.stderr)
@@ -815,9 +848,9 @@ def ancestors(pid: int, proc_root) -> set[int]:
     return seen
 
 
-def resolve_targets(procs: list[dict], exclude: set[int]) -> list[int]:
+def resolve_targets(procs: list[ProcessMatch], exclude: set[int]) -> list[int]:
     """PIDs of `procs` that are not in `exclude` (self/ancestors). PURE - the safety gate."""
-    return [p["pid"] for p in procs if p["pid"] not in exclude]
+    return [p.pid for p in procs if p.pid not in exclude]
 
 
 def _self_and_ancestors() -> set[int]:
@@ -889,8 +922,8 @@ def main(argv=None) -> int:
     targets = resolve_targets(procs, excluded)
 
     for p in procs:
-        tag = "  [self/ancestor - skipped]" if p["pid"] in excluded else ""
-        print(f"{p['pid']:>8}  {p['exe'] or p['comm'] or '?':40.40}  {p['cmdline'][:60]}{tag}")
+        tag = "  [self/ancestor - skipped]" if p.pid in excluded else ""
+        print(f"{p.pid:>8}  {p.exe or p.comm or '?':40.40}  {p.cmdline[:60]}{tag}")
 
     # Self and ancestors never count: procsig's own argv carries a --cmdline needle, so counting
     # them made `procsig --cmdline X && echo running` true for a process that does not exist.
