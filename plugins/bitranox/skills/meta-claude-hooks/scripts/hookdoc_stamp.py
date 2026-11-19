@@ -93,7 +93,7 @@ ENV_RX = re.compile(r"\bCLAUDE_[A-Z0-9_]+\b")
 TICK_RX = re.compile(r"`([^`\n]{1,60})`")
 ROW_RX = re.compile(r"^\|\s*([^|]+?)\s*\|")
 VERSION_RX = re.compile(r"\bv(2\.\d+\.\d+)\b")
-CLI_VERSION_RX = re.compile(r"(\d+\.\d+\.\d+)")
+CLI_VERSION_RX = re.compile(r"(?<!\d)(\d+\.\d+\.\d+)")
 # JSON-Schema primitives share the "type" key with hook handler types. Counting them would let an
 # unrelated schema example flip the structural digest, which is the cry-wolf failure this design
 # exists to avoid. A genuinely new handler type is never one of these words.

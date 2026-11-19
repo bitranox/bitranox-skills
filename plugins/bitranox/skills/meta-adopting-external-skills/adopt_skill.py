@@ -41,7 +41,7 @@ REJECTED = {"GPL", "LGPL", "AGPL", "MPL"}
 # Foreign marketplace namespaces an adopted skill may reference; rewritten to bitranox.
 FOREIGN_NAMESPACES = ("superpowers", "obra", "vercel")
 
-_COPYRIGHT_RX = re.compile(r"(?im)^\s*(copyright\s+(?:\(c\)|\xa9|©)?.*?\b\d{4}.*)$")
+_COPYRIGHT_RX = re.compile(r"(?im)^[^\S\n]*(copyright\s+(?:\(c\)|\xa9|©)?.*?\b\d{4}.*)$")
 # The whole expression, not its first id: "MIT OR GPL-3.0-only" read as "MIT" accepted a GPL
 # file, and "(MIT OR GPL-2.0-only)" matched nothing at all. A comment closer (`*/`, `-->`) ends it.
 _SPDX_RX = re.compile(r"SPDX-License-Identifier:[ \t]*([A-Za-z0-9.\-+() \t]+)")
@@ -93,7 +93,7 @@ def _classify_single_id(sid):
     return None
 
 
-_EXPR_SPLIT_RX = re.compile(r"\s+(?:AND|OR|WITH)\s+|[()]", re.IGNORECASE)
+_EXPR_SPLIT_RX = re.compile(r"(?<!\s)\s+(?:AND|OR|WITH)\s+|[()]", re.IGNORECASE)
 
 
 def classify_license_id(spdx):

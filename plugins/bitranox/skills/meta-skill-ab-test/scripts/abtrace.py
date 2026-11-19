@@ -55,7 +55,10 @@ _WRITE_FIELDS = {"Write": ("content",), "Edit": ("new_string",), "NotebookEdit":
 # (a digit before >) and ">&2" (a descriptor after it) are not writes of the marker.
 _SHELL_WRITE = re.compile(r">>|\btee\b|(?<![0-9&>])>(?![&>])")
 # In a shell command the marker line runs on into its quote and redirect; that tail is not the line.
-_SHELL_TAIL = re.compile(r"""\s*(?:\\n)?["']?\s*(?:>>?|\|).*$""")
+# Started only where a blank run starts, and the second blank run only after a quote or a
+# literal `\n`: two adjacent blank runs split a long run every possible way from every start,
+# which was cubic in its length. Same cut point as before.
+_SHELL_TAIL = re.compile(r"""(?<!\s)\s*(?:(?:\\n)?["']\s*|\\n\s*)?(?:>>?|\|).*$""")
 
 SUITE_PASSED = "passed"
 SUITE_NO_COMPILE = "does_not_compile"

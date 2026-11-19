@@ -173,7 +173,7 @@ def read_claude_md(path: Path, *, warn: Callable[[str], None]) -> str | None:
 _FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 # A closing sequence is a run of # preceded by whitespace (or standing alone): "## Using C#"
 # keeps its #, "## Closed ##" loses the trailing run.
-_CLOSING_RE = re.compile(r"(?:^|[ \t]+)#+[ \t]*$")
+_CLOSING_RE = re.compile(r"(?:^|(?<![ \t])[ \t]+)#+[ \t]*$")
 
 
 def _fence_opener(line: str) -> str | None:

@@ -77,7 +77,7 @@ from urllib.parse import urlparse
 _DTD_RE = re.compile(r"<!DOCTYPE|<!ENTITY", re.I)
 _DIGITS_RE = re.compile(r"[0-9]+")
 _NON_HEX_RE = re.compile(r"[^0-9a-fA-F]")
-_NAMESERVER_RE = re.compile(r"^\s*nameserver\s+(\S+)", re.M)
+_NAMESERVER_RE = re.compile(r"^[^\S\n]*nameserver\s+(\S+)", re.M)
 _TRACK_RE = re.compile(r"\btrack\s+([^,\s]+)")
 _TRACK_IP_RE = re.compile(r"\bip\s+(\[[^\]]*\]|[^,\s]+)")
 
