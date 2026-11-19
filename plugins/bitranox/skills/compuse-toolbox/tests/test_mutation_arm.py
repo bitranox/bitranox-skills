@@ -1320,8 +1320,12 @@ def _gone(pid: int) -> bool:
         os.kill(pid, 0)
     except ProcessLookupError:
         return True
-    status = Path(f"/proc/{pid}/status")
-    return status.is_file() and "State:\tZ" in status.read_text(encoding="utf-8")
+    # A zombie can be reaped between the kill probe and this read: its /proc entry then vanishes
+    # (FileNotFoundError) or answers ESRCH mid-read (ProcessLookupError). Both mean it is gone.
+    try:
+        return "State:\tZ" in Path(f"/proc/{pid}/status").read_text(encoding="utf-8")
+    except (FileNotFoundError, ProcessLookupError):
+        return True
 
 
 # The arm starts a grandchild that inherits its stdout and outlives it, then waits on it.

@@ -41,6 +41,9 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 - `block-write-after-sibling-cd.py`: the refusal's remedy shows `gate.py --gate "<cmd>"
   --gate-cwd /abs/repo` in its working order; gate.py refuses a `--gate-cwd` written before its
   `--gate`, so the old remedy led into a second refusal.
+- compuse-toolbox tests: `_gone` in `test_mutation_arm.py` treats a process reaped between its
+  kill probe and its `/proc/<pid>/status` read as gone. The read raised `FileNotFoundError` or
+  `ProcessLookupError`, so the signal-restore test failed intermittently (2 of 3 runs alone).
 
 ### Changed
 
