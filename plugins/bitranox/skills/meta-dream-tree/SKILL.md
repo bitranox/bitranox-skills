@@ -218,6 +218,9 @@ the success line, abort-and-show on a miss).
        store_manifest.py backup --from <anchor> --scope tree \
          --out ~/.claude/self-improve-audit/backups/<key>-<ts>
 
+   `<key>` is `tree-<name of the anchor dir>` and `<ts>` the `YYYYMMDD-HHMM` of the dream id named
+   in step 0c (so `tree-notes-20261119-1430` for an anchor dir named `notes`). A backup into a dir
+   that already holds one replaces it with exit 0, so only a new name keeps the earlier backup.
    It copies the anchor's `.claude-memory/` AND each in-scope `CLAUDE.local.md`, and records the
    ORDER-INDEPENDENT manifest of (level, slug, title, pin, hook digest, body digest) tuples that
    step 8 re-derives. Do not
