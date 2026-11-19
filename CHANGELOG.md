@@ -30,6 +30,82 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.13.0]
+
+### Added
+
+- compuse-git: a section on checking whether a file you are about to write is ignored: ask
+  `git check-ignore` about the file as well as its folder, in one `--stdin -z -v -n` call with
+  `core.quotePath=false`, and read each record's pattern and source fields. A negation match exits
+  0 under `-v`, and a per-user excludesFile protects only its owner.
+- process-test-design: a hand-written fake of a CLI refuses every input the real tool refuses, with
+  the same usage error and exit code; for a tool you own, the fake calls the tool's validator, or
+  one test runs the real tool.
+- process-test-design (silent-test-defeaters): a fake waiter, poller or child process honours the
+  real stop condition, counted in its own polls, so a mutant that removes the code's stop fails
+  instead of hanging.
+- coding-python-performance-review: `find_uncompiled_regex.py` reports patterns whose search
+  rescans one run from every start (a class run before a required suffix; a newline start followed
+  by blanks) in a new `# Quadratic Regex Starts` section, with the shape, the runs that fail from
+  every start, and the fix.
+- `mutation_arm.py` keeps an on-disk restore journal (`MUTATION_ARM_STATE_DIR`, default the
+  per-user state dir): the next start restores a file a SIGKILLed run left mutated, and refuses a
+  file edited after such a kill or one another live run is mutating.
+- redcheck: `iter_corpus` and `iter_cascade_corpus` yield corpus documents lazily.
+
+### Changed
+
+- coding-python-performance-review: Step 4b says how to read the new section, to time a hit at N
+  and 8N before filing it, and what is still left to hand review.
+- process-test-design (silent-test-defeaters): the "Pin the environment" entry points its `delenv`
+  mentions at the setenv-then-delenv rule.
+- stamp-clock-nudge: for a checkpoint the nudge says to read `date` and fix the stamp with the Edit
+  tool, not a shell edit. context-watcher: the save request says to read `date` before stamping,
+  and in plan mode that the checkpoint goes into the plan file as a `## Checkpoint` section.
+- `dream_state.py session-reviewed` names the mark it moved from ("advanced from X to Y"), so
+  `--to X` undoes a wrong mark exactly.
+- `/memory-settings` takes the `tmp_prune` choices from the tmp-prune hook's own mode type instead
+  of a second copy of the list.
+- Typed records replace dicts, with every reader converted and every JSON or file output kept
+  byte-identical: open_work `Item` (`Origin`, `ItemState`), ci_watch_state `Entry`, classifier
+  `ask_in_hook` returning `Asked` with typed `Result`s, skill_decisions `Entry`, git_state
+  `RepoState`/`BranchStatus`/`OwnUpstream`, procsig `ProcessMatch`/`PeerHolder`.
+- repo-gate: a comment records why checked-out bytes are read one git process per file (the
+  cat-file batch header carries the unfiltered size).
+- Test fixtures, docstrings and dated records use neutral project names.
+
+### Fixed
+
+- compact-resume: a checkpoint the session wrote stays attributed through its own later Bash edits
+  of the same file (a sed re-stamp after the clock nudge); a peer's change still breaks
+  attribution. Since 11.8.0 such a checkpoint was listed as unattributed instead of handed back.
+- compact-resume: `handover-<topic>.md` carrying the "## Lessons for the next nap" heading is
+  handed back as a checkpoint; a checkpoint the session retired itself before the compaction
+  (`# STALE` first line, or removed) is reported as retired, not as "no checkpoint was saved"; a
+  plan file written after the save request is named as where the checkpoint went.
+- `versionrot.py scan --pypi` asks PyPI only about a package a repo under `--repos` has or depends
+  on, or one the fact writes as a requirement (`foo==1.2.0`); a bare word next to a version
+  ("SDK 0.2.144") is no longer reported as a superseded package.
+- `dream_state.py session-reviewed` with no `--transcript` refuses (exit 2) when this session ran
+  no session-review for that cwd or the reviewed transcript is gone, instead of marking the newest
+  transcript in the project dir, which could be another session's.
+- `mutation_arm.py` restores the mutated sources when it is itself stopped by SIGTERM, SIGHUP,
+  SIGINT or SIGBREAK (a caller's timeout), stops the arm's test process and exits 128 + the signal.
+- redcheck no longer holds the whole corpus in memory: peak memory stays nearly flat as the corpus
+  grows (it rose about 8x for 8x the documents before); output unchanged.
+- `topics-show --json` in a tree with no topic list prints `{"tagger": null, "topics": {}}`
+  instead of plain text (exit 1 as before).
+- An update whose frame names a `metadata:` sub-key with no value removes it (`skill:`); a bare
+  `type:` keeps the stored kind.
+- The slug-collision suggestion no longer names a slug that a line with a missing body owns.
+- SessionStart names the memory levels the self-heal could not read, not only the ones it refused.
+- A TOPICS line added to a CRLF or CR-only descriptor goes after `STACK:` with the descriptor's own
+  line ending.
+- meta-dream-nap step 2 writes its store backup to `~/.claude/self-improve-audit/backups/`, as the
+  tree dream does, instead of the session scratchpad, which a reboot empties.
+- `heal --backfill-titles` names each legacy `uuid:` pointer it skips, so a tree holding
+  unmigrated facts no longer reads as fully back-filled.
+
 ## [11.12.0]
 
 ### Added
@@ -7318,7 +7394,7 @@ as a clean "no".
   plugin's own.** It used to glob `plugins/bitranox/skills/*/SKILL.md`, so a skill from another
   plugin, a project skill or a Claude Code built-in could never be proposed however well it fit:
   4 of the 6 skills no replay arm ever proposed across both adjudicated runs were of that kind
-  (`typesafe-ai`, `soundtouch-decloud`, `provmm-build`, `update-config`). The new
+  (`typesafe-ai`, `soundtouch-decloud`, `private-build`, `update-config`). The new
   `hooks/skill_roster.py` reads the session's `skill_listing` attachment from the transcript (the
   latest full listing plus the deltas a plugin reload adds after it). On a session's first prompt
   that attachment is usually not written yet - in 50 of 51 sessions it landed after the first typed
@@ -7335,10 +7411,10 @@ as a clean "no".
   shipping gate of 0.5, of the 11 prompts that need a skill, the installed roster scores 8 right,
   1 defensible, 1 wrong and 1 missed against 5, 3, 1 and 2 for the shipped roster, and it names a
   skill on 4 of the 39 prompts that need none against 5. It leads at 0.3 and 0.7 too. Two of the
-  three extra right picks are skills that were never on offer before (`provmm-build`,
-  `provmm-pr`). The two picks no earlier panel had seen were judged by five blind judges over the
+  three extra right picks are skills that were never on offer before (`private-build`,
+  `private-pr`). The two picks no earlier panel had seen were judged by five blind judges over the
   pooled candidates, unanimously; that panel also downgraded `compuse-toolbox` from right to
-  defensible on the prompt where `provmm-pr` now wins, and both rosters are scored with its
+  defensible on the prompt where `private-pr` now wins, and both rosters are scored with its
   verdicts. The one wrong pick is new: offered `update-config` for a Claude Code model-catalog
   error, the router chose `claude-api` (0.68 against 0.19), whose description names `[1m]` as a
   trigger. Eleven prompts in one run is a shape, not a proportion.
@@ -8308,7 +8384,7 @@ as a clean "no".
   moved it one layer out: a pipe masks with its last element's status, the runner masked with its
   own. That is what a caller actually sees, because a background task's completion notification
   carries the RUNNER's code, not the gate's. It costs most on a gate whose codes are a taxonomy
-  rather than pass/fail - the provmm Leg 3 perf gate uses 0 clean, 2 a metric regressed, 1 no
+  rather than pass/fail - the private Leg 3 perf gate uses 0 clean, 2 a metric regressed, 1 no
   metrics measured - where a reported 1 reads as "the measurement crashed" instead of "it returned
   a verdict". Measured 2026-09-04: four tool calls went into hunting a defect in the gate's exit
   plumbing that did not exist, and it briefly produced a confident wrong claim that a shipped tool
@@ -13145,7 +13221,7 @@ already complied on the skill text alone; these two fixes are what the weak tier
 
 - **`block-git-semicolon-chain`: a repeated verb in two different trees is parallel work.**
   Measuring the 47 real `commit`-then-`commit` blocks found 24 of them were one command committing
-  to a super-repo's separate sub-repos (`git -C provmm_planning commit ... ; git -C provmm_proxmox
+  to a super-repo's separate sub-repos (`git -C private_planning commit ... ; git -C private_proxmox
   commit ...`). Those are two pieces of work; `&&` between them is wrong advice, because the second
   is wanted even when the first fails. A `cd` or a differing `git -C` between two occurrences of
   the SAME verb now exempts the pair. Blocks fall from 625 to 610, and `commit`-then-`commit` from

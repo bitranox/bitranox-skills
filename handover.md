@@ -1,43 +1,67 @@
-# Checkpoint 2026-11-15: releasing 11.6.0 (backlog [175] and [165])
+# STALE - read 2026-11-19, work continued
 
 ## In flight
 
-- Worktree `.claude/worktrees/fix-175-165`, branch `fix/backlog-175-165`, based on origin/master
-  1cd91ed6. Committed: d84aa121 (bump 11.5.2 -> 11.6.0 with the full CHANGELOG), seven cherry-picked
-  fixer commits (8554c39a topics; 07c3f870 + 75fa97fc memory_engine; 59c41112 store_manifest;
-  76e46483 topic_placement; 9c5d7efd private-name scrub; 87574bbf session-start self-heal line),
-  3a617431 meta-dream-tree lock-holder list (skill-writer RED/GREEN done, checklist committed).
-- UNCOMMITTED in the worktree: `OPEN-WORK.md` ([175] and [165] closed, new [190] leftovers line,
-  [130] private repo names neutralised) and this `handover.md`.
-- The three fixer worktrees (`agent-ad81116b13ed4ef83`, `agent-a0f96d14b2f0c7589`,
-  `agent-ade79ed26abc7a923`) are done and reported; their work is cherry-picked. Remove them and
-  their `worktree-agent-*` branches after the push.
+- Items the user handed over at 03:21: [25], [100], [120], [150], [180], [190], [195], [200], [210].
+- Integration worktree `.claude/worktrees/sweep-1119`, branch `fix/sweep-1119` from origin/master
+  d8e71019 (11.12.0). Holds 20 cherry-picked fixer commits (all wave-1 work; DROP-AT-INTEGRATION
+  bump commits were NOT picked). UNCOMMITTED here: bump to 11.13.0 (plugin.json, pyproject.toml,
+  CHANGELOG with the wave-1 notes) plus a scrub of the bare token for the private project family
+  (replaced by "private") in 19 live files; and this handover.
+- Wave 2, running as named background agents in prepared worktrees branched from the integration
+  branch (each makes its own DROP-AT-INTEGRATION commit first; reports by SendMessage to main):
+  - `w2-g1` in `.claude/worktrees/w2-g1` (branch wave2/g1-engine): [195] G1, memory_engine
+    move/relocate/heal reports as typed records.
+  - `w2-row` in `.claude/worktrees/w2-row` (branch wave2/toolbox-row): compuse-toolbox SKILL.md
+    mutation_arm row is stale after the mutation_arm fix; dream-core `--to` offset wording.
+  - `w2-regex` in `.claude/worktrees/w2-regex` (branch wave2/quadratic-regex): fix the 18
+    confirmed quadratic regexes in shipped hooks and skill scripts (toolbox-nudge.py first).
+- Results log of every report: scratchpad `RESULTS.txt` (volatile: scratchpad dies on reboot);
+  the per-item outcome is also summarised below.
+- Research repo commit b26340f ([120] STRUCTURES.md) is PUSHED; [120] decision log section is in
+  the gitignored EXECUTION-USER-REVIEW.md at the main checkout root.
 
 ## Decided, and why
 
-- Private directory name scrubbed forward in a plan and a test fixture, following 008cbd9a's
-  precedent; history and dated checklists left alone. The bare `provmm` token is a question for
-  the user, filed in [190].
-- Minor bump (11.6.0): two additions (a bare frame key removes a stored unknown key; SessionStart
-  names refused self-heal levels) besides the fixes.
+- User 03:31: the private project-family name stays private "at the moment". Scrub forward in every live tracked file (dated
+  checklists and old CHANGELOG entries included, since they ship); git history stays.
+- Contribution entry 4 (probe hand-backs to a named teammate) is premise-false: drop it from the
+  queue citing ledger d-20261115-0a37a1d3; reopening that rejection is the user's call.
+- [195] G4 FU-b (transcript_turns resume-from-offset cache): leave it - median transcript 1.9 MB
+  (~2 ms), p90 29 MB (~30 ms); a cache adds stale-able state for outliers. Close that part.
+- mutation_arm refuses when its state dir is unwritable (fail loud) rather than falling back.
+- Plan-mode checkpoint goes into the plan file as `## Checkpoint` (implemented; option A).
+
+## Still open, for OPEN-WORK.md at the end
+
+- [100] KEEP: fixes ship in 11.13.0; re-measure after a week on >= 11.13.0 (scripts cycles2.py,
+  bucket2.py, classify.py in scratchpad measure-100; copy them into .plan/compact-cycles/).
+- [150] rewrite to the LEFT list (retitle race rm4, rehome default, empty-scope next step,
+  crosstree per-promotion cost + "global" naming, _check_out other-anchor guard, unreadable second
+  walk, dedup_scan duplicate, dup-pointer lock, ledger wording) plus the user question on
+  dream_mode off for a manual crosstree run.
+- [195] rewrite to: corpus_prompts, guard_replay, pfsense run_php, abscore/abtest (+ G1 if w2-g1
+  leaves parts).
+- [200] close; quadratic hits in tests (10, low) stay as a FOUND line if w2-regex leaves them.
+- Close [25] (ship entries 1,2,3,5,6,7 with contrib_queue ship --match; drop 4), [120], [180],
+  [190], [210]. Scrub the private token from OPEN-WORK.md lines too.
+- User questions: dream_mode off (manual crosstree); bare `type:` clears kind?; Step 4b severity
+  for quadratic on bounded non-hot input; [45] reviewer reads design?/4th arm.
 
 ## Next action
 
-1. Commit `OPEN-WORK.md` and `handover.md` in the worktree (message: close [175] and [165], file
-   [190]; reasons tagged measured).
-2. Run the full gate once over the integrated tree (pre-push hook does it), then
-   `git push origin HEAD:master` from the worktree and watch CI with
-   `ci_wait.py --ref HEAD` (compuse-toolbox).
-3. `skill_receipt.py end meta-skill-writer`; remove the four worktrees and branches; fast-forward
-   the main checkout only if its tree is clean and ours to touch (it holds another session's
-   uncommitted OPEN-WORK.md and handover.md - leave it).
+Wait for w2-g1, w2-row, w2-regex reports; cherry-pick their work commits (not their DROP commits)
+into `fix/sweep-1119`; add their CHANGELOG bullets under 11.13.0; commit; then update OPEN-WORK.md,
+run `python3 plugins/bitranox/hooks/repo-gate.py --ci`, push `HEAD:master`, watch CI with
+`ci_wait.py --ref HEAD` (compuse-toolbox), run the contrib_queue closes, `skill_receipt.py end
+meta-skill-writer`, remove the fixer worktrees.
 
 ## Lessons for the next nap
 
-- When a PreToolUse gate refuses a commit for an unstaged new file, run `git add` as its own
-  command first: the gate judges the whole command before the add runs.
-- When an edit names which verbs a rule covers, read the probe's paraphrase for an implied
-  generalisation ("a dry run of any of them"); it shows where the text over-claims.
+- When a measurement agent finds a regression in the item it measures, dispatch the fixer in the
+  same sweep: the measurement brief should ask for the recommended fix with code lines.
+- When fixers run in parallel on one file (memory_engine.py), confine each to named functions;
+  the cherry-picks then merged clean.
 
 Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not
 delete it - if this session ends badly it is the only record of where things stood.

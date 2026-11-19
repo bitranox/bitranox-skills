@@ -9,7 +9,7 @@ duplicate).
 - [x] Receipt held (skill_receipt.py start meta-skill-writer, this session)
 - [x] RED: observed failure in a real crosstree-deep run - the sonnet fan-out's 3 DUPLICATE/MERGE
       suggestions were ALL complementary on inspection (a summary+detail pair with a valid cross-link,
-      a fact cited across the provmm subtree, and a fleet fact whose overlap was one incidental clause);
+      a fact cited across the private subtree, and a fleet fact whose overlap was one incidental clause);
       merging any of them blindly would have destroyed content
 - [x] GREEN: the new clause + dream-core "Dedup semantics" rule makes the main agent read both bodies +
       check refs before merging, and names the three not-a-duplicate shapes; a subagent flags from

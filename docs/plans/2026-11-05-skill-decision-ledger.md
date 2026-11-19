@@ -2627,7 +2627,7 @@ entry from here); targets that are not a skill directory in this repo.
       `what`, `why`, `reason` (or `note`), `outcome`, `closed_ts` (or `dropped_ts`) and the source
       file. Records whose name is not a directory under `plugins/bitranox/skills/` go to a
       skipped list with the name. It prints both counts. Expected at plan time: 65 candidates,
-      15 skipped (`a`, `b`, `c`, `foo`, `toolbox`, `infra-soundtouch-decloud` and five `provmm-*`
+      15 skipped (`a`, `b`, `c`, `foo`, `toolbox`, `infra-soundtouch-decloud` and five `private-*`
       targets); a difference is recorded, not a stop.
 - [ ] **Step 2: judge.** Read every candidate (no sampling) and write one line per candidate into
       `verdicts.md`: KEEP, or DROP with one of `shipped-later` (grep the skill: the proposal is in
