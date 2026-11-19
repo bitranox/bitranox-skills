@@ -2242,15 +2242,27 @@ def heal(proj):
     return report
 
 
-def backfill_titles(proj):
+@dataclass
+class BackfillReport:
+    """What `backfill_titles` did, slug by slug. `kept` counts bodies that already had a title;
+    each list names the slugs in the order the walk met them."""
+
+    filled: list[str] = field(default_factory=list[str])
+    kept: int = 0
+    unframed: list[str] = field(default_factory=list[str])
+    untitled: list[str] = field(default_factory=list[str])
+    missing: list[str] = field(default_factory=list[str])
+    legacy: list[str] = field(default_factory=list[str])
+
+
+def backfill_titles(proj: str | os.PathLike[str]) -> BackfillReport:
     """Copy each pointer's title into its body's frontmatter where the body has none, across the
     WHOLE tree of `proj`'s anchor. A body that already has a `title:` is never rewritten, an
     unframed body is left alone and counted, and a missing body is counted, never fabricated.
 
     Separate from `heal`, which SessionStart runs on every start and which never opens a body: a
     back-fill reads every body of the tree and writes most of them once, a one-off for stores
-    written before titles were kept as data. Returns {'filled': [slugs], 'kept': n, 'unframed':
-    [slugs], 'untitled': [slugs], 'missing': [slugs], 'legacy': [slugs]}; `untitled` is a framed
+    written before titles were kept as data. Returns a BackfillReport; `untitled` is a framed
     body whose pointer has an empty link text, so there is no title to copy (kept apart from
     `unframed`, which would report a frame that is there as absent). A slug pointed at from two
     levels is filled from the first level the walk meets, and each body is read and written under the lock of that first
@@ -2263,36 +2275,36 @@ def backfill_titles(proj):
     tree holding unmigrated facts never reads as fully back-filled."""
     sig.refuse_if_memory_writes_off()
     anchor = _anchor(proj)
-    rep = {"filled": [], "kept": 0, "unframed": [], "untitled": [], "missing": [], "legacy": []}
-    seen = set()
+    rep = BackfillReport()
+    seen: set[str] = set()
     for level in curated_levels_under(anchor):
         with sig.memory_lock(sig.claude_local_md_path(level)):
             text = read_store_text(sig.claude_local_md_path(level))
             for ptr in us.parse_pointer_index(text)[1]:
                 if ptr.legacy:                       # not added to `seen`: a slug's legacy line
-                    if ptr.slug not in rep["legacy"]:    # at one level never hides its migrated
-                        rep["legacy"].append(ptr.slug)   # line at another from the back-fill
+                    if ptr.slug not in rep.legacy:       # at one level never hides its migrated
+                        rep.legacy.append(ptr.slug)      # line at another from the back-fill
                     continue
                 if ptr.slug in seen:
                     continue
                 seen.add(ptr.slug)
                 raw = read_store_text(us.body_path(anchor, ptr.slug))   # "" only when absent
                 if raw == "":
-                    rep["missing"].append(ptr.slug)
+                    rep.missing.append(ptr.slug)
                     continue
                 body = raw.rstrip("\n")
                 if _body_title(body):
-                    rep["kept"] += 1
+                    rep.kept += 1
                     continue
                 if _frontmatter(body)[1] is None:
-                    rep["unframed"].append(ptr.slug)
+                    rep.unframed.append(ptr.slug)
                     continue
                 filled = _with_title(body, ptr.title)
                 if filled == body:
-                    rep["untitled"].append(ptr.slug)
+                    rep.untitled.append(ptr.slug)
                     continue
                 us.put_body(str(anchor), ptr.slug, filled)
-                rep["filled"].append(ptr.slug)
+                rep.filled.append(ptr.slug)
     return rep
 
 
@@ -5024,14 +5036,14 @@ def _main(argv=None):
     if args.cmd == "heal" and args.backfill_titles:
         rep = backfill_titles(args.proj)
         print("back-filled %d title(s); %d body(ies) already had one"
-              % (len(rep["filled"]), rep["kept"]))
-        for slug in rep["unframed"]:
+              % (len(rep.filled), rep.kept))
+        for slug in rep.unframed:
             print("    ~ body has no frontmatter, left as it is: %s" % slug)
-        for slug in rep["untitled"]:
+        for slug in rep.untitled:
             print("    ~ pointer has no title to copy, body left as it is: %s" % slug)
-        for slug in rep["missing"]:
+        for slug in rep.missing:
             print("    ! missing central body (not fabricated): %s" % slug)
-        for slug in rep["legacy"]:
+        for slug in rep.legacy:
             print("    ~ legacy uuid: pointer, migrate it first (hooks/migrate_to_slug_store.py), "
                   "left as it is: %s" % slug)
         return 0
