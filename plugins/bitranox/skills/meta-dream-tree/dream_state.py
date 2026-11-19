@@ -40,7 +40,11 @@ Usage (cwd defaults to the current directory):
                                           advance the review watermark to where this session's last
                                           session-review ended, on the transcript it showed, whichever
                                           view that was. With nothing shown since the last mark it
-                                          marks nothing.
+                                          marks nothing. With no session-review of this session for
+                                          this cwd (or its transcript gone) it refuses, exit 2: it
+                                          never resolves a transcript itself, which from a cwd it
+                                          never reviewed would be another session's. The success
+                                          line names the mark it moved from, the --to to undo it.
   dream_state.py session-reviewed [cwd] --transcript PATH --to OFFSET
                                           rewind PATH's watermark to OFFSET, for a stretch marked
                                           reviewed that nobody read. Moves it back only.
@@ -94,7 +98,8 @@ Exit codes: 0 = done, or the answer yes (`due`, `should-promote` -> promote, `se
 showed a transcript part); 1 = the answer no (`not-due`, `hold`, `session-review` with NOTHING NEW
 left of its transcript - the word is printed either way, and it is an answer, not a failure); 2 =
 bad arguments, a write that did not land, a `--transcript` that does not exist, a session-review
-that discovered no transcript at all, or a transcript that exists but cannot be read
+that discovered no transcript at all, a bare session-reviewed with no session-review of this
+session to mark (or whose transcript is gone), or a transcript that exists but cannot be read
 (session-review / session-reviewed: nothing is shown or marked, because an unreadable stretch is
 never "nothing new"). A loop over the parts runs `session-review` again while it exits 0. `-h`/`--help` prints this and exits 0. Launch via `hooks/run-python.sh`, which forces UTF-8; a bare launch on
 a cp1252 console is made safe too.
@@ -457,8 +462,9 @@ def _record_shown(proj, path, offset):
         sig.set_watermark(proj, path, _SHOWN, offset)
         sig.record_review_shown(proj, path)
     except (OSError, ValueError, TypeError) as exc:
-        print("warning: could not record how far this review showed (%s); session-reviewed will "
-              "mark by its own window" % exc, file=sys.stderr)
+        print("warning: could not record how far this review showed (%s); a bare "
+              "session-reviewed cannot find it, so mark it with session-reviewed --transcript %s"
+              % (exc, path), file=sys.stderr)
 
 
 def _rewind(proj, named, to):
@@ -479,21 +485,30 @@ def _rewind(proj, named, to):
 
 
 def _mark_target(proj, named):
-    """(transcript to mark, or None when the last review's transcript is already marked).
+    """(transcript to mark, refusal): the path, or None when the last review's transcript is
+    already marked; a refusal is the error text when there is nothing of this session's to mark.
 
     The transcript this session's last review SHOWED, so the mark cannot land on another file. A
     review that was already marked showed nothing new, and marking again would discharge bytes
-    nobody read."""
+    nobody read. With no review recorded for this session here, or a reviewed file that is gone,
+    it refuses rather than resolving one: the resolver falls back to the newest transcript of the
+    project's native dir, which from a cwd this session never reviewed is another session's, and
+    marking it discharged a stretch nobody read."""
     if named:
-        return named
+        return named, None
     shown_path = sig.last_review_shown(proj)
-    if not shown_path or not os.path.isfile(shown_path):
-        return ""
+    if not shown_path:
+        return None, ("no session-review ran in this session for %s, so nothing of this "
+                      "session's can be marked - run session-review first, or pass "
+                      "--transcript PATH to mark a transcript you read" % proj)
+    if not os.path.isfile(shown_path):
+        return None, ("the transcript the last session-review showed is gone: %s - pass "
+                      "--transcript PATH to mark another one" % shown_path)
     shown = sig.get_watermark(proj, shown_path, _SHOWN)
     mark = sig.get_watermark(proj, shown_path, _REVIEWER)
     if mark > os.path.getsize(shown_path):      # a replaced file: the reader restarts it at 0
         mark = 0
-    return shown_path if shown > mark else None
+    return (shown_path if shown > mark else None), None
 
 
 def _session_reviewed(proj, named=None, prose=False, to=None):
@@ -507,19 +522,19 @@ def _session_reviewed(proj, named=None, prose=False, to=None):
         return _missing_named(named)
     if to is not None:
         return _rewind(proj, named, to)
-    named = _mark_target(proj, named)
+    named, refusal = _mark_target(proj, named)
+    if refusal:
+        print("error: %s - nothing was marked reviewed" % refusal, file=sys.stderr)
+        return 2
     if named is None:
         print("nothing marked: the last session-review is already marked reviewed; run "
               "session-review first")
         return 0
     try:
-        tp, part = _part_to_review(proj, named or None,  # the file review showed, or the mark lands
-                                   PROSE_CHUNK_BYTES if prose else None)  # on another transcript
+        tp, part = _part_to_review(proj, named,  # the file review showed, or the mark lands on
+                                   PROSE_CHUNK_BYTES if prose else None)  # another transcript
     except OSError as exc:                  # the wrong file and the owed stretch is skipped forever
         return _unreadable(exc.filename or "(the review target)", exc)
-    if not tp:
-        print("no known transcript for %s - nothing to mark" % proj)
-        return 0
     if not os.path.exists(tp):          # vanished after it was resolved: the reader's empty part
         return _unreadable(tp, "the file is gone")          # would pull the mark back to 0
     target, size = part.end, part.size
@@ -530,13 +545,16 @@ def _session_reviewed(proj, named=None, prose=False, to=None):
     shown = sig.get_watermark(proj, tp, _SHOWN)
     if part.start < shown <= size:
         target = shown
+    # Printed in the success line, so a mark that landed on a stretch nobody read can be rewound
+    # to exactly where it stood (--to) instead of to 0, which re-serves what was really read.
+    before = sig.get_watermark(proj, tp, _REVIEWER)
     try:
         sig.set_watermark(proj, tp, _REVIEWER, target)
     except OSError as exc:              # StateWriteError: the mark was not recorded
         return _write_failed("the review watermark for %s (%s)" % (tp, exc))
     if sig.get_watermark(proj, tp, _REVIEWER) != target:
         return _write_failed("the review watermark for %s" % tp)
-    print("review watermark advanced to %d for %s" % (target, tp))
+    print("review watermark advanced from %d to %d for %s" % (before, target, tp))
     if target < size:
         print("%d bytes remain unreviewed - run session-review%s again for the next part"
               % (size - target, " --prose" if prose else ""))

@@ -429,10 +429,11 @@ def test_session_reviewed_reports_a_watermark_it_could_not_write(home, tmp_path,
     audit = home / ".claude" / "self-improve-audit"
     audit.chmod(0o555)
     try:
-        assert D.main(["session-reviewed", "/p/w"]) == 2
+        assert D.main(["session-reviewed", "/p/w", "--transcript", str(tp)]) == 2
     finally:
         audit.chmod(0o755)
-    assert "advanced" not in capsys.readouterr().out
+    captured = capsys.readouterr()
+    assert "advanced" not in captured.out and "did not land" in captured.err
     assert D.sig.get_watermark("/p/w", str(tp), "dream") == 0
 
 
@@ -447,6 +448,13 @@ def test_an_unreadable_transcript_is_never_marked_reviewed(home, tmp_path, capsy
         assert D.main(["session-review", "/p/ur"]) == 2
         review = capsys.readouterr()
         assert "NOTHING NEW" not in review.out and "unreadable" in review.err
+    finally:
+        tp.chmod(0o644)
+    # A review that DID show it, so the bare mark targets this file; then it turns unreadable.
+    assert D.main(["session-review", "/p/ur"]) == 0
+    capsys.readouterr()
+    tp.chmod(0o000)
+    try:
         assert D.main(["session-reviewed", "/p/ur"]) == 2
         reviewed = capsys.readouterr()
         assert "advanced" not in reviewed.out and "unreadable" in reviewed.err
@@ -499,7 +507,7 @@ def _block_with_a_dir(path):
 def test_session_reviewed_exits_2_when_the_watermark_store_is_blocked(home, tmp_path, capsys):
     tp = _session(home, "/p/wb", tmp_path, '{"type":"user","message":{"content":"x"}}\n')
     _block_with_a_dir(D.sig.watermark_file("/p/wb"))
-    assert D.main(["session-reviewed", "/p/wb"]) == 2
+    assert D.main(["session-reviewed", "/p/wb", "--transcript", str(tp)]) == 2
     captured = capsys.readouterr()
     assert "advanced" not in captured.out and "did not land" in captured.err
     assert str(tp) in captured.err
@@ -529,9 +537,10 @@ def test_promoted_with_a_writable_store_clears_the_gate(home, capsys):
     assert capsys.readouterr().out.strip() == "hold"
 
 
-def test_session_reviewed_with_no_known_transcript_marks_nothing(home, capsys):
-    assert D.main(["session-reviewed", "/unknown/proj"]) == 0
-    assert "nothing to mark" in capsys.readouterr().out
+def test_session_reviewed_with_no_review_and_no_transcript_refuses(home, capsys):
+    assert D.main(["session-reviewed", "/unknown/proj"]) == 2
+    captured = capsys.readouterr()
+    assert "advanced" not in captured.out and "no session-review" in captured.err
 
 
 # ---- arguments: an unknown flag is refused, never taken as the project path ------------------
@@ -982,3 +991,51 @@ def test_the_closing_line_ends_on_the_command(home, tmp_path, capsys, monkeypatc
     _session(home, "/p/x", tmp_path, _LINE % "seen")
     D.main(["session-review", "--prose", "/p/x"])
     assert capsys.readouterr().out.rstrip().endswith("session-reviewed /p/x --prose")
+
+
+# ---- a bare mark with no review of its own never lands on another session's transcript --------
+
+def test_a_bare_mark_with_no_review_here_refuses_and_leaves_a_peer_unmarked(
+        home, capsys, monkeypatch):
+    """Measured: run from a cwd where this session never ran session-review, the bare mark found no
+    record of a review, fell back to the newest transcript of the project's native dir - another
+    session's, weeks old - and advanced its watermark to the end with a success line."""
+    proj = "/p/elsewhere"
+    peer = _session_file(proj, "sid-peer", "PEER lesson nobody read")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sid-mine")
+    assert D.main(["session-reviewed", proj]) == 2
+    captured = capsys.readouterr()
+    assert "advanced" not in captured.out
+    assert "no session-review" in captured.err and "--transcript" in captured.err
+    assert D.sig.get_watermark(proj, str(peer), "dream") == 0
+
+
+def test_a_bare_mark_whose_reviewed_transcript_vanished_refuses(home, tmp_path, capsys,
+                                                                  monkeypatch):
+    proj = "/p/x"
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    shown = _session(home, proj, tmp_path, _LINE % "seen")
+    assert D.main(["session-review", proj]) == 0
+    shown.unlink()
+    other = _session_file(proj, "sid-other", "never shown")
+    capsys.readouterr()
+    assert D.main(["session-reviewed", proj]) == 2
+    assert str(shown) in capsys.readouterr().err
+    assert D.sig.get_watermark(proj, str(other), "dream") == 0
+
+
+def test_the_success_line_names_the_mark_it_moved_from(home, tmp_path, capsys, monkeypatch):
+    """A mis-aimed mark is undone with --to; without the old offset printed it can only be rewound
+    to 0, which re-serves stretches that were really read."""
+    proj = "/p/x"
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    tp = _session(home, proj, tmp_path, _LINE % "first")
+    first = tp.stat().st_size
+    D.sig.set_watermark(proj, str(tp), "dream", first)
+    with open(tp, "a", encoding="utf-8") as fh:
+        fh.write(_LINE % "second")
+    assert D.main(["session-review", proj]) == 0
+    capsys.readouterr()
+    assert D.main(["session-reviewed", proj]) == 0
+    assert ("review watermark advanced from %d to %d for %s"
+            % (first, tp.stat().st_size, tp)) in capsys.readouterr().out

@@ -115,6 +115,7 @@ def test_a_prose_window_over_its_bound_is_truncated_and_marked_only_that_far(hom
 def test_control_reviewed_without_prose_advances_only_one_raw_part(home, tmp_path, monkeypatch):
     tp = _session(home, "/p/x", tmp_path, USER * 10)
     monkeypatch.setattr(D, "REVIEW_CHUNK_BYTES", len(USER) * 2)
+    assert D.main(["session-review", "/p/x"]) == 0
     assert D.main(["session-reviewed", "/p/x"]) == 0
     assert D.sig.get_watermark("/p/x", str(tp), "dream") == len(USER) * 2
 
