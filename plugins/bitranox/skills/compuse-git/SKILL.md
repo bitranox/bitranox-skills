@@ -66,6 +66,31 @@ branch with no upstream, use `HEAD..<incoming-ref>` (e.g. `origin/main`) instead
 `HEAD..@{upstream}`. `check-ignore` exits 1 when nothing matches, so an empty result is safe to
 proceed on.
 
+## Is a file you are about to WRITE ignored? Ask about the file, not its folder
+
+Code that writes a file into a checkout and relies on git ignoring it (a snapshot, a secret, a
+local config) must ask `check-ignore` about the FILE, not only the folder it goes in. With
+`configs/*` plus `!configs/*.xml` in `.gitignore`, `git check-ignore -- configs/` exits 0 and
+echoes the folder, while a `configs/config-x.xml` written into it is re-included by the negation
+and `git add -A` stages it. Ask about both in one call:
+
+```bash
+printf '%s\0' configs/ configs/config-x.xml |
+  git -c core.quotePath=false check-ignore --stdin -z -v -n
+```
+
+- `-z` is refused without `--stdin` (exit 128). Without `core.quotePath=false`, a non-ASCII path
+  comes back quoted (`"configs/\303\274.xml"`), so comparing the echo with the path you wrote fails.
+- Each record is four NUL-terminated fields: source, line number, pattern, path. Under `-n` a
+  path no rule matches still gets a record, with the first three fields empty.
+- Read each record's pattern and source fields, never the exit code alone: under `-v` a path
+  matched by a negation prints that rule and exits 0 (plain `check-ignore` exits 1 for it). A
+  pattern starting with `!` re-includes the path. A source outside the work tree is a per-user
+  `core.excludesFile` that another user of the same checkout does not have, so it protects only
+  you; trust a `.gitignore` inside the checkout or `.git/info/exclude`.
+- "Nothing under the folder is tracked yet" is a separate question, answered by
+  `git ls-files -z -- configs/`: an ignore rule never untracks a file already committed.
+
 ## Exec bit + fileMode (the silent hook failure)
 
 When `core.fileMode=false` (common), git ignores working-tree permission bits, so `chmod +x hook.sh` is a no-op in the index: the committed file stays `100644`, and whoever clones or installs it gets a non-executable hook that never runs. Set the bit in the index, commit WITHOUT a pathspec, and verify what the commit recorded:
