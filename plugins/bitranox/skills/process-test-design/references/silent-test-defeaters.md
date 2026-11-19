@@ -36,10 +36,14 @@ deadline (a deadline is the timer the SKILL.md rule forbids): give a spin a help
 predicate, a message and a tick ceiling; give a production loop an independent backstop (a hard
 cap that never binds while the real guard works) and assert in the test that it never fired, or
 have a fake clock or sleep raise `AssertionError` past a small call count, so a loop that stops
-advancing ends in a named failure rather than a stuck CI job. Make the fake
-advance every counter the real system advances (distinct ids, growing totals), or a
-de-duplicating consumer freezes the loop for a reason unrelated to the change. Then mutate the
-guard the loop depends on and require a fast, NAMED failure.
+advancing ends in a named failure rather than a stuck CI job. Make the fake advance every counter
+the real system advances (distinct ids, growing totals), or a de-duplicating consumer freezes the
+loop for a reason unrelated to the change. A fake standing in for a waiter, poller or child
+process honours the stop condition the real one has (the `--timeout` or deadline the code passes
+it), answering with the real tool's timed-out result once that limit is spent, counted in the
+fake's own polls or calls rather than on a real clock: a fake that ignores it turns the mutant that
+removes the code's own stop into a hang until the outer timeout, read as neither killed nor
+survived. Then mutate the guard the loop depends on and require a fast, NAMED failure.
 
 ### Timestamp BEFORE the probe that gets in, when the probe is the operation itself
 
@@ -79,10 +83,11 @@ least one test a latency large enough to cross the judge's slack.
 
 When a test's premise is a property of its output (no escape bytes, no colour, no control
 characters, a width), set the variables that decide it - `FORCE_COLOR`, `NO_COLOR`, `TERM`,
-`COLORTERM`, `COLUMNS`, the locale - in the suite's own fixture (`monkeypatch.setenv` / `delenv`)
-instead of inheriting them, and add a control asserting the premise holds (the output DOES contain
-colour when the test is about stripping it). Inherited, the same test is a guard on one machine
-and a wall of unrelated red on another.
+`COLORTERM`, `COLUMNS`, the locale - in the suite's own fixture (`monkeypatch.setenv`, and to
+remove one, `setenv` then `delenv`: see the `delenv` paragraph below) instead of inheriting
+them, and add a control asserting the premise holds (the output DOES contain colour when the test
+is about stripping it). Inherited, the same test is a guard on one machine and a wall of unrelated
+red on another.
 
 A spawned child needs the same pinning. A child env built as `{**os.environ, "FORCE_COLOR": "1"}`
 inherits the parent's `TERM`, and rich draws no colour under `TERM=dumb` or `TERM=unknown` even
@@ -109,7 +114,8 @@ every GitHub runner exports `GITHUB_ACTIONS=true`. rich-click is such a library:
 `GITHUB_ACTIONS`) and `WIDTH` and `MAX_WIDTH` (from `TERMINAL_WIDTH`) as module globals, and every
 help and usage-error render copies them, so on a runner that output comes out styled for a
 terminal (coloured and wrapped) and tests reading its text fail in CI only. In the autouse
-fixture, after the delenv loop, re-derive the globals through rich-click's own default functions:
+fixture, after the delenv loop (each delete written as `setenv` then `delenv`, as above),
+re-derive the globals through rich-click's own default functions:
 
 ```python
 import rich_click.rich_click

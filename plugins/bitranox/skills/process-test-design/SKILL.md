@@ -240,6 +240,11 @@ wiring a new call through a seam:
   received;
 - add a test that fails when the seam's contract moves (check the call's keywords against
   `inspect.signature(seam).parameters`), and RED it by restoring the mismatched call.
+- a hand-written fake of a CLI the code shells out to (a stub script on `PATH`, a fake the runner
+  dispatches to) refuses every input the real tool refuses, with the same usage error and exit
+  code. A fake more lenient than the tool keeps the suite green on calls production fails with.
+  When the tool is yours, have the fake call the tool's own argument validator, or run the real
+  tool on a scratch tree in at least one test.
 - a hand-written copy of a dependency's TYPES has two axes: its CONSTANTS (the limits and
   thresholds it reports) and its SHAPE (the field and attribute names your code reads). A fidelity
   check that pins only the constants passes while the double still carries a field the real class
