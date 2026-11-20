@@ -374,7 +374,7 @@ class PlacedElsewhere(SlugCollision):
 
 def _copies_of(anchor: _StrPath, slug: str) -> list[_Copy]:
     """[(level dir, Pointer)] for every line of `slug` in the tree, from one walk over its levels."""
-    out = []
+    out: list[_Copy] = []
     for level in curated_levels_under(anchor):
         for ptr in _us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level)))[1]:
             if ptr.slug == slug:
@@ -391,13 +391,15 @@ def _placed_slugs(anchor: _StrPath, slugs: Iterable[str]) -> set[str]:
     it, and the refusals of render-topics and set-topics offer to move exactly those lines.
     Reads one body head per slug; walks the tree's levels once, and only when a body is
     managed. Holds one small record per managed slug."""
-    managed = set()
+    managed: set[str] = set()
     for slug in slugs:
         head = _read_body_head(_us.body_path(anchor, slug))
         if head is not None and _managed_topics(slug, head, ()) is not None:
             managed.add(slug)
     if not managed:
         return set()
+    seen: set[str]
+    fixed: set[str]
     seen, fixed = set(), set()
     for level in curated_levels_under(anchor):
         for ptr in _us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level)))[1]:
@@ -695,15 +697,17 @@ class PlacementLockBusy(TimeoutError):
             "set-topics, topics-set-list, set-level-topics, set-top-topics, or write to a fact "
             "placed by topic holds it. Run %s again once that one finishes; a lock left by a "
             "holder that crashed is reclaimed once it is %d s old"
-            % (verb, waited, anchor, placement_lock_path(anchor), verb, int(sig._LOCK_STALE_S)))
+            # remove the ignore once self_improve_signals publishes the reclaim age (_LOCK_STALE_S)
+            % (verb, waited, anchor, placement_lock_path(anchor), verb, int(sig._LOCK_STALE_S)))  # pyright: ignore[reportPrivateUsage]
 
 
-_HEARTBEAT_AFTER_S = sig._LOCK_STALE_S / 4
+# remove the ignore once self_improve_signals publishes the reclaim age (_LOCK_STALE_S)
+_HEARTBEAT_AFTER_S = sig._LOCK_STALE_S / 4  # pyright: ignore[reportPrivateUsage]
 """How old the held placement lock's mtime may get before a heartbeat refreshes it: well inside
 the reclaim age, so a holder that beats at least once per this many seconds never looks stale,
 and one stat per beat is all a fresh lock costs."""
 
-_HELD_PLACEMENT_LOCKS = []
+_HELD_PLACEMENT_LOCKS: list[Path] = []
 """The lock files of the placement locks this process holds now, innermost last."""
 
 
@@ -808,6 +812,8 @@ def read_store(proj: _StrPath) -> tuple[str, list[Entry], dict[str, str]]:
     anchor = _anchor(proj)
     text = read_store_text(sig.claude_local_md_path(proj))
     scope, pointers = _us.parse_pointer_index(text)
+    entries: list[Entry]
+    bodies: dict[str, str]
     entries, bodies = [], {}
     for p in pointers:
         path = _us.legacy_body_path(anchor, p.uuid) if p.legacy else _us.body_path(anchor, p.slug)
@@ -825,7 +831,7 @@ def _commit_store(proj: _StrPath, scope: str | None, entries: Iterable[Entry], b
     sig.refuse_if_memory_writes_off()
     anchor = _anchor(proj)
     changed = False
-    pointers = []
+    pointers: list[us.Pointer] = []
     for e in entries:
         if not e.legacy:                             # a legacy body stays at its old path until the
             changed |= _us.put_body(str(anchor), e.slug, bodies.get(e.slug, e.body))  # migration moves it
@@ -1070,9 +1076,8 @@ def _upsert_checked(proj: str, anchor: _StrPath, slug: str, title: str, hook: st
             # body registers the slug). Reconstruct its Entry so the update path below
             # re-attaches a pointer at this level.
             adopted = _entry_from_body(anchor, slug)
-            if adopted is not None:
-                entries.append(adopted)
-                by_slug[slug] = adopted
+            entries.append(adopted)
+            by_slug[slug] = adopted
         created = slug not in by_slug
         if slug in by_slug:
             e = by_slug[slug]
@@ -1196,7 +1201,7 @@ def add_with_advice(proj: _StrPath, title: str, hook: str | None, body: str = ""
 def _add_advice(hook: str, body: str) -> list[str]:
     """The advisory lines for a just-written fact, in print order. `hook` is the RESOLVED text (a
     `--hook-file` call has no inline flag), so a caller must pass it, never the raw argument."""
-    advice = []
+    advice: list[str] = []
     if _us.hook_over_budget(hook):
         advice.append("~ warning: hook is %d chars (soft cap %d, advisory - fine up to the %d-char "
                       "hard cap; keep it self-sufficient, do not trim load-bearing detail to "
@@ -1497,7 +1502,7 @@ _FRAME_SUBKEY_RX = re.compile(r"[ \t]+([A-Za-z_][\w-]*):")
 def _frame_blocks(inner: str) -> list[tuple[str | None, list[str]]]:
     """[(key, [lines])] of a frontmatter's inner text: each top-level `key:` line with the
     indented and blank lines below it. Lines before the first key go under key None."""
-    blocks = []
+    blocks: list[tuple[str | None, list[str]]] = []
     for line in inner.splitlines(True):
         m = _FRAME_KEY_RX.match(line)
         if m or not blocks:
@@ -1520,7 +1525,7 @@ def _metadata_sub_blocks(lines: Sequence[str]) -> list[tuple[str | None, list[st
 
     subs = [line for line in lines[1:] if _FRAME_SUBKEY_RX.match(line)]
     level = min(map(indent, subs), default=0)
-    blocks = []
+    blocks: list[tuple[str | None, list[str]]] = []
     for line in lines[1:]:
         m = _FRAME_SUBKEY_RX.match(line)
         if (m and indent(line) == level) or not blocks:
@@ -1623,7 +1628,7 @@ def _with_stored_frame_keys(text: str, stored: str) -> str:
     new_blocks = _frame_blocks(m.group(1) or "")
     new = {key: lines for key, lines in new_blocks if key is not None}
     merged = [line for key, lines in new_blocks if key is None for line in lines]
-    used = {None}
+    used: set[str | None] = {None}
     for key, lines in _frame_blocks(sm.group(1) or ""):
         if key is None:
             continue
@@ -1657,7 +1662,8 @@ def _with_topics_line(text: str, line: str | None) -> str:
         return _with_frame(head, m, re.sub(every_line, "", inner))
     first = _TOPICS_LINE_RX.search(inner)
     n = first is not None
-    if n:
+    new_inner = inner
+    if first is not None:
         new_inner = inner[:first.start()] + line + re.sub(every_line, "", inner[first.end():])
     for key in ("title", "description", "name"):
         if n:
@@ -1816,6 +1822,8 @@ def dangling_wikilinks(text: str | None, existing: Iterable[str]) -> list[tuple[
     store-wide dangling ref a later `--check-tree` has to find. Deduped, order-preserving."""
     import difflib
     ex = {_canon_slug(s) for s in existing}
+    out: list[tuple[str, str | None]]
+    seen: set[str]
     out, seen = [], set()
     for m in _WIKILINK_RX.finditer(mask_code_regions(text)):
         target = _ref_slug(m.group(1))
@@ -1829,7 +1837,7 @@ def dangling_wikilinks(text: str | None, existing: Iterable[str]) -> list[tuple[
 
 def _existing_slugs(anchor: _StrPath) -> set[str]:
     """Every slug pointed at anywhere in the tree (pointer blocks only - cheap, no body reads)."""
-    slugs = set()
+    slugs: set[str] = set()
     for lvl in curated_levels_under(anchor):
         _scope, pointers = _us.parse_pointer_index(read_store_text(sig.claude_local_md_path(lvl)))
         slugs.update(p.slug for p in pointers)
@@ -1853,7 +1861,7 @@ def inbound_ref_sources(levels: Iterable[_StrPath], slug: str) -> list[tuple[str
     contains a `[[slug]]` reference. THE inbound-ref scan (reconcile delegates here); the dream's
     move safety check keys off it."""
     qcanon = _canon_slug(slug)
-    out = []
+    out: list[tuple[str, str]] = []
     for level in levels:
         _scope, entries, bodies = read_store(str(level))
         for e in entries:
@@ -1888,6 +1896,8 @@ def _as_slug_list(slug: str | Iterable[str] | None) -> list[str]:
     """The move's slug SET as an ordered, de-duplicated list. Accepts one slug or an iterable of
     them, so every existing single-slug caller keeps working untouched."""
     raw = [slug] if isinstance(slug, str) else list(slug or ())
+    seen: set[str]
+    out: list[str]
     seen, out = set(), []
     for s in raw:
         if s not in seen:
@@ -1909,7 +1919,7 @@ def _dangling_inbound_after_move(src: Path, dst: Path, slugs: Sequence[str]) -> 
     chain = {str(Path(x).resolve()) for x in
              (_sig.altitude_chain(str(src)) + _sig.altitude_chain(str(dst)))}
     moving = {_canon_slug(s) for s in slugs}
-    out = []
+    out: list[tuple[str, str, str]] = []
     for s in slugs:
         for lvl, citer in inbound_ref_sources(sorted(chain), s):
             here = Path(lvl).resolve()
@@ -2009,7 +2019,7 @@ def move_entry(from_level: _StrPath, to_level: _StrPath, slug: str | Iterable[st
 
     _scope, entries, _bodies = read_store(str(src))
     by_slug = {e.slug: e for e in entries}
-    moving = []
+    moving: list[Entry] = []
     for s in slugs:
         entry = by_slug.get(s)
         if entry is None:
@@ -2048,6 +2058,8 @@ def move_entry(from_level: _StrPath, to_level: _StrPath, slug: str | Iterable[st
     # so a late member's duplicate can never surface after an earlier member was already written:
     _s2, dst_entries, _b2 = read_store(str(dst))
     dst_by_slug = {e.slug: e for e in dst_entries}
+    plan: list[tuple[str, tuple[str, str, bool]]]
+    dedup_warnings: list[str]
     plan, dedup_warnings = [], []
     for entry in moving:
         dst_entry = dst_by_slug.get(entry.slug)
@@ -2214,8 +2226,9 @@ def _is_excluded_level(proj: _StrPath) -> bool:
         return True
     if real == Path(real.anchor):
         return True
-    excluded = set()
-    for d in _sig._excluded_anchor_dirs():
+    excluded: set[Path] = set()
+    # remove the ignore once self_improve_signals publishes _excluded_anchor_dirs
+    for d in _sig._excluded_anchor_dirs():  # pyright: ignore[reportPrivateUsage]
         excluded.add(Path(d))
         try:
             excluded.add(Path(d).resolve())
@@ -2439,7 +2452,7 @@ def scaffold(proj: _StrPath, refused_levels: list[LevelReason] | None = None) ->
     Refuses first under BITRANOX_MEMORY_WRITES=off: it writes the CLAUDE.md marker
     (`_ensure_claude_md`) before `ensure_level`'s own guard is reached."""
     sig.refuse_if_memory_writes_off()
-    created = []
+    created: list[str] = []
     try:
         levels = _sig.altitude_chain(proj)            # level dirs, narrowest -> the tree's anchor
     except (TypeError, ValueError):
@@ -2693,7 +2706,7 @@ def _rewrite_inbound_refs(anchor: _StrPath, old_slug: str, new_slug: str) -> lis
     Returns a `RewrittenRef` per citation repointed.
     """
     canon_old = _canon_slug(old_slug)
-    touched = []
+    touched: list[RewrittenRef] = []
     for level in curated_levels_under(anchor):
         _scope, entries, _bodies = read_store(str(level))
         for e in entries:
@@ -3071,8 +3084,9 @@ def curated_levels_under(anchor: _StrPath, unreadable: list[str] | None = None) 
     the answer every caller would trust, so the walk refuses instead of undercounting. A caller
     that REPORTS rather than acts (check-tree) passes a list as `unreadable` instead: it receives
     the path of each directory or level file that could not be read, and the walk goes on."""
-    audit_root = sig._audit_dir().resolve()
-    out = []
+    # remove the ignore once self_improve_signals publishes _audit_dir
+    audit_root = sig._audit_dir().resolve()  # pyright: ignore[reportPrivateUsage]
+    out: list[str] = []
     for root, dirs, files in os.walk(str(anchor), onerror=_walk_error_sink(unreadable)):
         dirs[:] = [d for d in dirs if not _us.is_non_level_dirname(d)
                    and Path(root, d).resolve() != audit_root]
@@ -3226,7 +3240,8 @@ class RenderBlockTooLarge(TopicRefusal):
         self.over = self.size - MAX_RENDER_BLOCK_BYTES
         self.need = kept + added - MAX_RENDER_BLOCK_BYTES
         if stale and self.need <= 0:
-            super().__init__([(
+            # remove the ignore once uuid_store.TopicRefusal.__init__ is annotated
+            super().__init__([(  # pyright: ignore[reportUnknownMemberType]
                 "%d bytes of lines placed by topic at another level stay at %s beside %d bytes "
                 "of pinned, legacy or unplaced lines, and %d bytes of lines placed there are to "
                 "be added: %d bytes over the %d bytes one level's block may hold. A chain render "
@@ -3291,7 +3306,8 @@ class RenderBlockTooLarge(TopicRefusal):
                     "and still counts), then run render-topics again"
                     % (added, level, stays, self.over, MAX_RENDER_BLOCK_BYTES, bound_to,
                        self.need, level))
-        super().__init__([text + "." + grows if grows else text])
+        # remove the ignore once uuid_store.TopicRefusal.__init__ is annotated
+        super().__init__([text + "." + grows if grows else text])  # pyright: ignore[reportUnknownMemberType]
 
 
 class CollapseTooLarge(TopicRefusal):
@@ -3355,7 +3371,8 @@ class CollapseTooLarge(TopicRefusal):
                     "set-topics again"
                     % (self.movable, placed, self.need, self._move_text(self.movable, "move"),
                        self._rebind_text(self.need - self.movable)))
-        super().__init__([head + parts + tail])
+        # remove the ignore once uuid_store.TopicRefusal.__init__ is annotated
+        super().__init__([head + parts + tail])  # pyright: ignore[reportUnknownMemberType]
 
     def _later(self) -> str:
         return ("" if not self.stale else
@@ -3401,7 +3418,7 @@ class CollapseTooLarge(TopicRefusal):
         # pools that free room are named exactly as for a full block.
         if self.room > 0 and (self.fit or self.fixed):
             return text
-        pools = []
+        pools: list[str] = []
         if self.stale:
             pools.append(("run " + _SWEEP_ROUTE + " (drops %d bytes of lines placed below the "
                           "top)") % (self.top, self.stale))
@@ -3444,7 +3461,8 @@ class LineGrowsPastCap(TopicRefusal):
     TopicRefusal, so every caller that reports the engine's refusals reports this one."""
 
     def __init__(self, text: str) -> None:
-        super().__init__([text])
+        # remove the ignore once uuid_store.TopicRefusal.__init__ is annotated
+        super().__init__([text])  # pyright: ignore[reportUnknownMemberType]
 
 
 def _line_growth_refusal(verb: str, changes: Iterable[tuple[_StrPath, str, us.Pointer]], retry: Callable[[int, int, int], str]) -> str | None:
@@ -3565,6 +3583,9 @@ def topic_level_map(anchor: _StrPath, levels: Iterable[_StrPath] | None = None) 
     roll-up.
     Raises TopicRefusal, naming the levels, when a `TOPICS:` line does not parse: placing by a
     guessed line would move rules. Holds one small record per level."""
+    declared: dict[tp.Level, tuple[str, ...]]
+    dirs: dict[tp.Level, str]
+    bad: list[str]
     declared, dirs, bad, total = {}, {tp.TOP: os.path.abspath(str(anchor))}, [], 0
     for level in curated_levels_under(anchor) if levels is None else levels:
         scope = _us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level)))[0]
@@ -3588,7 +3609,7 @@ def topic_level_map(anchor: _StrPath, levels: Iterable[_StrPath] | None = None) 
 def _unplaceable_slugs(levels: Iterable[_StrPath]) -> set[str]:
     """The slugs with a pinned or legacy line at any of `levels` (`_keeps_in_place`): the facts
     the renderer never places, whatever their bodies' `topics:` say. One record per such pointer."""
-    fixed = set()
+    fixed: set[str] = set()
     for level in levels:
         for ptr in _us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level)))[1]:
             if _keeps_in_place(ptr):
@@ -3635,7 +3656,9 @@ def _line_problem(slug: str, anchor: _StrPath, lines: Mapping[str, tuple[str, us
                 "hooks/memory_engine.py heal --proj %s --backfill-titles (or "
                 "skills/meta-dream-tree/factedit.py apply --slug %s --level %s "
                 "--title <title>), then tag it" % (slug, anchor, slug, level))
-    wanted = _comparable_line(_line_from_head(slug, head))
+    line = _line_from_head(slug, head)
+    assert line is not None  # a body with a title: and a description: always renders a line
+    wanted = _comparable_line(line)
     for line, (level, _ptr) in lines.items():
         if line != wanted:
             # Both routes name the level: factedit otherwise resolves the owning level by
@@ -3704,7 +3727,8 @@ def _set_topic_list_held(anchor: _StrPath, topics: Mapping[str, str], tagger: st
     # By the name the list will store (trimmed), one name at a time: the list is capped by
     # topic_store.MAX_LIST, not by the per-fact tp.MAX_TOPICS a whole-list normalise applies.
     names = {tp.normalise_topics([name])[0] for name in topics}
-    dropped = set(old.topics) - names if old else set()
+    dropped: set[str] = set(old.topics) - names if old else set()
+    users: list[str]
     users, total = [], 0
     if dropped:
         for slug, carried in iter_fact_topics(anchor):
@@ -3732,7 +3756,7 @@ def _pointer_owners(anchor: _StrPath, wanted: Container[str]) -> _Owners:
     it, its pointer)})} for the slugs in `wanted`, from one walk over the tree's levels. Holds one
     entry per wanted slug, and per slug one record per DISTINCT line (`_comparable_line`): lines
     that say the same thing at several levels are one record, so a placed fact costs one."""
-    owners = {}
+    owners: _Owners = {}
     for level in curated_levels_under(anchor):
         for ptr in _us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level)))[1]:
             if ptr.slug in wanted:
@@ -3776,7 +3800,7 @@ def _copy_levels(anchor: _StrPath, wanted: Container[str]) -> _CopyPlan:
     """{slug: ([every level dir holding a line of it, top first], the line at the first)} for the
     slugs in `wanted`, from one walk over the tree's levels. Holds per slug its levels and one
     pointer."""
-    found = {}
+    found: _CopyPlan = {}
     order = sorted(((_level_parts(anchor, level), os.path.abspath(str(level)))
                     for level in curated_levels_under(anchor)),
                    key=lambda row: (len(row[0]), row[0]))
@@ -3813,7 +3837,7 @@ def _collapse_plan(anchor: _StrPath, rows: Mapping[str, tuple[str, ...] | None],
             raise CollapseTooLarge(top, split["kept"] + split["fixed"], added, split["stale"],
                                    split["placed"], fixed=split["fixed"],
                                    fit=_lines_that_fit(plan, anchor, MAX_RENDER_BLOCK_BYTES - held),
-                                   rebind=split["rebind"])
+                                   rebind=bool(split["rebind"]))
     return plan
 
 
@@ -3929,6 +3953,7 @@ def set_fact_topics(proj: _StrPath, rows: Mapping[str, tuple[str, ...] | None], 
 def _set_fact_topics_held(anchor: _StrPath, rows: Mapping[str, tuple[str, ...] | None], allowed: Container[str], dry_run: bool, write: _WritePort | None) -> TopicsSetReport:
     """`set_fact_topics` from the row checks on; a real call's caller holds the placement lock."""
     owners = _pointer_owners(anchor, set(rows))
+    problems: list[str]
     problems, total = [], 0
     for slug in sorted(rows):
         why = _topic_row_problem(slug, rows[slug], anchor, allowed, owners)
@@ -4012,7 +4037,7 @@ def _write_level_topics(anchor: _StrPath, level: _StrPath, topics: Iterable[str]
         if not scope.strip():
             raise TopicRefusal(["%s has no descriptor yet (set-scope writes one)" % level])
         tagged = tp.with_descriptor_topics(scope, topics)
-        written = []
+        written: list[bool] = []
         _topic_store.record_level(
             anchor, level, tp.descriptor_digest(tagged),
             before=lambda: written.append(
@@ -4095,7 +4120,8 @@ class _Placer:
     stays small; it is emptied when it reaches _PLACEMENT_CACHE entries rather than grown."""
 
     def __init__(self, level_map: tp.LevelMap) -> None:
-        self._map, self._seen = level_map, {}
+        self._map = level_map
+        self._seen: dict[tuple[str, ...], frozenset[tp.Level]] = {}
 
     def __call__(self, topics: tuple[str, ...]) -> frozenset[tp.Level]:
         hit = self._seen.get(topics)
@@ -4296,12 +4322,14 @@ def _wanted_lines(anchor: _StrPath, place: _Placer, pinned: Container[str], part
     case already; this check holds the bound when a body or the level's block grew between the
     census and this pass (another writer). Past that bound it stops holding lines and only
     counts, so the refusal names the whole overflow."""
+    wanted: dict[str, us.Pointer] | None
     wanted, size = {}, sum(held)
     for slug, head in _iter_body_heads(anchor):
         topics = _managed_topics(slug, head, pinned)
         if topics is None or slug in skip or parts not in place(topics):
             continue
         line = _line_from_head(slug, head)
+        assert line is not None  # _managed_topics returned topics, so the head renders a line
         size += len(line.index_line().encode("utf-8")) + 1
         if _grows_past_cap(now, size):
             wanted = None
@@ -4348,6 +4376,8 @@ def _add_lines(level_dir: str, wanted: Mapping[str, us.Pointer], rep: RenderRepo
         text = read_store_text(local)
         scope, pointers = _us.parse_pointer_index(text)
         held = {p.slug: p for p in pointers}
+        added: list[str]
+        refreshed: list[str]
         added, refreshed = [], []
         for slug in sorted(wanted):
             line, have = wanted[slug], held.get(slug)
@@ -4382,7 +4412,7 @@ def _drop_lines(level_dir: str, doomed: Collection[str], rep: RenderReport, dry_
 def _misplaced_lines(anchor: _StrPath, place: _Placer, pinned: Container[str], parts: tp.Level, level_dir: _StrPath) -> dict[str, frozenset[tp.Level]]:
     """{slug: the levels (parts) its fact is placed at} for the managed lines at one level that are
     placed elsewhere: one body head is read per line of the level's block."""
-    doomed = {}
+    doomed: dict[str, frozenset[tp.Level]] = {}
     for ptr in _us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level_dir)))[1]:
         if ptr.pin or ptr.legacy:
             continue
@@ -4407,6 +4437,8 @@ def _keep_last_lines(dirs: Mapping[tp.Level, str], doomed: Mapping[str, Iterable
     levels' blocks."""
     if dry_run:
         return set(doomed), set()
+    blocks: dict[str, set[str]]
+    kept: set[str]
     blocks, kept = {}, set()
 
     def held(level: str) -> set[str]:
@@ -4491,14 +4523,15 @@ def _chain_census(anchor: _StrPath, pinned: Container[str], place: _Placer, chai
     tally = _census_tally()
     held_at = [_block_slugs(level) for _parts, level in chain]
     now = [_block_bytes(level) for _parts, level in chain]
-    sizes, added = [0] * len(chain), [set() for _level in chain]
+    sizes = [0] * len(chain)
+    added: list[set[str]] = [set() for _level in chain]
     for slug, topics, line in _census_lines(anchor, pinned, tally):
         i = _chain_target(slug, place(topics), chain, adds, held_at)
         if i is not None:
             sizes[i] += len(line.index_line().encode("utf-8")) + 1
             if sizes[i] <= max(MAX_RENDER_BLOCK_BYTES, now[i]):
                 added[i].add(slug)
-    above = set()
+    above: set[str] = set()
     for i, (parts, level) in enumerate(chain):
         if parts in adds:
             kept, stale = _held_bytes(anchor, pinned, level, _chain_goes(place, parts, above))
@@ -4514,7 +4547,7 @@ def _held_above(anchor: _StrPath, pinned: Container[str], level_dir: _StrPath, a
     """The slugs of the managed lines at one level whose slug a level above it on the chain holds
     (`above`): one body head is read per such line. A pinned, legacy or unmanaged line is never
     among them."""
-    doomed = set()
+    doomed: set[str] = set()
     for ptr in _us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level_dir)))[1]:
         if ptr.slug not in above or ptr.pin or ptr.legacy:
             continue
@@ -4531,10 +4564,12 @@ def _render_chain(anchor: _StrPath, chain: Sequence[tuple[tp.Level, str]], adds:
     is never dropped for being placed elsewhere: another subtree may still read it, and the tree
     scope sweeps. The slugs each level holds after its add are kept for the DROP pass, so a dry
     run reports the drops a real run makes. Holds the slugs of the chain's blocks."""
+    above: set[str]
+    holds: list[set[str]]
     above, holds = set(), []
     for parts, level in chain:
         _placement_heartbeat()
-        wanted = {}
+        wanted: dict[str, us.Pointer] = {}
         if parts in adds:
             held = _held_bytes(anchor, pinned, level, _chain_goes(place, parts, above))
             wanted = _wanted_lines(anchor, place, pinned, parts, level, held, skip=above,
@@ -4664,6 +4699,8 @@ def _read_topic_batch(path: _StrPath) -> tuple[dict[str, tuple[str, ...] | None]
         fh = open(path, "rb")
     except OSError as exc:
         return None, "! error: cannot read %s (%s)" % (path, exc.strerror or exc)
+    rows: dict[str, tuple[str, ...] | None]
+    first_on: dict[str, int]
     rows, first_on = {}, {}
     with fh:
         n = 0
@@ -4688,14 +4725,16 @@ def _read_topic_batch(path: _StrPath) -> tuple[dict[str, tuple[str, ...] | None]
             if not line.strip():
                 continue
             try:
-                obj = json.loads(line)
+                obj: object = json.loads(line)
                 if not isinstance(obj, dict):
                     raise TypeError('expected a JSON object {"slug": ..., "topics": [...]}, got %s'
                                     % _json_kind(obj))
-                slug, raw = obj["slug"], obj["topics"]
+                fields = cast("dict[str, object]", obj)     # a JSON object's keys are strings
+                slug, raw = fields["slug"], fields["topics"]
                 if not isinstance(slug, str) or not (raw is None or isinstance(raw, list)):
                     raise TypeError("'slug' must be a string and 'topics' a list or null")
-                topics = None if raw is None else tp.normalise_topics(raw)
+                # normalise_topics refuses each element that is not a str tag itself
+                topics = None if raw is None else tp.normalise_topics(cast("list[str]", raw))
             except (ValueError, KeyError, TypeError, RecursionError) as exc:
                 return None, "! error: %s line %d: %s" % (path, n, exc)
             if slug in rows:
@@ -4862,14 +4901,17 @@ def _topics_arg(value: str) -> tuple[tuple[str, ...], None] | tuple[None, str]:
         return None, "! error: --topics %r: %s" % (value, exc)
 
 
+_JSON_KINDS: dict[type[object], str] = {list: "an array", str: "a string", int: "a number",
+                                        float: "a number"}
+
+
 def _json_kind(value: object) -> str:
     """What a decoded JSON value is, in JSON's own words, for a message naming a wrong type."""
     if value is None:
         return "null"
     if isinstance(value, bool):
         return "a boolean"
-    return {list: "an array", str: "a string", int: "a number", float: "a number"}.get(
-        type(value), "a %s" % type(value).__name__)
+    return _JSON_KINDS.get(type(value), "a %s" % type(value).__name__)
 
 
 def _topic_write(args: argparse.Namespace) -> int:
@@ -4881,25 +4923,30 @@ def _topic_write(args: argparse.Namespace) -> int:
         text, err = _read_input_file(args.from_file)
         if err:
             return _input_error(err)
+        assert text is not None  # set whenever err is empty: every error the helper returns is a non-empty message
         try:
-            spec = json.loads(text)
+            spec: object = json.loads(text)
             if not isinstance(spec, dict):
                 raise TypeError('expected a JSON object {"tagger": ..., "topics": {...}}, got %s'
                                 % _json_kind(spec))
-            topics, tagger = spec["topics"], spec["tagger"]
+            fields = cast("dict[str, object]", spec)     # a JSON object's keys are strings
+            topics, tagger = fields["topics"], fields["tagger"]
             if not isinstance(topics, dict):
                 raise TypeError("'topics' must be an object of tag: meaning")
         except (ValueError, KeyError, TypeError) as exc:
             return _input_error("! error: %s: %s" % (args.from_file, exc))
-        changed = set_topic_list(args.proj, topics, tagger)
+        # The store refuses a tag, a meaning or a tagger that is not a str (topic_store.save_list)
+        topic_map = cast("dict[str, str]", topics)
+        changed = set_topic_list(args.proj, topic_map, cast("str", tagger))
         print("topic list %s: %d topic(s), tagger %s"
-              % ("updated" if changed else "unchanged", len(topics), tagger))
+              % ("updated" if changed else "unchanged", len(topic_map), tagger))
         return 0
     if args.cmd == "set-topics":
         if args.batch:
             rows, err = _read_topic_batch(args.batch)
             if err:
                 return _input_error(err)
+            assert rows is not None  # set whenever err is empty: every error the helper returns is a non-empty message
         else:
             given = [args.topics is not None, args.universal, args.clear]
             if not args.slug or sum(given) != 1:
@@ -4925,6 +4972,7 @@ def _topic_write(args: argparse.Namespace) -> int:
     topics, err = _topics_arg(args.topics)
     if err:
         return _input_error(err)
+    assert topics is not None  # set whenever err is empty: every error the helper returns is a non-empty message
     changed = set_level_topics(args.proj, topics, top=args.cmd == "set-top-topics")
     print("topics %s: %s" % ("updated" if changed else "unchanged", args.proj))
     return 0
@@ -5235,7 +5283,7 @@ def _main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.cmd == "ensure-memory-structure":
-        refused = []
+        refused: list[LevelReason] = []
         created = scaffold(args.proj, refused_levels=refused)
         print("ensure-memory-structure: created %d file(s) up the chain" % len(created))
         for p in created:
@@ -5249,6 +5297,7 @@ def _main(argv: Sequence[str] | None = None) -> int:
         scope, err = _text_from_flag_or_file(args.scope, args.scope_file, "--scope", "--scope-file")
         if err:
             return _input_error(err)
+        assert scope is not None  # set whenever err is empty: every error the helper returns is a non-empty message
         local = sig.claude_local_md_path(args.proj)
         if _is_excluded_level(args.proj):             # before the lock, which creates a file there
             raise ExcludedLevel(args.proj)
@@ -5313,12 +5362,14 @@ def _main(argv: Sequence[str] | None = None) -> int:
         hook, err = _text_from_flag_or_file(args.hook, args.hook_file, "--hook", "--hook-file")
         if err:
             return _input_error(err)
+        assert hook is not None  # set whenever err is empty: every error the helper returns is a non-empty message
         hook = hook.strip()
         body = args.body
         if args.body_file:
             body, err = _read_input_file(args.body_file)
             if err:
                 return _input_error(err)
+            assert body is not None  # set whenever err is empty: every error the helper returns is a non-empty message
         # Unlike --hook/--hook-file, a scope flag on `add` is OPTIONAL - essentially every capture
         # passes neither. So this is a GUARDED call: `_text_from_flag_or_file` only runs when
         # --scope-file was actually given (it reads the file, or refuses cleanly if it cannot);
@@ -5332,6 +5383,7 @@ def _main(argv: Sequence[str] | None = None) -> int:
                                                           "--scope", "--scope-file")
             if err:
                 return _input_error(err)
+            assert scope_default is not None  # set whenever err is empty: every error the helper returns is a non-empty message
         try:
             slug, _created, advice = add_with_advice(
                 args.proj, title=args.title, hook=hook, body=body, type_=args.type_,
@@ -5352,6 +5404,7 @@ def _main(argv: Sequence[str] | None = None) -> int:
             hook, err = _text_from_flag_or_file(args.hook, args.hook_file, "--hook", "--hook-file")
             if err:
                 return _input_error(err)
+            assert hook is not None  # set whenever err is empty: every error the helper returns is a non-empty message
             hook = hook.strip()
         body = None
         if args.body_file:
