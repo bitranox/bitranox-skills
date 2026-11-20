@@ -1083,10 +1083,21 @@ def repair_appended_type(anchor, dry_run=False):
     return repaired, skipped
 
 
+def rehome_pointer(anchor, slug):
+    """The pointer line a re-home writes for the dangling body `slug`: its hook from the body's
+    `description:`, its title from the body's `title:`. Only a body written before titles were
+    kept as data has none, and then the title is derived from the slug - the stored one, when
+    there is one, is the fact's own: deriving it anyway also overwrote it in the body, since every
+    engine write keeps the two equal."""
+    text = ME.read_store_text(us.body_path(anchor, slug))
+    return us.Pointer(slug=slug, title=ME._body_title(text) or slug.replace("-", " "),
+                      hook=ME._body_description(text))
+
+
 def rehome_dangling_bodies(anchor, to_level=None, dry_run=False):
     """Re-attach a pointer for each dangling body at `to_level` (default: the anchor top) so it becomes
-    visible + loadable again; a later dream re-levels it. The hook is read from the body frontmatter; the
-    title is derived from the slug (a body stores no title). Returns the rehomed slugs.
+    visible + loadable again; a later dream re-levels it. The line is `rehome_pointer`'s. Returns the
+    rehomed slugs.
 
     Every body `unrehomable_bodies` names is skipped - the engine would refuse its name, it is a
     sharded body with no slug to re-attach under, or it cannot be read - and the caller reports
@@ -1099,13 +1110,12 @@ def rehome_dangling_bodies(anchor, to_level=None, dry_run=False):
     for slug in find_dangling_bodies(anchor):
         if slug in blocked:
             continue
-        text = ME.read_store_text(us.body_path(anchor, slug))
+        line = rehome_pointer(anchor, slug)
         if not dry_run:
             # add with no body keeps the existing central body; Fix A re-adopts the dangling slug.
             # allow_over_cap_hook: a rehome MOVES a stored hook verbatim, so a legacy over-cap one
             # must travel with its fact rather than block the move.
-            ME.add_or_update_entry(to_level, title=slug.replace("-", " "),
-                                   hook=ME._body_description(text), slug=slug,
+            ME.add_or_update_entry(to_level, title=line.title, hook=line.hook, slug=slug,
                                    allow_over_cap_hook=True)
         done.append(slug)
     return done
@@ -1363,6 +1373,15 @@ def _main(argv=None):
         for slug in done:
             print("%s: %s" % ("would re-home" if args.dry_run else "re-homed", slug))
         print("TOTAL re-homed: %d" % len(done))
+        if done:
+            # The cost every re-home to a level is reported with: the bytes its lines add to
+            # that level's always-loaded block (a dangling body has no line there yet).
+            target = args.rehome_to or str(anchor)
+            added = sum(ME._line_size(rehome_pointer(anchor, s)) for s in done)
+            print("cost: %s %d byte(s) to the always-loaded pointer block at %s%s"
+                  % ("would add" if args.dry_run else "added", added, target,
+                     " (the tree top, loaded by every session in the tree)"
+                     if Path(target).resolve() == Path(anchor).resolve() else ""))
         stuck = unrehomable_bodies(anchor)
         for name, why in stuck:
             print("cannot re-home: %s.md - %s" % (name, why))
