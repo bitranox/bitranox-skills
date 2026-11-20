@@ -30,6 +30,12 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.17.5]
+
+### Fixed
+
+- `compuse-bash`: a new row, "Waiting for the next run of a timer's `Type=oneshot` service": the unit's state is stale from its previous run, so `is-active`, `ActiveState` and `Result` read finished before the new run starts, and a plain oneshot never sets `ActiveEnterTimestampMonotonic`. Wait instead until `InactiveEnterTimestampMonotonic` differs from its value at arming; `ExecMainExitTimestampMonotonic` is never set when a start fails before the main process.
+
 ## [11.17.4]
 
 ### Added
