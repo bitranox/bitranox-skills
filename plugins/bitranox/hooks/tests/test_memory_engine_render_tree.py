@@ -505,8 +505,8 @@ def test_kept_lines_that_fill_the_block_are_refused_with_a_route_that_moves_them
     assert E.main(["render-topics", "--proj", anchor, "--scope", "tree"]) == 2
     out = capsys.readouterr().out
     assert _snapshot(anchor) == before
-    said = re.search(r"(\d+) bytes of pinned, legacy or unplaced lines stay at (\S+) and (\d+) "
-                     r"bytes of lines placed there are to be added, (\d+) bytes over", out)
+    said = re.search(r"(?<!\d)(\d+) bytes of pinned, legacy or unplaced lines stay at (\S+) and "
+                     r"(\d+) bytes of lines placed there are to be added, (\d+) bytes over", out)
     assert said is not None and said.group(2) == level, out
     assert int(said.group(1)) == sum(kept_bytes.values()) > E.MAX_RENDER_BLOCK_BYTES
     assert E.MAX_RENDER_BLOCK_BYTES > int(said.group(3)) > 0

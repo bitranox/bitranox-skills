@@ -669,8 +669,8 @@ def test_a_collapse_past_the_top_block_cap_is_refused_before_any_write(tmp_path,
                        "--universal", *extra]) == 2
         out = capsys.readouterr().out
         assert out.startswith("! refused") and _snapshot(anchor) == before, out
-    said = re.search(r"(\d+) bytes of lines are there and (\d+) bytes would be added, (\d+) bytes "
-                     r"over the (\d+) bytes", out)
+    said = re.search(r"(?<!\d)(\d+) bytes of lines are there and (\d+) bytes would be added, "
+                     r"(\d+) bytes over the (\d+) bytes", out)
     assert said is not None, out
     assert [int(g) for g in said.groups()] == [E.MAX_RENDER_BLOCK_BYTES - 10, line, line - 10,
                                                E.MAX_RENDER_BLOCK_BYTES]
