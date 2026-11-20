@@ -49,7 +49,7 @@ import shutil
 import sys
 from collections.abc import Callable, Container, Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import Protocol, TypedDict, cast
+from typing import TypedDict
 
 # reuse the UUID-native engine (single source of truth for the on-disk format) from the hooks dir
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "hooks"))
@@ -71,33 +71,6 @@ type _PinsPort = Callable[[_StrPath], Container[str]]
 
 type _DriftRow = tuple[str, int, int, int, list[str]]
 """One `render_drift` row: level, lines missing, differing, placed elsewhere, example slugs."""
-
-
-# The functions of the sibling modules that carry no annotations yet, typed as this tool calls
-# them (the pattern memory_engine uses). Each view is the MODULE ITSELF under a Protocol type,
-# never a copy: a call through it looks the function up when it is made, so a test that patches
-# the module still reaches this one. Drop a view, and call the module directly, once that module
-# is annotated.
-
-class _UuidStoreView(Protocol):
-    def parse_pointer_index(self, text: str) -> tuple[str, list[us.Pointer]]: ...
-    def invalid_pointer_lines(self, text: str) -> list[str]: ...
-    def central_facts_dir(self, anchor_dir: _StrPath) -> Path: ...
-    def body_path(self, anchor_dir: _StrPath, slug: str) -> Path: ...
-    def legacy_body_path(self, anchor_dir: _StrPath, fact_uuid_str: str) -> Path: ...
-    def free_archive_path(self, archive_dir: _StrPath, name: str) -> Path: ...
-    def is_valid_slug(self, slug: object) -> bool: ...
-    def is_non_level_dirname(self, name: str) -> bool: ...
-    def shard(self, fact_uuid_str: str) -> str: ...
-    def resolve_anchor(self, proj: _StrPath) -> Path | None: ...
-
-
-class _SignalsView(Protocol):
-    def altitude_chain(self, proj: _StrPath) -> list[Path]: ...
-
-
-_us = cast("_UuidStoreView", us)
-_sig = cast("_SignalsView", sig)
 
 
 class ReconcileReport(TypedDict):
@@ -314,7 +287,7 @@ def _unpassed_ancestor_levels(dirs: Sequence[_StrPath]) -> list[Path]:
     seen: set[Path] = set()
     out: list[Path] = []
     for d in dirs:
-        for lvl in _sig.altitude_chain(str(d)):
+        for lvl in sig.altitude_chain(str(d)):
             key = _key(lvl)
             if key is None or key in passed or key in seen:
                 continue
@@ -431,7 +404,7 @@ def reconcile(level_dir: _StrPath, dry_run: bool = False) -> ReconcileReport:
     anchor = ME.anchor_dir(str(d))
     orphans = sorted(
         _canon(e.slug) for e in entries
-        if not (_us.legacy_body_path(anchor, e.uuid) if e.legacy else _us.body_path(anchor, e.slug)).is_file())
+        if not (us.legacy_body_path(anchor, e.uuid) if e.legacy else us.body_path(anchor, e.slug)).is_file())
     return {"dir": str(d), "facts": len(entries), "already_indexed": len(entries),
             "added": [], "orphans": orphans, "dry_run": dry_run}
 
@@ -447,7 +420,7 @@ def _other_levels_pointing(anchor: _StrPath, level_dir: _StrPath, slug: str) -> 
             continue
         # raises TreeWalkError rather than skip: "no other level points at it" is the answer
         # that archives a body a level still needs
-        _s, ptrs = _us.parse_pointer_index(ME.read_store_text(Path(lvl) / "CLAUDE.local.md"))
+        _s, ptrs = us.parse_pointer_index(ME.read_store_text(Path(lvl) / "CLAUDE.local.md"))
         if any(_canon(x.slug) == qcanon for x in ptrs):
             return True
     return False
@@ -458,7 +431,7 @@ def _names_invalid_pointer(level_dir: _StrPath, slug: str) -> bool:
     the slug (or legacy uuid) is not a plain store name."""
     text = ME.read_store_text(Path(level_dir) / "CLAUDE.local.md")
     needles = ("](mem:%s)" % slug, "](uuid:%s)" % slug, "bx:slug=%s " % slug)
-    return any(n in raw + " " for raw in _us.invalid_pointer_lines(text) for n in needles)
+    return any(n in raw + " " for raw in us.invalid_pointer_lines(text) for n in needles)
 
 
 # A slug-shaped token: starts and ends alphanumeric, may hold `-`, `_` and `.` inside. The
@@ -684,14 +657,14 @@ def _archive_here(d: Path, anchor: Path, slug: str, scope: str, entries: list[ME
     moved: list[tuple[Path, Path]] = []
     for e in entries:
         if _canon(e.slug) == qcanon:
-            src = _us.legacy_body_path(anchor, e.uuid) if e.legacy else _us.body_path(anchor, e.slug)
+            src = us.legacy_body_path(anchor, e.uuid) if e.legacy else us.body_path(anchor, e.slug)
             # archive the body ONLY when no other level in the tree still points at this slug
             others = _other_levels_pointing(anchor, d, e.slug)
             if src.is_file() and not others:
-                archive = _us.central_facts_dir(anchor).parent / archive_subdir
+                archive = us.central_facts_dir(anchor).parent / archive_subdir
                 archive.mkdir(parents=True, exist_ok=True)
                 # an archive is the only copy of a retired fact: never move onto an earlier one
-                dest = _us.free_archive_path(archive, src.name)
+                dest = us.free_archive_path(archive, src.name)
                 move(str(src), str(dest))
                 moved.append((src, dest))
     try:
@@ -752,7 +725,7 @@ def store_bodies(facts: Path, unreadable: list[str] | None = None) -> tuple[set[
         if not d.is_dir() or d.is_symlink():
             continue
         for f in _list_store_dir(d, unreadable):
-            if f.suffix == ".md" and f.is_file() and _us.shard(f.stem) == d.name:
+            if f.suffix == ".md" and f.is_file() and us.shard(f.stem) == d.name:
                 sharded[f.stem] = "%s/%s" % (d.name, f.stem)
     return flat, sharded
 
@@ -767,7 +740,7 @@ def find_dangling_bodies(anchor: _StrPath, unreadable: list[str] | None = None) 
 
     A store directory that cannot be listed raises `TreeWalkError`, unless `unreadable` is a list,
     which then receives its path instead."""
-    flat, sharded = store_bodies(_us.central_facts_dir(Path(anchor)), unreadable)
+    flat, sharded = store_bodies(us.central_facts_dir(Path(anchor)), unreadable)
     pointed: set[str] = set()
     legacy: set[str] = set()
     for lvl in _all_curated_levels(anchor):
@@ -826,7 +799,7 @@ def find_misplaced(anchor: _StrPath) -> list[Misplaced]:
             own = 0
             for m in _ABS_PATH_RX.finditer(body):
                 p = m.group(1)
-                found = _us.resolve_anchor(p) or _existing_ancestor_anchor(p)
+                found = us.resolve_anchor(p) or _existing_ancestor_anchor(p)
                 if found is None:
                     continue
                 a = Path(found).resolve()
@@ -848,7 +821,7 @@ def _existing_ancestor_anchor(path: str) -> Path | None:
     p = Path(path)
     for cand in [p] + list(p.parents):
         if cand.exists():
-            return _us.resolve_anchor(str(cand))
+            return us.resolve_anchor(str(cand))
     return None
 
 
@@ -884,7 +857,7 @@ def find_decoy_anchors(anchor: _StrPath, unreadable: list[str] | None = None) ->
         # never descend into a store, a backup/variant dir (`<store>-*`), a vendored dir, or the
         # dream's own backup root
         dirs[:] = [d for d in dirs
-                   if not _us.is_non_level_dirname(d) and (rootp / d).resolve() != audit_root]
+                   if not us.is_non_level_dirname(d) and (rootp / d).resolve() != audit_root]
     return sorted(found)
 
 
@@ -940,16 +913,16 @@ def placed_by_topic(anchor: _StrPath, slug: str, pins: _PinsPort) -> bool:
     `topics:` line and the title and description a line is built from, and no level pins it or
     holds a legacy line of it (`pins(anchor)`, asked only for such a body). Its lines then stand wherever the levels' topics
     place them, at levels a citing fact's chain need not include. Reads one body head."""
-    if not _us.is_valid_slug(slug):
+    if not us.is_valid_slug(slug):
         return False
-    head = ME.read_body_head(_us.body_path(anchor, slug))
+    head = ME.read_body_head(us.body_path(anchor, slug))
     if head is None or ME.managed_topics(slug, head, ()) is None:
         return False
     return slug not in pins(anchor)
 
 
 def _level_pointers(level: _StrPath) -> list[us.Pointer]:
-    return _us.parse_pointer_index(ME.read_store_text(sig.claude_local_md_path(level)))[1]
+    return us.parse_pointer_index(ME.read_store_text(sig.claude_local_md_path(level)))[1]
 
 
 def _levels_above(level: Path, anchor: Path) -> list[Path]:
@@ -1020,7 +993,7 @@ def check_tree(anchor: _StrPath) -> TreeReport:
                 pinned.add(cslug)
             if not e.legacy and ME.managed_topics(e.slug, bodies.get(e.slug, ""), ()) is not None:
                 tagged.add(cslug)
-            body_p = _us.legacy_body_path(top, e.uuid) if e.legacy else _us.body_path(top, e.slug)
+            body_p = us.legacy_body_path(top, e.uuid) if e.legacy else us.body_path(top, e.slug)
             if not body_p.is_file():
                 orphan_pointers.append((lvl, e.slug))
             cited = ME.mask_code_regions(e.hook + "\n" + bodies.get(e.slug, ""))
@@ -1089,7 +1062,7 @@ def find_frame_only_bodies(anchor: _StrPath, unreadable: list[str] | None = None
     A body that cannot be read or is not UTF-8 raises `TreeWalkError`, unless `unreadable` is a
     list, which then receives its path: skipping it in silence reported it as not frame-only."""
     out: list[str] = []
-    facts = _us.central_facts_dir(Path(anchor))
+    facts = us.central_facts_dir(Path(anchor))
     if not facts.is_dir():
         return out
     flat, sharded = store_bodies(facts, unreadable)
@@ -1152,7 +1125,7 @@ def find_appended_type_damage(anchor: _StrPath, unreadable: list[str] | None = N
     """Names of the bodies in `anchor`'s store carrying `appended_type_damage`: a flat body by its
     slug, a sharded one as `<shard>/<uuid>`. A body that cannot be read raises `TreeWalkError`,
     unless `unreadable` is a list, which then receives its path."""
-    facts = _us.central_facts_dir(Path(anchor))
+    facts = us.central_facts_dir(Path(anchor))
     if not facts.is_dir():
         return []
     flat, sharded = store_bodies(facts, unreadable)
@@ -1199,7 +1172,7 @@ def repair_appended_type(anchor: _StrPath, dry_run: bool = False, *,
             skipped.append((name, "no pointer names this body - re-home it first (--rehome)"))
             continue
         level, entry = owners[name]
-        raw = reread(_us.body_path(top, name))
+        raw = reread(us.body_path(top, name))
         damage = appended_type_damage(raw)
         if damage is None:                       # repaired or rewritten since the scan: no damage
             continue
@@ -1219,7 +1192,7 @@ def rehome_pointer(anchor: _StrPath, slug: str) -> us.Pointer:
     kept as data has none, and then the title is derived from the slug - the stored one, when
     there is one, is the fact's own: deriving it anyway also overwrote it in the body, since every
     engine write keeps the two equal."""
-    text = ME.read_store_text(_us.body_path(anchor, slug))
+    text = ME.read_store_text(us.body_path(anchor, slug))
     return us.Pointer(slug=slug, title=ME.body_title(text) or slug.replace("-", " "),
                       hook=ME.body_description(text))
 
@@ -1266,11 +1239,11 @@ def unrehomable_bodies(anchor: _StrPath) -> list[tuple[str, str]]:
             out.append((name, "a pre-pivot sharded body no pointer names; it carries no slug to "
                               "re-attach under - read it, then re-capture it with memory_engine "
                               "add, or move it to .claude-memory/.archive/"))
-        elif not _us.is_valid_slug(name):
+        elif not us.is_valid_slug(name):
             out.append((name, "its name is not a valid slug; rename the body file"))
         else:
             try:
-                ME.read_store_text(_us.body_path(top, name))
+                ME.read_store_text(us.body_path(top, name))
             except ME.TreeWalkError as exc:
                 out.append((name, _walk_error_reason(exc)))
     return out
@@ -1400,7 +1373,7 @@ def _main(argv: Sequence[str] | None = None) -> int:
         # Only a LAST pointer leaves its mentions dangling; while another level still points at
         # the slug the fact survives, and listing its mentions would claim they now name nothing.
         # a slug that is no filename owns no body; archive_entry reports it as no entry
-        others = (placed_copies(anchor, level, args.archive) if _us.is_valid_slug(args.archive)
+        others = (placed_copies(anchor, level, args.archive) if us.is_valid_slug(args.archive)
                   else [])
         if args.force and (others or not _other_levels_pointing(anchor, level, args.archive)):
             found = inbound_mentions(anchor, args.archive)
@@ -1517,7 +1490,7 @@ def _main(argv: Sequence[str] | None = None) -> int:
             print("cannot re-home: %s.md - %s" % (name, why))
         # a sharded body or a non-slug name is a finding for a person (1); anything else on the
         # list is a body that could not be READ, which is not an answer but a failure (2)
-        unread = [n for n, _why in stuck if not _is_sharded_body_name(n) and _us.is_valid_slug(n)]
+        unread = [n for n, _why in stuck if not _is_sharded_body_name(n) and us.is_valid_slug(n)]
         if unread:
             return 2
         return 1 if stuck else 0

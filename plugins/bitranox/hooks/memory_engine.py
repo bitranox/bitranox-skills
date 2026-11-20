@@ -40,7 +40,7 @@ from collections.abc import Callable, Collection, Container, Iterable, Iterator,
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import NamedTuple, NoReturn, Protocol, TypedDict, cast
+from typing import NamedTuple, NoReturn, TypedDict, cast
 
 import capture_constraints
 import self_improve_signals as sig
@@ -70,68 +70,6 @@ type _PartRule = Callable[[str, tuple[str, ...]], str | None]
 """`_block_split`'s rule for a managed line: the part its bytes count under, or None for none."""
 
 
-# The functions of the sibling modules that carry no annotations yet, typed as this module calls
-# them. Strict pyright reads every unannotated function as partially unknown, and everything built
-# from its result inherits that. Each view below is the MODULE ITSELF under a Protocol type, never
-# a copy: a call through it looks the function up when it is made, as a call through the module
-# name does, so a test that patches the module still reaches this one. Drop a view, and call the
-# module directly, once that module is annotated.
-
-class _UuidStoreApi(Protocol):
-    def parse_pointer_index(self, text: str) -> tuple[str, list[us.Pointer]]: ...
-    def invalid_pointer_lines(self, text: str) -> list[str]: ...
-    def upsert_pointer_block(self, text: str, scope: str,
-                             pointers: Iterable[us.Pointer]) -> str: ...
-    def read_store_text(self, path: _StrPath) -> str: ...
-    def write_if_changed(self, path: _StrPath, text: str) -> bool: ...
-    def central_facts_dir(self, anchor_dir: _StrPath) -> Path: ...
-    def body_path(self, anchor_dir: _StrPath, slug: str) -> Path: ...
-    def legacy_body_path(self, anchor_dir: _StrPath, fact_uuid_str: str) -> Path: ...
-    def free_archive_path(self, archive_dir: _StrPath, name: str) -> Path: ...
-    def put_body(self, anchor_dir: _StrPath, slug: str, body: str) -> bool: ...
-    def add_pointer(self, altitude_dir: _StrPath, slug: str, title: str, hook: str,
-                    pin: bool = ..., scope_default: str = ...) -> str: ...
-    def is_valid_slug(self, slug: object) -> bool: ...
-    def require_valid_slug(self, slug: object) -> None: ...
-    def is_non_level_dirname(self, name: str) -> bool: ...
-    def hook_over_budget(self, hook: str | None) -> bool: ...
-    def hook_over_hard_cap(self, hook: str | None) -> bool: ...
-    def hook_missing_trigger(self, hook: str | None) -> bool: ...
-    def recurrence_count(self, body: str | None) -> int | None: ...
-    def slugify(self, title: str | None, type_: str | None = ...) -> str: ...
-    def resolve_anchor(self, proj: _StrPath) -> Path | None: ...
-
-
-class _SignalsApi(Protocol):
-    def altitude_chain(self, proj: _StrPath) -> list[Path]: ...
-    def read_scope_block(self, text: str) -> str | None: ...
-    def load_config(self) -> dict[str, object]: ...
-    def ensure_gitignored(self, proj: _StrPath, *patterns: str) -> bool: ...
-    def discovery_roots(self) -> list[Path]: ...
-    def find_claude_md_dirs(self, roots: Iterable[_StrPath]) -> list[Path]: ...
-    def tree_groups(self, md_dirs: Iterable[_StrPath]) -> dict[Path, list[Path]]: ...
-    def excluded_anchor_dirs(self) -> set[Path]: ...
-
-
-class _TopicStoreApi(Protocol):
-    def store_path(self, anchor: _StrPath) -> Path: ...
-    def level_key(self, anchor: _StrPath, level: _StrPath) -> str: ...
-    def load(self, anchor: _StrPath) -> topic_store.TopicFile | None: ...
-    def save_list(self, anchor: _StrPath, topics: Mapping[str, str], tagger: str) -> bool: ...
-    def record_level(self, anchor: _StrPath, level: _StrPath, digest: str,
-                     before: Callable[[], object] | None = ...) -> bool: ...
-
-
-class _TellCharsApi(Protocol):
-    def split_lines(self, text: str, keepends: bool = ...) -> list[str]: ...
-    def code_line_flags(self, lines: Sequence[str]) -> list[bool]: ...
-
-
-_us = cast("_UuidStoreApi", us)
-_sig = cast("_SignalsApi", sig)
-_topic_store = cast("_TopicStoreApi", topic_store)
-_tell_chars = cast("_TellCharsApi", tell_chars)
-
 WRITE_VERBS = frozenset({"add", "amend-pinned", "move", "relocate", "rename", "retitle", "set-scope",
                          "heal", "ensure-memory-structure", "ensure-all-trees", "topics-set-list",
                          "set-topics", "set-level-topics", "set-top-topics", "render-topics"})
@@ -142,7 +80,7 @@ SCOPE_END = sig.SCOPE_MARK_END              # <!-- /bitranox:self-learning -->
 
 # The slug algorithm + type prefixes live in uuid_store (single source); aliased here because the
 # capture procedure and the migration tools call them via this module.
-slugify = _us.slugify
+slugify = us.slugify
 _TYPE_PREFIXES = us.TYPE_PREFIXES
 
 # Minimal marker written to a level's CLAUDE.md when the scaffold creates one (so every altitude up to
@@ -376,7 +314,7 @@ def _copies_of(anchor: _StrPath, slug: str) -> list[_Copy]:
     """[(level dir, Pointer)] for every line of `slug` in the tree, from one walk over its levels."""
     out: list[_Copy] = []
     for level in curated_levels_under(anchor):
-        for ptr in _us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level)))[1]:
+        for ptr in us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level)))[1]:
             if ptr.slug == slug:
                 out.append((level, ptr))
     return out
@@ -393,7 +331,7 @@ def _placed_slugs(anchor: _StrPath, slugs: Iterable[str]) -> set[str]:
     managed. Holds one small record per managed slug."""
     managed: set[str] = set()
     for slug in slugs:
-        head = read_body_head(_us.body_path(anchor, slug))
+        head = read_body_head(us.body_path(anchor, slug))
         if head is not None and managed_topics(slug, head, ()) is not None:
             managed.add(slug)
     if not managed:
@@ -402,7 +340,7 @@ def _placed_slugs(anchor: _StrPath, slugs: Iterable[str]) -> set[str]:
     fixed: set[str]
     seen, fixed = set(), set()
     for level in curated_levels_under(anchor):
-        for ptr in _us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level)))[1]:
+        for ptr in us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level)))[1]:
             if ptr.slug in managed:
                 seen.add(ptr.slug)
                 if _keeps_in_place(ptr):
@@ -413,7 +351,7 @@ def _placed_slugs(anchor: _StrPath, slugs: Iterable[str]) -> set[str]:
 def placed_copies(anchor: _StrPath, slug: str) -> list[_Copy]:
     """[(level dir, Pointer)] for every line of `slug` when its fact is placed by topic (see
     `_placed_slugs`), else []. One body head; one walk over the levels for a managed body."""
-    head = read_body_head(_us.body_path(anchor, slug))
+    head = read_body_head(us.body_path(anchor, slug))
     if head is None or managed_topics(slug, head, ()) is None:
         return []
     copies = _copies_of(anchor, slug)
@@ -455,7 +393,7 @@ def _placed_by_topic(slug: str, anchor: _StrPath) -> str:
 # builder raises it too, so the engine's up-front refusal and the store's last line of defence are
 # one exception type.
 InvalidSlug = us.InvalidSlug
-_require_valid_slug = _us.require_valid_slug
+_require_valid_slug = us.require_valid_slug
 
 
 def _require_known_type(type_: str | None) -> None:
@@ -585,7 +523,7 @@ def _pruned_part(anchor: _StrPath, proj: _StrPath) -> tuple[str, str] | None:
     except ValueError:
         return None
     for name in rel.parts:
-        if _us.is_non_level_dirname(name):
+        if us.is_non_level_dirname(name):
             return name, str(top)
         top = top / name
     return None
@@ -647,7 +585,7 @@ class UnknownSlug(ValueError):
 def anchor_dir(proj: _StrPath) -> Path:
     """The anchor dir for `proj` (holds the central `.claude-memory/` body-store). Falls back to `proj`
     itself when there is no CLAUDE.md-bearing ancestor to anchor to (bootstrap)."""
-    return _us.resolve_anchor(proj) or Path(proj)
+    return us.resolve_anchor(proj) or Path(proj)
 
 
 # ---- the placement lock: one per tree, held by everything that changes where a line is read ---
@@ -679,7 +617,7 @@ a level lock's 5 s, because the holder may be a whole-tree render."""
 
 def _placement_target(anchor: _StrPath) -> Path:
     """The path `sig.memory_lock` locks for `anchor`'s tree: `<anchor>/.claude-memory/placement`."""
-    return _us.central_facts_dir(anchor).parent / "placement"
+    return us.central_facts_dir(anchor).parent / "placement"
 
 
 def placement_lock_path(anchor: _StrPath) -> Path:
@@ -775,7 +713,7 @@ def _placement_lock_if_bound(anchor: _StrPath, slug: str, verb: str) -> contextl
     it, a line the next render refreshes) or finds it gone and refuses as a collision; it can
     neither drop a line elsewhere nor put one back. `add` is also the per-turn capture path, so it
     does not wait behind a render for a fact no render manages."""
-    if not _us.is_valid_slug(slug) or not read_body_topics(_us.body_path(anchor, slug)):
+    if not us.is_valid_slug(slug) or not read_body_topics(us.body_path(anchor, slug)):
         return contextlib.nullcontext()
     return placement_lock(anchor, verb)
 
@@ -787,7 +725,7 @@ def placement_lock_if_listed(anchor: _StrPath | None, verb: str) -> contextlib.A
     un-bound by peers between two of those steps would get a line put back where a collapse had
     dropped it. Holding the lock for any fact of a tree that places by topic rules that out; a
     tree without a list places nothing, and nothing there takes it."""
-    if anchor is None or not _topic_store.store_path(anchor).is_file():
+    if anchor is None or not topic_store.store_path(anchor).is_file():
         return contextlib.nullcontext()
     return placement_lock(anchor, verb)
 
@@ -821,7 +759,7 @@ def _hold_level_locks(levels: Iterable[_StrPath]) -> Iterator[None]:
 def _current_line(level: _StrPath, slug: str) -> us.Pointer | None:
     """`slug`'s pointer line at `level` as the file holds it now, else None. Under the level's lock
     the answer stays true until the lock is released; without it, it is a plan to re-check."""
-    pointers = _us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level)))[1]
+    pointers = us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level)))[1]
     return next((p for p in pointers if p.slug == slug), None)
 
 
@@ -829,10 +767,10 @@ def _put_line_locked(level: _StrPath, slug: str, title: str, hook: str, pin: boo
     """`us.add_pointer` for a caller that already holds `level`'s lock (the lock is not
     reentrant): the same merge (a line the level holds keeps its pin when `pin` is False and its
     hook when `hook` is empty, and a legacy one turns current), the same append for a new line."""
-    _us.require_valid_slug(slug)
+    us.require_valid_slug(slug)
     local = sig.claude_local_md_path(level)
     text = read_store_text(local)
-    scope, pointers = _us.parse_pointer_index(text)
+    scope, pointers = us.parse_pointer_index(text)
     ptr = next((p for p in pointers if p.slug == slug), None)
     if ptr is None:
         pointers.append(us.Pointer(slug=slug, title=title, hook=hook, pin=pin))
@@ -840,28 +778,28 @@ def _put_line_locked(level: _StrPath, slug: str, title: str, hook: str, pin: boo
         ptr.title, ptr.hook = title, (hook or ptr.hook)
         ptr.pin = ptr.pin or pin
         ptr.legacy, ptr.uuid = False, ""
-    _us.write_if_changed(local, _us.upsert_pointer_block(text, scope, pointers))
+    us.write_if_changed(local, us.upsert_pointer_block(text, scope, pointers))
 
 
 def _drop_line_locked(level: _StrPath, slug: str) -> bool:
     """`drop_pointer` for a caller that already holds `level`'s lock."""
     local = sig.claude_local_md_path(level)
     text = read_store_text(local)
-    scope, pointers = _us.parse_pointer_index(text)
+    scope, pointers = us.parse_pointer_index(text)
     kept = [p for p in pointers if p.slug != slug]
     if len(kept) == len(pointers):
         return False
-    _us.write_if_changed(local, _us.upsert_pointer_block(text, scope, kept))
+    us.write_if_changed(local, us.upsert_pointer_block(text, scope, kept))
     return True
 
 
 # mtime-neutral writer: one implementation, in uuid_store.
-_write_if_changed = _us.write_if_changed
+_write_if_changed = us.write_if_changed
 
 # The strict store reader and its error: one implementation, in uuid_store, so a read that
 # add_pointer makes there fails with the class this module's CLI maps to exit 2.
 TreeWalkError = us.TreeWalkError
-read_store_text = _us.read_store_text
+read_store_text = us.read_store_text
 
 
 def read_store(proj: _StrPath) -> tuple[str, list[Entry], dict[str, str]]:
@@ -872,12 +810,12 @@ def read_store(proj: _StrPath) -> tuple[str, list[Entry], dict[str, str]]:
     level read as empty is one it would then rewrite."""
     anchor = anchor_dir(proj)
     text = read_store_text(sig.claude_local_md_path(proj))
-    scope, pointers = _us.parse_pointer_index(text)
+    scope, pointers = us.parse_pointer_index(text)
     entries: list[Entry]
     bodies: dict[str, str]
     entries, bodies = [], {}
     for p in pointers:
-        path = _us.legacy_body_path(anchor, p.uuid) if p.legacy else _us.body_path(anchor, p.slug)
+        path = us.legacy_body_path(anchor, p.uuid) if p.legacy else us.body_path(anchor, p.slug)
         body = read_store_text(path).rstrip("\n")
         entries.append(Entry(slug=p.slug, title=p.title, hook=p.hook, body=body,
                              pin=p.pin, uuid=p.uuid, legacy=p.legacy))
@@ -904,13 +842,13 @@ def commit_store(proj: _StrPath, scope: str | None, entries: Iterable[Entry], bo
     for e in entries:
         body = bodies.get(e.slug)
         if body and not e.legacy:                    # a legacy body stays at its old path until the
-            changed |= _us.put_body(str(anchor), e.slug, body)  # migration moves it
+            changed |= us.put_body(str(anchor), e.slug, body)  # migration moves it
         pointers.append(us.Pointer(slug=e.slug, title=e.title, hook=e.hook,
                                    pin=e.pin, uuid=e.uuid, legacy=e.legacy))
     local = sig.claude_local_md_path(proj)
     text = read_store_text(local)
     _warn_dropped_invalid_pointers(local, text)
-    changed |= _us.write_if_changed(local, _us.upsert_pointer_block(text, scope or "", pointers))
+    changed |= us.write_if_changed(local, us.upsert_pointer_block(text, scope or "", pointers))
     return changed
 
 
@@ -918,7 +856,7 @@ def _warn_dropped_invalid_pointers(local: _StrPath, text: str) -> None:
     """Name, on stderr, each pointer line the canonical re-render about to happen will drop because
     its slug or legacy uuid is not a plain store name. The parser already refuses to follow such a
     line; this keeps its removal from being silent."""
-    for raw in _us.invalid_pointer_lines(text):
+    for raw in us.invalid_pointer_lines(text):
         print("memory_engine: dropping a pointer whose slug is not a plain filename (%s): %s"
               % (local, raw), file=sys.stderr)
 
@@ -1083,7 +1021,7 @@ def upsert_entry(proj: _StrPath, title: str, hook: str | None, body: str = "", t
     slug = slug or slugify(title, type_)
     _require_valid_slug(slug)
     hook = (hook or "").strip()
-    if not allow_over_cap_hook and _us.hook_over_hard_cap(hook):
+    if not allow_over_cap_hook and us.hook_over_hard_cap(hook):
         raise HookTooLong(len(hook))
     anchor = anchor_dir(proj)
     pruned = _pruned_part(anchor, proj)
@@ -1096,12 +1034,12 @@ def upsert_entry(proj: _StrPath, title: str, hook: str | None, body: str = "", t
     # absent ones - so the only signal is a reader walking up to an empty file. Refuse here, while
     # the content still exists to supply. Keyed on the body FILE, so a mover carrying stored text
     # (rehome/migrate, which pass no body) is unaffected.
-    if not _has_prose(body) and not _us.body_path(anchor, slug).is_file():
+    if not _has_prose(body) and not us.body_path(anchor, slug).is_file():
         raise EmptyBody(slug)
     # Same key, same moment: a create (no body file yet) whose framed body brings a `topics:` line
     # would store a tagging set-topics never checked. Refused before the level is scaffolded, so
     # the refusal writes nothing at all.
-    if _body_topics_line(body) is not None and not _us.body_path(anchor, slug).is_file():
+    if _body_topics_line(body) is not None and not us.body_path(anchor, slug).is_file():
         raise TopicsOnCreate(slug)
     # A write to a fact bound to a topic holds the tree's placement lock from here on, so the
     # placed decision below and every line it rewrites see no render or set-topics half done.
@@ -1127,7 +1065,7 @@ def _upsert_checked(proj: str, anchor: _StrPath, slug: str, title: str, hook: st
                             "pin it" % (slug, _ENGINE_ROUTE, anchor, slug)])
     if placed and not any(same_level(level, proj) for level, _ptr in copies):
         raise PlacedElsewhere(slug, [level for level, _ptr in copies])
-    store_dir = _us.central_facts_dir(anchor).parent   # the `.claude-memory` store dir for this tree
+    store_dir = us.central_facts_dir(anchor).parent   # the `.claude-memory` store dir for this tree
     store_existed = store_dir.exists()
     lock_target = sig.claude_local_md_path(proj)
     with sig.memory_lock(lock_target):
@@ -1139,7 +1077,7 @@ def _upsert_checked(proj: str, anchor: _StrPath, slug: str, title: str, hook: st
         ensure_level(proj, scope_default=scope_default, _locked=True)
         scope, entries, _bodies = read_store(proj)
         by_slug = {e.slug: e for e in entries}
-        if slug not in by_slug and _us.body_path(anchor, slug).is_file():
+        if slug not in by_slug and us.body_path(anchor, slug).is_file():
             # A DANGLING body (its pointer was lost - e.g. a formatter wrapped the line and a heal
             # round-trip then dropped it; no level points at it, checked above) is safe to ADOPT
             # here rather than leave the fact stuck (invisible, yet un-recreatable because the
@@ -1192,7 +1130,7 @@ def _upsert_checked(proj: str, anchor: _StrPath, slug: str, title: str, hook: st
         else:
             # Tree-unique slugs: the body file is the registry. A body still here was neither owned
             # by another level (refused above) nor adoptable - refuse with a suggestion.
-            if _us.body_path(anchor, slug).is_file():
+            if us.body_path(anchor, slug).is_file():
                 raise SlugCollision(slug, _free_slug(anchor, slug))
             e = Entry(slug=slug, title=title, hook=hook,
                       body=_with_skill(_synced_frame(slug, hook, type_,
@@ -1213,7 +1151,7 @@ def _upsert_checked(proj: str, anchor: _StrPath, slug: str, title: str, hook: st
         # body and this level written and the rest as render drift, which --check-tree names.
         for level, ptr in copies:
             if not same_level(level, proj) and (ptr.title, ptr.hook) != (e.title, e.hook):
-                _us.add_pointer(str(level), slug, e.title, e.hook)
+                us.add_pointer(str(level), slug, e.title, e.hook)
     if not store_existed and store_dir.exists():      # this add created a brand-new store dir:
         sig.bump_stores_generation()                  # bust the cross-tree dir-cache so recall sees it
     _warn_dangling_wikilinks(anchor, "%s\n%s" % (e.hook or "", e.body or ""), slug)
@@ -1272,11 +1210,11 @@ def _add_advice(hook: str, body: str) -> list[str]:
     """The advisory lines for a just-written fact, in print order. `hook` is the RESOLVED text (a
     `--hook-file` call has no inline flag), so a caller must pass it, never the raw argument."""
     advice: list[str] = []
-    if _us.hook_over_budget(hook):
+    if us.hook_over_budget(hook):
         advice.append("~ warning: hook is %d chars (soft cap %d, advisory - fine up to the %d-char "
                       "hard cap; keep it self-sufficient, do not trim load-bearing detail to "
                       "silence this)" % (len(hook), us.HOOK_SOFT_MAX, us.HOOK_HARD_MAX))
-    if _us.hook_missing_trigger(hook):
+    if us.hook_missing_trigger(hook):
         advice.append("~ warning: hook has no trigger phrase - lead with WHEN it applies "
                       "('When <situation>, <directive>'), or it will not fire during reasoning")
     for _advice in capture_constraints.advise(hook, body):
@@ -1285,7 +1223,7 @@ def _add_advice(hook: str, body: str) -> list[str]:
     # and this is the moment it is in hand. Naming BOTH ladders is deliberate: the body cannot say
     # whether a repeat is a rule being skipped or work being re-done, and the counter living only
     # in the rule ladder is what kept sending readers to a guard while the jig was never proposed.
-    seen = _us.recurrence_count(body)
+    seen = us.recurrence_count(body)
     if seen is not None and seen >= us.RECURRENCE_ESCALATE_AT and _user_decided_escalation(body):
         # The user already ruled on the ladder: "propose it in THIS turn" would contradict the
         # very fact being written and re-ask a settled question.
@@ -1356,11 +1294,11 @@ def _slug_owned_elsewhere(anchor: _StrPath, proj: _StrPath, slug: str) -> list[s
     another level points at. When no body exists the walk is best effort (`_readable_copies_of`):
     an unreadable level is skipped, because refusing there would stop every new add in the tree
     over one damaged level unrelated to the slug, and a new slug was never refused that way."""
-    _s, here = _us.parse_pointer_index(read_store_text(sig.claude_local_md_path(proj)))
+    _s, here = us.parse_pointer_index(read_store_text(sig.claude_local_md_path(proj)))
     if any(p.slug == slug for p in here):
         return []
     pnorm = Path(proj).resolve()
-    walk = _copies_of if _us.body_path(anchor, slug).is_file() else _readable_copies_of
+    walk = _copies_of if us.body_path(anchor, slug).is_file() else _readable_copies_of
     return [level for level, _ptr in walk(anchor, slug) if Path(level).resolve() != pnorm]
 
 
@@ -1384,7 +1322,7 @@ def _readable_pointers(anchor: _StrPath) -> Iterator[_Copy]:
             text = read_store_text(sig.claude_local_md_path(level))
         except TreeWalkError:
             continue
-        for ptr in _us.parse_pointer_index(text)[1]:
+        for ptr in us.parse_pointer_index(text)[1]:
             yield level, ptr
 
 
@@ -1770,7 +1708,7 @@ def _entry_from_body(anchor: _StrPath, slug: str) -> Entry:
     the body's `description:` frontmatter; title/level are not stored in a body, so the caller's update
     supplies them. Raises TreeWalkError if the body cannot be read or is not UTF-8: returning
     nothing sent add on to call the slug a collision with a fact it had simply failed to read."""
-    text = read_store_text(_us.body_path(anchor, slug)).rstrip("\n")
+    text = read_store_text(us.body_path(anchor, slug)).rstrip("\n")
     return Entry(slug=slug, title=slug, hook=body_description(text), body=text)
 
 
@@ -1781,7 +1719,7 @@ def _free_slug(anchor: _StrPath, slug: str) -> str:
     The line walk is best effort, like the one a new slug gets: an unreadable level holds none."""
     pointed = {ptr.slug for _level, ptr in _readable_pointers(anchor)}
     n = 2
-    while ("%s-%d" % (slug, n)) in pointed or _us.body_path(anchor, "%s-%d" % (slug, n)).is_file():
+    while ("%s-%d" % (slug, n)) in pointed or us.body_path(anchor, "%s-%d" % (slug, n)).is_file():
         n += 1
     return "%s-%d" % (slug, n)
 
@@ -1790,11 +1728,11 @@ def _archive_legacy_body(anchor: _StrPath, entry: Entry) -> None:
     """Move a flipped legacy entry's old sharded body to `.claude-memory/.archive/` (best-effort;
     the new slug-named body is written by the commit that follows)."""
     try:
-        old = _us.legacy_body_path(anchor, entry.uuid)
+        old = us.legacy_body_path(anchor, entry.uuid)
         if old.is_file():
-            dest = _us.central_facts_dir(anchor).parent / ".archive"
+            dest = us.central_facts_dir(anchor).parent / ".archive"
             dest.mkdir(parents=True, exist_ok=True)
-            old.rename(_us.free_archive_path(dest, old.name))
+            old.rename(us.free_archive_path(dest, old.name))
     except OSError:
         pass
 
@@ -1827,9 +1765,9 @@ def _mask_fenced_blocks(chars: list[str], text: str) -> None:
     """Blank every fenced code block in place, fence lines included, by the shared fence rule
     (`tell_chars.code_line_flags`). A missed opener is the costly direction here: a block read as
     prose reports every quoted [[ref]] in it as dangling."""
-    lines = _tell_chars.split_lines(text, keepends=True)
+    lines = tell_chars.split_lines(text, keepends=True)
     pos = 0
-    for line, is_code in zip(lines, _tell_chars.code_line_flags(lines)):
+    for line, is_code in zip(lines, tell_chars.code_line_flags(lines)):
         if is_code:
             _blank(chars, pos, pos + len(line))
         pos += len(line)
@@ -1909,7 +1847,7 @@ def _existing_slugs(anchor: _StrPath) -> set[str]:
     """Every slug pointed at anywhere in the tree (pointer blocks only - cheap, no body reads)."""
     slugs: set[str] = set()
     for lvl in curated_levels_under(anchor):
-        _scope, pointers = _us.parse_pointer_index(read_store_text(sig.claude_local_md_path(lvl)))
+        _scope, pointers = us.parse_pointer_index(read_store_text(sig.claude_local_md_path(lvl)))
         slugs.update(p.slug for p in pointers)
     return slugs
 
@@ -1980,7 +1918,7 @@ def _dangling_inbound_after_move(src: Path, dst: Path, slugs: Sequence[str]) -> 
     at a higher level stays put and must still count. Pure read, and it takes the WHOLE set, so the
     answer cannot depend on the order the members are listed in."""
     chain = {str(Path(x).resolve()) for x in
-             (_sig.altitude_chain(str(src)) + _sig.altitude_chain(str(dst)))}
+             (sig.altitude_chain(str(src)) + sig.altitude_chain(str(dst)))}
     moving = {canon_slug(s) for s in slugs}
     out: list[tuple[str, str, str]] = []
     for s in slugs:
@@ -2115,7 +2053,7 @@ def move_entry(from_level: _StrPath, to_level: _StrPath, slug: str | Iterable[st
         return rep
     src = Path(from_level).resolve()
     dst = Path(to_level).resolve()
-    a_from, a_to = _us.resolve_anchor(str(src)), _us.resolve_anchor(str(dst))
+    a_from, a_to = us.resolve_anchor(str(src)), us.resolve_anchor(str(dst))
     if a_from is None or a_to is None or a_from != a_to:
         rep.refused = "cross-tree move (or no anchor) - a move stays within one tree; use a lift/copy for cross-tree"
         return rep
@@ -2236,7 +2174,7 @@ def _move_cap_refusal(src: _StrPath, dst: _StrPath, plan: Sequence[tuple[str, tu
     the refusal names for taking the lines from `src` elsewhere (`relocate` across trees); room
     at `dst` is freed with `move`, which stays in its tree. Holds the target's block and one size
     per moving line."""
-    pointers = _us.parse_pointer_index(read_store_text(sig.claude_local_md_path(str(dst))))[1]
+    pointers = us.parse_pointer_index(read_store_text(sig.claude_local_md_path(str(dst))))[1]
     moving = {s for s, _fields in plan}
     before = sum(line_size(p) for p in pointers)
     kept = sum(line_size(p) for p in pointers if p.slug not in moving)
@@ -2300,10 +2238,10 @@ def ensure_level(proj: _StrPath, scope_default: str = "", _locked: bool = False)
         # Both reads raise TreeWalkError rather than read as empty: this function REWRITES both
         # files, and text it could not decode is text it would write back wrong.
         md = read_store_text(md_path)
-        legacy_scope = _sig.read_scope_block(md)             # a scope block left in CLAUDE.md (migration)
+        legacy_scope = sig.read_scope_block(md)             # a scope block left in CLAUDE.md (migration)
         local = sig.claude_local_md_path(proj)
         text = read_store_text(local)
-        scope, pointers = _us.parse_pointer_index(text)
+        scope, pointers = us.parse_pointer_index(text)
         want_scope = scope or (legacy_scope or scope_default or "").strip()
         if not scope and want_scope:
             # A new descriptor passes the one TOPICS gate before either file is written: checked
@@ -2315,11 +2253,11 @@ def ensure_level(proj: _StrPath, scope_default: str = "", _locked: bool = False)
         if legacy_scope is not None:
             _write_if_changed(md_path, _strip_scope_block(md))
         if us.INDEX_BEGIN not in text or want_scope != scope:
-            _us.write_if_changed(local, _us.upsert_pointer_block(text, want_scope, pointers))
-        if not _sig.load_config().get("track_private"):     # keep local wiring + central store unpushed
+            us.write_if_changed(local, us.upsert_pointer_block(text, want_scope, pointers))
+        if not sig.load_config().get("track_private"):     # keep local wiring + central store unpushed
             for where, pattern in ((proj, "CLAUDE.local.md"),
                                    (str(anchor_dir(proj)), us.STORE_DIRNAME + "/")):
-                if not _sig.ensure_gitignored(where, pattern):
+                if not sig.ensure_gitignored(where, pattern):
                     sys.stderr.write("~ warning: could not make sure git ignores %s in %s (git did not "
                                      "answer, or its exclude file could not be read or written) - "
                                      "check `git status` there before staging anything\n"
@@ -2343,7 +2281,7 @@ def _is_excluded_level(proj: _StrPath) -> bool:
     if real == Path(real.anchor):
         return True
     excluded: set[Path] = set()
-    for d in _sig.excluded_anchor_dirs():
+    for d in sig.excluded_anchor_dirs():
         excluded.add(Path(d))
         try:
             excluded.add(Path(d).resolve())
@@ -2393,8 +2331,8 @@ def _level_needs_heal(proj: _StrPath) -> bool:
     if not sig.claude_md_path(proj).is_file():
         return True
     text = read_store_text(sig.claude_local_md_path(proj))   # absent -> "" -> a block is due
-    scope, pointers = _us.parse_pointer_index(text)
-    return _us.upsert_pointer_block(text, scope, pointers) != text
+    scope, pointers = us.parse_pointer_index(text)
+    return us.upsert_pointer_block(text, scope, pointers) != text
 
 
 def _heal_level(proj: _StrPath, report: HealReport) -> None:
@@ -2408,8 +2346,8 @@ def _heal_level(proj: _StrPath, report: HealReport) -> None:
         ensure_level(proj, _locked=True)
         local = sig.claude_local_md_path(proj)
         text = read_store_text(local)
-        scope, pointers = _us.parse_pointer_index(text)
-        canonical = _us.upsert_pointer_block(text, scope, pointers)     # round-trip -> canonical grammar
+        scope, pointers = us.parse_pointer_index(text)
+        canonical = us.upsert_pointer_block(text, scope, pointers)     # round-trip -> canonical grammar
         if canonical != text and _write_if_changed(local, canonical):
             report.healed.append(str(local))
 
@@ -2437,7 +2375,7 @@ def heal(proj: _StrPath) -> HealReport:
         return HealReport(skipped=sig.MEMORY_WRITES_OFF_LINE)
     report = HealReport()
     try:
-        levels = _sig.altitude_chain(proj)            # level dirs, narrowest -> the tree's anchor
+        levels = sig.altitude_chain(proj)            # level dirs, narrowest -> the tree's anchor
     except Exception:                                # noqa: BLE001 - self-heal must never raise
         return report
     for level in levels:
@@ -2502,7 +2440,7 @@ def backfill_titles(proj: str | os.PathLike[str]) -> BackfillReport:
     # One entry per fact of the tree, as the `seen` set it replaces held.
     carriers: dict[str, tuple[str, list[str]]] = {}
     for level in curated_levels_under(anchor):
-        for ptr in _us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level)))[1]:
+        for ptr in us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level)))[1]:
             if ptr.legacy:                           # a slug's legacy line at one level never
                 if ptr.slug not in rep.legacy:       # hides its migrated line at another from
                     rep.legacy.append(ptr.slug)      # the back-fill
@@ -2520,7 +2458,7 @@ def backfill_titles(proj: str | os.PathLike[str]) -> BackfillReport:
 def _backfill_one(anchor: _StrPath, slug: str, title: str, rep: BackfillReport) -> None:
     """`backfill_titles` for one fact, under the locks its caller holds: fill `title` into the body
     when it has a frame and no title, and count the outcome in `rep`."""
-    raw = read_store_text(_us.body_path(anchor, slug))   # "" only when absent
+    raw = read_store_text(us.body_path(anchor, slug))   # "" only when absent
     if raw == "":
         rep.missing.append(slug)
         return
@@ -2535,7 +2473,7 @@ def _backfill_one(anchor: _StrPath, slug: str, title: str, rep: BackfillReport) 
     if filled == body:
         rep.untitled.append(slug)
         return
-    _us.put_body(str(anchor), slug, filled)
+    us.put_body(str(anchor), slug, filled)
     rep.filled.append(slug)
 
 
@@ -2544,14 +2482,14 @@ def _heal_one_level(level: str, report: HealReport) -> None:
     pointers whose body is missing. Raises TreeWalkError before any write when the level's files
     cannot be read."""
     before = read_store_text(sig.claude_local_md_path(level))
-    report.invalid_pointers.extend(LevelLine(level, raw) for raw in _us.invalid_pointer_lines(before))
+    report.invalid_pointers.extend(LevelLine(level, raw) for raw in us.invalid_pointer_lines(before))
     if _level_needs_heal(level):                     # skip-fast: healthy level = no lock, no write
         _heal_level(level, report)
     anchor = anchor_dir(level)
     # orphan check by pointer-parse + stat only - bodies are never opened here
     text = read_store_text(sig.claude_local_md_path(level))
-    for ptr in _us.parse_pointer_index(text)[1]:
-        path = _us.legacy_body_path(anchor, ptr.uuid) if ptr.legacy else _us.body_path(anchor, ptr.slug)
+    for ptr in us.parse_pointer_index(text)[1]:
+        path = us.legacy_body_path(anchor, ptr.uuid) if ptr.legacy else us.body_path(anchor, ptr.slug)
         if not path.is_file():
             report.orphans.append(LevelSlug(level, ptr.slug))
 
@@ -2567,7 +2505,7 @@ def scaffold(proj: _StrPath, refused_levels: list[LevelReason] | None = None) ->
     sig.refuse_if_memory_writes_off()
     created: list[str] = []
     try:
-        levels = _sig.altitude_chain(proj)            # level dirs, narrowest -> the tree's anchor
+        levels = sig.altitude_chain(proj)            # level dirs, narrowest -> the tree's anchor
     except (TypeError, ValueError):
         return created
     for level in levels:
@@ -2588,7 +2526,7 @@ def scaffold(proj: _StrPath, refused_levels: list[LevelReason] | None = None) ->
         except OSError:
             continue                                   # an unwritable level; the next is still scaffolded
     try:
-        facts_dir = _us.central_facts_dir(anchor_dir(proj))
+        facts_dir = us.central_facts_dir(anchor_dir(proj))
         store_existed = facts_dir.parent.exists()     # the `.claude-memory` store dir
         facts_dir.mkdir(parents=True, exist_ok=True)
         if not store_existed:                          # scaffolding created a brand-new store dir
@@ -2646,7 +2584,7 @@ def relocate_entry(from_level: _StrPath, to_level: _StrPath, slug: str, force: b
     sig.refuse_if_memory_writes_off()
     rep = RelocateReport(slug=slug, from_level=str(from_level), to_level=str(to_level))
     src, dst = Path(from_level).resolve(), Path(to_level).resolve()
-    a_from, a_to = _us.resolve_anchor(str(src)), _us.resolve_anchor(str(dst))
+    a_from, a_to = us.resolve_anchor(str(src)), us.resolve_anchor(str(dst))
     if a_from is None or a_to is None:
         rep.refused = "no anchor for the source or the target level"
         return rep
@@ -2660,7 +2598,7 @@ def relocate_entry(from_level: _StrPath, to_level: _StrPath, slug: str, force: b
         rep.relocated, rep.refused, rep.warnings = m.moved, m.refused, m.warnings
         return rep
     rep.cross_tree = True
-    if not _us.is_valid_slug(slug):
+    if not us.is_valid_slug(slug):
         rep.refused = str(InvalidSlug(slug))
         return rep
 
@@ -2695,7 +2633,7 @@ def relocate_entry(from_level: _StrPath, to_level: _StrPath, slug: str, force: b
                        "first" % (slug, owner))
         return rep
 
-    src_body, dst_body = _us.body_path(a_from, slug), _us.body_path(a_to, slug)
+    src_body, dst_body = us.body_path(a_from, slug), us.body_path(a_to, slug)
     rep.refused = _relocate_body_refusal(src_body, dst_body, slug)[0]
     if rep.refused:
         return rep
@@ -2735,7 +2673,7 @@ def relocate_entry(from_level: _StrPath, to_level: _StrPath, slug: str, force: b
                                "at it")
         else:
             try:
-                archive = _us.central_facts_dir(a_from).parent / ".archive"
+                archive = us.central_facts_dir(a_from).parent / ".archive"
                 archive.mkdir(parents=True, exist_ok=True)
                 if src_body.is_file():
                     # Another session's unlocked read of the body (an `add`'s placement check,
@@ -2743,7 +2681,7 @@ def relocate_entry(from_level: _StrPath, to_level: _StrPath, slug: str, force: b
                     # file. Left in place, the body is one no level points at, and the next `add`
                     # of the slug in this tree adopts it back.
                     sig.retry_while_shared(src_body.rename,
-                                           _us.free_archive_path(archive, slug + ".md"))
+                                           us.free_archive_path(archive, slug + ".md"))
             except OSError as exc:
                 archive_warning = "source body left in place (archive failed: %s)" % exc
     if dropped_topics:
@@ -2876,7 +2814,7 @@ def _rewrite_inbound_refs(anchor: _StrPath, old_slug: str, new_slug: str) -> lis
     levels = curated_levels_under(anchor)
     carriers: dict[str, list[str]] = {}
     for level in levels:
-        for ptr in _us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level)))[1]:
+        for ptr in us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level)))[1]:
             carriers.setdefault(ptr.slug, []).append(level)
     touched: list[RewrittenRef] = []
     for level in levels:
@@ -2896,7 +2834,7 @@ def _retarget_hooks_locked(level: _StrPath, canon_old: str, new_slug: str) -> tu
     line turns current as `add_pointer` turns it (a legacy line is flipped)."""
     local = sig.claude_local_md_path(level)
     text = read_store_text(local)
-    scope, pointers = _us.parse_pointer_index(text)
+    scope, pointers = us.parse_pointer_index(text)
     hooked: set[str] = set()
     for ptr in pointers:
         hook = _retarget_refs(ptr.hook, canon_old, new_slug)
@@ -2904,7 +2842,7 @@ def _retarget_hooks_locked(level: _StrPath, canon_old: str, new_slug: str) -> tu
             ptr.hook, ptr.legacy, ptr.uuid = hook, False, ""
             hooked.add(ptr.slug)
     if hooked:
-        _us.write_if_changed(local, _us.upsert_pointer_block(text, scope, pointers))
+        us.write_if_changed(local, us.upsert_pointer_block(text, scope, pointers))
     return [ptr.slug for ptr in pointers], hooked
 
 
@@ -2912,7 +2850,7 @@ def _retarget_body(anchor: _StrPath, slug: str, carriers: Iterable[_StrPath], ca
     """Repoint `canon_old` in `slug`'s body, re-read and written under the locks of every level in
     `carriers`. A body that cites nothing to repoint, read without them, takes no lock. True when
     it was written."""
-    path = _us.body_path(anchor, slug)
+    path = us.body_path(anchor, slug)
     text = read_store_text(path)
     if not text or _retarget_refs(text, canon_old, new_slug) == text:
         return False
@@ -2923,7 +2861,7 @@ def _retarget_body(anchor: _StrPath, slug: str, carriers: Iterable[_StrPath], ca
         retargeted = _retarget_refs(text, canon_old, new_slug)
         if retargeted == text:
             return False
-        _us.write_if_changed(path, retargeted)
+        us.write_if_changed(path, retargeted)
     return True
 
 
@@ -2949,7 +2887,7 @@ def rename_entry(level: _StrPath, slug: str, to_slug: str) -> RenameReport:
     sig.refuse_if_memory_writes_off()
     # In a tree that places by topic, a rename holds the placement lock: the fact's lines at
     # every level change together, with no render or set-topics between them.
-    anchor = _us.resolve_anchor(str(Path(level).resolve()))
+    anchor = us.resolve_anchor(str(Path(level).resolve()))
     with placement_lock_if_listed(anchor, "rename"):
         return _rename_entry(level, slug, to_slug)
 
@@ -2959,7 +2897,7 @@ def _rename_entry(level: _StrPath, slug: str, to_slug: str) -> RenameReport:
     sig.refuse_if_memory_writes_off()
     rep = RenameReport(slug=slug, to_slug=to_slug, level=str(level))
     lvl = Path(level).resolve()
-    anchor = _us.resolve_anchor(str(lvl))
+    anchor = us.resolve_anchor(str(lvl))
     if anchor is None:
         rep.refused = "no anchor for this level"
         return rep
@@ -2972,7 +2910,7 @@ def _rename_entry(level: _StrPath, slug: str, to_slug: str) -> RenameReport:
         rep.warnings.append("new slug normalised to %r" % canon_new)
         to_slug = canon_new
         rep.to_slug = to_slug
-    if not _us.is_valid_slug(to_slug):
+    if not us.is_valid_slug(to_slug):
         rep.refused = str(InvalidSlug(to_slug))
         return rep
     if canon_slug(slug) == canon_new:
@@ -3046,7 +2984,7 @@ def _rename_locked(anchor: _StrPath, lvl: Path, *, others: Sequence[str], slug: 
     if ptr is None or ptr.legacy:
         return ("slug %r left %s while it was being renamed (a concurrent move, rename or "
                 "migration); nothing was written" % (slug, lvl))
-    src_body, dst_body = _us.body_path(anchor, slug), _us.body_path(anchor, to_slug)
+    src_body, dst_body = us.body_path(anchor, slug), us.body_path(anchor, to_slug)
     if dst_body.exists():
         return "a body file already sits at %s" % dst_body
     try:
@@ -3089,12 +3027,12 @@ def _rename_locked(anchor: _StrPath, lvl: Path, *, others: Sequence[str], slug: 
         return None
     try:
         if src_body.is_file():
-            archive = _us.central_facts_dir(anchor).parent / ".archive"
+            archive = us.central_facts_dir(anchor).parent / ".archive"
             archive.mkdir(parents=True, exist_ok=True)
             # Waits out a reader holding the body open, as relocate's archive does: left in
             # place, the next `add` of the old slug adopts it and the fact answers to that name
             # again.
-            sig.retry_while_shared(src_body.rename, _us.free_archive_path(archive, slug + ".md"))
+            sig.retry_while_shared(src_body.rename, us.free_archive_path(archive, slug + ".md"))
     except OSError as exc:
         warnings.append("old body left in place (archive failed: %s)" % exc)
     return None
@@ -3126,7 +3064,7 @@ def retitle_entry(level: _StrPath, slug: str, to_title: str) -> RetitleReport:
     sig.refuse_if_memory_writes_off()
     # In a tree that places by topic, a retitle holds the placement lock: the fact's lines at
     # every level change together, with no render or set-topics between them.
-    anchor = _us.resolve_anchor(str(Path(level).resolve()))
+    anchor = us.resolve_anchor(str(Path(level).resolve()))
     with placement_lock_if_listed(anchor, "retitle"):
         return _retitle_entry(level, slug, to_title)
 
@@ -3136,7 +3074,7 @@ def _retitle_entry(level: _StrPath, slug: str, to_title: str) -> RetitleReport:
     sig.refuse_if_memory_writes_off()
     rep = RetitleReport(slug=slug, to_title=to_title, level=str(level))
     lvl = Path(level).resolve()
-    anchor = _us.resolve_anchor(str(lvl))
+    anchor = us.resolve_anchor(str(lvl))
     if anchor is None:
         rep.refused = "no anchor for this level"
         return rep
@@ -3191,12 +3129,12 @@ def _retitle_entry(level: _StrPath, slug: str, to_title: str) -> RetitleReport:
         rep.refused = _retitle_line_locked(lvl, slug, title, refuse_pinned=True)
         if rep.refused:
             return rep
-        current = read_store_text(_us.body_path(anchor, slug)).rstrip("\n")
+        current = read_store_text(us.body_path(anchor, slug)).rstrip("\n")
         retitled_body = with_title(current, title)
         # `current and` is belt-and-braces: `with_title("")` returns "", so an absent body
         # (read as "") already compares equal and gets no file, which keeps a dangler dangling.
         if current and retitled_body != current:
-            _us.put_body(str(anchor), slug, retitled_body)
+            us.put_body(str(anchor), slug, retitled_body)
     rep.levels.append(str(lvl))
 
     # A slug carried by more than one level is a pre-existing violation, but leaving the OTHER
@@ -3241,7 +3179,7 @@ def _retitle_line_locked(level: _StrPath, slug: str, title: str, refuse_pinned: 
     keep the line and the body in one hold cannot call it."""
     local = sig.claude_local_md_path(str(level))
     text = read_store_text(local)
-    scope, pointers = _us.parse_pointer_index(text)
+    scope, pointers = us.parse_pointer_index(text)
     ptr = next((p for p in pointers if p.slug == slug), None)
     if ptr is None or ptr.legacy:
         return ("slug %r left %s while it was being retitled (a concurrent move, rename or "
@@ -3250,7 +3188,7 @@ def _retitle_line_locked(level: _StrPath, slug: str, title: str, refuse_pinned: 
         return ("fact was pinned while it was being retitled - use `amend-pinned --proj %s "
                 "--slug %s --title ...`" % (level, slug))
     ptr.title = title
-    _us.write_if_changed(local, _us.upsert_pointer_block(text, scope, pointers))
+    us.write_if_changed(local, us.upsert_pointer_block(text, scope, pointers))
     return None
 
 
@@ -3324,7 +3262,7 @@ def curated_levels_under(anchor: _StrPath, unreadable: list[str] | None = None) 
     audit_root = sig.audit_dir().resolve()
     out: list[str] = []
     for root, dirs, files in os.walk(str(anchor), onerror=_walk_error_sink(unreadable)):
-        dirs[:] = [d for d in dirs if not _us.is_non_level_dirname(d)
+        dirs[:] = [d for d in dirs if not us.is_non_level_dirname(d)
                    and Path(root, d).resolve() != audit_root]
         if "CLAUDE.local.md" not in files:
             continue
@@ -3384,12 +3322,12 @@ def lint_tree(anchor: str | os.PathLike[str]) -> LintReport:
     rep = LintReport(anchor=str(top))
     for lvl in curated_levels_under(top):
         text = read_store_text(sig.claude_local_md_path(lvl))
-        rep.invalid_pointers.extend(LevelLine(lvl, raw) for raw in _us.invalid_pointer_lines(text))
+        rep.invalid_pointers.extend(LevelLine(lvl, raw) for raw in us.invalid_pointer_lines(text))
         _scope, entries, bodies = read_store(lvl)
         for e in entries:
             if len(e.hook or "") > us.HOOK_HARD_MAX:
                 rep.over_cap.append(OverCapHook(lvl, e.slug, len(e.hook)))
-            if _us.hook_missing_trigger(e.hook):
+            if us.hook_missing_trigger(e.hook):
                 rep.no_trigger.append(LevelSlug(lvl, e.slug))
             if _body_unlabelled(bodies.get(e.slug, "")):
                 rep.unlabelled.append(LevelSlug(lvl, e.slug))
@@ -3688,7 +3626,7 @@ def _grows_past_cap(before: int, after: int) -> bool:
 def _block_bytes(level_dir: _StrPath) -> int:
     """Bytes of every line in one level's block, each counting its line break."""
     return sum(line_size(p) for p in
-               _us.parse_pointer_index(read_store_text(sig.claude_local_md_path(str(level_dir))))[1])
+               us.parse_pointer_index(read_store_text(sig.claude_local_md_path(str(level_dir))))[1])
 
 
 class LineGrowsPastCap(TopicRefusal):
@@ -3713,7 +3651,7 @@ def _line_growth_refusal(verb: str, changes: Iterable[tuple[_StrPath, str, us.Po
     block at a time; holds one row."""
     named, shrink = None, 0
     for level, slug, line in changes:
-        pointers = _us.parse_pointer_index(read_store_text(sig.claude_local_md_path(str(level))))[1]
+        pointers = us.parse_pointer_index(read_store_text(sig.claude_local_md_path(str(level))))[1]
         before = sum(line_size(p) for p in pointers)
         old = sum(line_size(p) for p in pointers if p.slug == slug)
         after = before - old + line_size(line)
@@ -3782,7 +3720,7 @@ def read_body_head(path: _StrPath) -> str | None:
 def _iter_body_heads(anchor: _StrPath) -> Iterator[tuple[str, str]]:
     """Yield (slug, head text) for every body of the tree, one at a time: nothing is held but the
     head being read."""
-    facts = _us.central_facts_dir(anchor)
+    facts = us.central_facts_dir(anchor)
     try:
         scan = os.scandir(facts)
     except (FileNotFoundError, NotADirectoryError):
@@ -3791,7 +3729,7 @@ def _iter_body_heads(anchor: _StrPath) -> Iterator[tuple[str, str]]:
         raise TreeWalkError(facts, "cannot list this directory: %s" % exc) from exc
     with scan:
         for item in scan:
-            if not item.name.endswith(".md") or not _us.is_valid_slug(item.name[:-3]):
+            if not item.name.endswith(".md") or not us.is_valid_slug(item.name[:-3]):
                 continue
             head = read_body_head(item.path)
             if head is not None:
@@ -3801,7 +3739,7 @@ def _iter_body_heads(anchor: _StrPath) -> Iterator[tuple[str, str]]:
 def _level_parts(anchor: _StrPath, level: _StrPath) -> tp.Level:
     """`level` as the path parts below `anchor` that `topic_placement` works on; () for the anchor.
     Lexical, like `topic_store.level_key` it is built on."""
-    key = _topic_store.level_key(anchor, level)
+    key = topic_store.level_key(anchor, level)
     return tuple(key.split("/")) if key else tp.TOP
 
 
@@ -3828,7 +3766,7 @@ def topic_level_map(anchor: _StrPath, levels: Iterable[_StrPath] | None = None) 
     bad: list[str]
     declared, dirs, bad, total = {}, {tp.TOP: os.path.abspath(str(anchor))}, [], 0
     for level in curated_levels_under(anchor) if levels is None else levels:
-        scope = _us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level)))[0]
+        scope = us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level)))[0]
         if not scope.strip():
             continue
         try:
@@ -3851,7 +3789,7 @@ def unplaceable_slugs(levels: Iterable[_StrPath]) -> set[str]:
     the renderer never places, whatever their bodies' `topics:` say. One record per such pointer."""
     fixed: set[str] = set()
     for level in levels:
-        for ptr in _us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level)))[1]:
+        for ptr in us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level)))[1]:
             if _keeps_in_place(ptr):
                 fixed.add(ptr.slug)
     return fixed
@@ -3877,7 +3815,7 @@ def _line_problem(slug: str, anchor: _StrPath, lines: Mapping[str, tuple[str, us
             return ("%s: its line at %s is a legacy uuid: pointer, so the fact is not migrated to "
                     "the slug store; run hooks/migrate_to_slug_store.py --root %s --apply (without "
                     "--apply it only reports), then tag it" % (slug, level, anchor))
-    head = read_body_head(_us.body_path(anchor, slug)) or ""
+    head = read_body_head(us.body_path(anchor, slug)) or ""
     # The body is shared, so a level holding any line of the fact is a level its repair may
     # target. Every route names one: factedit otherwise walks up from its cwd and cannot run
     # outside the tree, and add without --proj and --slug derives a new slug from the title,
@@ -3931,7 +3869,7 @@ def iter_fact_topics(anchor: _StrPath) -> Iterator[tuple[str, tuple[str, ...]]]:
 
 def _topic_list(anchor: _StrPath) -> Mapping[str, str]:
     """The tree's topic list as {name: meaning}. Raises TopicRefusal when the tree has none."""
-    data = _topic_store.load(anchor)
+    data = topic_store.load(anchor)
     if data is None:
         raise TopicRefusal(["this tree has no topic list yet (topics-set-list writes one)"])
     return data.topics
@@ -3963,7 +3901,7 @@ def set_topic_list(proj: _StrPath, topics: Mapping[str, str], tagger: str) -> bo
 
 def _set_topic_list_held(anchor: _StrPath, topics: Mapping[str, str], tagger: str) -> bool:
     """`set_topic_list` from reading the old list on; the caller holds the placement lock."""
-    old = _topic_store.load(anchor)
+    old = topic_store.load(anchor)
     # By the name the list will store (trimmed), one name at a time: the list is capped by
     # topic_store.MAX_LIST, not by the per-fact tp.MAX_TOPICS a whole-list normalise applies.
     names = {tp.normalise_topics([name])[0] for name in topics}
@@ -3977,7 +3915,7 @@ def _set_topic_list_held(anchor: _StrPath, topics: Mapping[str, str], tagger: st
                 if len(users) < _REFUSALS_SHOWN:
                     users.append("fact %s carries %s" % (slug, ", ".join(sorted(dropped & set(carried)))))
         for level in curated_levels_under(anchor):
-            scope = _us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level)))[0]
+            scope = us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level)))[0]
             try:
                 declared = set(tp.descriptor_topics(scope) or ())
             except tp.InvalidTopic:
@@ -3988,7 +3926,7 @@ def _set_topic_list_held(anchor: _StrPath, topics: Mapping[str, str], tagger: st
                     users.append("level %s declares %s" % (level, ", ".join(sorted(dropped & declared))))
     if total:
         raise TopicRefusal(users, total)
-    return _topic_store.save_list(anchor, topics, tagger)
+    return topic_store.save_list(anchor, topics, tagger)
 
 
 def pointer_owners(anchor: _StrPath, wanted: Container[str]) -> _Owners:
@@ -3998,7 +3936,7 @@ def pointer_owners(anchor: _StrPath, wanted: Container[str]) -> _Owners:
     that say the same thing at several levels are one record, so a placed fact costs one."""
     owners: _Owners = {}
     for level in curated_levels_under(anchor):
-        for ptr in _us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level)))[1]:
+        for ptr in us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level)))[1]:
             if ptr.slug in wanted:
                 first, pinned, lines = owners.get(ptr.slug) or (level, False, {})
                 lines.setdefault(_comparable_line(ptr), (level, ptr))
@@ -4008,7 +3946,7 @@ def pointer_owners(anchor: _StrPath, wanted: Container[str]) -> _Owners:
 
 def topic_row_problem(slug: str, topics: tuple[str, ...] | None, anchor: _StrPath, allowed: Container[str], owners: _Owners) -> str | None:
     """Why this row cannot be applied, or None."""
-    if not _us.is_valid_slug(slug):
+    if not us.is_valid_slug(slug):
         return "%r is not a valid slug" % (slug,)
     if slug not in owners:
         return "%s: no level points at it" % slug
@@ -4022,7 +3960,7 @@ def topic_row_problem(slug: str, topics: tuple[str, ...] | None, anchor: _StrPat
         # Ahead of the frontmatter check: a legacy body sits at its uuid path, so the slug path
         # reads as empty and that check would name the wrong cause.
         return _line_problem(slug, anchor, owners[slug][2])
-    body = read_store_text(_us.body_path(anchor, slug))
+    body = read_store_text(us.body_path(anchor, slug))
     if split_frontmatter(body)[1] is None:
         return "%s: its body has no frontmatter to carry topics" % slug
     if topics:
@@ -4045,7 +3983,7 @@ def _copy_levels(anchor: _StrPath, wanted: Container[str]) -> _CopyPlan:
                     for level in curated_levels_under(anchor)),
                    key=lambda row: (len(row[0]), row[0]))
     for _parts, level in order:
-        for ptr in _us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level)))[1]:
+        for ptr in us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level)))[1]:
             if ptr.slug in wanted:
                 found.setdefault(ptr.slug, ([], ptr))[0].append(level)
     return found
@@ -4065,13 +4003,13 @@ def _collapse_plan(anchor: _StrPath, rows: Mapping[str, tuple[str, ...] | None],
     if not unbound:
         return {}
     plan = {slug: copy for slug, copy in _copy_levels(anchor, unbound).items()
-            if len(copy[0]) > 1 and read_body_topics(_us.body_path(anchor, slug))}
+            if len(copy[0]) > 1 and read_body_topics(us.body_path(anchor, slug))}
     added = sum(line_size(line) for holders, line in plan.values()
                 if _level_parts(anchor, holders[0]) != tp.TOP)
     if added:
         top = os.path.abspath(str(anchor))
         held = sum(line_size(ptr) for ptr in
-                   _us.parse_pointer_index(read_store_text(sig.claude_local_md_path(top)))[1])
+                   us.parse_pointer_index(read_store_text(sig.claude_local_md_path(top)))[1])
         if held + added > MAX_RENDER_BLOCK_BYTES:
             split = _top_split(anchor, top, unbound)
             raise CollapseTooLarge(top, split["kept"] + split["fixed"], added, split["stale"],
@@ -4111,7 +4049,7 @@ def _top_split(anchor: _StrPath, top: _StrPath, unbound: Container[str]) -> dict
     split = _block_split(anchor, unplaceable_slugs(levels), top,
                          lambda slug, topics: "placed" if tp.TOP in place(topics) else "stale",
                          claim=lambda slug: "fixed" if slug in unbound and read_body_topics(
-                             _us.body_path(anchor, slug)) else None)
+                             us.body_path(anchor, slug)) else None)
     split["rebind"] = any(level_map.topics(parts) for parts in level_map.levels()
                           if parts != tp.TOP)
     return split
@@ -4204,7 +4142,7 @@ def _set_fact_topics_held(anchor: _StrPath, rows: Mapping[str, tuple[str, ...] |
     if total:
         raise TopicRefusal(problems, total)
     plan = _collapse_plan(anchor, rows, owners)
-    write = write or _us.write_if_changed
+    write = write or us.write_if_changed
     rep = TopicsSetReport()
     for slug in sorted(rows):
         _placement_heartbeat()
@@ -4216,13 +4154,13 @@ def _set_fact_topics_held(anchor: _StrPath, rows: Mapping[str, tuple[str, ...] |
                 _collapse_copies(anchor, slug, *plan[slug], write)
             rep.collapsed.append(slug)
         with _write_lock(sig.claude_local_md_path(owners[slug][0]), dry_run):
-            body = read_store_text(_us.body_path(anchor, slug)).rstrip("\n")
+            body = read_store_text(us.body_path(anchor, slug)).rstrip("\n")
             tagged = _with_topics(body, rows[slug])
             if tagged == body:
                 rep.unchanged += 1
                 continue
             if not dry_run:
-                _us.put_body(str(anchor), slug, tagged)
+                us.put_body(str(anchor), slug, tagged)
             rep.changed.append(slug)
     return rep
 
@@ -4248,7 +4186,7 @@ def set_level_topics(level: _StrPath, topics: Iterable[str], top: bool = False) 
     level = os.path.abspath(str(level))
     anchor = anchor_dir(level)
     is_top = os.path.normcase(level) == os.path.normcase(os.path.abspath(str(anchor)))
-    _topic_store.level_key(anchor, level)              # a level it cannot key refuses before any write
+    topic_store.level_key(anchor, level)              # a level it cannot key refuses before any write
     if is_top and not top:
         raise TopicRefusal(["%s is the tree top: its topics are the user's decision "
                             "(set-top-topics, on the user's word)" % level])
@@ -4273,15 +4211,15 @@ def _write_level_topics(anchor: _StrPath, level: _StrPath, topics: Iterable[str]
     local = sig.claude_local_md_path(level)
     with sig.memory_lock(local):
         text = read_store_text(local)
-        scope, pointers = _us.parse_pointer_index(text)
+        scope, pointers = us.parse_pointer_index(text)
         if not scope.strip():
             raise TopicRefusal(["%s has no descriptor yet (set-scope writes one)" % level])
         tagged = tp.with_descriptor_topics(scope, topics)
         written: list[bool] = []
-        _topic_store.record_level(
+        topic_store.record_level(
             anchor, level, tp.descriptor_digest(tagged),
             before=lambda: written.append(
-                _us.write_if_changed(local, _us.upsert_pointer_block(text, tagged, pointers))))
+                us.write_if_changed(local, us.upsert_pointer_block(text, tagged, pointers))))
     return written[0]
 
 
@@ -4291,10 +4229,10 @@ def level_topics_stale(level: _StrPath) -> tuple[bool, str]:
     the tree has no topic list (nothing is tagged there at all)."""
     level = os.path.abspath(str(level))
     anchor = anchor_dir(level)
-    data = _topic_store.load(anchor)
+    data = topic_store.load(anchor)
     if data is None:
         return False, ""
-    scope = _us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level)))[0]
+    scope = us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level)))[0]
     if not scope.strip():
         return True, "no descriptor"
     try:
@@ -4303,7 +4241,7 @@ def level_topics_stale(level: _StrPath) -> tuple[bool, str]:
         return True, "its TOPICS line does not parse (set-level-topics replaces it)"
     if declared is None:
         return True, "never tagged"
-    if data.levels.get(_topic_store.level_key(anchor, level)) != tp.descriptor_digest(scope):
+    if data.levels.get(topic_store.level_key(anchor, level)) != tp.descriptor_digest(scope):
         return True, "descriptor changed since its topics were chosen"
     return False, ""
 
@@ -4342,11 +4280,11 @@ def _current_scope(proj: _StrPath) -> tuple[str, Path | None]:
     """(descriptor, stored_in): `proj`'s descriptor as a descriptor writer must judge it - its
     pointer block's, else the legacy CLAUDE.md block ensure_level would harvest (read here, never
     moved) together with that CLAUDE.md's path, else ("", None) for a level that has none."""
-    scope = _us.parse_pointer_index(read_store_text(sig.claude_local_md_path(proj)))[0]
+    scope = us.parse_pointer_index(read_store_text(sig.claude_local_md_path(proj)))[0]
     if scope:
         return scope, None
     md = sig.claude_md_path(proj)
-    legacy = _sig.read_scope_block(read_store_text(md))
+    legacy = sig.read_scope_block(read_store_text(md))
     return ("", None) if legacy is None else (legacy.strip(), md)
 
 
@@ -4409,10 +4347,10 @@ def _block_split(anchor: _StrPath, pinned: Container[str], level_dir: _StrPath, 
     unmanaged line is 'kept', a managed line goes under `part(slug, topics)`, and is not counted
     when that is None. One body head is read per unpinned line."""
     split = {"kept": 0, "stale": 0, "placed": 0, "fixed": 0}
-    for ptr in _us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level_dir)))[1]:
+    for ptr in us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level_dir)))[1]:
         name = "kept" if claim is None else claim(ptr.slug) or "kept"
         if name == "kept" and not (ptr.pin or ptr.legacy):
-            head = read_body_head(_us.body_path(anchor, ptr.slug))
+            head = read_body_head(us.body_path(anchor, ptr.slug))
             topics = None if head is None else managed_topics(ptr.slug, head, pinned)
             if topics is not None:
                 name = part(ptr.slug, topics)
@@ -4614,7 +4552,7 @@ def _add_lines(level_dir: str, wanted: Mapping[str, us.Pointer], rep: RenderRepo
     local = sig.claude_local_md_path(level_dir)
     with _write_lock(local, dry_run):
         text = read_store_text(local)
-        scope, pointers = _us.parse_pointer_index(text)
+        scope, pointers = us.parse_pointer_index(text)
         held = {p.slug: p for p in pointers}
         added: list[str]
         refreshed: list[str]
@@ -4628,7 +4566,7 @@ def _add_lines(level_dir: str, wanted: Mapping[str, us.Pointer], rep: RenderRepo
                 have.title, have.hook = line.title, line.hook
                 refreshed.append(slug)
         if (added or refreshed) and not dry_run:
-            write(local, _us.upsert_pointer_block(text, scope, pointers))
+            write(local, us.upsert_pointer_block(text, scope, pointers))
     _note(rep, level_dir, RenderKind.ADDED, added)
     _note(rep, level_dir, RenderKind.REFRESHED, refreshed)
     return set(held) | set(added)
@@ -4641,11 +4579,11 @@ def _drop_lines(level_dir: str, doomed: Collection[str], rep: RenderReport, dry_
     local = sig.claude_local_md_path(level_dir)
     with _write_lock(local, dry_run):
         text = read_store_text(local)
-        scope, pointers = _us.parse_pointer_index(text)
+        scope, pointers = us.parse_pointer_index(text)
         kept = [p for p in pointers if p.slug not in doomed or p.pin or p.legacy]
         removed = [p.slug for p in pointers if p.slug in doomed and not (p.pin or p.legacy)]
         if removed and not dry_run:
-            write(local, _us.upsert_pointer_block(text, scope, kept))
+            write(local, us.upsert_pointer_block(text, scope, kept))
     _note(rep, level_dir, RenderKind.REMOVED, removed)
 
 
@@ -4653,10 +4591,10 @@ def _misplaced_lines(anchor: _StrPath, place: _Placer, pinned: Container[str], p
     """{slug: the levels (parts) its fact is placed at} for the managed lines at one level that are
     placed elsewhere: one body head is read per line of the level's block."""
     doomed: dict[str, frozenset[tp.Level]] = {}
-    for ptr in _us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level_dir)))[1]:
+    for ptr in us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level_dir)))[1]:
         if ptr.pin or ptr.legacy:
             continue
-        head = read_body_head(_us.body_path(anchor, ptr.slug))
+        head = read_body_head(us.body_path(anchor, ptr.slug))
         topics = None if head is None else managed_topics(ptr.slug, head, pinned)
         if topics is not None and parts not in place(topics):
             doomed[ptr.slug] = place(topics)
@@ -4729,7 +4667,7 @@ def _chain_levels(anchor: _StrPath, proj: _StrPath, levels: Iterable[_StrPath]) 
 def _block_slugs(level_dir: _StrPath) -> set[str]:
     """The slugs of every pointer line in one level's block."""
     return {p.slug for p in
-            _us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level_dir)))[1]}
+            us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level_dir)))[1]}
 
 
 def _chain_target(slug: str, placed: Container[tp.Level], chain: Sequence[tuple[tp.Level, str]], adds: Container[tp.Level], held_at: Sequence[Container[str]]) -> int | None:
@@ -4788,10 +4726,10 @@ def _held_above(anchor: _StrPath, pinned: Container[str], level_dir: _StrPath, a
     (`above`): one body head is read per such line. A pinned, legacy or unmanaged line is never
     among them."""
     doomed: set[str] = set()
-    for ptr in _us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level_dir)))[1]:
+    for ptr in us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level_dir)))[1]:
         if ptr.slug not in above or ptr.pin or ptr.legacy:
             continue
-        head = read_body_head(_us.body_path(anchor, ptr.slug))
+        head = read_body_head(us.body_path(anchor, ptr.slug))
         if head is not None and managed_topics(ptr.slug, head, pinned) is not None:
             doomed.add(ptr.slug)
     return doomed
@@ -4863,7 +4801,7 @@ def render_topics(proj: _StrPath, scope: str = "tree", dry_run: bool = False, wr
         sig.refuse_if_memory_writes_off()
     proj = os.path.abspath(str(proj))
     anchor = anchor_dir(proj)
-    if _topic_store.load(anchor) is None:
+    if topic_store.load(anchor) is None:
         return RenderReport(has_list=False)
     if dry_run:
         return _render_held(anchor, proj, scope, True, write)
@@ -4885,7 +4823,7 @@ def _render_held(anchor: _StrPath, proj: str, scope: str, dry_run: bool, write: 
     pinned = unplaceable_slugs(levels)     # pinned or legacy anywhere: never placed
     place, adds = _Placer(level_map), _add_levels(level_map)
     rep = RenderReport(scope=scope, dry_run=bool(dry_run))
-    write = write or _us.write_if_changed
+    write = write or us.write_if_changed
     if scope == "tree":
         rep.census = _render_census(anchor, pinned, place, dirs, adds)
         _render_tree(anchor, levels, adds, place, dirs, pinned, rep, dry_run, write)
@@ -4973,8 +4911,9 @@ def _read_topic_batch(path: _StrPath) -> tuple[dict[str, tuple[str, ...] | None]
                 slug, raw = fields["slug"], fields["topics"]
                 if not isinstance(slug, str) or not (raw is None or isinstance(raw, list)):
                     raise TypeError("'slug' must be a string and 'topics' a list or null")
-                # normalise_topics refuses each element that is not a str tag itself
-                topics = None if raw is None else tp.normalise_topics(cast("list[str]", raw))
+                # a JSON list's elements are unchecked objects; normalise_topics refuses each one
+                # that is not a str tag itself
+                topics = None if raw is None else tp.normalise_topics(cast("list[object]", raw))
             except (ValueError, KeyError, TypeError, RecursionError) as exc:
                 return None, "! error: %s line %d: %s" % (path, n, exc)
             if slug in rows:
@@ -5000,7 +4939,7 @@ def tree_top(proj: _StrPath) -> TreeTop:
     """{'top', 'store', 'bootstrap'} for `proj`'s knowledge tree: the top dir, its central store
     path, and whether the tree is still BOOTSTRAP (top has no store yet - the first engine write
     creates it). For the model: `tree-top --proj <dir> [--json]`."""
-    top = _us.resolve_anchor(str(proj))
+    top = us.resolve_anchor(str(proj))
     if top is None:
         top = Path(proj)
     store = Path(top) / sig.MEMORY_DIRNAME
@@ -5019,8 +4958,8 @@ def ensure_all_trees(roots: Iterable[_StrPath] | None = None, apply: bool = Fals
     never auto-merged. Default is a DRY-RUN report; `apply=True` writes. Returns a
     `TreesReport`."""
     sig.refuse_if_memory_writes_off()
-    roots = [str(r) for r in (roots or _sig.discovery_roots())]
-    groups = _sig.tree_groups(_sig.find_claude_md_dirs(roots))
+    roots = [str(r) for r in (roots or sig.discovery_roots())]
+    groups = sig.tree_groups(sig.find_claude_md_dirs(roots))
     tops = list(groups)
     report = TreesReport(roots=roots)
     for top, members in sorted(groups.items(), key=lambda kv: str(kv[0])):
@@ -5106,7 +5045,7 @@ def _topic_read(args: argparse.Namespace) -> int:
         stale, why = level_topics_stale(args.proj)
         print("stale: %s" % why if stale else "fresh")
         return 1 if stale else 0
-    data = _topic_store.load(anchor_dir(args.proj))
+    data = topic_store.load(anchor_dir(args.proj))
     if data is None:
         # a caller that asked for JSON parses stdout on every exit: the success shape, emptied
         print(json.dumps({"tagger": None, "topics": {}}, sort_keys=True) if args.as_json
@@ -5557,12 +5496,12 @@ def _main(argv: Sequence[str] | None = None) -> int:
                 return _refused(exc)
             ensure_level(args.proj, _locked=True)     # make sure the pointer block exists first
             text = read_store_text(local)
-            old_scope, pointers = _us.parse_pointer_index(text)
+            old_scope, pointers = us.parse_pointer_index(text)
             try:
                 scope = scope_keeping_topics(old_scope, scope.strip())
             except (TopicRefusal, tp.InvalidTopic) as exc:
                 return _refused(exc)
-            changed = _us.write_if_changed(local, _us.upsert_pointer_block(text, scope, pointers))
+            changed = us.write_if_changed(local, us.upsert_pointer_block(text, scope, pointers))
         print("scope %s: %s" % ("updated" if changed else "unchanged", local))
         return 0
 
