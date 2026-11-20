@@ -14,11 +14,10 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any
 
-from _ablib import run
+from _ablib import JsonObject, JsonValue, int_or_zero, json_items, run
 
 __all__ = [
     "API_URL",
@@ -47,7 +46,7 @@ class GuardError(RuntimeError):
     """The guard could not run; the arm must not start (or its result cannot be trusted)."""
 
 
-def _manifest(argv: list[str], manifest: Path, *, timeout: float = MANIFEST_TIMEOUT) -> tuple[int, dict[str, Any]]:
+def _manifest(argv: list[str], manifest: Path, *, timeout: float = MANIFEST_TIMEOUT) -> tuple[int, JsonObject]:
     """Run the manifest script with --json; (exit code, parsed envelope or {})."""
     try:
         proc = run([sys.executable, str(manifest), *argv, "--json"], timeout=timeout)
@@ -56,22 +55,22 @@ def _manifest(argv: list[str], manifest: Path, *, timeout: float = MANIFEST_TIME
     except OSError as exc:
         raise GuardError(f"store_manifest {argv[0]} could not start: {exc}") from exc
     try:
-        data = json.loads(proc.stdout or "{}")
+        data: JsonValue = json.loads(proc.stdout or "{}")
     except json.JSONDecodeError:
         data = {}
     return proc.returncode, data if isinstance(data, dict) else {}
 
 
-def _data(envelope: dict[str, Any]) -> dict[str, Any]:
+def _data(envelope: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
     d = envelope.get("data")
     return d if isinstance(d, dict) else {}
 
 
-def snapshot(chain_from: Path, out: Path, *, manifest: Path = MANIFEST) -> dict[str, Any]:
+def snapshot(chain_from: Path, out: Path, *, manifest: Path = MANIFEST) -> JsonObject:
     """Back up the chain's pointer files and store under out; skipped (not taken) without a store."""
     rc, data = _manifest(["backup", "--from", str(chain_from), "--scope", "chain", "--out", str(out)], manifest)
     if rc == 0:
-        return {"taken": True, "entries": int(_data(data).get("entries") or 0), "skipped": None}
+        return {"taken": True, "entries": int_or_zero(_data(data).get("entries")), "skipped": None}
     error = str(_data(data).get("error") or "")
     if rc == 2 and NO_STORE_MARK in error:
         return {"taken": False, "entries": 0, "skipped": error}
@@ -93,7 +92,7 @@ def verify(out: Path, *, manifest: Path = MANIFEST) -> list[str]:
     d = _data(data)
     lines: list[str] = []
     for kind in ("added", "removed", "changed", "moved"):
-        lines.extend(f"{kind}: {item}" for item in d.get(kind) or [])
+        lines.extend(f"{kind}: {item}" for item in json_items(d.get(kind)))
     if rc == 1 and not lines:
         lines.append("differs (no detail in the verify output)")
     return lines
@@ -131,7 +130,7 @@ def _post(url: str, headers: dict[str, str], body: bytes) -> tuple[int, str]:
 
 def _read_token(credentials: Path) -> str | None:
     try:
-        doc = json.loads(credentials.read_text(encoding="utf-8"))
+        doc: JsonValue = json.loads(credentials.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
     oauth = doc.get("claudeAiOauth") if isinstance(doc, dict) else None
@@ -151,7 +150,7 @@ def credentials_expiry_s(credentials: Path) -> float | None:
     must not refuse on it. Nothing of the file is logged or returned beyond this one number.
     """
     try:
-        doc = json.loads(credentials.read_text(encoding="utf-8"))
+        doc: JsonValue = json.loads(credentials.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     oauth = doc.get("claudeAiOauth") if isinstance(doc, dict) else None

@@ -8,9 +8,11 @@ fable id (fable only authors) included, so the check is an allowlist, not a list
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+
+from _ablib import JsonObject, JsonValue, int_or_zero, json_items
 
 __all__ = [
     "ALLOWED_MODEL_PREFIXES",
@@ -58,7 +60,7 @@ class UnknownModel(KeyError):
     """A model id with no row in PRICES; pricing it would be a guess."""
 
 
-def input_usage(usage: dict[str, Any]) -> dict[str, int]:
+def input_usage(usage: Mapping[str, JsonValue]) -> dict[str, int]:
     """The INPUT side of one message's usage, split by price class.
 
     Args:
@@ -67,14 +69,14 @@ def input_usage(usage: dict[str, Any]) -> dict[str, int]:
     Returns:
         Token counts keyed by every name in INPUT_CLASSES.
     """
-    cc = usage.get("cache_creation")
-    cc = cc if isinstance(cc, dict) else {}
-    five = int(cc.get("ephemeral_5m_input_tokens") or 0)
-    one_h = int(cc.get("ephemeral_1h_input_tokens") or 0)
+    split = usage.get("cache_creation")
+    cc: Mapping[str, JsonValue] = split if isinstance(split, dict) else {}
+    five = int_or_zero(cc.get("ephemeral_5m_input_tokens"))
+    one_h = int_or_zero(cc.get("ephemeral_1h_input_tokens"))
     # Whatever the split does not explain (no split at all, or only one class reported) takes the
     # 5m rate, the cheaper one, so the total is never lost and never priced above what it was.
-    five += max(0, int(usage.get("cache_creation_input_tokens") or 0) - five - one_h)
-    return {"input": int(usage.get("input_tokens") or 0), "cache_read": int(usage.get("cache_read_input_tokens") or 0),
+    five += max(0, int_or_zero(usage.get("cache_creation_input_tokens")) - five - one_h)
+    return {"input": int_or_zero(usage.get("input_tokens")), "cache_read": int_or_zero(usage.get("cache_read_input_tokens")),
             "cache_write_5m": five, "cache_write_1h": one_h}
 
 
@@ -115,13 +117,17 @@ def price_input(model: str, usage: dict[str, int]) -> float:
 
 @dataclass
 class StreamAccount:
-    """What one stream says about one run; feed() is idempotent per assistant message id."""
+    """What one stream says about one run; feed() is idempotent per assistant message id.
 
-    model: str | None = None
-    claude_version: str | None = None
-    session_id: str | None = None
-    permission_mode: str | None = None
-    plugins: list[str] = field(default_factory=list)
+    The four init fields hold what the init record wrote, unchecked (a string from the real CLI):
+    the summary repeats them as written, and the opus check reads model through str().
+    """
+
+    model: JsonValue = None
+    claude_version: JsonValue = None
+    session_id: JsonValue = None
+    permission_mode: JsonValue = None
+    plugins: list[str] = field(default_factory=list[str])
     skill_count: int = 0
     saw_init: bool = False
     # New input (input_tokens + cache_creation_input_tokens) summed over EVERY model's assistant
@@ -134,13 +140,13 @@ class StreamAccount:
     # Lines a saved stream held that were not a JSON object: a killed arm tears its last line,
     # and a count that is not zero says the account may be missing what that line carried.
     skipped_lines: int = 0
-    seen_ids: set[str] = field(default_factory=set)
+    seen_ids: set[str] = field(default_factory=set[str])
     # The largest output_tokens seen per message id: the first record of a message is the
     # message_start partial, so its output count is low.
-    output_by_id: dict[str, int] = field(default_factory=dict)
-    per_message_model: dict[str, int] = field(default_factory=dict)
-    result: dict[str, Any] | None = None
-    void_reasons: list[str] = field(default_factory=list)
+    output_by_id: dict[str, int] = field(default_factory=dict[str, int])
+    per_message_model: dict[str, int] = field(default_factory=dict[str, int])
+    result: Mapping[str, JsonValue] | None = None
+    void_reasons: list[str] = field(default_factory=list[str])
     # The text of the last model record that carried any, on one line: the session's last words.
     # A record holding only a tool_use keeps the earlier text (the CLI writes each content block
     # of a message as its own record), and a CLI synthetic notice is no model text.
@@ -157,7 +163,7 @@ class StreamAccount:
         if not text:
             return
         try:
-            record = json.loads(text)
+            record: JsonValue = json.loads(text)
         except (ValueError, RecursionError):
             record = None
         if isinstance(record, dict):
@@ -165,7 +171,7 @@ class StreamAccount:
         else:
             self.skipped_lines += 1
 
-    def feed(self, record: dict[str, Any]) -> None:
+    def feed(self, record: Mapping[str, JsonValue]) -> None:
         """Account one stream record; a record of any other type is ignored."""
         kind = record.get("type")
         if kind == "system" and record.get("subtype") == "init":
@@ -185,18 +191,18 @@ class StreamAccount:
         if model_id and not model_id.lower().startswith(ALLOWED_MODEL_PREFIXES):
             self._void(f"model {model_id} appears in {where}, not an opus or haiku id")
 
-    def _feed_init(self, record: dict[str, Any]) -> None:
+    def _feed_init(self, record: Mapping[str, JsonValue]) -> None:
         self.saw_init = True
         self.model = record.get("model")
         self.claude_version = record.get("claude_code_version")
         self.session_id = record.get("session_id")
         self.permission_mode = record.get("permissionMode")
-        self.plugins = [str(p.get("name", p)) if isinstance(p, dict) else str(p) for p in record.get("plugins") or []]
-        self.skill_count = len(record.get("skills") or [])
+        self.plugins = [str(p.get("name", p)) if isinstance(p, dict) else str(p) for p in json_items(record.get("plugins"))]
+        self.skill_count = _length(record.get("skills"))
         if not str(self.model or "").startswith(OPUS_PREFIX):
             self.void_reasons.append(f"session model is {self.model!r}, not an opus id")
 
-    def _feed_assistant(self, message: object) -> None:
+    def _feed_assistant(self, message: JsonValue) -> None:
         if not isinstance(message, dict):
             self.skipped_lines += 1
             return
@@ -205,10 +211,11 @@ class StreamAccount:
             self._void(SYNTHETIC_REASON_PREFIX + _text_of(message)[:SYNTHETIC_TEXT_LIMIT])
             return
         self.last_text = _text_of(message) or self.last_text
-        usage = message.get("usage")
-        usage = usage if isinstance(usage, dict) else {}
-        mid = message.get("id") if isinstance(message.get("id"), str) else None
-        self._note_output(mid, int(usage.get("output_tokens") or 0))
+        raw_usage = message.get("usage")
+        usage: Mapping[str, JsonValue] = raw_usage if isinstance(raw_usage, dict) else {}
+        raw_id = message.get("id")
+        mid = raw_id if isinstance(raw_id, str) else None
+        self._note_output(mid, int_or_zero(usage.get("output_tokens")))
         # A message without an id is counted every time it appears (accepted: real CLI records
         # always carry one, so there is nothing to deduplicate on).
         if mid and mid in self.seen_ids:
@@ -232,35 +239,35 @@ class StreamAccount:
             self.output_tokens += output - previous
             self.output_by_id[mid] = output
 
-    def _count_input(self, usage: dict[str, Any]) -> None:
-        cache_read = int(usage.get("cache_read_input_tokens") or 0)
+    def _count_input(self, usage: Mapping[str, JsonValue]) -> None:
+        cache_read = int_or_zero(usage.get("cache_read_input_tokens"))
         if self.first_cache_read is None:
             self.first_cache_read = cache_read
-        self.new_tokens += int(usage.get("input_tokens") or 0) + int(usage.get("cache_creation_input_tokens") or 0)
+        self.new_tokens += int_or_zero(usage.get("input_tokens")) + int_or_zero(usage.get("cache_creation_input_tokens"))
         self.cache_read += cache_read
 
-    def _feed_result(self, record: dict[str, Any]) -> None:
+    def _feed_result(self, record: Mapping[str, JsonValue]) -> None:
         self.result = record
         if not self.saw_init:
             self._void(NO_INIT_REASON)
         for model_id in _model_usage(record):
             self._check_model(model_id, "modelUsage")
 
-    def per_model(self) -> dict[str, dict[str, Any]]:
+    def per_model(self) -> dict[str, dict[str, int | float]]:
         """Tokens and cost per model id, from the result record's modelUsage (empty without one).
 
         A model whose entry is not an object is left out; its id is still checked by the void rule.
         """
-        out: dict[str, dict[str, Any]] = {}
+        out: dict[str, dict[str, int | float]] = {}
         for model_id, u in _model_usage(self.result or {}).items():
             if not isinstance(u, dict):
                 continue
-            out[model_id] = {"new_tokens": int(u.get("inputTokens") or 0) + int(u.get("cacheCreationInputTokens") or 0),
-                             "cache_read": int(u.get("cacheReadInputTokens") or 0),
-                             "output_tokens": int(u.get("outputTokens") or 0), "cost_usd": float(u.get("costUSD") or 0.0)}
+            out[model_id] = {"new_tokens": int_or_zero(u.get("inputTokens")) + int_or_zero(u.get("cacheCreationInputTokens")),
+                             "cache_read": int_or_zero(u.get("cacheReadInputTokens")),
+                             "output_tokens": int_or_zero(u.get("outputTokens")), "cost_usd": _float_or_zero(u.get("costUSD"))}
         return out
 
-    def summary(self) -> dict[str, Any]:
+    def summary(self) -> JsonObject:
         """Everything the account knows, as one JSON-ready dict.
 
         ``main_new_tokens`` is ``new_tokens``: EVERY model's new input, not the main model's alone.
@@ -281,19 +288,37 @@ class StreamAccount:
                 "void_reasons": void_reasons, "last_text": self.last_text}
 
 
-def _text_of(message: dict[str, Any]) -> str:
+def _text_of(message: Mapping[str, JsonValue]) -> str:
     """The text content blocks of a message joined on one line ("" when it carries none)."""
     content = message.get("content")
     if isinstance(content, str):
         return " ".join(content.split())
-    blocks = content if isinstance(content, list) else []
-    texts = [b["text"] for b in blocks if isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str)]
+    blocks: list[JsonValue] = content if isinstance(content, list) else []
+    texts = [text for b in blocks if isinstance(b, dict) and b.get("type") == "text" and isinstance(text := b.get("text"), str)]
     return " ".join(" ".join(texts).split())
 
 
-def _model_usage(record: dict[str, Any]) -> dict[str, Any]:
+def _model_usage(record: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
     usage = record.get("modelUsage")
     return usage if isinstance(usage, dict) else {}
+
+
+def _float_or_zero(value: JsonValue) -> float:
+    """float(value or 0.0) over a JSON value, kept to exactly what that expression did."""
+    if not value:
+        return 0.0
+    if isinstance(value, bool | int | float | str):
+        return float(value)
+    raise TypeError(f"float() argument must be a string or a real number, not {type(value).__name__!r}")
+
+
+def _length(value: JsonValue) -> int:
+    """len(value or []) over a JSON value, a scalar's TypeError included."""
+    if not value:
+        return 0
+    if isinstance(value, str | Mapping | list | tuple):
+        return len(value)
+    raise TypeError(f"object of type {type(value).__name__!r} has no len()")
 
 
 def account_stream_file(path: Path) -> StreamAccount:

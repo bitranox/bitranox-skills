@@ -109,3 +109,26 @@ def test_skills_repo_commits_the_hook_under_its_real_name(skills_repo):
     assert not [p for p in tracked if p.endswith(".fixture")]
     hook = skills_repo / "hooks" / "self_improve_signals.py"
     assert "BITRANOX_MEMORY_WRITES" in hook.read_text(encoding="utf-8")
+
+
+# What a JSON field can hold, every shape json.loads gives, numeric strings and the truthy and
+# falsy cases of each: the helpers below replace a plain expression, and must answer as it did.
+_JSON_SHAPES = [None, True, False, 0, 7, -3, 0.0, 3.9, -2.5, "", "12", " 4 ", "3.5", "x", [], [1, "a"], {}, {"k": 1},
+                float("inf"), float("nan")]
+
+
+def _outcome(fn, value):
+    try:
+        return ("ok", fn(value))
+    except Exception as exc:  # noqa: BLE001 - the exception's type and text ARE what is compared
+        return (type(exc).__name__, str(exc))
+
+
+@pytest.mark.parametrize("value", _JSON_SHAPES, ids=repr)
+def test_int_or_zero_answers_as_int_of_value_or_zero(value):
+    assert _outcome(L.int_or_zero, value) == _outcome(lambda v: int(v or 0), value)
+
+
+@pytest.mark.parametrize("value", _JSON_SHAPES, ids=repr)
+def test_json_items_walks_what_a_loop_over_value_or_empty_walked(value):
+    assert _outcome(L.json_items, value) == _outcome(lambda v: [x for x in v or []], value)

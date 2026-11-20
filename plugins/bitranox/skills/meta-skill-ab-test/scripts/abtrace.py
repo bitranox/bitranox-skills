@@ -21,10 +21,12 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Iterator
-from datetime import datetime, timezone
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+
+from _ablib import JsonObject, JsonValue
 
 __all__ = [
     "MISSING_CAP",
@@ -86,12 +88,12 @@ _MISSING_CODES = frozenset({"E0405", "E0407", "E0412", "E0422", "E0423", "E0425"
                             "E0560", "E0599", "E0609"})
 
 
-def _records(path: Path) -> Iterator[dict[str, Any]]:
+def _records(path: Path) -> Iterator[dict[str, JsonValue]]:
     """Every JSON-object line of a JSONL file; a torn or non-object line is skipped."""
     with path.open(encoding="utf-8", errors="replace") as fh:
         for line in fh:
             try:
-                record = json.loads(line)
+                record: JsonValue = json.loads(line)
             except (ValueError, RecursionError):
                 continue
             if isinstance(record, dict):
@@ -107,7 +109,7 @@ def _instant(value: object) -> datetime | None:
         stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
-    return stamp if stamp.tzinfo else stamp.replace(tzinfo=timezone.utc)
+    return stamp if stamp.tzinfo else stamp.replace(tzinfo=UTC)
 
 
 def _span(path: Path) -> tuple[datetime, datetime] | None:
@@ -170,27 +172,37 @@ def _shell_marker_text(command: str) -> list[str]:
     return [_SHELL_TAIL.sub("", m.group(0)) for m in MARKER.finditer(command)]
 
 
-def _written_texts(name: str, tool_input: dict[str, Any]) -> list[str]:
+def _written_texts(name: str, tool_input: Mapping[str, JsonValue]) -> list[str]:
     """The text a writing tool call puts into a file; [] for a call that writes nothing."""
     if name == "Bash":
         command = tool_input.get("command")
         return ["\n".join(_shell_marker_text(command))] if isinstance(command, str) else []
     if name == "MultiEdit":
-        edits = tool_input.get("edits")
-        edits = edits if isinstance(edits, list) else []
-        return [e["new_string"] for e in edits if isinstance(e, dict) and isinstance(e.get("new_string"), str)]
+        raw = tool_input.get("edits")
+        edits: list[JsonValue] = raw if isinstance(raw, list) else []
+        return [new for e in edits if isinstance(e, dict) and isinstance(new := e.get("new_string"), str)]
     return [v for f in _WRITE_FIELDS.get(name, ()) if isinstance(v := tool_input.get(f), str)]
 
 
-def _tool_uses(record: dict[str, Any]) -> Iterator[dict[str, Any]]:
+@dataclass(frozen=True)
+class _ToolUse:
+    """One tool_use block as the tally reads it: its id as written, its name through str(), its input."""
+
+    tool_id: JsonValue
+    name: str
+    input: Mapping[str, JsonValue]
+
+
+def _tool_uses(record: Mapping[str, JsonValue]) -> Iterator[_ToolUse]:
     """The tool_use blocks of an assistant record (what the arm DID, never what it was told)."""
     if record.get("type") != "assistant":
         return
     message = record.get("message")
     content = message.get("content") if isinstance(message, dict) else None
-    for block in content if isinstance(content, list) else []:
-        if isinstance(block, dict) and block.get("type") == "tool_use" and isinstance(block.get("input"), dict):
-            yield block
+    blocks: list[JsonValue] = content if isinstance(content, list) else []
+    for block in blocks:
+        if isinstance(block, dict) and block.get("type") == "tool_use" and isinstance(tool_input := block.get("input"), dict):
+            yield _ToolUse(tool_id=block.get("id"), name=str(block.get("name")), input=tool_input)
 
 
 def _idea_order(idea: str) -> tuple[int, int, str]:
@@ -206,13 +218,13 @@ class _IdeaTally:
         self.writes = 0
         self.seen_ids: set[str] = set()
 
-    def add_call(self, block: dict[str, Any]) -> None:
-        tid = block.get("id")
+    def add_call(self, call: _ToolUse) -> None:
+        tid = call.tool_id
         if isinstance(tid, str):
             if tid in self.seen_ids:
                 return
             self.seen_ids.add(tid)
-        markers = [m for text in _written_texts(str(block.get("name")), block["input"]) for m in MARKER.finditer(text)]
+        markers = [m for text in _written_texts(call.name, call.input) for m in MARKER.finditer(text)]
         if markers:
             self.writes += 1
         for m in markers:
@@ -221,8 +233,9 @@ class _IdeaTally:
             if line not in known:
                 known.append(line)
 
-    def result(self) -> dict[str, Any]:
-        ideas = {n: {"count": len(self.lines[n]), "first": self.lines[n][0]} for n in sorted(self.lines, key=_idea_order)}
+    def result(self) -> JsonObject:
+        ideas: dict[str, JsonObject] = {n: {"count": len(self.lines[n]), "first": self.lines[n][0]}
+                                        for n in sorted(self.lines, key=_idea_order)}
         return {"writes": self.writes, "ideas": ideas}
 
 
@@ -232,7 +245,7 @@ def _subagent_transcripts(transcripts: Path | None) -> list[Path]:
     return [p for p in sorted(transcripts.rglob(f"{SUBAGENT_PREFIX}*.jsonl")) if p.is_file()]
 
 
-def idea_markers(stream: Path, transcripts: Path | None = None) -> dict[str, Any] | None:
+def idea_markers(stream: Path, transcripts: Path | None = None) -> JsonObject | None:
     """The `[abx] idea=<id> ...` lines the arm wrote, read from the writing tool calls it made.
 
     The calls are read from the stream and from every subagent transcript (agent-*.jsonl) under
@@ -318,7 +331,7 @@ def _read_log(log: Path) -> _SuiteLog:
     return parsed
 
 
-def _outcome(step: dict[str, Any], parsed: _SuiteLog) -> str:
+def _outcome(step: Mapping[str, JsonValue], parsed: _SuiteLog) -> str:
     if step.get("error"):
         return SUITE_NOT_FINISHED
     if step.get("rc") == 0:
@@ -330,7 +343,7 @@ def _outcome(step: dict[str, Any], parsed: _SuiteLog) -> str:
     return SUITE_TESTS_FAILED if parsed.failed else SUITE_FAILED
 
 
-def step_outcome(step: dict[str, Any] | None, log: Path) -> dict[str, Any] | None:
+def step_outcome(step: Mapping[str, JsonValue] | None, log: Path) -> JsonObject | None:
     """A floor step (the gate or the suite), classified by its log rather than by one exit code.
 
     Args:
@@ -360,14 +373,14 @@ def step_outcome(step: dict[str, Any] | None, log: Path) -> dict[str, Any] | Non
             "prerequisite": prerequisite}
 
 
-def suite_outcome(step: dict[str, Any] | None, log: Path) -> dict[str, Any] | None:
+def suite_outcome(step: Mapping[str, JsonValue] | None, log: Path) -> JsonObject | None:
     """The floor's suite step, classified by its log (step_outcome of the suite step and floor-suite.log)."""
     return step_outcome(step, log)
 
 
 # --- the text line -------------------------------------------------------------------------------
 
-def describe_subagents(subagents: dict[str, int] | None) -> str:
+def describe_subagents(subagents: Mapping[str, int] | None) -> str:
     """'-' (no transcripts kept), '0', or '<files>(max <peak> at once[, <n> untimed])'."""
     if subagents is None:
         return "-"
@@ -377,18 +390,38 @@ def describe_subagents(subagents: dict[str, int] | None) -> str:
     return f"{subagents['transcripts']}(max {subagents['max_concurrent']} at once{untimed})"
 
 
-def describe_ideas(markers: dict[str, Any] | None) -> str:
-    """'-' (no stream), 'none' (a stream with no marker written), or '<N>x<count>,...'."""
+def _fields(value: JsonValue) -> Mapping[str, JsonValue]:
+    """An object a describe_* reader takes apart: what idea_markers or step_outcome wrote there."""
+    if not isinstance(value, Mapping):
+        raise TypeError(f"expected a JSON object, got {type(value).__name__}")
+    return value
+
+
+def _names(value: JsonValue) -> list[str]:
+    """step_outcome's missing list; an empty value is no names, any other shape is refused."""
+    if not value:
+        return []
+    if not isinstance(value, list) or not all(isinstance(n, str) for n in value):
+        raise TypeError(f"expected a JSON array of names, got {value!r}")
+    return [n for n in value if isinstance(n, str)]
+
+
+def describe_ideas(markers: Mapping[str, JsonValue] | None) -> str:
+    """'-' (no stream), 'none' (a stream with no marker written), or '<N>x<count>,...'.
+
+    Reads what idea_markers returned; any other shape is refused with TypeError.
+    """
     if markers is None:
         return "-"
     ideas = markers["ideas"]
-    return ",".join(f"{n}x{v['count']}" for n, v in ideas.items()) if ideas else "none"
+    return ",".join(f"{n}x{_fields(v)['count']}" for n, v in _fields(ideas).items()) if ideas else "none"
 
 
-def describe_suite(suite: dict[str, Any] | None) -> str:
+def describe_suite(suite: Mapping[str, JsonValue] | None) -> str:
     """The outcome, with its codes and missing symbols, its failed-of-total count, or the missing tool.
 
-    Reads any step_outcome, the gate's as well as the suite's.
+    Reads any step_outcome, the gate's as well as the suite's; any other shape is refused with
+    TypeError.
     """
     if suite is None:
         return "-"
@@ -396,8 +429,9 @@ def describe_suite(suite: dict[str, Any] | None) -> str:
     if outcome == SUITE_PREREQ_MISSING:
         return f"{outcome}({suite.get('prerequisite') or '?'})"
     if outcome == SUITE_NO_COMPILE:
-        codes = ",".join(f"{c}x{n}" for c, n in suite["error_codes"].items())
-        missing = f"; missing {','.join(suite['missing'])}" if suite["missing"] else ""
+        codes = ",".join(f"{c}x{n}" for c, n in _fields(suite["error_codes"]).items())
+        names = _names(suite["missing"])
+        missing = f"; missing {','.join(names)}" if names else ""
         return f"{outcome}({codes}{missing})"
     if outcome == SUITE_TESTS_FAILED:
         return f"{outcome}({suite['tests_failed']} of {suite['tests_total']})"

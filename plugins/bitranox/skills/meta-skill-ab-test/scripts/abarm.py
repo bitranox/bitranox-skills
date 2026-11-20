@@ -15,21 +15,31 @@ import subprocess
 import tarfile
 import threading
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import IO, Any
+from typing import IO
 
-from _ablib import clear_group, git, git_env, run, signal_group, tree_hashes
+from _ablib import (
+    JsonObject,
+    JsonValue,
+    clear_group,
+    git,
+    git_env,
+    run,
+    signal_group,
+    tree_hashes,
+)
 from abprofile import SANDBOX_BWRAP, SANDBOX_BWRAP_HOST_PROC, Profile
 from abstream import StreamAccount
 
 __all__ = [
+    "BWRAP_BASES",
+    "BWRAP_PROBE_TIMEOUT_S",
     "PLUGIN_ID",
     "PRE_PUSH_HOOK",
     "UNCOMMITTED_PATCH",
     "UNTRACKED_TAR",
-    "BWRAP_BASES",
-    "BWRAP_PROBE_TIMEOUT_S",
     "ArmError",
     "Frozen",
     "SandboxMounts",
@@ -147,7 +157,7 @@ def _git_ok(repo: Path, *args: str) -> str:
     return proc.stdout.strip()
 
 
-def _read_json(path: Path) -> Any:
+def _read_json(path: Path) -> JsonValue:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
@@ -171,9 +181,10 @@ def plugin_root(checkout: Path) -> Path:
     raise ArmError(f"{checkout} holds neither .claude-plugin/marketplace.json nor .claude-plugin/plugin.json")
 
 
-def _marketplace_source(checkout: Path, data: Any) -> Path:
-    entries = data.get("plugins") if isinstance(data, dict) else None
-    for entry in entries if isinstance(entries, list) else []:
+def _marketplace_source(checkout: Path, data: JsonValue) -> Path:
+    raw = data.get("plugins") if isinstance(data, dict) else None
+    entries: list[JsonValue] = raw if isinstance(raw, list) else []
+    for entry in entries:
         if not isinstance(entry, dict) or entry.get("name") != PLUGIN_NAME:
             continue
         source = entry.get("source")
@@ -191,7 +202,7 @@ def _apply_overlay(variant_dir: Path | None, skill_dir: Path) -> tuple[str, ...]
     """Copy every file of the variant dir over the skill dir; the list of relative paths written."""
     if variant_dir is None:
         return ()
-    written = []
+    written: list[str] = []
     for src in sorted(p for p in variant_dir.rglob("*") if p.is_file()):
         rel = src.relative_to(variant_dir)
         dst = skill_dir / rel
@@ -330,10 +341,11 @@ def installed_plugin_path(cfg: Path) -> Path | None:
         return None
     data = _read_json(registry)
     plugins = data.get("plugins") if isinstance(data, dict) else None
-    entries = plugins.get(PLUGIN_ID) if isinstance(plugins, dict) else None
-    for entry in entries if isinstance(entries, list) else []:
-        if isinstance(entry, dict) and isinstance(entry.get("installPath"), str):
-            return Path(entry["installPath"])
+    raw = plugins.get(PLUGIN_ID) if isinstance(plugins, dict) else None
+    entries: list[JsonValue] = raw if isinstance(raw, list) else []
+    for entry in entries:
+        if isinstance(entry, dict) and isinstance(install_path := entry.get("installPath"), str):
+            return Path(install_path)
     return None
 
 
@@ -350,11 +362,11 @@ def user_config_dir() -> Path:
 def _seed_settings(cfg: Path, keep: tuple[str, ...]) -> list[str]:
     """Write cfg/settings.json holding only the `keep` keys of the user's settings; the keys written."""
     try:
-        user = json.loads((user_config_dir() / "settings.json").read_text(encoding="utf-8"))
+        loaded: JsonValue = json.loads((user_config_dir() / "settings.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        user = {}
-    user = user if isinstance(user, dict) else {}
-    seeded = {k: user[k] for k in keep if k in user}
+        loaded = {}
+    user: Mapping[str, JsonValue] = loaded if isinstance(loaded, dict) else {}
+    seeded: JsonObject = {k: user[k] for k in keep if k in user}
     (cfg / "settings.json").write_text(json.dumps(seeded), encoding="utf-8")
     return sorted(seeded)
 
@@ -378,7 +390,7 @@ def _copy_credentials(credentials: Path, cfg: Path) -> None:
         fh.write(credentials.read_bytes())
 
 
-def _run_claude(argv: list[str], cwd: Path, env: dict[str, str]) -> dict[str, Any]:
+def _run_claude(argv: list[str], cwd: Path, env: dict[str, str]) -> JsonObject:
     """One `claude plugin ...` step that must succeed; its argv head and rc."""
     try:
         proc = run(argv, cwd=cwd, env=env, timeout=INSTALL_TIMEOUT_S)
@@ -391,7 +403,18 @@ def _run_claude(argv: list[str], cwd: Path, env: dict[str, str]) -> dict[str, An
     return {"argv": argv[1:4], "rc": proc.returncode}
 
 
-def _verify_install(cfg: Path, frozen: Frozen) -> dict[str, Any]:
+@dataclass(frozen=True)
+class _InstallCheck:
+    """The installed plugin as found: its path, the version its plugin.json names (as written), and
+    every skill-relative path whose hash differs from the frozen checkout (plus, for a removed
+    skill, what of it is still installed)."""
+
+    installed_path: str
+    installed_version: JsonValue
+    drift: list[str]
+
+
+def _verify_install(cfg: Path, frozen: Frozen) -> _InstallCheck:
     installed = installed_plugin_path(cfg)
     if installed is None:
         raise ArmError("the config dir records no installed bitranox plugin")
@@ -401,7 +424,7 @@ def _verify_install(cfg: Path, frozen: Frozen) -> dict[str, Any]:
     drift += _absence_drift(installed, frozen)
     manifest = _read_json(installed / ".claude-plugin" / "plugin.json")
     version = manifest.get("version") if isinstance(manifest, dict) else None
-    return {"installed_path": str(installed), "installed_version": version, "drift": drift}
+    return _InstallCheck(installed_path=str(installed), installed_version=version, drift=drift)
 
 
 def _absence_drift(installed: Path, frozen: Frozen) -> list[str]:
@@ -409,7 +432,7 @@ def _absence_drift(installed: Path, frozen: Frozen) -> list[str]:
     if not frozen.skill_removed:
         return []
     name = frozen.skill_dir.name
-    found = []
+    found: list[str] = []
     if (installed / "skills" / name).exists():
         found.append(f"skills/{name}/ is installed; a remove_skill arm must run without it")
     triggers = installed / TRIGGERS_REL
@@ -420,7 +443,7 @@ def _absence_drift(installed: Path, frozen: Frozen) -> list[str]:
 
 
 def install_plugin(cfg: Path, frozen: Frozen, credentials: Path, env: dict[str, str], *,
-                   settings_keep: tuple[str, ...] = ("skillListingBudgetFraction",)) -> dict[str, Any]:
+                   settings_keep: tuple[str, ...] = ("skillListingBudgetFraction",)) -> JsonObject:
     """Install the frozen plugin into cfg and verify the installed skill byte for byte.
 
     For a remove_skill arm the same check asserts the ABSENCE: no installed skill dir, no router key.
@@ -455,9 +478,10 @@ def install_plugin(cfg: Path, frozen: Frozen, credentials: Path, env: dict[str, 
              for argv in (["claude", "plugin", "marketplace", "add", str(frozen.path), "--json"],
                           ["claude", "plugin", "install", PLUGIN_ID, "--json"])]
     info = _verify_install(cfg, frozen)
-    if info["drift"]:
-        raise ArmError(f"installed skill drifts from the frozen checkout: {info['drift']}")
-    return dict(info, steps=steps, settings_seeded=seeded)
+    if info.drift:
+        raise ArmError(f"installed skill drifts from the frozen checkout: {info.drift}")
+    return {"installed_path": info.installed_path, "installed_version": info.installed_version, "drift": info.drift,
+            "steps": steps, "settings_seeded": seeded}
 
 
 def _is_ignored(repo: Path, rel: str) -> bool:
@@ -579,7 +603,7 @@ def _link_workpiece_hooks(source: Path, hooks: Path) -> list[str]:
     """
     if not source.is_dir():
         return []
-    linked = []
+    linked: list[str] = []
     for entry in sorted(source.iterdir()):
         if entry.name == "pre-push" or entry.name.startswith(".") or entry.name.endswith(".sample"):
             continue
@@ -648,12 +672,23 @@ def _worktree_gone(repo: Path, ws: Path) -> bool:
     return not (ws.exists() or ws.is_symlink()) and os.path.realpath(ws) not in _registered_paths(repo)
 
 
-def _read_state(hooks: Path) -> dict[str, Any] | None:
+@dataclass(frozen=True)
+class _HookState:
+    """A hooks dir's state file as read back: whether it says the harness set the extension.
+
+    Only a literal JSON true says so; any other value, or none, means the harness did not.
+    """
+
+    harness_set_extension: bool
+
+
+def _read_state(hooks: Path) -> _HookState | None:
+    """The state file of a hooks dir; None when it is missing, unreadable or not a JSON object."""
     try:
-        data = json.loads((hooks / STATE_FILE).read_text(encoding="utf-8"))
+        data: JsonValue = json.loads((hooks / STATE_FILE).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    return data if isinstance(data, dict) else None
+    return _HookState(harness_set_extension=data.get(STATE_KEY) is True) if isinstance(data, dict) else None
 
 
 def _remove_hooks_path(hooks: Path) -> None:
@@ -664,11 +699,11 @@ def _remove_hooks_path(hooks: Path) -> None:
         shutil.rmtree(hooks, ignore_errors=True)
 
 
-def _extension_note(state: dict[str, Any] | None) -> str:
+def _extension_note(state: _HookState | None) -> str:
     """What a hooks dir's state file says about extensions.worktreeConfig, for a message."""
     if state is None:
         return f"it holds no readable {STATE_FILE}, so whether the harness set {WORKTREE_CONFIG_KEY} is unknown"
-    if state.get(STATE_KEY) is True:
+    if state.harness_set_extension:
         return f"its {STATE_FILE} says the harness set {WORKTREE_CONFIG_KEY}"
     return f"its {STATE_FILE} says {WORKTREE_CONFIG_KEY} was not set by the harness"
 
@@ -716,14 +751,14 @@ def _hooks_leftover(repo: Path, path: Path, hooks: Path) -> str:
     """A leftover hooks path, what its state says, and how to clean it up."""
     state = _read_state(hooks) if hooks.is_dir() else None
     unset = (f", then git -C {repo} config --local --unset {WORKTREE_CONFIG_KEY} unless another worktree "
-             "has a config.worktree") if state is not None and state.get(STATE_KEY) is True else ""
+             "has a config.worktree") if state is not None and state.harness_set_extension else ""
     return (f"the arm's hooks path {hooks} exists ({_extension_note(state)}; prune of {path} cleans it up, "
             f"or rm -r {hooks}{unset})")
 
 
 def _leftovers(repo: Path, branch: str, path: Path) -> list[str]:
     """What an earlier arm left at this path, its hooks path or branch, each with its cleanup."""
-    found = []
+    found: list[str] = []
     registered = os.path.realpath(path) in _registered_paths(repo)
     if path.exists() and registered:
         found.append(f"worktree {path} exists (git -C {repo} worktree remove --force {path})")
@@ -765,7 +800,7 @@ def _copy_untracked_claude_md(repo: Path, path: Path) -> bool:
     return True
 
 
-def make_worktree(repo: Path, base: str, branch: str, path: Path, *, copy_untracked_claude_md: bool) -> dict[str, Any]:
+def make_worktree(repo: Path, base: str, branch: str, path: Path, *, copy_untracked_claude_md: bool) -> JsonObject:
     """A nested worktree of repo at base on a NEW branch, with a refusing pre-push hook.
 
     `.claude/worktrees/` is added to the repo's info/exclude when not already ignored, so the
@@ -1180,7 +1215,7 @@ def _run_session(proc: subprocess.Popen[str], out: IO[str], acct: StreamAccount,
 
 
 def dispatch(arm_dir: Path, ws: Path, env: dict[str, str], argv: list[str], *, max_tokens: int,
-             deadline_s: float, stop_grace_s: float = STOP_GRACE_S) -> dict[str, Any]:
+             deadline_s: float, stop_grace_s: float = STOP_GRACE_S) -> JsonObject:
     """Stream the session to arm_dir/stream.jsonl, account it, end it on a cap or the deadline.
 
     Args:
@@ -1245,11 +1280,11 @@ def _drop_caches(ws: Path, cache_paths: tuple[str, ...]) -> int:
     return freed
 
 
-def _restore_worktree_config(repo: Path, state: dict[str, Any] | None) -> dict[str, Any]:
+def _restore_worktree_config(repo: Path, state: _HookState | None) -> JsonObject:
     """Unset extensions.worktreeConfig when this arm set it and no worktree's config.worktree needs it."""
     if state is None:
         return {"worktree_config": "no_state", "worktree_config_kept_for": []}
-    if state.get(STATE_KEY) is not True:
+    if not state.harness_set_extension:
         return {"worktree_config": "untouched", "worktree_config_kept_for": []}
     others = _worktree_configs(repo)
     if others:
@@ -1258,7 +1293,7 @@ def _restore_worktree_config(repo: Path, state: dict[str, Any] | None) -> dict[s
     return {"worktree_config": "unset", "worktree_config_kept_for": []}
 
 
-def prune(ws: Path, repo: Path, cache_paths: tuple[str, ...]) -> dict[str, Any]:
+def prune(ws: Path, repo: Path, cache_paths: tuple[str, ...]) -> JsonObject:
     """Remove the build caches, then the worktree (run from repo, never from inside ws); keep the branch.
 
     The arm's hooks dir (with its refusing pre-push and its state file) and the extension the
@@ -1292,7 +1327,7 @@ def prune(ws: Path, repo: Path, cache_paths: tuple[str, ...]) -> dict[str, Any]:
     # The extension first: should its unset fail, the state file is still there for the next prune.
     restored = _restore_worktree_config(repo, state)
     _remove_hooks_path(hooks)
-    return dict({"cache_bytes": freed, "worktree_removed": not already_gone}, **restored)
+    return {"cache_bytes": freed, "worktree_removed": not already_gone, **restored}
 
 
 def save_transcripts(cfg: Path, dest: Path) -> list[str]:
@@ -1306,7 +1341,7 @@ def save_transcripts(cfg: Path, dest: Path) -> list[str]:
     src = cfg / "projects"
     if src.is_symlink() or not src.is_dir():
         return []
-    copied = []
+    copied: list[str] = []
     for root, _dirs, files in os.walk(src):  # followlinks=False: a linked dir is never entered
         for name in files:
             path = Path(root) / name
@@ -1337,7 +1372,7 @@ def _skipped(rel: str, ws: Path, skip_prefixes: tuple[str, ...], harness_copies:
 
 
 def save_uncommitted(ws: Path, out_dir: Path, *, skip_prefixes: tuple[str, ...] = (),
-                     harness_copies: dict[str, Path] | None = None) -> dict[str, Any]:
+                     harness_copies: dict[str, Path] | None = None) -> JsonObject:
     """Save the work an arm left uncommitted: `git diff --binary HEAD` and a tar of its untracked files.
 
     bundle() takes base..HEAD only, and prune() removes the worktree, so without this an arm's

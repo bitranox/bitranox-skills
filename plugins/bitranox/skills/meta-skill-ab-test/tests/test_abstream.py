@@ -271,3 +271,34 @@ def test_a_stream_without_assistant_text_has_no_last_text():
     for record in (OPUS_INIT, _said("m1", TOOL_USE), _said("m2", "   ")):
         acct.feed(record)
     assert acct.last_text is None and acct.summary()["last_text"] is None
+
+
+@pytest.mark.parametrize(("plugins", "skills", "expected"), [
+    (["a", {"name": "b"}, {"x": 1}], [1, 2], (["a", "b", "{'x': 1}"], 2)),
+    ("ab", "abc", (["a", "b"], 3)),  # a string walks its characters, as the plain loop did
+    ({"k": 1}, {"s": 1, "t": 2}, (["k"], 2)),  # an object walks its keys
+    (None, None, ([], 0)),
+])
+def test_init_plugins_and_skills_read_any_json_shape_as_before(plugins, skills, expected):
+    acct = S.StreamAccount()
+    acct.feed({"type": "system", "subtype": "init", "model": "claude-opus-5-5", "plugins": plugins, "skills": skills})
+    assert (acct.plugins, acct.skill_count) == expected
+
+
+@pytest.mark.parametrize(("field", "value", "error"), [
+    ("plugins", 3, "'int' object is not iterable"),
+    ("skills", 4, "object of type 'int' has no len()"),
+])
+def test_an_init_scalar_where_a_list_belongs_raises_the_type_error_it_always_did(field, value, error):
+    acct = S.StreamAccount()
+    with pytest.raises(TypeError, match=error.replace("(", r"\(").replace(")", r"\)")):
+        acct.feed({"type": "system", "subtype": "init", "model": "claude-opus-5-5", field: value})
+
+
+def test_a_model_usage_cost_reads_as_float_of_value_or_zero():
+    acct = S.StreamAccount()
+    acct.feed({"type": "result", "modelUsage": {"claude-opus-5-5": {"costUSD": "1.25", "inputTokens": "3"},
+                                                "claude-haiku-5-5": {"costUSD": None}}})
+    assert acct.per_model() == {
+        "claude-opus-5-5": {"new_tokens": 3, "cache_read": 0, "output_tokens": 0, "cost_usd": 1.25},
+        "claude-haiku-5-5": {"new_tokens": 0, "cache_read": 0, "output_tokens": 0, "cost_usd": 0.0}}

@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
-from _ablib import clear_group, median, sha256_file, signal_group
+from _ablib import JsonObject, JsonValue, clear_group, median, sha256_file, signal_group
 from abprofile import Profile
 from abstream import StreamAccount
 from abtrace import idea_markers, step_outcome, subagent_overlap, suite_outcome
@@ -66,11 +66,6 @@ __all__ = [
     "run_floor",
     "score_arm",
 ]
-
-# A value as json.loads gives it (what a result.json written by any harness version may hold), or
-# as json.dumps takes it: the read-only container types let a list[str] or a dict[str, str] stand.
-type JsonValue = None | bool | int | float | str | Sequence[JsonValue] | Mapping[str, JsonValue]
-type JsonObject = dict[str, JsonValue]
 
 # A median of one reading is that reading: the check needs two other arms before it means anything.
 WARMTH_MIN_PEERS = 2

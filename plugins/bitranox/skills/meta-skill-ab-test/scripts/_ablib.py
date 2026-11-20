@@ -12,9 +12,8 @@ import re
 import signal
 import subprocess
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path, PurePath
-from typing import Any
 
 _NON_ALNUM_RE = re.compile(r"[^a-zA-Z0-9]")
 
@@ -24,12 +23,16 @@ __all__ = [
     "EXIT_NO",
     "EXIT_YES",
     "GROUP_POLL_S",
+    "JsonObject",
+    "JsonValue",
     "append_jsonl",
     "clear_group",
     "dashkey",
     "envelope",
     "git",
     "git_env",
+    "int_or_zero",
+    "json_items",
     "median",
     "read_jsonl",
     "rotated_schedule",
@@ -47,8 +50,57 @@ EXCLUDED_TREE_DIRS = {"__pycache__", ".skillwriter", "tests"}
 # How often clear_group asks whether a process group is empty yet during its grace.
 GROUP_POLL_S = 0.05
 
+# A value as json.loads gives it (what a file written by any harness version, or by the CLI, may
+# hold), or as json.dumps takes it: the read-only container types let a list[str] or a
+# dict[str, str] stand. Defined here, the lowest module, so every script can type its JSON.
+type JsonValue = None | bool | int | float | str | Sequence[JsonValue] | Mapping[str, JsonValue]
+type JsonObject = dict[str, JsonValue]
 
-def envelope(command: str, data: Any, *, ok: bool = True, skipped: list[str] | None = None) -> str:
+
+def int_or_zero(value: JsonValue) -> int:
+    """int(value or 0) over a JSON value: a usage count as the CLI writes it.
+
+    Kept to exactly what that expression did (a numeric string converts, a float truncates, a
+    non-empty list or object raises TypeError), so a stream that once accounted still does.
+
+    Examples:
+        >>> int_or_zero(None), int_or_zero(7), int_or_zero("12"), int_or_zero(3.9), int_or_zero(True)
+        (0, 7, 12, 3, 1)
+        >>> int_or_zero([1])
+        Traceback (most recent call last):
+        ...
+        TypeError: int() argument must be a string, a bytes-like object or a real number, not 'list'
+    """
+    if not value:
+        return 0
+    if isinstance(value, bool | int | float | str):
+        return int(value)
+    raise TypeError(f"int() argument must be a string, a bytes-like object or a real number, not {type(value).__name__!r}")
+
+
+def json_items(value: JsonValue) -> list[JsonValue]:
+    """What `for x in value or []` walked over a JSON value: a string's characters and an object's
+    keys included, a scalar's TypeError too.
+
+    The fields read this way are lists in every file the CLI or the harness writes; any other
+    shape is iterated as the plain loop always did, so a file that read before reads the same now.
+
+    Examples:
+        >>> json_items(None), json_items(["a", 1]), json_items("ab"), json_items({"k": 1})
+        ([], ['a', 1], ['a', 'b'], ['k'])
+    """
+    if not value:
+        return []
+    if isinstance(value, str):
+        return list(value)
+    if isinstance(value, Mapping):
+        return list(value.keys())
+    if isinstance(value, list | tuple):
+        return list(value)
+    raise TypeError(f"{type(value).__name__!r} object is not iterable")
+
+
+def envelope(command: str, data: JsonValue, *, ok: bool = True, skipped: list[str] | None = None) -> str:
     """The {ok, command, data, skipped} JSON envelope every subcommand prints under --json."""
     return json.dumps({"ok": ok, "command": command, "data": data, "skipped": skipped or []}, indent=1)
 
@@ -119,18 +171,19 @@ def utc_now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
-def read_jsonl(path: Path) -> list[dict[str, Any]]:
-    """Every non-blank line of a JSONL file as a dict; a missing file reads as no rows."""
+def read_jsonl(path: Path) -> list[JsonValue]:
+    """Every non-blank line of a JSONL file, parsed (an object per line in every file this harness
+    writes); a missing file reads as no rows."""
     if not path.is_file():
         return []
-    rows = []
+    rows: list[JsonValue] = []
     for line in path.read_text(encoding="utf-8").splitlines():
         if line.strip():
             rows.append(json.loads(line))
     return rows
 
 
-def append_jsonl(path: Path, row: dict[str, Any]) -> None:
+def append_jsonl(path: Path, row: Mapping[str, JsonValue]) -> None:
     """Append one row as a sorted-key JSON line, LF-terminated on every platform."""
     with path.open("a", encoding="utf-8", newline="\n") as fh:
         fh.write(json.dumps(row, sort_keys=True) + "\n")

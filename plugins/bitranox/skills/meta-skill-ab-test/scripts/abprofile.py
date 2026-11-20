@@ -7,9 +7,14 @@ from __future__ import annotations
 
 import re
 import tomllib
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import date, datetime, time
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Any
+
+# A value as tomllib.loads gives it; a table is a Mapping, an array a Sequence (a list at run time).
+type TomlValue = bool | int | float | str | datetime | date | time | Sequence[TomlValue] | Mapping[str, TomlValue]
+type TomlTable = Mapping[str, TomlValue]
 
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 NAME_RE = re.compile(r"^V[0-9A-Za-z_-]{1,20}$")
@@ -194,7 +199,7 @@ class _Check:
     def __init__(self) -> None:
         self.problems: list[str] = []
 
-    def str_list(self, table: dict[str, Any], key: str, where: str, *, required: bool = True,
+    def str_list(self, table: TomlTable, key: str, where: str, *, required: bool = True,
                  default: tuple[str, ...] = ()) -> tuple[str, ...]:
         v = table.get(key)
         if v is None:
@@ -204,30 +209,30 @@ class _Check:
         if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
             self.problems.append(f"{where}.{key}: must be a list of strings (an argv list, never one shell string)")
             return default
-        return tuple(v)
+        return tuple(x for x in v if isinstance(x, str))  # every item, now typed as the str it was checked to be
 
-    def text(self, table: dict[str, Any], key: str, where: str, *, default: str | None = None) -> str:
+    def text(self, table: TomlTable, key: str, where: str, *, default: str | None = None) -> str:
         v = table.get(key, default)
         if not isinstance(v, str) or not v or v.startswith("<"):
             self.problems.append(f"{where}.{key}: missing or still a <placeholder>")
             return ""
         return v
 
-    def integer(self, table: dict[str, Any], key: str, where: str, *, minimum: int, default: int | None = None) -> int:
+    def integer(self, table: TomlTable, key: str, where: str, *, minimum: int, default: int | None = None) -> int:
         v = table.get(key, default)
         if not isinstance(v, int) or isinstance(v, bool) or v < minimum:
             self.problems.append(f"{where}.{key}: must be an integer >= {minimum}")
             return minimum
         return v
 
-    def sha(self, table: dict[str, Any], key: str, where: str) -> str:
+    def sha(self, table: TomlTable, key: str, where: str) -> str:
         v = self.text(table, key, where)
         if v and not SHA_RE.match(v):
             self.problems.append(f"{where}.{key}: must be a full 40-char lowercase sha")
         return v
 
 
-def _table(c: _Check, data: dict[str, Any], key: str) -> dict[str, Any]:
+def _table(c: _Check, data: TomlTable, key: str) -> TomlTable:
     """The [key] table, or {} after reporting a wrong shape (an array, a scalar) as a problem."""
     v = data.get(key)
     if v is None:
@@ -238,7 +243,7 @@ def _table(c: _Check, data: dict[str, Any], key: str) -> dict[str, Any]:
     return v
 
 
-def _variant_tables(c: _Check, data: dict[str, Any]) -> list[tuple[int, dict[str, Any]]]:
+def _variant_tables(c: _Check, data: TomlTable) -> list[tuple[int, TomlTable]]:
     """The [[variant]] entries with their index; a wrong shape is reported, never an AttributeError."""
     v = data.get("variant")
     if v is None or v == []:
@@ -247,12 +252,12 @@ def _variant_tables(c: _Check, data: dict[str, Any]) -> list[tuple[int, dict[str
     if not isinstance(v, list):
         c.problems.append("variant: must be an array of tables ([[variant]])")
         return []
-    tables = [(i, t) for i, t in enumerate(v) if isinstance(t, dict)]
+    tables: list[tuple[int, TomlTable]] = [(i, t) for i, t in enumerate(v) if isinstance(t, dict)]
     c.problems.extend(f"variant[{i}]: must be a table" for i, t in enumerate(v) if not isinstance(t, dict))
     return tables
 
 
-def _changes(c: _Check, t: dict[str, Any], where: str) -> tuple[str, ...]:
+def _changes(c: _Check, t: TomlTable, where: str) -> tuple[str, ...]:
     """At least one change, none blank and none still the skeleton's <placeholder>."""
     before = len(c.problems)
     changes = c.str_list(t, "changes", where)
@@ -266,7 +271,7 @@ def _changes(c: _Check, t: dict[str, Any], where: str) -> tuple[str, ...]:
     return changes
 
 
-def _remove_skill(c: _Check, t: dict[str, Any], where: str) -> bool:
+def _remove_skill(c: _Check, t: TomlTable, where: str) -> bool:
     v = t.get("remove_skill", False)
     if not isinstance(v, bool):
         c.problems.append(f"{where}.remove_skill: must be true or false")
@@ -274,7 +279,7 @@ def _remove_skill(c: _Check, t: dict[str, Any], where: str) -> bool:
     return v
 
 
-def _variant_task_file(c: _Check, t: dict[str, Any], where: str) -> str | None:
+def _variant_task_file(c: _Check, t: TomlTable, where: str) -> str | None:
     v = t.get("task_file")
     if v is None:
         return None
@@ -285,7 +290,7 @@ def _variant_task_file(c: _Check, t: dict[str, Any], where: str) -> str | None:
     return v
 
 
-def _variant_dir(c: _Check, t: dict[str, Any], where: str, remove_skill: bool) -> str | None:
+def _variant_dir(c: _Check, t: TomlTable, where: str, remove_skill: bool) -> str | None:
     """The overlay dir; a remove_skill variant has none, and naming one is refused, never ignored."""
     if not remove_skill:
         return c.text(t, "dir", where)
@@ -294,7 +299,7 @@ def _variant_dir(c: _Check, t: dict[str, Any], where: str, remove_skill: bool) -
     return None
 
 
-def _variant(c: _Check, i: int, t: dict[str, Any], seen: set[str]) -> Variant:
+def _variant(c: _Check, i: int, t: TomlTable, seen: set[str]) -> Variant:
     where = f"variant[{i}]"
     name = c.text(t, "name", where)
     if name and not NAME_RE.match(name):
@@ -310,12 +315,12 @@ def _variant(c: _Check, i: int, t: dict[str, Any], seen: set[str]) -> Variant:
                    markers=markers, remove_skill=remove_skill, task_file=_variant_task_file(c, t, where))
 
 
-def _variants(c: _Check, data: dict[str, Any]) -> tuple[Variant, ...]:
+def _variants(c: _Check, data: TomlTable) -> tuple[Variant, ...]:
     seen: set[str] = set()
     return tuple(_variant(c, i, t, seen) for i, t in _variant_tables(c, data))
 
 
-def _workpiece(c: _Check, wp: dict[str, Any]) -> Workpiece:
+def _workpiece(c: _Check, wp: TomlTable) -> Workpiece:
     repo_text = c.text(wp, "repo", "workpiece")
     repo = Path(repo_text).expanduser()
     # An empty repo_text is already reported; Path("") is the cwd, whose .git says nothing.
@@ -328,7 +333,7 @@ def _workpiece(c: _Check, wp: dict[str, Any]) -> Workpiece:
                      link=_links(c, wp, repo.resolve()))
 
 
-def _links(c: _Check, wp: dict[str, Any], repo: Path) -> tuple[str, ...]:
+def _links(c: _Check, wp: TomlTable, repo: Path) -> tuple[str, ...]:
     """workpiece.link: relative paths inside the checkout, outside .git, each named once."""
     entries = c.str_list(wp, "link", "workpiece", required=False)
     for entry in entries:
@@ -352,7 +357,7 @@ def _link_problem(entry: str, repo: Path) -> str | None:
     return None
 
 
-def _control(c: _Check, ct: dict[str, Any]) -> Control:
+def _control(c: _Check, ct: TomlTable) -> Control:
     return Control(skills_ref=c.sha(ct, "skills_ref", "control"), skill=c.text(ct, "skill", "control"))
 
 
@@ -363,7 +368,7 @@ def _is_inside_relative(text: str) -> bool:
             and ".." not in posix.parts)
 
 
-def _suite(c: _Check, fl: dict[str, Any]) -> str | None:
+def _suite(c: _Check, fl: TomlTable) -> str | None:
     suite = fl.get("suite")
     if suite is None:
         return None
@@ -373,7 +378,7 @@ def _suite(c: _Check, fl: dict[str, Any]) -> str | None:
     return suite
 
 
-def _suite_from(c: _Check, fl: dict[str, Any], suite: str | None) -> str | None:
+def _suite_from(c: _Check, fl: TomlTable, suite: str | None) -> str | None:
     """The absolute path seal reads the suite from; meaningless, so refused, without a suite."""
     v = fl.get("suite_from")
     if v is None:
@@ -387,7 +392,7 @@ def _suite_from(c: _Check, fl: dict[str, Any], suite: str | None) -> str | None:
     return v if suite is not None else None
 
 
-def _floor(c: _Check, fl: dict[str, Any]) -> Floor:
+def _floor(c: _Check, fl: TomlTable) -> Floor:
     suite = _suite(c, fl)
     floor = Floor(gate=c.str_list(fl, "gate", "floor"), suite=suite,
                   suite_cmd=c.str_list(fl, "suite_cmd", "floor", required=suite is not None),
@@ -399,7 +404,7 @@ def _floor(c: _Check, fl: dict[str, Any]) -> Floor:
     return floor
 
 
-def _warmth_tolerance(c: _Check, rn: dict[str, Any]) -> float:
+def _warmth_tolerance(c: _Check, rn: TomlTable) -> float:
     tol = rn.get("warmth_tolerance", 0.25)
     if not isinstance(tol, (int, float)) or isinstance(tol, bool) or not 0 < tol < 1:
         c.problems.append("run.warmth_tolerance: must be a number in (0, 1)")
@@ -407,7 +412,7 @@ def _warmth_tolerance(c: _Check, rn: dict[str, Any]) -> float:
     return float(tol)
 
 
-def _sandbox(c: _Check, rn: dict[str, Any]) -> str | None:
+def _sandbox(c: _Check, rn: TomlTable) -> str | None:
     """The [run] sandbox value; a missing key is None here, refused only where an arm would run."""
     v = rn.get("sandbox")
     if v is None:
@@ -418,7 +423,7 @@ def _sandbox(c: _Check, rn: dict[str, Any]) -> str | None:
     return str(v)
 
 
-def _unattended_note(c: _Check, rn: dict[str, Any]) -> str | None:
+def _unattended_note(c: _Check, rn: TomlTable) -> str | None:
     """run.unattended_note: optional; when present a non-blank string that is no <placeholder>."""
     if "unattended_note" not in rn:
         return None
@@ -429,7 +434,7 @@ def _unattended_note(c: _Check, rn: dict[str, Any]) -> str | None:
     return note.strip()
 
 
-def _run(c: _Check, rn: dict[str, Any]) -> Run:
+def _run(c: _Check, rn: TomlTable) -> Run:
     run = Run(model=c.text(rn, "model", "run", default="opus"),
               n=c.integer(rn, "n", "run", minimum=1), deadline_s=c.integer(rn, "deadline_s", "run", minimum=60),
               max_tokens=c.integer(rn, "max_tokens", "run", minimum=1000), warmth_tolerance=_warmth_tolerance(c, rn),
@@ -445,7 +450,7 @@ def load_profile(path: Path) -> Profile:
     """Parse and validate abtest.toml; raise ProfileError listing every problem."""
     c = _Check()
     try:
-        data = tomllib.loads(path.read_text(encoding="utf-8"))
+        data: TomlTable = tomllib.loads(path.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError) as exc:
         raise ProfileError(f"{path}: {exc}") from exc
     workpiece = _workpiece(c, _table(c, data, "workpiece"))
