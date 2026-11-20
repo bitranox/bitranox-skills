@@ -76,7 +76,10 @@ Each altitude's `CLAUDE.local.md` carries ONE managed, fenced pointer block:
   carries the pointer's title as data: an engine write that rewrites a body (`add`, `amend-pinned`,
   `retitle`, factedit's `apply`) keeps the two equal by setting it from the pointer, so a stale
   `title:` in a body handed back is overwritten, never copied to the pointer, and
-  `heal --backfill-titles` fills it into bodies written before it existed. A `topics:` line
+  `heal --backfill-titles` fills it into bodies written before it existed. A re-home runs the other
+  way: `reconcile_memory_index.py --rehome` writes a new pointer line for a body that lost its
+  line and takes that line's title from the body's `title:` (from the slug only for a body written
+  before titles were kept), so the two stay equal there too. A `topics:` line
   (`topics: [python, uv]`, written after `title:`) lists the topics the fact is bound to, at most
   12 and each from the tree's closed list; `topics: []` means it was tagged and is bound to none,
   and no line means it was never tagged. An `add`, `amend-pinned` or factedit `apply` that

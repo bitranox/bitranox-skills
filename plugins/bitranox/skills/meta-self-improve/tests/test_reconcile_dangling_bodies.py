@@ -2,6 +2,8 @@
 entries: a central body no level points at). All content ASCII."""
 
 
+from pathlib import Path
+
 import reconcile_memory_index as R
 import memory_engine as E
 import self_improve_signals as sig
@@ -118,3 +120,13 @@ def test_rehome_to_a_level_below_the_top_prints_its_cost_without_the_top_note(tm
 
     assert ("cost: added %d byte(s) to the always-loaded pointer block at %s\n"
             % (E._block_bytes(proj), proj)) in out
+
+
+def test_the_backend_doc_names_the_rehome_among_the_title_keeping_writes():
+    """memory-backend.md is where a reader learns which writes keep a body's `title:` equal to the
+    pointer (ledger d-20261120-bf284c6e); the re-home writes the pointer from the body, so the doc
+    must say so or it reads as a write that may set a different title."""
+    doc = Path(R.__file__).resolve().parent / "references" / "memory-backend.md"
+    text = " ".join(doc.read_text(encoding="utf-8").split())
+    assert ("`reconcile_memory_index.py --rehome` writes a new pointer line for a body that lost "
+            "its line and takes that line's title from the body's `title:`") in text
