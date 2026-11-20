@@ -3,7 +3,11 @@
 Builds synthetic memory dirs in tmp_path. All content ASCII.
 """
 
+import json
 import os
+import subprocess
+import sys
+import time
 from pathlib import Path
 
 import reconcile_memory_index as R
@@ -913,3 +917,85 @@ def test_the_large_index_warning_never_recommends_lifting_facts(proj, capsys):
     assert len(warning) == 1
     assert "lift/" not in warning[0] and "promote" not in warning[0]
     assert "fold near-duplicates, trim long hooks" in warning[0]
+
+
+# ---- an archive never drops a line a concurrent add wrote at the same level --------------------
+
+_ADDER = r'''
+import json, random, sys, time
+from pathlib import Path
+hooks, level, progress, stop = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+sys.path.insert(0, hooks)
+import memory_engine as E
+created = []
+n = 0
+while not Path(stop).exists():
+    n += 1
+    slug, new = E.upsert_entry(level, "Added %d" % n, "When adding %d, keep it." % n,
+                               body="prose %d" % n, slug="added-%d" % n)
+    if new:
+        created.append(slug)
+    Path(progress).write_text(str(len(created)), encoding="utf-8")
+    # a real session pauses between its writes; a worker that re-takes the level lock at once
+    # leaves a 50 ms-polling waiter no gap (see the race tests in hooks/tests)
+    time.sleep(random.uniform(0.0, 0.005))
+print(json.dumps({"created": created}))
+'''
+
+_ADDS_TO_MEET = 150
+"""How many facts the adder creates before the archives stop: counted, not timed, so the adds meet
+many archives whatever the runner's speed."""
+
+
+def _adder_progress(path):
+    """The adder's count of created facts; 0 until it has written one (or mid-write)."""
+    try:
+        return int(path.read_text(encoding="utf-8") or 0)
+    except (OSError, ValueError):
+        return 0
+
+
+def test_an_archive_never_drops_a_line_a_concurrent_add_wrote(tmp_path):
+    """The archive read the level's block without its lock and wrote the block back without the
+    archived line: an `add` of ANOTHER fact landing between the two lost its line (its body stayed,
+    a dangling body), while both sides exited 0. A real second process adds new facts in a loop
+    while this one adds and archives one fact after another; every fact the adder created must
+    keep its line."""
+    root = tmp_path / "tree"
+    root.mkdir()
+    (root / "CLAUDE.md").write_text("x\n", encoding="utf-8")
+    (root / us.STORE_DIRNAME).mkdir()
+    level = str(root)
+    progress, stop, worker = tmp_path / "progress", tmp_path / "stop", tmp_path / "adder.py"
+    worker.write_text(_ADDER, encoding="utf-8")
+    hooks = str(Path(ME.__file__).resolve().parent)
+    proc = subprocess.Popen([sys.executable, str(worker), hooks, level, str(progress), str(stop)],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding="utf-8")
+    victims = []
+    try:
+        while _adder_progress(progress) < 1:
+            assert proc.poll() is None, proc.communicate()
+            time.sleep(0.002)
+        while _adder_progress(progress) < _ADDS_TO_MEET and len(victims) < 5000:
+            n = len(victims)
+            slug = ME.add_or_update_entry(level, "Victim %d" % n, "When victim %d, drop it." % n,
+                                          body="victim prose", slug="victim-%d" % n)
+            victims.append(slug)
+            assert R.archive_entry(level, slug) is True
+        stop.write_text("x", encoding="utf-8")
+        out, err = proc.communicate(timeout=60)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.communicate()
+    assert proc.returncode == 0, err
+    created = json.loads(out.strip().splitlines()[-1])["created"]
+    assert len(created) >= _ADDS_TO_MEET
+    kept = {e.slug for e in ME.read_store(level)[1]}
+    # an add that read the block before an unlocked archive wrote it puts the archived line back
+    # (a pointer naming a body in the archive); an archive that read before an add drops its line
+    back = sorted(kept & set(victims))
+    lost = [slug for slug in created if slug not in kept]
+    assert (back, lost) == ([], []), ("%d of %d archived lines came back, %d of %d added lines "
+                                      "were dropped" % (len(back), len(victims), len(lost),
+                                                        len(created)))

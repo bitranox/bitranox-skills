@@ -576,6 +576,15 @@ def archive_entry(level_dir: _StrPath, slug: str, archive_subdir: str = ".archiv
     `move` and `commit` are the body-move and pointer-write seams (shutil.move and the engine's
     store commit when omitted), resolved at call time.
 
+    The level's own block is re-read and written under its level lock (`sig.memory_lock`, the lock
+    every `add` takes): what was read before taking it is a plan. Reading and writing it unlocked
+    dropped the line of another fact an `add` wrote in between, and an `add` that had read before
+    the archive's write put the archived line back, naming a body already in the archive (both
+    sides exit 0). The lines at the other levels are dropped first, each under its own lock, so
+    no level lock is ever held while another is taken. The commit writes no body: an archive only
+    drops a line, and writing the kept facts' bodies back from its read undid any `add` another
+    level made to them since.
+
     Raises `sig.MemoryWritesOff` before anything is read under BITRANOX_MEMORY_WRITES=off, unless
     `dry_run`. It cannot leave that to the commit's own guard: the body is moved BEFORE the commit,
     and a refusal there is not the OSError `_put_back` answers, so the body would stay in the
@@ -602,16 +611,17 @@ def _archive_entry(level_dir: _StrPath, slug: str, archive_subdir: str, dry_run:
     move_body: _MovePort = move or shutil.move
     write: _CommitPort = commit or ME.commit_store
     d = Path(level_dir)
-    scope, entries, bodies = ME.read_store(str(d))
+    _scope, entries, _bodies = ME.read_store(str(d))          # the plan; re-read under the lock
     qcanon = _canon(slug)
-    kept = [e for e in entries if _canon(e.slug) != qcanon]
-    if len(kept) == len(entries):
+    if not any(_canon(e.slug) == qcanon for e in entries):
         # A hand-damaged pointer (`mem:../../CLAUDE`) is never parsed into an entry, so it owns no
         # body; forgetting it means dropping the line, which the canonical re-render below does.
         if not _names_invalid_pointer(d, slug):
             return False
         if not dry_run:
-            write(str(d), scope, entries, bodies)
+            with _level_lock(d):
+                scope, current, _bodies = ME.read_store(str(d))
+                write(str(d), scope, current, {})
         return True
     anchor = ME.anchor_dir(str(d))
     # A fact placed by topic is archived at EVERY level it has a line at, so this is its last
@@ -630,8 +640,10 @@ def _archive_entry(level_dir: _StrPath, slug: str, archive_subdir: str, dry_run:
             # lines not yet reached, which a render repairs, never a line with no body
             ME.drop_pointer(other, slug)
             dropped.append(other)
-        _archive_here(d, anchor, slug, scope, entries, kept, bodies, archive_subdir, move_body,
-                      write)
+        with _level_lock(d):
+            scope, entries, _bodies = ME.read_store(str(d))
+            kept = [e for e in entries if _canon(e.slug) != qcanon]
+            _archive_here(d, anchor, slug, scope, entries, kept, archive_subdir, move_body, write)
     except ArchiveRollbackFailed as exc:
         if not dropped:
             raise
@@ -647,12 +659,18 @@ def _archive_entry(level_dir: _StrPath, slug: str, archive_subdir: str, dry_run:
     return True
 
 
+def _level_lock(level_dir: Path) -> contextlib.AbstractContextManager[None]:
+    """The level lock of `level_dir`: the one every `add` there takes around its read and write."""
+    return sig.memory_lock(sig.claude_local_md_path(str(level_dir)))
+
+
 def _archive_here(d: Path, anchor: Path, slug: str, scope: str, entries: list[ME.Entry],
-                  kept: list[ME.Entry], bodies: dict[str, str], archive_subdir: str,
-                  move: _MovePort, commit: _CommitPort) -> None:
+                  kept: list[ME.Entry], archive_subdir: str, move: _MovePort,
+                  commit: _CommitPort) -> None:
     """Move the body to the archive when no OTHER level still holds a line of `slug` (the caller
     has dropped them), then write this level's block without it; a failed write moves the body
-    back (see `archive_entry`)."""
+    back (see `archive_entry`). The caller holds `d`'s level lock and read `entries` under it; the
+    commit names no body, so it writes none (see `archive_entry`)."""
     qcanon = _canon(slug)
     moved: list[tuple[Path, Path]] = []
     for e in entries:
@@ -668,7 +686,7 @@ def _archive_here(d: Path, anchor: Path, slug: str, scope: str, entries: list[ME
                 move(str(src), str(dest))
                 moved.append((src, dest))
     try:
-        commit(str(d), scope, kept, {e.slug: bodies.get(e.slug, "") for e in kept})
+        commit(str(d), scope, kept, {})
     except OSError as exc:
         _put_back(moved, exc, move)
         raise
