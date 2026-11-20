@@ -140,6 +140,18 @@ def test_a_reservation_reply_of_another_shape_is_refused_naming_the_box(reply, c
     assert "php on 192.0.2.1 returned an unexpected reply: " in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("reply", [
+    '[{"host":"nas","domain":"example.com","ip":"192.0.2.31"}]',                # no descr
+    '[{"host":null,"domain":"example.com","ip":"192.0.2.31","descr":""}]',      # null for text
+])
+def test_an_override_reply_of_another_shape_is_refused_naming_the_box(reply, capsys):
+    fake = FakeRun([('config_get_path("unbound/hosts"', (0, reply, ""))])
+    assert P.main(["--host", "192.0.2.1", "--json", "dns", "list"], run=fake) == 2
+    out = capsys.readouterr()
+    assert json.loads(out.out)["ok"] is False
+    assert "php on 192.0.2.1 returned an unexpected reply: a host override has no text field" in out.err
+
+
 def test_a_pool_reply_of_another_shape_is_refused_before_the_audit(capsys):
     fake = FakeRun([('$pools = array()', (0, '[{"interface":"lan","from":"192.0.2.100"}]', "")),
                     ('config_get_path("dhcpd"', (0, RESERVATIONS_JSON, "")),
@@ -260,9 +272,9 @@ def test_parse_arp_keeps_an_incomplete_entry_with_no_mac():
     assert incomplete["mac"] == ""
 
 
-def test_override_name_handles_an_override_with_no_host_part():
-    assert P.override_name({"host": "", "domain": "example.com"}) == "example.com"
-    assert P.override_name({"host": "nas", "domain": "example.com"}) == "nas.example.com"
+def test_an_override_fqdn_handles_an_override_with_no_host_part():
+    assert P.Override(host="", domain="example.com", ip="", descr="").fqdn == "example.com"
+    assert P.Override(host="nas", domain="example.com", ip="", descr="").fqdn == "nas.example.com"
 
 
 # ---- selection refuses to guess -----------------------------------------------------------------
@@ -348,7 +360,7 @@ def test_reservations_are_read_out_of_a_snapshot_with_the_static_arp_flag():
 def test_overrides_are_read_from_unbound_hosts_not_hostoverride():
     """The GUI says Host Overrides; the element is `hosts`. The wrong path returns [] silently."""
     overrides = P.overrides_from_config_xml(CONFIG_XML)
-    assert [P.override_name(o) for o in overrides] == ["nas.example.com", "bare.example.com"]
+    assert [o.fqdn for o in overrides] == ["nas.example.com", "bare.example.com"]
 
 
 # ---- doctor -------------------------------------------------------------------------------------
@@ -425,7 +437,7 @@ def test_one_reserved_mac_answering_for_a_shared_address_is_not_a_mismatch():
 
 def test_an_override_pointing_at_a_static_host_is_not_a_finding():
     """A statically configured server has no reservation; that is normal, not a fault."""
-    overrides = [{"host": "srv", "domain": "example.com", "ip": "192.0.2.200"}]
+    overrides = [P.Override(host="srv", domain="example.com", ip="192.0.2.200", descr="")]
     assert P.doctor_findings(reservations=[], overrides=overrides) == []
     assert P.doctor_findings(reservations=[], overrides=overrides, arp=P.parse_arp(ARP_TEXT)) == []
 

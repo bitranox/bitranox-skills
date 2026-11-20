@@ -303,6 +303,40 @@ class Pool:
         return [cls.from_json(item) for item in _array(value, "the DHCP pool list")]
 
 
+@dataclass(frozen=True)
+class Override:
+    """One unbound host override, as `dns list` prints it."""
+
+    host: str
+    domain: str
+    ip: str
+    descr: str
+
+    @property
+    def fqdn(self) -> str:
+        """The fully qualified name, tolerating an empty host part (the whole name in `domain`)."""
+        host, domain = self.host.strip(), self.domain.strip()
+        return f"{host}.{domain}" if host else domain
+
+    @classmethod
+    def from_json(cls, value: object) -> "Override":
+        what = "a host override"
+        obj = _object(value, what)
+        return cls(host=_text(obj, "host", what), domain=_text(obj, "domain", what),
+                   ip=_text(obj, "ip", what), descr=_text(obj, "descr", what))
+
+    @classmethod
+    def list_from_json(cls, value: object) -> list["Override"]:
+        return [cls.from_json(item) for item in _array(value, "the host override list")]
+
+    def to_json(self, *, with_fqdn: bool = False) -> dict:
+        """The object the PHP echoed; `with_fqdn` appends the name `dns rm` selected it by."""
+        out = {"host": self.host, "domain": self.domain, "ip": self.ip, "descr": self.descr}
+        if with_fqdn:
+            out["fqdn"] = self.fqdn
+        return out
+
+
 def _json_value(value: object) -> object:
     """The reply as decoded, for a shape that has no record yet."""
     return value
@@ -692,12 +726,6 @@ def _is_loopback(address: str) -> str | bool:
     return address.startswith("127.") or address in ("::1", "0:0:0:0:0:0:0:1")
 
 
-def override_name(entry: dict) -> str:
-    """The fully qualified name of a host override, tolerating an empty host part."""
-    host, domain = (entry.get("host") or "").strip(), (entry.get("domain") or "").strip()
-    return f"{host}.{domain}" if host else domain
-
-
 # ---- offline config parsing ---------------------------------------------------------------------
 def reservations_from_config_xml(text: str) -> list[Reservation]:
     """DHCP reservations read straight out of a config.xml snapshot.
@@ -745,18 +773,18 @@ def pools_from_config_xml(text: str) -> list[Pool]:
     return out
 
 
-def overrides_from_config_xml(text: str) -> list[dict]:
+def overrides_from_config_xml(text: str) -> list[Override]:
     """DNS host overrides from a snapshot. The element is `hosts`, not `hostoverride`."""
     root = parse_xml(text)
     unbound = root.find("unbound")
     if unbound is None:
         return []
-    return [{
-        "host": (entry.findtext("host") or "").strip(),
-        "domain": (entry.findtext("domain") or "").strip(),
-        "ip": (entry.findtext("ip") or "").strip(),
-        "descr": (entry.findtext("descr") or "").strip(),
-    } for entry in unbound.findall("hosts")]
+    return [Override(
+        host=(entry.findtext("host") or "").strip(),
+        domain=(entry.findtext("domain") or "").strip(),
+        ip=(entry.findtext("ip") or "").strip(),
+        descr=(entry.findtext("descr") or "").strip(),
+    ) for entry in unbound.findall("hosts")]
 
 
 # ---- doctor: pure checks over plain data --------------------------------------------------------
@@ -806,7 +834,7 @@ def _reservations_in_pools(reservations: Sequence[Reservation], pools: Sequence[
     return findings
 
 
-def doctor_findings(*, reservations: Sequence[Reservation], overrides: Sequence,
+def doctor_findings(*, reservations: Sequence[Reservation], overrides: Sequence[Override],
                     arp: list[dict] | None = None, resolv_conf: str | None = None,
                     upgrade_locks: list[str] | None = None,
                     pools: Sequence[Pool] | None = None) -> list[Finding]:
@@ -1638,10 +1666,11 @@ def cmd_dhcp_rm_static_arp(args) -> int:
 
 def cmd_dns_list(args) -> int:
     target = _target_from_args(args)
-    overrides = run_php(target, php_list_overrides(), parse=_json_value, run=args.run)
-    lines = [f"  {override_name(o):<44} -> {o['ip']}" for o in overrides]
+    overrides = run_php(target, php_list_overrides(), parse=Override.list_from_json, run=args.run)
+    lines = [f"  {o.fqdn:<44} -> {o.ip}" for o in overrides]
     lines.append(f"  ({len(overrides)} host overrides)")
-    _emit(envelope(command="dns list", data=overrides, ok=True), args.json, "\n".join(lines))
+    _emit(envelope(command="dns list", data=[o.to_json() for o in overrides], ok=True), args.json,
+          "\n".join(lines))
     return 0
 
 
@@ -1665,8 +1694,8 @@ def cmd_dns_add(args) -> int:
     # The PHP duplicate check compares host and domain separately, so it cannot see an override
     # stored with an EMPTY host whose domain is this whole name. Compare full names here, with the
     # same rule the listing uses, before anything is snapshotted or written.
-    existing = run_php(target, php_list_overrides(), parse=_json_value, run=args.run)
-    if any(override_name(o).lower() == f"{host}.{domain}" for o in existing):
+    existing = run_php(target, php_list_overrides(), parse=Override.list_from_json, run=args.run)
+    if any(o.fqdn.lower() == f"{host}.{domain}" for o in existing):
         raise PfsenseError(f"an override for {host}.{domain} already exists")
     _guard_mutation(args, target, f"adding {host}.{domain}")
     result = run_php(target, php_add_override(host, domain, args.ip, args.descr), parse=_json_value,
@@ -1724,7 +1753,7 @@ def restart_and_verify_unbound(target: Target, *, name: str, ip: str, run, chang
     return {"restarted": True, "resolved": name, "ip": ip}
 
 
-def _probe_after_removal(overrides: list[dict], removed_fqdn: str) -> tuple[str, str]:
+def _probe_after_removal(overrides: Sequence[Override], removed_fqdn: str) -> tuple[str, str]:
     """A name unbound must still answer locally after `removed_fqdn` is gone, and its address.
 
     An override that remains has a known answer that needs no upstream server, so a dead link to
@@ -1732,35 +1761,35 @@ def _probe_after_removal(overrides: list[dict], removed_fqdn: str) -> tuple[str,
     local zone; the trailing dot keeps a search domain from being tried first.
     """
     for entry in overrides:
-        fqdn = override_name(entry)
-        if fqdn.lower() != removed_fqdn.lower() and entry.get("ip"):
-            return fqdn, entry["ip"]
+        if entry.fqdn.lower() != removed_fqdn.lower() and entry.ip:
+            return entry.fqdn, entry.ip
     return "localhost.", "127.0.0.1"
 
 
 def cmd_dns_rm(args) -> int:
     target = _target_from_args(args)
     host, domain = _split_name(args.name)
-    overrides = run_php(target, php_list_overrides(), parse=_json_value, run=args.run)
-    named = [dict(o, fqdn=override_name(o)) for o in overrides]
-    entry = select_one(named, f"{host}.{domain}", key=lambda o: o["fqdn"], field="fqdn", what="host override")
+    overrides = run_php(target, php_list_overrides(), parse=Override.list_from_json, run=args.run)
+    entry = select_one(overrides, f"{host}.{domain}", key=lambda o: o.fqdn, field="fqdn",
+                       what="host override")
     if not args.apply:
-        _emit(envelope(command="dns rm", data={"would_remove": entry}, ok=True, skipped=["--apply not given"]),
-              args.json, f"  DRY RUN: would remove {entry['fqdn']} -> {entry['ip']}.  Re-run with --apply.")
+        _emit(envelope(command="dns rm", data={"would_remove": entry.to_json(with_fqdn=True)}, ok=True,
+                       skipped=["--apply not given"]),
+              args.json, f"  DRY RUN: would remove {entry.fqdn} -> {entry.ip}.  Re-run with --apply.")
         return 0
     _guard_mutation(args, target, f"removing {host}.{domain}")
     # Target the fields as STORED, not a re-split of the name: an override with an empty host keeps
     # the whole name in its domain, and host 'bare' + domain 'example.com' would match nothing.
-    stored_host = (entry.get("host") or "").lower()
-    stored_domain = (entry.get("domain") or "").lower()
+    stored_host = entry.host.lower()
+    stored_domain = entry.domain.lower()
     result = run_php(target, php_rm_override(stored_host, stored_domain), parse=_json_value, run=args.run)
     removed = result.get("removed") or []
     _require_effect(removed, f"the override {host}.{domain} matched, but removing it removed nothing "
                              "(it changed since it was listed); config.xml was not written")
-    probe_name, probe_ip = _probe_after_removal(overrides, entry["fqdn"])
+    probe_name, probe_ip = _probe_after_removal(overrides, entry.fqdn)
     result["unbound"] = restart_and_verify_unbound(
         target, name=probe_name, ip=probe_ip, run=args.run,
-        change=f"the removal of the override {entry['fqdn']}")
+        change=f"the removal of the override {entry.fqdn}")
     _emit(envelope(command="dns rm", data=result, ok=True), args.json,
           f"  removed {len(removed)} override(s) for {host}.{domain}; "
           f"unbound restarted and answers {probe_name}")
@@ -2261,7 +2290,7 @@ def cmd_doctor(args) -> int:
     else:
         target = _target_from_args(args)
         reservations = run_php(target, php_list_reservations(), parse=Reservation.list_from_json, run=args.run)
-        overrides = run_php(target, php_list_overrides(), parse=_json_value, run=args.run)
+        overrides = run_php(target, php_list_overrides(), parse=Override.list_from_json, run=args.run)
         pools = run_php(target, php_list_pools(), parse=Pool.list_from_json, run=args.run)
         arp_out = _read_or_raise(target, "arp -an", run=args.run)
         resolv = _read_or_raise(target, "cat /etc/resolv.conf", run=args.run)
