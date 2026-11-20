@@ -447,3 +447,30 @@ def test_add_reports_a_typed_record_whose_data_is_the_backlog_add_wire(tmp_path)
 def test_close_reports_its_keys_in_the_order_backlog_close_relays(tmp_path):
     p = _backlog(tmp_path, _item(10))
     assert list(ow.close_item(p, 10, "done").to_data()) == ["rank", "line", "reason", "deleted"]
+
+
+# A ranked line written without its (date) prefix, by hand or by an older tool, is still an item:
+# read as no item, its rank was "not found" for close and free for add, while the line stood there.
+_DATELESS = "- [ ] [84] USER: a hand-written line | size: 1 | open: o | next: n"
+
+
+def test_a_ranked_line_without_a_date_is_an_item_with_no_raised_date(tmp_path):
+    p = _backlog(tmp_path, _item(10), _DATELESS)
+    items = {it.rank: it for it in ow.list_items(p)}
+    assert set(items) == {10, 84}
+    assert items[84].raised == "" and items[84].origin == ow.Origin.USER
+    assert items[84].what == "a hand-written line"
+    assert ow.unranked_lines(p) == []
+
+
+def test_close_deletes_a_ranked_line_without_a_date(tmp_path):
+    p = _backlog(tmp_path, _item(10), _DATELESS)
+    result = ow.close_item(p, 84, "solved")
+    assert result.line == _DATELESS
+    assert [it.rank for it in ow.list_items(p)] == [10]
+
+
+def test_add_refuses_the_rank_a_line_without_a_date_holds(tmp_path):
+    p = _backlog(tmp_path, _DATELESS)
+    with pytest.raises(ow.BacklogError):
+        _add(p, 84)

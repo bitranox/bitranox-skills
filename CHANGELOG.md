@@ -40,6 +40,9 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 - `meta-self-improve` `jev_shadow.py items`: a fact whose pointer line sits at several levels (placed
   by topic) is one item for `dream-prune`, `dream-firing` and `crosstree-misplaced`, so `run` no
   longer refuses the items file with "duplicate id".
+- `meta-context-watcher` backlog tools (`open_work.py`): a ranked line written without its
+  `(date)` prefix (`- [ ] [84] USER: ...`) is an item with no raised date, so `backlog_close`
+  deletes it and `backlog_list` lists it, instead of "no line holds rank 84".
 
 ## [11.13.7]
 

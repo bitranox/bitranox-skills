@@ -62,7 +62,9 @@ HEADER = (
     "put the reason in that commit message: git history keeps the old line.\n\n"
 )
 
-_ITEM_RX = re.compile(r"-\s*\[([ xX])\]\s*\(([^)]*)\)\s*\[(\d+)\]\s*(.*)$")
+#: The `(date)` is optional: a ranked line written without one (by hand, or by an older tool) is
+#: still an item. Read as no item, close reported its rank "not found" while the line stood there.
+_ITEM_RX = re.compile(r"-\s*\[([ xX])\]\s*(?:\(([^)]*)\)\s*)?\[(\d+)\]\s*(.*)$")
 _ORIGIN_RX = re.compile(r"(USER|FOUND):\s*(.*)$")
 _FIELD_RX = re.compile(r"(?<!\s)\s+\|\s+(size|open|next|closed):\s*")
 _FENCE_RX = re.compile(r" {0,3}(`{3,}|~{3,})")
@@ -182,7 +184,7 @@ def parse_line(line: str) -> Item | None:
         current = label
     head = parts[0].strip()
     om = _ORIGIN_RX.match(head)
-    return Item(rank=int(rank), raised=raised.strip(),
+    return Item(rank=int(rank), raised=(raised or "").strip(),
                 state=ItemState.OPEN if box == " " else ItemState.CLOSED,
                 origin=Origin(om.group(1)) if om else None,
                 what=(om.group(2) if om else head).strip(),
