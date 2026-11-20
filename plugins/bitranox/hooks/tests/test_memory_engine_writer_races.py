@@ -34,6 +34,9 @@ import pytest
 import memory_engine as E
 import uuid_store as us
 
+if sys.platform == "win32":
+    import _winapi
+
 HOOKS = Path(E.__file__).resolve().parent
 
 # The longest pause, in seconds, a worker takes after each of its writes. The level lock is an
@@ -215,6 +218,39 @@ class _HeldOpen:
 
     def __exit__(self, *exc):
         self.timer.join()
+
+
+class _HeldExclusive:
+    """The file at `path` opened on Windows with no sharing at all, as a write replacing it or a
+    scanner can hold it, and closed `seconds` later from a second thread: every other open of it
+    is refused meanwhile with a PermissionError."""
+
+    def __init__(self, path, seconds):
+        self.handle = _winapi.CreateFile(str(path), _winapi.GENERIC_READ, 0, 0,
+                                         _winapi.OPEN_EXISTING, 0, 0)
+        self.timer = threading.Timer(seconds, _winapi.CloseHandle, args=(self.handle,))
+
+    def __enter__(self):
+        self.timer.start()
+        return self
+
+    def __exit__(self, *exc):
+        self.timer.join()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="only Windows refuses an open by share mode")
+def test_an_add_waits_out_a_body_another_handle_holds(tmp_path):
+    """An `add` reads the body without the level lock to decide whether the fact is placed by
+    topic. On Windows that read can meet the body held by another session's write (the instant
+    of its replace) and be refused; the add waits it out instead of failing with "unreadable".
+    Seen in test_memory_engine_retitle_race: an add's worker died on TreeWalkError there."""
+    root = tmp_path / "tree"
+    (proj,) = _tree(root, "proj")
+    E.add_or_update_entry(proj, "T0", "When racing 0, keep it.", body="prose 0", slug="fact")
+    with _HeldExclusive(us.body_path(str(root), "fact"), 0.3):
+        result = E.upsert_entry(proj, "T1", "When racing 1, keep it.", body="prose 1", slug="fact")
+    assert result == ("fact", False)
+    assert _counter(_line(proj, "fact").title) == 1
 
 
 def _old_slug_answers_again(level):

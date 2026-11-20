@@ -3765,9 +3765,13 @@ def _read_body_head(path: _StrPath) -> str | None:
     past the head read as no frame, so `set_topic_list` found no user of a topic such a fact
     carries and dropped it. Only a body whose frame the head cuts is read whole, so a scan over
     every body of a tree still holds one head at a time, and at most the one body being read, as
-    any write of that body does."""
+    any write of that body does.
+
+    Read without the level lock, so on Windows it can meet the body mid-replace by another
+    session's write, or held by a rename that archives it: the open is refused for a moment and
+    retried (`sig.retry_while_shared`) instead of failing the caller's whole add or walk."""
     try:
-        with open(path, "rb") as fh:
+        with sig.retry_while_shared(open, path, "rb") as fh:
             head = fh.read(FRONTMATTER_HEAD_BYTES)
             if len(head) == FRONTMATTER_HEAD_BYTES \
                     and _head_cuts_the_frame(head.decode("utf-8", errors="replace")):
