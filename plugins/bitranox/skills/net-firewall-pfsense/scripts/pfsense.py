@@ -1140,20 +1140,6 @@ def pools_from_config_xml(text: str) -> list[Pool]:
     return out
 
 
-def overrides_from_config_xml(text: str) -> list[Override]:
-    """DNS host overrides from a snapshot. The element is `hosts`, not `hostoverride`."""
-    root = parse_xml(text)
-    unbound = root.find("unbound")
-    if unbound is None:
-        return []
-    return [Override(
-        host=(entry.findtext("host") or "").strip(),
-        domain=(entry.findtext("domain") or "").strip(),
-        ip=(entry.findtext("ip") or "").strip(),
-        descr=(entry.findtext("descr") or "").strip(),
-    ) for entry in unbound.findall("hosts")]
-
-
 # ---- doctor: pure checks over plain data --------------------------------------------------------
 def _pool_holding(address: ipaddress.IPv4Address | ipaddress.IPv6Address, interface: str,
                   pools: Sequence[Pool]) -> Pool | None:
@@ -1201,7 +1187,7 @@ def _reservations_in_pools(reservations: Sequence[Reservation], pools: Sequence[
     return findings
 
 
-def doctor_findings(*, reservations: Sequence[Reservation], overrides: Sequence[Override],
+def doctor_findings(*, reservations: Sequence[Reservation],
                     arp: Sequence[ArpEntry] | None = None, resolv_conf: str | None = None,
                     upgrade_locks: list[str] | None = None,
                     pools: Sequence[Pool] | None = None) -> list[Finding]:
@@ -1209,6 +1195,10 @@ def doctor_findings(*, reservations: Sequence[Reservation], overrides: Sequence[
 
     Each one is a fault that raises no error of its own and so goes unnoticed: they were all found
     the expensive way, by chasing a symptom that pointed somewhere else entirely.
+
+    Host overrides are not an input: an override naming an address no reservation holds is a
+    statically configured server, which is normal, so no check reads them and doctor does not
+    fetch them.
     """
     findings: list[Finding] = []
 
@@ -2720,17 +2710,15 @@ def cmd_doctor(args) -> int:
     if args.config:
         text = Path(args.config).read_text(encoding="utf-8")
         findings = doctor_findings(reservations=reservations_from_config_xml(text),
-                                   overrides=overrides_from_config_xml(text),
                                    pools=pools_from_config_xml(text))
         source = args.config
     else:
         target = _target_from_args(args)
         reservations = run_php(target, php_list_reservations(), parse=Reservation.list_from_json, run=args.run)
-        overrides = run_php(target, php_list_overrides(), parse=Override.list_from_json, run=args.run)
         pools = run_php(target, php_list_pools(), parse=Pool.list_from_json, run=args.run)
         arp_out = _read_or_raise(target, "arp -an", run=args.run)
         resolv = _read_or_raise(target, "cat /etc/resolv.conf", run=args.run)
-        findings = doctor_findings(reservations=reservations, overrides=overrides,
+        findings = doctor_findings(reservations=reservations,
                                    arp=parse_arp(arp_out), resolv_conf=resolv,
                                    upgrade_locks=_present_upgrade_locks(target, run=args.run),
                                    pools=pools)

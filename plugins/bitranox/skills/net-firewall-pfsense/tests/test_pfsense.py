@@ -413,15 +413,9 @@ def test_reservations_are_read_out_of_a_snapshot_with_the_static_arp_flag():
         res("192.0.2.31", "00:11:22:33:44:31", hostname="nas")]
 
 
-def test_overrides_are_read_from_unbound_hosts_not_hostoverride():
-    """The GUI says Host Overrides; the element is `hosts`. The wrong path returns [] silently."""
-    overrides = P.overrides_from_config_xml(CONFIG_XML)
-    assert [o.fqdn for o in overrides] == ["nas.example.com", "bare.example.com"]
-
-
 # ---- doctor -------------------------------------------------------------------------------------
 def test_doctor_warns_about_an_armed_static_arp_entry():
-    findings = P.doctor_findings(reservations=P.reservations_from_config_xml(CONFIG_XML), overrides=[])
+    findings = P.doctor_findings(reservations=P.reservations_from_config_xml(CONFIG_XML))
     armed = [f for f in findings if f.check == "static_arp_armed"]
     assert len(armed) == 1 and armed[0].severity == "warn" and "192.0.2.30" in armed[0].subject
 
@@ -429,7 +423,7 @@ def test_doctor_warns_about_an_armed_static_arp_entry():
 def test_doctor_stays_quiet_on_a_config_with_nothing_wrong():
     """A check that fires on a healthy config is as useless as one that never fires."""
     clean = [res("192.0.2.31", "00:11:22:33:44:31")]
-    assert [f for f in P.doctor_findings(reservations=clean, overrides=[]) if f.severity == "warn"] == []
+    assert [f for f in P.doctor_findings(reservations=clean) if f.severity == "warn"] == []
 
 
 def test_a_finding_with_a_misspelled_severity_is_refused():
@@ -451,21 +445,21 @@ def test_one_address_shared_by_several_macs_is_context_not_a_warning():
     A wired and a wireless interface sharing one reserved address is the intended setup.
     """
     shared = [res("192.0.2.31", "00:11:22:33:44:31"), res("192.0.2.31", "00:11:22:33:44:32")]
-    findings = P.doctor_findings(reservations=shared, overrides=[])
+    findings = P.doctor_findings(reservations=shared)
     assert [f.check for f in findings] == ["shared_ip_multi_mac"]
     assert findings[0].severity == "info"
 
 
 def test_static_arp_on_a_shared_address_names_the_lethal_combination():
     shared = [res("192.0.2.31", "00:11:22:33:44:31", static_arp=True), res("192.0.2.31", "00:11:22:33:44:32")]
-    armed = [f for f in P.doctor_findings(reservations=shared, overrides=[]) if f.check == "static_arp_armed"]
+    armed = [f for f in P.doctor_findings(reservations=shared) if f.check == "static_arp_armed"]
     assert "2 MACs" in armed[0].detail
 
 
 def test_doctor_reports_an_address_held_by_hardware_the_reservation_does_not_name():
     """The stale-reservation-versus-live-device collision, which shows up as flaky wifi."""
     reservations = [res("192.0.2.30", "aa:aa:aa:aa:aa:aa", descr="old AP")]
-    findings = P.doctor_findings(reservations=reservations, overrides=[], arp=P.parse_arp(ARP_TEXT))
+    findings = P.doctor_findings(reservations=reservations, arp=P.parse_arp(ARP_TEXT))
     mismatch = [f for f in findings if f.check == "reservation_mac_mismatch"]
     assert len(mismatch) == 1 and "00:11:22:33:44:30" in mismatch[0].subject
 
@@ -478,7 +472,7 @@ def test_an_idle_device_is_never_reported_as_gone():
     dhcpd writes no lease for a fixed-address reservation.
     """
     reservations = [res("192.0.2.77", "aa:aa:aa:aa:aa:aa", descr="idle")]
-    assert P.doctor_findings(reservations=reservations, overrides=[], arp=P.parse_arp(ARP_TEXT)) == []
+    assert P.doctor_findings(reservations=reservations, arp=P.parse_arp(ARP_TEXT)) == []
 
 
 def test_one_reserved_mac_answering_for_a_shared_address_is_not_a_mismatch():
@@ -487,15 +481,20 @@ def test_one_reserved_mac_answering_for_a_shared_address_is_not_a_mismatch():
     Measured: treating the others as mismatches produced 5 false warnings against a live config.
     """
     shared = [res("192.0.2.30", "00:11:22:33:44:30"), res("192.0.2.30", "00:11:22:33:44:99")]
-    findings = P.doctor_findings(reservations=shared, overrides=[], arp=P.parse_arp(ARP_TEXT))
+    findings = P.doctor_findings(reservations=shared, arp=P.parse_arp(ARP_TEXT))
     assert [f.check for f in findings] == ["shared_ip_multi_mac"]
 
 
-def test_an_override_pointing_at_a_static_host_is_not_a_finding():
-    """A statically configured server has no reservation; that is normal, not a fault."""
-    overrides = [P.Override(host="srv", domain="example.com", ip="192.0.2.200", descr="")]
-    assert P.doctor_findings(reservations=[], overrides=overrides) == []
-    assert P.doctor_findings(reservations=[], overrides=overrides, arp=P.parse_arp(ARP_TEXT)) == []
+def test_live_doctor_does_not_fetch_the_host_overrides():
+    """No check reads them: an override naming an address no reservation holds is a statically
+    configured server, which is normal, not a fault. Fetching them anyway cost an ssh round trip
+    and turned an unreadable override list into exit 2 for an audit that never looked at it."""
+    fake = _doctor_fake()
+    # Answered, so a doctor that did fetch them still exits 0 and fails on the assertion below.
+    fake.responses.append(('config_get_path("unbound/hosts"', (0, "[]", "")))
+    assert P.main(["--host", "192.0.2.1", "doctor"], run=fake) == 0
+    assert not [body for body in fake.php_bodies() if "unbound/hosts" in body]
+    assert [body for body in fake.php_bodies() if 'config_get_path("dhcpd"' in body]
 
 
 # Real captures, with the site-specific values replaced. HIJACKED is what tailscaled writes with
@@ -518,7 +517,7 @@ search internal.example
 
 
 def test_doctor_warns_when_magicdns_has_taken_over_the_resolver():
-    findings = P.doctor_findings(reservations=[], overrides=[], arp=[], resolv_conf=RESOLV_HIJACKED)
+    findings = P.doctor_findings(reservations=[], arp=[], resolv_conf=RESOLV_HIJACKED)
     assert [f.check for f in findings] == ["magicdns_in_resolv_conf"]
 
 
@@ -529,29 +528,29 @@ def test_upstream_fallbacks_after_loopback_are_not_a_fault():
     naming its perfectly normal fallbacks as the evidence of a hijack. The check had only ever
     been run against the broken box, never against a healthy one.
     """
-    assert P.doctor_findings(reservations=[], overrides=[], arp=[], resolv_conf=RESOLV_HEALTHY) == []
+    assert P.doctor_findings(reservations=[], arp=[], resolv_conf=RESOLV_HEALTHY) == []
 
 
 def test_ipv6_loopback_counts_as_the_box_resolving_through_itself():
-    assert P.doctor_findings(reservations=[], overrides=[], arp=[],
+    assert P.doctor_findings(reservations=[], arp=[],
                              resolv_conf="nameserver ::1\nnameserver 192.0.2.53\n") == []
 
 
 def test_doctor_warns_when_the_box_does_not_ask_itself_first():
-    findings = P.doctor_findings(reservations=[], overrides=[], arp=[],
+    findings = P.doctor_findings(reservations=[], arp=[],
                                  resolv_conf="nameserver 192.0.2.53\nnameserver 127.0.0.1\n")
     assert [f.check for f in findings] == ["resolver_not_first"]
 
 
 def test_doctor_reports_an_upgrade_lock_and_names_its_path():
-    findings = P.doctor_findings(reservations=[], overrides=[], arp=[],
+    findings = P.doctor_findings(reservations=[], arp=[],
                                  upgrade_locks=["/tmp/pfSense-upgrade.lock"])
     assert [f.check for f in findings] == ["upgrade_lock_present"]
     assert findings[0].subject == "/tmp/pfSense-upgrade.lock"
 
 
 def test_doctor_reports_no_lock_finding_when_no_lock_was_found():
-    assert P.doctor_findings(reservations=[], overrides=[], arp=[], upgrade_locks=[]) == []
+    assert P.doctor_findings(reservations=[], arp=[], upgrade_locks=[]) == []
 
 
 def test_the_upgrade_lock_finding_sends_the_reader_to_dns_before_the_lock():
@@ -560,7 +559,7 @@ def test_the_upgrade_lock_finding_sends_the_reader_to_dns_before_the_lock():
     Advising removal on its own is the dirty patch: the next metadata run hangs again and the
     message comes back.
     """
-    [finding] = P.doctor_findings(reservations=[], overrides=[], arp=[],
+    [finding] = P.doctor_findings(reservations=[], arp=[],
                                   upgrade_locks=["/var/run/pfSense-upgrade.lock"])
     assert "fix the box's dns first" in finding.detail.lower()
     assert "the lock is stale and the file can be removed" not in finding.detail
@@ -568,7 +567,7 @@ def test_the_upgrade_lock_finding_sends_the_reader_to_dns_before_the_lock():
 
 def test_the_magicdns_finding_does_not_advise_forwarding_to_quad_100():
     """quad-100 does not answer on FreeBSD/pfSense, so a forward to it SERVFAILs there."""
-    [finding] = P.doctor_findings(reservations=[], overrides=[], arp=[],
+    [finding] = P.doctor_findings(reservations=[], arp=[],
                                   resolv_conf=RESOLV_HIJACKED)
     assert "domain override" not in finding.detail
     assert "forward the tailnet's domain to MagicDNS" not in finding.detail
@@ -2003,7 +2002,6 @@ def test_snort_unblock_of_several_where_all_stay_blocked_is_exit_2(capsys):
 def _doctor_fake(arp=(0, "", ""), resolv=(0, "nameserver 127.0.0.1\n", ""), lock=(1, "", "")):
     return FakeRun([
         ('config_get_path("dhcpd"', (0, "[]", "")),
-        ('config_get_path("unbound/hosts"', (0, "[]", "")),
         ("arp -an", arp),
         ("cat /etc/resolv.conf", resolv),
         ("test -f", lock),
@@ -2151,7 +2149,7 @@ POOL_CONFIG_XML = """<?xml version="1.0"?>
 
 
 def _pool_findings(text=POOL_CONFIG_XML):
-    findings = P.doctor_findings(reservations=P.reservations_from_config_xml(text), overrides=[],
+    findings = P.doctor_findings(reservations=P.reservations_from_config_xml(text),
                                  pools=P.pools_from_config_xml(text))
     return [f for f in findings if f.check == "static_map_in_dynamic_pool"]
 
@@ -2192,7 +2190,7 @@ def test_doctor_ignores_a_static_map_outside_the_pool_and_on_a_disabled_server()
 def test_a_pool_on_another_interface_does_not_claim_a_reservation():
     reservations = [res("203.0.113.150", "00:11:22:33:44:70", hostname="x")]
     pools = [P.Pool(interface="opt2", first="203.0.113.100", last="203.0.113.199")]
-    assert P.doctor_findings(reservations=reservations, overrides=[], pools=pools) == []
+    assert P.doctor_findings(reservations=reservations, pools=pools) == []
 
 
 def test_doctor_from_a_snapshot_reports_the_pool_overlap(tmp_path, capsys):
