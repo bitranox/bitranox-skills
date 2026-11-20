@@ -1,0 +1,283 @@
+"""move, relocate, rename and the inbound-ref rewrite of a rename never write back a copy of a
+fact read before another session's `add` landed.
+
+Each verb reads a fact's line (and, for relocate and rename, its body), then writes a line and a
+body built from that read. An `add` from another session can land between the two: it updates
+the line and the body under the level lock. A verb that writes what it read unlocked puts the
+old hook, title and prose back over the add's, and both sides exit 0.
+
+The second writer here is a REAL process. In each trial it updates the fact in a loop, the hook,
+the title and the prose carrying its counter N, while this process runs the verb once; the loop
+stops when the fact has left the level (the next `add` is refused, or creates a new fact). Every
+`add` that returned an UPDATE of the fact happened before the verb took the fact away, so the
+fact's new home must carry the counter of the last such update. A verb that copied an older read
+leaves a smaller counter there.
+
+The inbound-ref rewrite is checked by an observer process instead: a citing fact's counter only
+ever grows, so any sample of it below one already seen is a stale copy written back.
+
+All content ASCII.
+"""
+
+import json
+import random
+import re
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+import pytest
+
+import memory_engine as E
+import uuid_store as us
+
+HOOKS = Path(E.__file__).resolve().parent
+
+_UPDATER = r'''
+import json, sys, time
+from pathlib import Path
+hooks, level, slug, ready, deadline = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], float(sys.argv[5])
+sys.path.insert(0, hooks)
+import memory_engine as E
+updated, ended = 0, "deadline"
+n = 0
+while time.time() < deadline:
+    n += 1
+    try:
+        _slug, created = E.upsert_entry(
+            level, "T%d" % n, "When racing %d, keep it." % n, body="prose %d" % n, slug=slug)
+    except (E.SlugCollision, E.PinnedEntry) as exc:
+        ended = type(exc).__name__
+        break
+    if created:
+        ended = "created"
+        break
+    updated = n
+    if n == 1:
+        Path(ready).write_text("x", encoding="utf-8")
+print(json.dumps({"updated": updated, "ended": ended}))
+'''
+
+_NUM = re.compile(r"(\d+)")
+
+
+def _counter(text):
+    """The counter N in 'T<N>', 'When racing <N>, ...' or 'prose <N>'; None when absent."""
+    m = _NUM.search(text or "")
+    return int(m.group(1)) if m else None
+
+
+@pytest.fixture(autouse=True)
+def _isolated_home(tmp_path, monkeypatch):
+    h = tmp_path / "home"
+    h.mkdir(exist_ok=True)
+    monkeypatch.setenv("HOME", str(h))
+    monkeypatch.setenv("USERPROFILE", str(h))
+    return h
+
+
+def _tree(root, *levels):
+    """A tree at `root` with a CLAUDE.md at the root and at each of `levels` (relative paths),
+    its central store at the root."""
+    root.mkdir(parents=True)
+    (root / "CLAUDE.md").write_text("x\n", encoding="utf-8")
+    (root / us.STORE_DIRNAME).mkdir()
+    out = []
+    for rel in levels:
+        d = root / rel
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "CLAUDE.md").write_text("x\n", encoding="utf-8")
+        out.append(str(d))
+    return out
+
+
+def _line(level, slug):
+    text = (Path(level) / "CLAUDE.local.md").read_text(encoding="utf-8")
+    return next((p for p in us.parse_pointer_index(text)[1] if p.slug == slug), None)
+
+
+def _race(tmp, level, slug, verb):
+    """Start the updater on `level`/`slug`, run `verb()` once it has updated the fact at least
+    once, and return the updater's report."""
+    ready = tmp / "ready"
+    worker = tmp / "updater.py"
+    worker.write_text(_UPDATER, encoding="utf-8")
+    proc = subprocess.Popen([sys.executable, str(worker), str(HOOKS), level, slug, str(ready),
+                             repr(time.time() + 20.0)],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding="utf-8")
+    try:
+        start = time.time()
+        while not ready.exists():
+            assert proc.poll() is None, proc.communicate()
+            assert time.time() - start < 15, "the updater never updated the fact"
+            time.sleep(0.002)
+        time.sleep(random.uniform(0.0, 0.02))
+        verb()
+        out, err = proc.communicate(timeout=60)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.communicate()
+    assert proc.returncode == 0, err
+    return json.loads(out.strip().splitlines()[-1])
+
+
+TRIALS = 12
+
+
+def _assert_home_carries(rows):
+    """Every trial's new home carries the counter of the updater's last update."""
+    stale = [r for r in rows if r["home"] != (r["updated"],) * len(r["home"])]
+    assert not stale, "a verb wrote back a copy read before an add landed: %s" % stale
+
+
+def test_move_carries_the_last_concurrent_update(tmp_path):
+    rows = []
+    for i in range(TRIALS):
+        sub, top = _tree(tmp_path / ("t%d" % i), "proj/sub", "proj")
+        E.add_or_update_entry(sub, "T0", "When racing 0, keep it.", body="prose 0", slug="fact")
+        moved = []
+        res = _race(tmp_path / ("t%d" % i), sub, "fact",
+                    lambda: moved.append(E.move_entry(sub, top, "fact")))
+        assert moved[0].moved, moved[0].refused
+        ptr = _line(top, "fact")
+        body = us.body_path(str(tmp_path / ("t%d" % i)), "fact").read_text(encoding="utf-8")
+        rows.append({"updated": res["updated"], "ended": res["ended"],
+                     "home": (_counter(ptr.hook), _counter(ptr.title),
+                              _counter(E._body_title(body)))})
+    _assert_home_carries(rows)
+
+
+def test_relocate_carries_the_last_concurrent_update(tmp_path):
+    rows = []
+    for i in range(TRIALS):
+        (src,) = _tree(tmp_path / ("a%d" % i), "proj")
+        (dst,) = _tree(tmp_path / ("b%d" % i), "proj")
+        E.add_or_update_entry(src, "T0", "When racing 0, keep it.", body="prose 0", slug="fact")
+        done = []
+        res = _race(tmp_path / ("a%d" % i), src, "fact",
+                    lambda: done.append(E.relocate_entry(src, dst, "fact")))
+        assert done[0].relocated, done[0].refused
+        ptr = _line(dst, "fact")
+        body = us.body_path(str(tmp_path / ("b%d" % i)), "fact").read_text(encoding="utf-8")
+        prose = body.split("---")[-1]
+        rows.append({"updated": res["updated"], "ended": res["ended"],
+                     "home": (_counter(ptr.hook), _counter(ptr.title), _counter(prose))})
+    _assert_home_carries(rows)
+
+
+def test_rename_carries_the_last_concurrent_update(tmp_path):
+    rows = []
+    for i in range(TRIALS):
+        root = tmp_path / ("t%d" % i)
+        (proj,) = _tree(root, "proj")
+        E.add_or_update_entry(proj, "T0", "When racing 0, keep it.", body="prose 0", slug="fact")
+        done = []
+        res = _race(root, proj, "fact",
+                    lambda: done.append(E.rename_entry(proj, "fact", "renamed")))
+        assert done[0].renamed, done[0].refused
+        ptr = _line(proj, "renamed")
+        body = us.body_path(str(root), "renamed").read_text(encoding="utf-8")
+        prose = body.split("---")[-1]
+        rows.append({"updated": res["updated"], "ended": res["ended"],
+                     "home": (_counter(ptr.hook), _counter(ptr.title), _counter(prose))})
+    _assert_home_carries(rows)
+
+
+_CITER = r'''
+import json, sys, time
+hooks, level, deadline = sys.argv[1], sys.argv[2], float(sys.argv[3])
+sys.path.insert(0, hooks)
+import memory_engine as E
+n = 0
+while time.time() < deadline:
+    n += 1
+    E.add_or_update_entry(level, "Citer", "When racing %d, see [[fact]] and [[renamed]]." % n,
+                          body="prose %d cites [[fact]] and [[renamed]]." % n, slug="citer")
+print(json.dumps({"role": "citer", "done": n}))
+'''
+
+_OBSERVER = r'''
+import json, re, sys, time
+from pathlib import Path
+hooks, root, level, deadline = sys.argv[1], sys.argv[2], sys.argv[3], float(sys.argv[4])
+sys.path.insert(0, hooks)
+import uuid_store as us
+num = re.compile(r"(\d+)")
+seen = {"hook": 0, "body": 0}
+samples = drops = 0
+while time.time() < deadline:
+    try:
+        text = Path(level, "CLAUDE.local.md").read_text(encoding="utf-8")
+        body = us.body_path(root, "citer").read_text(encoding="utf-8")
+    except OSError:
+        continue
+    ptr = next((p for p in us.parse_pointer_index(text)[1] if p.slug == "citer"), None)
+    for site, value in (("hook", ptr.hook if ptr else ""), ("body", body.split("---")[-1])):
+        m = num.search(value)
+        if not m:
+            continue
+        n = int(m.group(1))
+        drops += n < seen[site]
+        seen[site] = max(seen[site], n)
+    samples += 1
+    time.sleep(0.0002)
+print(json.dumps({"role": "observer", "samples": samples, "drops": drops}))
+'''
+
+
+def test_the_inbound_ref_rewrite_never_writes_back_an_older_citer(tmp_path):
+    """A rename back and forth while another process keeps updating a fact that cites it: the
+    citer's counter, in its hook and its body, never goes down.
+
+    The level holds facts of an ordinary count, so the rewrite reads each before it reaches the
+    citer, and the renames are spaced at random, off the citer's rhythm: renamed back to back,
+    the rename's own line swaps kept the citer waiting out a lock poll while the rewrite ran, and
+    the two seldom overlapped. Against the engine that rewrote from an unlocked read this caught
+    a stale citer in 6 of 6 runs; the deterministic case is in
+    test_memory_engine_writer_interleavings.py."""
+    root = tmp_path / "tree"
+    (proj,) = _tree(root, "proj")
+    E.add_or_update_entry(proj, "Fact", "When racing, the cited fact.", body="cited", slug="fact")
+    for k in range(40):
+        E.add_or_update_entry(proj, "Filler %d" % k, "When filling, fact %d." % k,
+                              body="filler %d" % k, slug="filler-%d" % k)
+    E.add_or_update_entry(proj, "Citer", "When racing 0, see [[fact]] and [[renamed]].",
+                          body="prose 0 cites [[fact]] and [[renamed]].", slug="citer")
+    citer, observer = tmp_path / "citer.py", tmp_path / "observer.py"
+    citer.write_text(_CITER, encoding="utf-8")
+    observer.write_text(_OBSERVER, encoding="utf-8")
+    stop = time.time() + 4.0
+    procs = [subprocess.Popen([sys.executable, str(citer), str(HOOKS), proj, repr(stop)],
+                              # it warns on stderr for each ref to the name the fact does not
+                              # have now: a pipe nobody reads fills, and the citer then stalls
+                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                              encoding="utf-8"),
+             subprocess.Popen([sys.executable, str(observer), str(HOOKS), str(root), proj,
+                               repr(stop)],
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding="utf-8")]
+    renames, rewrote, names = 0, 0, ("fact", "renamed")
+    try:
+        time.sleep(0.5)                              # both workers imported and running
+        while time.time() < stop - 0.3:
+            rep = E.rename_entry(proj, names[renames % 2], names[(renames + 1) % 2])
+            assert rep.renamed, rep.refused
+            rewrote += {r.citer for r in rep.refs_rewritten} == {"citer"}
+            renames += 1
+            time.sleep(random.uniform(0.0, 0.005))
+        results = {}
+        for proc in procs:
+            out, err = proc.communicate(timeout=60)
+            assert proc.returncode == 0, err
+            row = json.loads(out.strip().splitlines()[-1])
+            results[row["role"]] = row
+    finally:
+        for proc in procs:
+            if proc.poll() is None:
+                proc.kill()
+                proc.communicate()
+    assert renames >= 10 and rewrote == renames, (renames, rewrote)
+    assert results["citer"]["done"] >= 20, results
+    assert results["observer"]["samples"] >= 200, results
+    assert results["observer"]["drops"] == 0, (renames, results)

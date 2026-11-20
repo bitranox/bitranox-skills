@@ -794,6 +794,69 @@ def placement_lock_if_listed(anchor: _StrPath | None, verb: str) -> contextlib.A
     return placement_lock(anchor, verb)
 
 
+# ---- several level locks at once, and the line writes made under them --------------------------
+#
+# A verb that writes a fact at more than one level in one step (move and relocate take the line
+# from one level to another, rename swaps it at every level carrying it, and a back-fill writes a
+# body every carrier level's `add` also writes) holds all of those level locks together and re-reads
+# under them: what it read before taking them is a plan, never the text it writes back. Holding
+# one level lock at a time let an `add` land between that verb's read and its write, and the verb
+# then wrote the old hook, title or prose back over the add's (both sides exit 0).
+#
+# Lock order: the placement lock first (see above), then level locks in ONE global order, the
+# resolved level path compared part by part (`_hold_level_locks`). Every holder of more than one
+# level lock takes them through that helper, so two holders always meet their common locks in the
+# same order and never wait on each other in a cycle. A writer holding ONE level lock (`add`,
+# `add_pointer`, a retitle) takes no second lock while it holds it.
+
+@contextlib.contextmanager
+def _hold_level_locks(levels: Iterable[_StrPath]) -> Iterator[None]:
+    """Hold the level lock of every level in `levels` (duplicates and spellings of one dir count
+    once), taken in the global order described above, for the block."""
+    ordered = sorted({Path(level).resolve() for level in levels}, key=lambda p: p.parts)
+    with contextlib.ExitStack() as held:
+        for level in ordered:
+            held.enter_context(sig.memory_lock(sig.claude_local_md_path(str(level))))
+        yield
+
+
+def _current_line(level: _StrPath, slug: str) -> us.Pointer | None:
+    """`slug`'s pointer line at `level` as the file holds it now, else None. Under the level's lock
+    the answer stays true until the lock is released; without it, it is a plan to re-check."""
+    pointers = _us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level)))[1]
+    return next((p for p in pointers if p.slug == slug), None)
+
+
+def _put_line_locked(level: _StrPath, slug: str, title: str, hook: str, pin: bool) -> None:
+    """`us.add_pointer` for a caller that already holds `level`'s lock (the lock is not
+    reentrant): the same merge (a line the level holds keeps its pin when `pin` is False and its
+    hook when `hook` is empty, and a legacy one turns current), the same append for a new line."""
+    _us.require_valid_slug(slug)
+    local = sig.claude_local_md_path(level)
+    text = read_store_text(local)
+    scope, pointers = _us.parse_pointer_index(text)
+    ptr = next((p for p in pointers if p.slug == slug), None)
+    if ptr is None:
+        pointers.append(us.Pointer(slug=slug, title=title, hook=hook, pin=pin))
+    else:
+        ptr.title, ptr.hook = title, (hook or ptr.hook)
+        ptr.pin = ptr.pin or pin
+        ptr.legacy, ptr.uuid = False, ""
+    _us.write_if_changed(local, _us.upsert_pointer_block(text, scope, pointers))
+
+
+def _drop_line_locked(level: _StrPath, slug: str) -> bool:
+    """`_drop_pointer` for a caller that already holds `level`'s lock."""
+    local = sig.claude_local_md_path(level)
+    text = read_store_text(local)
+    scope, pointers = _us.parse_pointer_index(text)
+    kept = [p for p in pointers if p.slug != slug]
+    if len(kept) == len(pointers):
+        return False
+    _us.write_if_changed(local, _us.upsert_pointer_block(text, scope, kept))
+    return True
+
+
 # mtime-neutral writer: one implementation, in uuid_store.
 _write_if_changed = _us.write_if_changed
 
@@ -825,16 +888,25 @@ def read_store(proj: _StrPath) -> tuple[str, list[Entry], dict[str, str]]:
 
 
 def _commit_store(proj: _StrPath, scope: str | None, entries: Iterable[Entry], bodies: Mapping[str, str]) -> bool:
-    """Write each entry's central body + the pointer block in `CLAUDE.local.md`; mtime-neutral. Returns
-    True if anything changed. Refuses first under BITRANOX_MEMORY_WRITES=off: reconcile's archive
-    commits a pointer block through here without going through `upsert_entry`."""
+    """Write the pointer block in `CLAUDE.local.md` from `entries`, and the central body of each
+    entry named in `bodies`; mtime-neutral. Returns True if anything changed. Refuses first under
+    BITRANOX_MEMORY_WRITES=off: reconcile's archive commits a pointer block through here without
+    going through `upsert_entry`.
+
+    Only a body in `bodies` is written, and only a non-empty one: an empty text is how
+    `read_store` reads a body that is not there, and writing it made an empty file for a dangling
+    pointer (its slug then registered as taken by a body with no prose). An entry left out of
+    `bodies` is not this write's: writing its body back from an earlier read undid whatever
+    another level's `add` wrote to it since (a fact with lines at two levels is written under
+    either level's lock)."""
     sig.refuse_if_memory_writes_off()
     anchor = _anchor(proj)
     changed = False
     pointers: list[us.Pointer] = []
     for e in entries:
-        if not e.legacy:                             # a legacy body stays at its old path until the
-            changed |= _us.put_body(str(anchor), e.slug, bodies.get(e.slug, e.body))  # migration moves it
+        body = bodies.get(e.slug)
+        if body and not e.legacy:                    # a legacy body stays at its old path until the
+            changed |= _us.put_body(str(anchor), e.slug, body)  # migration moves it
         pointers.append(us.Pointer(slug=e.slug, title=e.title, hook=e.hook,
                                    pin=e.pin, uuid=e.uuid, legacy=e.legacy))
     local = sig.claude_local_md_path(proj)
@@ -1067,7 +1139,7 @@ def _upsert_checked(proj: str, anchor: _StrPath, slug: str, title: str, hook: st
         if owners:
             raise SlugOwnedElsewhere(slug, owners, _free_slug(anchor, slug))
         ensure_level(proj, scope_default=scope_default, _locked=True)
-        scope, entries, bodies = read_store(proj)
+        scope, entries, _bodies = read_store(proj)
         by_slug = {e.slug: e for e in entries}
         if slug not in by_slug and _us.body_path(anchor, slug).is_file():
             # A DANGLING body (its pointer was lost - e.g. a formatter wrapped the line and a heal
@@ -1135,8 +1207,8 @@ def _upsert_checked(proj: str, anchor: _StrPath, slug: str, title: str, hook: st
         # The body carries the pointer's title as data (`title:`); every write through here,
         # amend-pinned and factedit's apply included, keeps the two equal.
         e.body = _with_title(e.body, e.title)
-        bodies[slug] = e.body
-        _commit_store(proj, scope or scope_default, entries, bodies)
+        # This fact's body only: the others at this level are not this write's (see _commit_store).
+        _commit_store(proj, scope or scope_default, entries, {slug: e.body})
     if placed:
         # The other lines of a fact placed by topic say what this one now says. After the commit
         # and outside its lock (add_pointer takes each level's own): a failure here leaves the
@@ -1881,15 +1953,8 @@ def has_inbound_refs(levels: Iterable[_StrPath], slug: str) -> bool:
 
 def _drop_pointer(level: _StrPath, slug: str) -> bool:
     """Remove one pointer line (by slug) from a level's block, under lock, mtime-neutral."""
-    local = sig.claude_local_md_path(level)
-    with sig.memory_lock(local):
-        text = read_store_text(local)
-        scope, pointers = _us.parse_pointer_index(text)
-        kept = [p for p in pointers if p.slug != slug]
-        if len(kept) == len(pointers):
-            return False
-        _us.write_if_changed(local, _us.upsert_pointer_block(text, scope, kept))
-    return True
+    with sig.memory_lock(sig.claude_local_md_path(level)):
+        return _drop_line_locked(level, slug)
 
 
 def _as_slug_list(slug: str | Iterable[str] | None) -> list[str]:
@@ -1931,7 +1996,7 @@ def _dangling_inbound_after_move(src: Path, dst: Path, slugs: Sequence[str]) -> 
     return out
 
 
-def _dedup_pick(entry: Entry, dst_entry: Entry) -> tuple[tuple[str, str, bool], str]:
+def _dedup_pick(entry: Entry | us.Pointer, dst_entry: Entry | us.Pointer) -> tuple[tuple[str, str, bool], str]:
     """Forced dedup of a divergent duplicate pointer: keep the information-richer (LONGER) hook
     regardless of move DIRECTION, OR the pin. Direction-independent by construction, so it can
     never discard the richer hook the way a plain overwrite did. Returns ((title, hook, pin),
@@ -1942,6 +2007,59 @@ def _dedup_pick(entry: Entry, dst_entry: Entry) -> tuple[tuple[str, str, bool], 
                "dropped the shorter line" % (len(keep.hook or ""),
                                                     min(len(entry.hook or ""), len(dst_entry.hook or ""))))
     return fields, warning
+
+
+class _MoveDecision(NamedTuple):
+    """How one line moves: `fields` (title, hook, pin) to write at the target, with the dedup
+    `warning` a forced pick made (else ""); or `fields` None and `refused` saying why not."""
+
+    fields: tuple[str, str, bool] | None
+    warning: str = ""
+    refused: str = ""
+
+
+def _move_decision(entry: Entry | us.Pointer, dst_entry: Entry | us.Pointer | None, force: bool) -> _MoveDecision:
+    """Decide what moving `entry` writes at a target holding `dst_entry` for its slug (None: no
+    line there). No duplicate, or an IDENTICAL one (crash residue): the moving line as it is, which
+    merges pin and completes a crash-interrupted move. A DIVERGENT duplicate: refused unless
+    `force`, which keeps the longer hook (`_dedup_pick`)."""
+    if dst_entry is None or (dst_entry.title, dst_entry.hook) == (entry.title, entry.hook):
+        return _MoveDecision((entry.title, entry.hook, entry.pin))
+    if force:
+        fields, warning = _dedup_pick(entry, dst_entry)
+        return _MoveDecision(fields, warning)
+    # Name the field that ACTUALLY differs: the comparison above is of the (title, hook) TUPLE, so
+    # it fires on a title-only divergence too, and a message blaming the hook then sends the reader
+    # to diff two identical hooks.
+    differing = " and ".join(
+        part for part, differs in (("TITLE", dst_entry.title != entry.title),
+                                   ("HOOK", (dst_entry.hook or "") != (entry.hook or "")))
+        if differs)
+    return _MoveDecision(None, refused=(
+        "target already points at %r with a DIFFERENT %s (duplicate pointer); picking by "
+        "move direction would discard one - dedup deliberately with `add --slug %s` at the "
+        "surviving level, or --force to keep the LONGER hook (an exact tie keeps the "
+        "MOVING entry) and drop the other"
+        % (entry.slug, differing, entry.slug)))
+
+
+def _move_line_locked(src: _StrPath, dst: _StrPath, slug: str, force: bool) -> _MoveDecision:
+    """Move `slug`'s line from `src` to `dst`, whose locks the CALLER holds: add it at `dst` as
+    `_move_decision` decides on the two lines as the files hold them now, then drop it at `src`.
+    Writes nothing and returns the refusal when the line has left `src` (or turned legacy)
+    meanwhile: a move never puts back a line another writer took away."""
+    ptr = _current_line(src, slug)
+    if ptr is None or ptr.legacy:
+        return _MoveDecision(None, refused=(
+            "slug %r left %s while it was being moved (a concurrent move, rename or migration); "
+            "nothing was written for it" % (slug, src)))
+    decision = _move_decision(ptr, _current_line(dst, slug), force)
+    if decision.fields is None:
+        return decision
+    title, hook, pin = decision.fields
+    _put_line_locked(dst, slug, title, hook, pin)
+    _drop_line_locked(src, slug)
+    return decision
 
 
 def _nearest_common_level(src: Path, dst: Path, anchor: Path) -> Path:
@@ -1975,6 +2093,13 @@ def move_entry(from_level: _StrPath, to_level: _StrPath, slug: str | Iterable[st
     mid-set therefore leaves a visible duplicate pointer, never a lost fact, and re-running the SAME
     command completes it (both halves are idempotent); a write error is reported as a refusal naming
     how many pointers already moved, with that same re-run instruction.
+
+    Each line is written under the source and target level locks together (`_hold_level_locks`)
+    from what the two files hold under them, never from the read the checks above were made on: a
+    concurrent `add` there wrote a newer hook, title or pin, which the move carries. A line that
+    left the source meanwhile (a concurrent move, rename or migration) is refused, never put back,
+    and so is a target line that diverged meanwhile without `force`; a refusal after earlier
+    members moved names how many did.
 
     It also refuses, before any write, a set holding a fact placed by topic (its place follows its
     topics; un-bind it first), and a set whose lines would leave the target's block past
@@ -2059,33 +2184,13 @@ def move_entry(from_level: _StrPath, to_level: _StrPath, slug: str | Iterable[st
     _s2, dst_entries, _b2 = read_store(str(dst))
     dst_by_slug = {e.slug: e for e in dst_entries}
     plan: list[tuple[str, tuple[str, str, bool]]]
-    dedup_warnings: list[str]
-    plan, dedup_warnings = [], []
+    plan = []
     for entry in moving:
-        dst_entry = dst_by_slug.get(entry.slug)
-        if dst_entry is not None and (dst_entry.title, dst_entry.hook) != (entry.title, entry.hook):
-            if not force:
-                # Name the field that ACTUALLY differs: the condition above compares the (title,
-                # hook) TUPLE, so it fires on a title-only divergence too, and a message blaming
-                # the hook then sends the reader to diff two identical hooks.
-                differing = " and ".join(
-                    part for part, differs in (("TITLE", dst_entry.title != entry.title),
-                                               ("HOOK", (dst_entry.hook or "") != (entry.hook or "")))
-                    if differs)
-                rep.refused = (
-                    "target already points at %r with a DIFFERENT %s (duplicate pointer); picking by "
-                    "move direction would discard one - dedup deliberately with `add --slug %s` at the "
-                    "surviving level, or --force to keep the LONGER hook (an exact tie keeps the "
-                    "MOVING entry) and drop the other"
-                    % (entry.slug, differing, entry.slug))
-                return rep
-            fields, warning = _dedup_pick(entry, dst_entry)
-            dedup_warnings.append(warning)
-        else:
-            # No duplicate, or an IDENTICAL one (crash residue): the normal add-then-remove. An
-            # identical duplicate merges provenance/pin and completes a crash-interrupted move.
-            fields = (entry.title, entry.hook, entry.pin)
-        plan.append((entry.slug, fields))
+        decision = _move_decision(entry, dst_by_slug.get(entry.slug), force)
+        if decision.fields is None:
+            rep.refused = decision.refused
+            return rep
+        plan.append((entry.slug, decision.fields))
 
     # The target's block is held to the cap render-topics holds every level to; the refusals of
     # render-topics and set-topics that name a move promise it.
@@ -2094,16 +2199,29 @@ def move_entry(from_level: _StrPath, to_level: _StrPath, slug: str | Iterable[st
         rep.refused = full
         return rep
 
-    for s, (title, hook, pin) in plan:
+    # Each line moves under BOTH level locks, re-read there: the plan above was read without them,
+    # and writing it back would undo an `add` that landed since (its hook and title), or put back a
+    # line a concurrent move took away. The duplicate decision is made again on what the files hold
+    # now; a line gone from the source is refused, never resurrected.
+    dedup_warnings: list[str] = []
+    for s, _planned in plan:
         try:
-            _us.add_pointer(str(dst), slug=s, title=title, hook=hook, pin=pin)
-            _drop_pointer(str(src), s)
+            with _hold_level_locks([src, dst]):
+                decision = _move_line_locked(src, dst, s, force)
         except (OSError, TreeWalkError) as exc:        # the re-read inside the drop can fail too
             rep.refused = (
                 "write failed on %r after %d of %d pointer(s) moved: %s - each move is an idempotent "
                 "add-then-remove, so re-run the SAME command to complete the set"
                 % (s, len(rep.moved_slugs), len(plan), exc))
             return rep
+        if decision.fields is None:
+            rep.refused = decision.refused + (
+                "" if not rep.moved_slugs else
+                " (%d of %d pointer(s) had moved before it; re-run the SAME command for the rest)"
+                % (len(rep.moved_slugs), len(plan)))
+            return rep
+        if decision.warning:
+            dedup_warnings.append(decision.warning)
         rep.moved_slugs.append(s)
     rep.warnings.extend(dedup_warnings)
     rep.moved = True
@@ -2366,12 +2484,13 @@ def backfill_titles(proj: str | os.PathLike[str]) -> BackfillReport:
     the first level the walk meets.
 
     Each fact is read and written under the lock of EVERY level that carries a line of it, taken
-    in walk order, and under the placement lock first when its body is bound to a topic: each of
-    those levels is a route an `add` writes the body through, and a back-fill holding only the
-    first one's lock wrote the prose it had read back over prose an `add` through another level
-    wrote meanwhile. The locks are held for one fact at a time, so a level's other facts stay
-    writable while the back-fill walks it. Which levels carry a slug is read once, before the
-    first write; a line a `move` adds at a new level after that read is not among them.
+    in the one order `_hold_level_locks` keeps, and under the placement lock first when its body
+    is bound to a topic: each of those levels is a route an `add` writes the body through, and a
+    back-fill holding only the first one's lock wrote the prose it had read back over prose an
+    `add` through another level wrote meanwhile. The locks are held for one fact at a time, so
+    a level's other facts stay writable while the back-fill walks it. Which levels carry a slug
+    is read once, before the first write; a line a `move` adds at a new level after that read is
+    not among them.
 
     Raises TreeWalkError (exit 2 on the CLI) when a level or a body cannot be read: a back-fill
     that skipped part of the tree would read as done. Missing is decided by the read itself, never
@@ -2396,10 +2515,7 @@ def backfill_titles(proj: str | os.PathLike[str]) -> BackfillReport:
             elif level not in carriers[ptr.slug][1]:   # two lines at one level: one lock
                 carriers[ptr.slug][1].append(level)
     for slug, (title, levels) in carriers.items():
-        with _placement_lock_if_bound(anchor, slug, "backfill-titles"), \
-                contextlib.ExitStack() as held:
-            for level in levels:
-                held.enter_context(sig.memory_lock(sig.claude_local_md_path(level)))
+        with _placement_lock_if_bound(anchor, slug, "backfill-titles"), _hold_level_locks(levels):
             _backfill_one(anchor, slug, title, rep)
     return rep
 
@@ -2517,6 +2633,10 @@ def relocate_entry(from_level: _StrPath, to_level: _StrPath, slug: str, force: b
     It also refuses when any level of the target tree OTHER than the target level already points at
     the slug: that level owns it, whatever its body. The archived source body never replaces an
     earlier archived body of the same slug.
+    The copy, the target line, the source drop and the archive happen under the source and target
+    level locks together, from the line and body the files hold under them: a concurrent `add` at
+    the source landed between the checks and the copy, and a copy of the earlier read left its
+    prose behind in the archive. A source line gone meanwhile is refused, writing nothing.
     A cross-tree copy drops the body's frontmatter `topics:` line (topics are tagged against one
     tree's closed list) and says so in `notes`; a same-tree move leaves the body untouched. A fact
     placed by topic is refused across trees: its other lines would stay behind in the source tree.
@@ -2563,10 +2683,9 @@ def relocate_entry(from_level: _StrPath, to_level: _StrPath, slug: str, force: b
     # Slugs are TREE-unique, so a divergent slug already in the target tree is a different fact.
     # Landing on it would destroy it silently; never pick a winner here (dedup is a decision).
     _s2, dst_entries, _b2 = read_store(str(dst))
-    dst_entry = next((e for e in dst_entries if e.slug == slug), None)
-    if dst_entry is not None and (dst_entry.title, dst_entry.hook) != (entry.title, entry.hook):
-        rep.refused = ("target tree already has slug %r with a DIFFERENT hook - relocating would "
-                       "overwrite that fact; dedup deliberately or rename one first" % slug)
+    rep.refused = _relocate_line_refusal(next((e for e in dst_entries if e.slug == slug), None),
+                                         entry)
+    if rep.refused:
         return rep
     # A pointer at ANY OTHER level of the target tree means the slug is already owned there - with
     # an identical body the move would leave it pointed at from two levels, and with a missing body
@@ -2579,33 +2698,10 @@ def relocate_entry(from_level: _StrPath, to_level: _StrPath, slug: str, force: b
                        "first" % (slug, owner))
         return rep
 
-    # The body FILE is the tree-wide slug registry, so it is the check that sees an owner at ANY level
-    # of the target tree - and a dangling body with no pointer at all - where the pointer check above
-    # sees only the target level. A different body there is a different fact; an identical one is
-    # the residue of an interrupted relocate, which re-running completes.
     src_body, dst_body = _us.body_path(a_from, slug), _us.body_path(a_to, slug)
-    try:
-        src_data = src_body.read_bytes() if src_body.is_file() else b""
-    except OSError as exc:
-        rep.refused = "could not read the body %s: %s" % (src_body, exc)
+    rep.refused = _relocate_body_refusal(src_body, dst_body, slug)[0]
+    if rep.refused:
         return rep
-    # Topics are tagged against ONE tree's closed list, so the copy leaves them behind.
-    data, dropped_topics = _without_topics_line(src_data)
-    if dst_body.is_file():
-        # BYTES, not text: whether two files are one fact needs no decoding, and a text compare
-        # crashed on a target body that was not UTF-8 instead of refusing to land on it. Either
-        # copy is the residue of an interrupted relocate: with its topics line dropped, or one
-        # made before relocate dropped it.
-        try:
-            same = dst_body.read_bytes() in (data, src_data)
-        except OSError as exc:
-            rep.refused = "could not compare with the target tree's body %s: %s" % (dst_body, exc)
-            return rep
-        if not same:
-            rep.refused = ("target tree already holds a DIFFERENT body for slug %r (%s) - "
-                           "relocating would overwrite that fact; dedup deliberately or rename "
-                           "one first" % (slug, dst_body))
-            return rep
 
     # The fact LEAVES this tree entirely, so EVERY inbound [[ref]] in the source tree dangles -
     # including one at the source level itself. A cross-tree ref is never an allowed substitute.
@@ -2626,36 +2722,99 @@ def relocate_entry(from_level: _StrPath, to_level: _StrPath, slug: str, force: b
         rep.refused = full
         return rep
 
-    # COPY-THEN-DROP (same crash-safety direction as move_entry): a crash between the two leaves a
-    # visible duplicate, never a lost fact. The body file is copied VERBATIM but for its topics
-    # line - it is already framed, and re-writing it through add_or_update_entry would double-wrap
-    # the frontmatter. As BYTES: a text round-trip rewrote a CRLF body's line endings on the way.
+    # Every write below happens under BOTH level locks, from what the files hold under them: the
+    # line, the body and the target's state were read above without them, and an `add` at the
+    # source that landed since wrote a newer hook, title and prose, which a copy of the earlier
+    # read would leave behind in the archive. A line gone from the source meanwhile is refused.
+    archive_warning = ""
+    with _hold_level_locks([src, dst]):
+        rep.refused, dropped_topics = _relocate_locked(src, dst, slug, src_body, dst_body)
+        if rep.refused:
+            return rep
+        # Archive the source body only once nothing in the source tree points at the slug any
+        # more; still under the source level's lock, so no `add` there writes it meanwhile.
+        if _other_levels_pointing_in(a_from, slug):
+            archive_warning = ("source body kept: another level in the source tree still points "
+                               "at it")
+        else:
+            try:
+                archive = _us.central_facts_dir(a_from).parent / ".archive"
+                archive.mkdir(parents=True, exist_ok=True)
+                if src_body.is_file():
+                    src_body.rename(_us.free_archive_path(archive, slug + ".md"))
+            except OSError as exc:
+                archive_warning = "source body left in place (archive failed: %s)" % exc
+    if dropped_topics:
+        rep.notes.append("dropped the topics: line of %s - topics are tagged against one tree's "
+                         "list; tag it in the target tree with set-topics" % slug)
+    if archive_warning:
+        rep.warnings.append(archive_warning)
+    rep.relocated = True
+    return rep
+
+
+def _relocate_line_refusal(dst_entry: Entry | us.Pointer | None, entry: Entry | us.Pointer) -> str | None:
+    """Why relocate may not land `entry` on the target level's line for its slug (`dst_entry`,
+    None when there is none): a line with a different title or hook is a different fact."""
+    if dst_entry is not None and (dst_entry.title, dst_entry.hook) != (entry.title, entry.hook):
+        return ("target tree already has slug %r with a DIFFERENT hook - relocating would "
+                "overwrite that fact; dedup deliberately or rename one first" % entry.slug)
+    return None
+
+
+def _relocate_body_refusal(src_body: Path, dst_body: Path, slug: str) -> tuple[str | None, bytes, bool]:
+    """Read the source body and check the target tree's body for `slug`: (refusal, the bytes to
+    copy, whether its topics line was dropped). The body FILE is the tree-wide slug registry, so
+    it sees an owner at ANY level of the target tree - and a dangling body with no pointer at all.
+    A different body there is a different fact; an identical one (with its topics line dropped,
+    or a copy made before relocate dropped it) is the residue of an interrupted relocate, which
+    re-running completes. Compared as BYTES: whether two files are one fact needs no decoding, and
+    a text compare crashed on a target body that was not UTF-8 instead of refusing to land on it."""
+    try:
+        src_data = src_body.read_bytes() if src_body.is_file() else b""
+    except OSError as exc:
+        return "could not read the body %s: %s" % (src_body, exc), b"", False
+    # Topics are tagged against ONE tree's closed list, so the copy leaves them behind.
+    data, dropped_topics = _without_topics_line(src_data)
+    if dst_body.is_file():
+        try:
+            same = dst_body.read_bytes() in (data, src_data)
+        except OSError as exc:
+            return ("could not compare with the target tree's body %s: %s" % (dst_body, exc),
+                    data, dropped_topics)
+        if not same:
+            return ("target tree already holds a DIFFERENT body for slug %r (%s) - relocating "
+                    "would overwrite that fact; dedup deliberately or rename one first"
+                    % (slug, dst_body), data, dropped_topics)
+    return None, data, dropped_topics
+
+
+def _relocate_locked(src: Path, dst: Path, slug: str, src_body: Path, dst_body: Path) -> tuple[str | None, bool]:
+    """relocate's writes, under the source and target level locks the CALLER holds: re-read the
+    source line and body, re-check the target, then COPY-THEN-DROP (the crash-safety direction of
+    move_entry: a crash between the two leaves a visible duplicate, never a lost fact). Returns
+    (refusal, topics line dropped); a refusal wrote nothing."""
+    ptr = _current_line(src, slug)
+    if ptr is None or ptr.legacy:
+        return ("slug %r left %s while it was being relocated (a concurrent move, rename or "
+                "migration); nothing was written" % (slug, src)), False
+    refused = _relocate_line_refusal(_current_line(dst, slug), ptr)
+    if refused:
+        return refused, False
+    refused, data, dropped_topics = _relocate_body_refusal(src_body, dst_body, slug)
+    if refused:
+        return refused, False
+    # The body file is copied VERBATIM but for its topics line - it is already framed, and
+    # re-writing it through add_or_update_entry would double-wrap the frontmatter. As BYTES: a
+    # text round-trip rewrote a CRLF body's line endings on the way.
     try:
         dst_body.parent.mkdir(parents=True, exist_ok=True)
         dst_body.write_bytes(data)
     except OSError as exc:
-        rep.refused = "could not write the body into the target tree: %s" % exc
-        return rep
-    _us.add_pointer(str(dst), slug=slug, title=entry.title, hook=entry.hook,
-                   pin=entry.pin)
-    _drop_pointer(str(src), slug)
-    if dropped_topics:
-        rep.notes.append("dropped the topics: line of %s - topics are tagged against one tree's "
-                         "list; tag it in the target tree with set-topics" % slug)
-
-    # Archive the source body only once nothing in the source tree points at the slug any more.
-    if not _other_levels_pointing_in(a_from, slug):
-        try:
-            archive = _us.central_facts_dir(a_from).parent / ".archive"
-            archive.mkdir(parents=True, exist_ok=True)
-            if src_body.is_file():
-                src_body.rename(_us.free_archive_path(archive, slug + ".md"))
-        except OSError as exc:
-            rep.warnings.append("source body left in place (archive failed: %s)" % exc)
-    else:
-        rep.warnings.append("source body kept: another level in the source tree still points at it")
-    rep.relocated = True
-    return rep
+        return "could not write the body into the target tree: %s" % exc, False
+    _put_line_locked(dst, slug, ptr.title, ptr.hook, ptr.pin)
+    _drop_line_locked(src, slug)
+    return None, dropped_topics
 
 
 def _retarget_refs(text: str | None, canon_old: str, new_slug: str) -> str:
@@ -2704,25 +2863,66 @@ def _rewrite_inbound_refs(anchor: _StrPath, old_slug: str, new_slug: str) -> lis
     Rewriting rather than merely reporting is the whole point of rename: citations that survive it
     are what separate a rename from capturing a new fact and orphaning the old one.
     Returns a `RewrittenRef` per citation repointed.
+
+    Each write is built from what the file holds under the lock of every level an `add` writes it
+    through: a level's hooks under that level's lock (one write per level, the title, pin and
+    every other line as the file holds them), a body under the locks of all the levels carrying a
+    line of it. Built from a read taken without them, the rewrite put an older hook, title or
+    prose back over an `add` that landed in between.
     """
     canon_old = _canon_slug(old_slug)
+    levels = curated_levels_under(anchor)
+    carriers: dict[str, list[str]] = {}
+    for level in levels:
+        for ptr in _us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level)))[1]:
+            carriers.setdefault(ptr.slug, []).append(level)
     touched: list[RewrittenRef] = []
-    for level in curated_levels_under(anchor):
-        _scope, entries, _bodies = read_store(str(level))
-        for e in entries:
-            hook = _retarget_refs(e.hook, canon_old, new_slug)
-            if hook != e.hook:
-                _us.add_pointer(str(level), slug=e.slug, title=e.title, hook=hook,
-                               pin=e.pin)
-                touched.append(RewrittenRef(str(level), e.slug, RefSite.HOOK))
-            body = _us.body_path(anchor, e.slug)
-            text = read_store_text(body)            # rename_entry's collision scan read it already
-            if text:
-                retargeted = _retarget_refs(text, canon_old, new_slug)
-                if retargeted != text:
-                    _us.write_if_changed(body, retargeted)
-                    touched.append(RewrittenRef(str(level), e.slug, RefSite.BODY))
+    for level in levels:
+        with sig.memory_lock(sig.claude_local_md_path(level)):
+            slugs, hooked = _retarget_hooks_locked(level, canon_old, new_slug)
+        for slug in slugs:
+            if slug in hooked:
+                touched.append(RewrittenRef(str(level), slug, RefSite.HOOK))
+            if _retarget_body(anchor, slug, carriers.get(slug, []) + [level], canon_old, new_slug):
+                touched.append(RewrittenRef(str(level), slug, RefSite.BODY))
     return touched
+
+
+def _retarget_hooks_locked(level: _StrPath, canon_old: str, new_slug: str) -> tuple[list[str], set[str]]:
+    """Repoint `canon_old` in every hook at `level`, whose lock the CALLER holds, in one write.
+    Returns (every slug the level holds, in block order; the slugs whose hook changed). A changed
+    line turns current as `add_pointer` turns it (a legacy line is flipped)."""
+    local = sig.claude_local_md_path(level)
+    text = read_store_text(local)
+    scope, pointers = _us.parse_pointer_index(text)
+    hooked: set[str] = set()
+    for ptr in pointers:
+        hook = _retarget_refs(ptr.hook, canon_old, new_slug)
+        if hook != ptr.hook:
+            ptr.hook, ptr.legacy, ptr.uuid = hook, False, ""
+            hooked.add(ptr.slug)
+    if hooked:
+        _us.write_if_changed(local, _us.upsert_pointer_block(text, scope, pointers))
+    return [ptr.slug for ptr in pointers], hooked
+
+
+def _retarget_body(anchor: _StrPath, slug: str, carriers: Iterable[_StrPath], canon_old: str, new_slug: str) -> bool:
+    """Repoint `canon_old` in `slug`'s body, re-read and written under the locks of every level in
+    `carriers`. A body that cites nothing to repoint, read without them, takes no lock. True when
+    it was written."""
+    path = _us.body_path(anchor, slug)
+    text = read_store_text(path)
+    if not text or _retarget_refs(text, canon_old, new_slug) == text:
+        return False
+    with _hold_level_locks(carriers):
+        text = read_store_text(path)
+        if not text:
+            return False
+        retargeted = _retarget_refs(text, canon_old, new_slug)
+        if retargeted == text:
+            return False
+        _us.write_if_changed(path, retargeted)
+    return True
 
 
 def rename_entry(level: _StrPath, slug: str, to_slug: str) -> RenameReport:
@@ -2738,6 +2938,10 @@ def rename_entry(level: _StrPath, slug: str, to_slug: str) -> RenameReport:
 
     Same level, same tree, body CONTENT untouched: only the name moves, along with the body's
     frontmatter `name:` and every inbound citation.
+    The body copy, the line swaps and the archive of the old body happen under the locks of every
+    level carrying a line of the fact, from what the files hold under them (a line gone from this
+    level meanwhile is refused, writing nothing); the citations are then rewritten under the
+    locks of the levels each one is written through (`_rewrite_inbound_refs`).
     Returns a `RenameReport`.
     """
     sig.refuse_if_memory_writes_off()
@@ -2807,60 +3011,88 @@ def _rename_entry(level: _StrPath, slug: str, to_slug: str) -> RenameReport:
     if rep.refused:
         return rep
 
-    # COPY-THEN-DROP, the same crash-safety direction as move/relocate: a crash between the two
-    # leaves a visible duplicate, never a lost fact.
+    # Every level carrying a line of the fact is held together while the body is copied, the lines
+    # are swapped and the old body is archived, and each is re-read under the locks: the entry
+    # above was read without them, and an `add` of the old slug that landed since wrote a newer
+    # hook, title and prose that a copy of that read would leave behind in the archive. A line
+    # gone from this level meanwhile is refused, never put back.
+    carriers = [str(lvl)] + [other for other in curated_levels_under(anchor)
+                             if Path(other).resolve() != lvl
+                             and _current_line(other, slug) is not None]
+    with _hold_level_locks(carriers):
+        rep.refused = _rename_locked(anchor, lvl, others=carriers[1:], slug=slug, to_slug=to_slug,
+                                     placed=placed, warnings=rep.warnings)
+        if rep.refused:
+            return rep
+
+    # After the pointer swaps, so the renamed fact's OWN body already sits at the new path and a
+    # self-reference is repointed along with everyone else's.
+    rep.refs_rewritten = _rewrite_inbound_refs(anchor, slug, to_slug)
+    rep.renamed = True
+    return rep
+
+
+def _rename_locked(anchor: _StrPath, lvl: Path, *, others: Sequence[str], slug: str, to_slug: str,
+                   placed: bool, warnings: list[str]) -> str | None:
+    """rename's writes, under the locks of `lvl` and of every level in `others` (the other levels
+    carrying a line of `slug`), which the CALLER holds. Returns the refusal, having written
+    nothing, else None; appends its warnings to `warnings`.
+
+    COPY-THEN-DROP, the same crash-safety direction as move/relocate: a crash between the two
+    leaves a visible duplicate, never a lost fact."""
+    ptr = _current_line(lvl, slug)
+    if ptr is None or ptr.legacy:
+        return ("slug %r left %s while it was being renamed (a concurrent move, rename or "
+                "migration); nothing was written" % (slug, lvl))
     src_body, dst_body = _us.body_path(anchor, slug), _us.body_path(anchor, to_slug)
     if dst_body.exists():
-        rep.refused = "a body file already sits at %s" % dst_body
-        return rep
+        return "a body file already sits at %s" % dst_body
     try:
         if src_body.is_file():
             dst_body.parent.mkdir(parents=True, exist_ok=True)
             dst_body.write_text(_retarget_body_name(read_store_text(src_body), to_slug),
                                 encoding="utf-8")
         else:
-            rep.warnings.append("no body file at the old slug; renaming the pointer only")
+            warnings.append("no body file at the old slug; renaming the pointer only")
     except OSError as exc:
-        rep.refused = "could not write the body under the new slug: %s" % exc
-        return rep
+        return "could not write the body under the new slug: %s" % exc
 
-    _us.add_pointer(str(lvl), slug=to_slug, title=entry.title, hook=entry.hook,
-                   pin=entry.pin)
-    _drop_pointer(str(lvl), slug)
+    _put_line_locked(lvl, to_slug, ptr.title, ptr.hook, ptr.pin)
+    _drop_line_locked(lvl, slug)
 
     # A slug carried by more than one level is a pre-existing violation (`heal` and the chain-only
     # `--check` both miss it), but a rename must not LEAVE one behind: dropping only the named
     # level's pointer turns every other one into an orphan aimed at a body that no longer answers to
     # that name. Renaming them too keeps the fact reachable from exactly where it was, and the
     # warning surfaces the duplicate instead of quietly propagating it under a new name.
-    for other in curated_levels_under(anchor):
-        if Path(other).resolve() == lvl:
-            continue
-        _s, oentries, _b = read_store(str(other))
-        dup = next((e for e in oentries if e.slug == slug), None)
+    for other in others:
+        dup = _current_line(other, slug)
         if dup is None:
             continue
-        _us.add_pointer(str(other), slug=to_slug, title=dup.title, hook=dup.hook,
-                       pin=dup.pin)
-        _drop_pointer(str(other), slug)
+        _put_line_locked(other, to_slug, dup.title, dup.hook, dup.pin)
+        _drop_line_locked(other, slug)
         if placed:
             continue                                 # placed by topic: one line per level, by design
-        rep.warnings.append("slug was ALSO pointed at from %s - a pre-existing duplicate; "
-                            "renamed there too, dedup it deliberately" % other)
+        warnings.append("slug was ALSO pointed at from %s - a pre-existing duplicate; "
+                        "renamed there too, dedup it deliberately" % other)
 
-    # After the pointer swaps, so the renamed fact's OWN body already sits at the new path and a
-    # self-reference is repointed along with everyone else's.
-    rep.refs_rewritten = _rewrite_inbound_refs(anchor, slug, to_slug)
-
+    # A level that took a line of the old slug after the carriers were read is not held, so its
+    # line is left alone and so is the body it points at.
+    held = {Path(level).resolve() for level in [lvl, *others]}
+    late = [level for level in curated_levels_under(anchor)
+            if Path(level).resolve() not in held and _current_line(level, slug) is not None]
+    if late:
+        warnings.append("old body kept: %s took a line of %s while it was being renamed - "
+                        "rename it there too" % (", ".join(late), slug))
+        return None
     try:
         if src_body.is_file():
             archive = _us.central_facts_dir(anchor).parent / ".archive"
             archive.mkdir(parents=True, exist_ok=True)
             src_body.rename(_us.free_archive_path(archive, slug + ".md"))
     except OSError as exc:
-        rep.warnings.append("old body left in place (archive failed: %s)" % exc)
-    rep.renamed = True
-    return rep
+        warnings.append("old body left in place (archive failed: %s)" % exc)
+    return None
 
 
 def _normalised_title(raw: str | None) -> str:
