@@ -30,6 +30,22 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.13.8]
+
+### Fixed
+
+- block-or-echo-verdict no longer rescans the rest of a command from every `;`, `&`, `|`, `(` or `{`: a launcher or path word stops at the next start and at a newline. Its quoted shape now starts at the program, not at a statement glued in front of it by a separator.
+- skill-router and recall-memory: cutting a `:12:5` line suffix from a prompt token is linear, not quadratic in a run like `:0:0:0...`.
+- compuse-toolbox procsig: the shell-name test cuts a version suffix in linear time on a long digit argv token.
+- compuse-toolbox winpytest: finding the pytest summary is linear in a run of blank lines.
+- meta-dream-tree factedit: `clean_body` trims trailing blank lines in linear time.
+- sec-appsec-web-baseline audit_headers: the version-leak check is linear on a long digit run. A comment that listed `v3` as a version is corrected: `v3` alone never counted.
+
+### Changed
+
+- The hooks and compuse-toolbox growth tests time on user CPU time with equal windows of at least 10 clock steps, following the process-test-design growth-ratio rule.
+- block-or-echo-verdict builds its pattern by concatenation, so `find_uncompiled_regex.py` can fold and check it instead of counting it as built at run time.
+
 ## [11.13.7]
 
 ### Fixed
