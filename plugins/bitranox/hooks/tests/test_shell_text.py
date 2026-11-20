@@ -1379,6 +1379,22 @@ def test_resolve_path_finds_a_path_the_way_the_shell_hands_it_on(path, base, win
     assert S.resolve_path(path, base, msys_drives=windows) == expected
 
 
+@pytest.mark.parametrize("tool, os_name, expected", [
+    ("Bash", "nt", "C:/temp/h.txt"),             # Git Bash on Windows: the drive
+    ("PowerShell", "nt", "/c/temp/h.txt"),       # PowerShell hands the text on as written
+    ("Bash", "posix", "/c/temp/h.txt"),          # anywhere else /c is a directory
+])
+def test_resolve_path_takes_the_drive_reading_from_the_host_it_is_told(tool, os_name, expected):
+    """With `msys_drives` left to its default, the drive reading follows the tool AND the host;
+    `os_name` reaches the Windows arm from any host."""
+    assert S.resolve_path("/c/temp/h.txt", "/s", tool, os_name=os_name) == expected
+
+
+def test_resolve_path_reads_a_git_bash_mount_as_unknown_on_a_windows_host():
+    assert S.resolve_path("/tmp/x", "/s", "Bash", os_name="nt") is None
+    assert S.resolve_path("/tmp/x", "/s", "Bash", os_name="posix") == "/tmp/x"
+
+
 # ---- past_command_prefix: the launcher walk, public -------------------------------------------
 #
 # A guard asking "which program does this statement really run?" had to read the private

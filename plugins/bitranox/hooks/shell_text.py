@@ -611,7 +611,8 @@ def reads_msys_drives(tool_name="Bash", os_name=os.name):
     return os_name == "nt" and (tool_name or "Bash") == "Bash"
 
 
-def resolve_path(path, base, tool_name="Bash", *, msys_drives=None, unknown_mounts=True):
+def resolve_path(path, base, tool_name="Bash", *, msys_drives=None, unknown_mounts=True,
+                 os_name=os.name):
     """`path` as the shell finds it from `base`, not normalised, or None when that cannot be read:
     a relative `path` and no `base`, or a Git Bash mount that is not a drive.
 
@@ -621,10 +622,12 @@ def resolve_path(path, base, tool_name="Bash", *, msys_drives=None, unknown_moun
     None: only Git Bash's mount table says where it lands (see Decisions in the module docstring).
     `unknown_mounts=False` keeps such a path as written instead, for a caller that asks only
     whether a landing is rooted and never reaches the disk with it. `msys_drives` None asks
-    `reads_msys_drives(tool_name)`; True or False overrides it. A translated drive path counts as
-    rooted on every host, so both arms give the same answer wherever the tests run.
+    `reads_msys_drives(tool_name, os_name)`; True or False overrides it. A translated drive path
+    counts as rooted on every host, so both arms give the same answer wherever the tests run.
+    `os_name` is a parameter so tests reach the Windows default on any host, as
+    `msys_drive_path_for_tool` lets them.
     """
-    windows = reads_msys_drives(tool_name) if msys_drives is None else msys_drives
+    windows = reads_msys_drives(tool_name, os_name) if msys_drives is None else msys_drives
     if unknown_mounts and is_msys_mount(path, windows):
         return None
     drive = msys_drive_path(path, windows)
