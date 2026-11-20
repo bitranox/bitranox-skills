@@ -468,6 +468,10 @@ NESTED = "def outer():\n    y = 1\n\n    def target():\n        pass\n"
 
 class TestRegexPositions:
     def test_a_leading_backslash_s_that_crosses_a_blank_line_lands_on_the_def(self) -> None:
+        # The quadratic-start finder flags this pattern (newline-start-then-blanks), and that is
+        # accepted: the crossing `\s*` IS the input under test, and it only ever sees the 55-char
+        # NESTED string. `[^\S\n]*` would start the match one line later and duplicate the
+        # blank-free control below.
         pattern = re.compile(r"(?m)^(\s*)def target\(")
         result = scan_source(NESTED, pattern=pattern, intended=["outer"])
         assert [(s.line, s.enclosing, s.bucket) for s in result.sites] == [
