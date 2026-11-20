@@ -253,14 +253,18 @@ Create one todo per step.
    Verify's `pointer blocks` lines (per changed level: bytes and pointers before and after, and
    `arrived N  left N` counts) go into the report as printed, per tree, naming the slugs that
    arrived at each tree top from `data.levels[]` under `--json` (dream-core.md, report contract);
-   a promotion shows there as an arrival at its ancestor, which lies within its tree (step 5), so
-   that tree's verify reports it.
+   a promotion shows there as an arrival at the level it was promoted to, which lies within its
+   tree (step 5), so that tree's verify reports it.
    Verify prints bytes per level, not per fact, so list each promotion to a tree top by slug, as
    applied, with its cost: the bytes its pointer line adds to that top's block (the UTF-8 length
    of the line plus the newline), which `grep -F '(mem:<slug>)' <top>/CLAUDE.local.md | wc -c`
    prints once the line is there.
+   A promotion to a common ancestor below the tree top is listed the same way, by slug and as
+   applied, with the level it landed at and the bytes its pointer line adds to that level's block,
+   the same `grep -F '(mem:<slug>)' <level>/CLAUDE.local.md | wc -c`: that block loads in every
+   session under the level, so its cost is reported as a top's is.
    Counts: stores scanned, items gathered (lift vs local copy), promotions to a tree top,
-   cross-pollinations, normalizations, any skill change,
+   promotions to a level below a top, cross-pollinations, normalizations, any skill change,
    toolbox proposals (contribute / new tool), and any contribution still queued (only those blocked
    on user input or `off`-mode - deliverable ones are shipped THIS run, not left pending), and
    `jev shadow:` followed by one `crosstree-misplaced <anchor> <form>` entry per tree, joined by

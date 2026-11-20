@@ -203,6 +203,22 @@ def test_crosstree_lists_each_promotion_to_a_tree_top_with_its_cost():
     assert "promotions to global" not in cross
 
 
+def test_a_promotion_below_the_tree_top_is_reported_with_its_level_and_cost():
+    """Step 5 promotes to the lowest common ancestor within the tree, which is not always its top,
+    and that level's block loads in every session under it. Verify names arriving slugs only at a
+    tree top, so without these sentences a below-top promotion reaches the report as a bare
+    arrival count, in the crosstree report and in the core's report contract alike."""
+    core = _flat(CORE)
+    cross = _flat(FAMILY["meta-dream-crosstree"])
+    assert ("A promotion to a common ancestor below the tree top is listed the same way, by slug "
+            "and as applied, with the level it landed at") in cross
+    assert "grep -F '(mem:<slug>)' <level>/CLAUDE.local.md | wc -c" in cross
+    assert "promotions to a tree top, promotions to a level below a top," in cross
+    assert ("A promotion to a common ancestor below the top (a duplicate merged at its levels' "
+            "common parent, a crosstree lift to the lowest common ancestor) is listed as applied "
+            "too, by slug, with the level it landed at and its cost there") in core
+
+
 def test_the_dreams_say_what_follows_an_empty_scope_and_another_trees_backup_dir():
     """store_manifest refuses an empty scope and an --out holding another tree's backup; the
     tree and crosstree steps that run it say what each refusal means and what comes next."""
