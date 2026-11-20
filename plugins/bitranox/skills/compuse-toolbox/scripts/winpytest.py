@@ -52,8 +52,11 @@ COMMAND = "winpytest"
 _TAIL = 40
 _CONNECT_TIMEOUT = "15"
 _ABS_WIN = re.compile(r"^[A-Za-z]:\\")
-_SUMMARY = re.compile(r"^=*\s*((?:\d+ [a-z]+(?:, )?)+ in [\d.]+s(?: \([^)]*\))?|no tests ran in [\d.]+s)"
-                      r"\s*=*\s*$", re.MULTILINE)
+# The blanks after the line start stop at a newline: each line is a start of its own, so a `\s*`
+# there would rescan every following blank line from each one, quadratic in a run of them. A
+# tally after blank lines is still found, from its own line.
+_SUMMARY = re.compile(r"^=*[^\S\n]*((?:\d+ [a-z]+(?:, )?)+ in [\d.]+s(?: \([^)]*\))?"
+                      r"|no tests ran in [\d.]+s)\s*=*\s*$", re.MULTILINE)
 _SHORT_SUMMARY = re.compile(r"^=+ short test summary info =+\s*$", re.MULTILINE)
 # Any CSI escape (ESC [ params intermediates final), not just SGR colour: pytest with --color=yes
 # (or PY_COLORS / FORCE_COLOR in the env) starts every rule line with one, which hides it from
