@@ -69,7 +69,7 @@ import subprocess
 import sys
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, replace
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
@@ -404,9 +404,211 @@ class FirewallInfo:
                 "packages": [p.to_json() for p in self.packages]}
 
 
-def _json_value(value: object) -> object:
-    """The reply as decoded, for a shape that has no record yet."""
-    return value
+# ---- typed results of the PHP writes ------------------------------------------------------------
+# One record per write, each holding exactly the keys its PHP echoes. `unbound` is the restart-and-
+# resolve check this side adds after the write; it is appended to the --json object last, as the
+# key the PHP never sends.
+def _optional_text(obj: dict, key: str, what: str) -> str | None:
+    if key not in obj:
+        return None
+    return _text(obj, key, what)
+
+
+@dataclass(frozen=True)
+class UnboundCheck:
+    """unbound was restarted and resolved `resolved` to `ip` through 127.0.0.1."""
+
+    restarted: bool
+    resolved: str
+    ip: str
+
+    def to_json(self) -> dict:
+        return {"restarted": self.restarted, "resolved": self.resolved, "ip": self.ip}
+
+
+def _with_unbound(out: dict, unbound: UnboundCheck | None) -> dict:
+    if unbound is not None:
+        out["unbound"] = unbound.to_json()
+    return out
+
+
+@dataclass(frozen=True)
+class TouchedReservation:
+    """A reservation a write removed, renamed or cleared static ARP on: where it was, and its address."""
+
+    interface: str
+    ip: str
+
+    @classmethod
+    def list_from_json(cls, value: object, what: str) -> tuple["TouchedReservation", ...]:
+        items = []
+        for item in _array(value, what):
+            obj = _object(item, f"an entry of {what}")
+            items.append(cls(interface=_text(obj, "interface", what), ip=_text(obj, "ip", what)))
+        return tuple(items)
+
+    def to_json(self) -> dict:
+        return {"interface": self.interface, "ip": self.ip}
+
+
+@dataclass(frozen=True)
+class ReservationRemoved:
+    """The `dhcp rm` write: what it removed (empty unless exactly one entry matched)."""
+
+    removed: tuple[TouchedReservation, ...]
+    unbound_follows: bool
+    unbound: UnboundCheck | None = None
+
+    @classmethod
+    def from_json(cls, value: object) -> "ReservationRemoved":
+        what = "the reservation removal"
+        obj = _object(value, what)
+        return cls(removed=TouchedReservation.list_from_json(obj.get("removed"), "its removed list"),
+                   unbound_follows=_flag(obj, "unbound_follows", what))
+
+    def to_json(self) -> dict:
+        return _with_unbound({"removed": [r.to_json() for r in self.removed],
+                              "unbound_follows": self.unbound_follows}, self.unbound)
+
+
+@dataclass(frozen=True)
+class ReservationRenamed:
+    """The `dhcp rename` write: what it renamed (empty unless exactly one entry matched)."""
+
+    renamed: tuple[TouchedReservation, ...]
+    unbound_follows: bool
+    unbound: UnboundCheck | None = None
+
+    @classmethod
+    def from_json(cls, value: object) -> "ReservationRenamed":
+        what = "the reservation rename"
+        obj = _object(value, what)
+        return cls(renamed=TouchedReservation.list_from_json(obj.get("renamed"), "its renamed list"),
+                   unbound_follows=_flag(obj, "unbound_follows", what))
+
+    def to_json(self) -> dict:
+        return _with_unbound({"renamed": [r.to_json() for r in self.renamed],
+                              "unbound_follows": self.unbound_follows}, self.unbound)
+
+
+@dataclass(frozen=True)
+class StaticArpCleared:
+    """The `dhcp rm-static-arp` write: the reservations whose static-ARP flag it cleared."""
+
+    changed: tuple[TouchedReservation, ...]
+
+    @classmethod
+    def from_json(cls, value: object) -> "StaticArpCleared":
+        obj = _object(value, "the static ARP change")
+        return cls(changed=TouchedReservation.list_from_json(obj.get("changed"), "its changed list"))
+
+    def to_json(self) -> dict:
+        return {"changed": [r.to_json() for r in self.changed]}
+
+
+@dataclass(frozen=True)
+class NewReservation:
+    """A reservation `dhcp add` writes, or would write on a dry run."""
+
+    interface: str
+    mac: str
+    ip: str
+    hostname: str
+
+    @classmethod
+    def from_json(cls, value: object) -> "NewReservation":
+        what = "the added reservation"
+        obj = _object(value, what)
+        return cls(interface=_text(obj, "interface", what), mac=_text(obj, "mac", what),
+                   ip=_text(obj, "ip", what), hostname=_text(obj, "hostname", what))
+
+    def to_json(self) -> dict:
+        return {"interface": self.interface, "mac": self.mac, "ip": self.ip, "hostname": self.hostname}
+
+
+@dataclass(frozen=True)
+class ReservationAdded:
+    """The `dhcp add` write: the reservation added, or (added None) the refusal the PHP gave."""
+
+    added: NewReservation | None
+    error: str | None
+    unbound_follows: bool
+    unbound: UnboundCheck | None = None
+
+    @classmethod
+    def from_json(cls, value: object) -> "ReservationAdded":
+        what = "the reservation add"
+        obj = _object(value, what)
+        if obj.get("added") is None:
+            return cls(added=None, error=_text(obj, "error", what), unbound_follows=False)
+        return cls(added=NewReservation.from_json(obj["added"]), error=None,
+                   unbound_follows=_flag(obj, "unbound_follows", what))
+
+    def to_json(self) -> dict:
+        if self.added is None:
+            return _with_unbound({"added": None, "error": self.error}, self.unbound)
+        return _with_unbound({"added": self.added.to_json(), "unbound_follows": self.unbound_follows},
+                             self.unbound)
+
+
+@dataclass(frozen=True)
+class NameAndAddress:
+    """A host override as the `dns add` and `dns rm` writes echo it: no description."""
+
+    host: str
+    domain: str
+    ip: str
+
+    @classmethod
+    def from_json(cls, value: object, what: str) -> "NameAndAddress":
+        obj = _object(value, what)
+        return cls(host=_text(obj, "host", what), domain=_text(obj, "domain", what),
+                   ip=_text(obj, "ip", what))
+
+    def to_json(self) -> dict:
+        return {"host": self.host, "domain": self.domain, "ip": self.ip}
+
+
+@dataclass(frozen=True)
+class OverrideAdded:
+    """The `dns add` write: the override added, or (added None) the refusal the PHP gave."""
+
+    added: NameAndAddress | None
+    error: str | None
+    unbound: UnboundCheck | None = None
+
+    @classmethod
+    def from_json(cls, value: object) -> "OverrideAdded":
+        what = "the override add"
+        obj = _object(value, what)
+        if obj.get("added") is None:
+            return cls(added=None, error=_text(obj, "error", what))
+        return cls(added=NameAndAddress.from_json(obj["added"], "the added override"),
+                   error=_optional_text(obj, "error", what))
+
+    def to_json(self) -> dict:
+        out: dict = {"added": None if self.added is None else self.added.to_json()}
+        if self.error is not None:
+            out["error"] = self.error
+        return _with_unbound(out, self.unbound)
+
+
+@dataclass(frozen=True)
+class OverrideRemoved:
+    """The `dns rm` write: the overrides it removed."""
+
+    removed: tuple[NameAndAddress, ...]
+    unbound: UnboundCheck | None = None
+
+    @classmethod
+    def from_json(cls, value: object) -> "OverrideRemoved":
+        obj = _object(value, "the override removal")
+        what = "its removed list"
+        return cls(removed=tuple(NameAndAddress.from_json(item, f"an entry of {what}")
+                                 for item in _array(obj.get("removed"), what)))
+
+    def to_json(self) -> dict:
+        return _with_unbound({"removed": [r.to_json() for r in self.removed]}, self.unbound)
 
 
 # ---- target resolution --------------------------------------------------------------------------
@@ -573,13 +775,17 @@ def run_php[T](target: Target, php_body: str, *, parse: Callable[[object], T], r
 
     `parse` is required so that no call site can take the decoded JSON untyped: each one names the
     record its PHP body answers with (Reservation.list_from_json, ReservationRemoved.from_json,
-    ...), and a reply of any other shape is refused here, naming the box.
+    ...), and a reply of any other shape is refused here, naming the box. The reply of a write
+    arrives after write_config() may already have run, so that refusal says so: a reader who
+    retries a change that did land would otherwise make it twice.
     """
     decoded = _run_php_json(target, php_body, run=run, timeout=timeout)
     try:
         return parse(decoded)
     except PfsenseError as exc:
-        raise PfsenseError(f"php on {target.host} returned an unexpected reply: {exc}") from None
+        landed = ("; the change may already be written to config.xml, so check it before running "
+                  "this again" if "write_config(" in php_body else "")
+        raise PfsenseError(f"php on {target.host} returned an unexpected reply: {exc}{landed}") from None
 
 
 def _run_php_json(target: Target, php_body: str, *, run, timeout: int | None) -> object:
@@ -1602,37 +1808,40 @@ def cmd_dhcp_add(args) -> int:
         # bypasses the GUI, so a reservation outside the subnet would be stored and never served.
         interfaces = tuple(i for i in interfaces if i.name == args.interface)
     interface = interface_for_ip(interfaces, args.ip)
-    entry = {"interface": interface, "mac": mac, "ip": args.ip, "hostname": hostname}
+    entry = NewReservation(interface=interface, mac=mac, ip=args.ip, hostname=hostname)
     if not args.apply:
-        _emit(envelope(command="dhcp add", data={"would_add": entry}, ok=True, skipped=["--apply not given"]),
+        _emit(envelope(command="dhcp add", data={"would_add": entry.to_json()}, ok=True,
+                       skipped=["--apply not given"]),
               args.json, f"  DRY RUN: would reserve {args.ip} for {mac} ({hostname}) on {interface}.  "
                          "Re-run with --apply.")
         return 0
     _guard_mutation(args, target, f"adding the reservation {args.ip} for {mac}")
     result = run_php(target, php_add_reservation(interface, mac, args.ip, hostname, args.descr),
-                     parse=_json_value, run=args.run)
-    if not result.get("added"):
-        raise PfsenseError(str(result.get("error") or "the reservation was not added"))
-    note = _restart_unbound_after_dhcp(target, result, run=args.run,
-                                       change=f"the reservation {args.ip} for {mac}")
-    _emit(envelope(command="dhcp add", data=result, ok=True), args.json,
+                     parse=ReservationAdded.from_json, run=args.run)
+    if result.added is None:
+        raise PfsenseError(result.error or "the reservation was not added")
+    result, note = _restart_unbound_after_dhcp(target, result, run=args.run,
+                                               change=f"the reservation {args.ip} for {mac}")
+    _emit(envelope(command="dhcp add", data=result.to_json(), ok=True), args.json,
           f"  reserved {args.ip} for {mac} ({hostname}) on {interface}{note}")
     return 0
 
 
-def _restart_unbound_after_dhcp(target: Target, result: dict, *, run, change: str) -> str:
+def _restart_unbound_after_dhcp[R: (ReservationAdded, ReservationRenamed, ReservationRemoved)](
+        target: Target, result: R, *, run, change: str) -> tuple[R, str]:
     """Restart unbound and check it answers when the DHCP write also reconfigured it.
 
     The PHP side reconfigured unbound only when it registers DHCP static mappings, and says so in
     `unbound_follows`. The check resolves `localhost.`, unbound's own built-in local zone: the
     reservation's name depends on a domain this tool does not read, so the check proves unbound
-    answers, not that it answers that name. Returns the human-output suffix.
+    answers, not that it answers that name. Returns the result with the check recorded, and the
+    human-output suffix.
     """
-    if not result.get("unbound_follows"):
-        return ""
-    result["unbound"] = restart_and_verify_unbound(target, name="localhost.", ip="127.0.0.1",
-                                                   run=run, change=change)
-    return "; unbound reconfigured and restarted for the static-mapping name, and answers"
+    if not result.unbound_follows:
+        return result, ""
+    check = restart_and_verify_unbound(target, name="localhost.", ip="127.0.0.1", run=run, change=change)
+    return (replace(result, unbound=check),
+            "; unbound reconfigured and restarted for the static-mapping name, and answers")
 
 
 def cmd_dhcp_rename(args) -> int:
@@ -1648,12 +1857,13 @@ def cmd_dhcp_rename(args) -> int:
                          f"{entry.hostname or '(no hostname)'} to {hostname}.  Re-run with --apply.")
         return 0
     _guard_mutation(args, target, f"renaming the reservation for {mac}")
-    result = run_php(target, php_rename_reservation(mac, hostname), parse=_json_value, run=args.run)
-    if len(result.get("renamed") or []) != 1:
+    result = run_php(target, php_rename_reservation(mac, hostname), parse=ReservationRenamed.from_json,
+                     run=args.run)
+    if len(result.renamed) != 1:
         raise PfsenseError(f"the reservation for {mac} was not renamed (it changed since it was listed)")
-    note = _restart_unbound_after_dhcp(target, result, run=args.run,
-                                       change=f"the rename of the reservation for {mac} to {hostname}")
-    _emit(envelope(command="dhcp rename", data=result, ok=True), args.json,
+    result, note = _restart_unbound_after_dhcp(target, result, run=args.run,
+                                               change=f"the rename of the reservation for {mac} to {hostname}")
+    _emit(envelope(command="dhcp rename", data=result.to_json(), ok=True), args.json,
           f"  renamed {entry.ip} {mac} to {hostname}{note}")
     return 0
 
@@ -1670,18 +1880,18 @@ def cmd_dhcp_rm(args) -> int:
                          f"({entry.hostname or entry.descr}).  Re-run with --apply.")
         return 0
     _guard_mutation(args, target, f"removing the reservation for {mac}")
-    result = run_php(target, php_rm_reservation(mac), parse=_json_value, run=args.run)
-    removed = result.get("removed") or []
+    result = run_php(target, php_rm_reservation(mac), parse=ReservationRemoved.from_json, run=args.run)
+    removed = result.removed
     _require_effect(removed, f"the reservation for {mac} matched, but removing it removed nothing "
                              "(it changed since it was listed); config.xml was not written")
-    note = _restart_unbound_after_dhcp(target, result, run=args.run,
-                                       change=f"the removal of the reservation for {mac}")
-    _emit(envelope(command="dhcp rm", data=result, ok=True), args.json,
+    result, note = _restart_unbound_after_dhcp(target, result, run=args.run,
+                                               change=f"the removal of the reservation for {mac}")
+    _emit(envelope(command="dhcp rm", data=result.to_json(), ok=True), args.json,
           f"  removed {len(removed)} reservation(s) for {mac}{note}")
     return 0
 
 
-def _require_effect(effect: list, failure: str) -> None:
+def _require_effect(effect: Sequence, failure: str) -> None:
     """Refuse a single-target change that matched and then changed nothing.
 
     The listing found exactly one entry, so the caller asked for one thing and it did not happen.
@@ -1722,11 +1932,11 @@ def cmd_dhcp_rm_static_arp(args) -> int:
               args.json, f"  DRY RUN: would clear static ARP on {entry.ip} {mac}.  Re-run with --apply.")
         return 0
     _guard_mutation(args, target, f"clearing static ARP for {mac}")
-    result = run_php(target, php_rm_static_arp(mac), parse=_json_value, run=args.run)
-    changed = result.get("changed") or []
+    result = run_php(target, php_rm_static_arp(mac), parse=StaticArpCleared.from_json, run=args.run)
+    changed = result.changed
     _require_effect(changed, f"static ARP is set on the reservation for {mac}, but clearing it "
                              "changed nothing (it changed since it was listed); config.xml was not written")
-    _emit(envelope(command="dhcp rm-static-arp", data=result, ok=True), args.json,
+    _emit(envelope(command="dhcp rm-static-arp", data=result.to_json(), ok=True), args.json,
           f"  cleared static ARP on {len(changed)} reservation(s) for {mac}")
     return 0
 
@@ -1765,14 +1975,14 @@ def cmd_dns_add(args) -> int:
     if any(o.fqdn.lower() == f"{host}.{domain}" for o in existing):
         raise PfsenseError(f"an override for {host}.{domain} already exists")
     _guard_mutation(args, target, f"adding {host}.{domain}")
-    result = run_php(target, php_add_override(host, domain, args.ip, args.descr), parse=_json_value,
-                     run=args.run)
-    if result.get("error"):
-        raise PfsenseError(str(result["error"]))
-    result["unbound"] = restart_and_verify_unbound(
+    result = run_php(target, php_add_override(host, domain, args.ip, args.descr),
+                     parse=OverrideAdded.from_json, run=args.run)
+    if result.error:
+        raise PfsenseError(result.error)
+    result = replace(result, unbound=restart_and_verify_unbound(
         target, name=f"{host}.{domain}", ip=args.ip, run=args.run,
-        change=f"the override {host}.{domain} -> {args.ip}")
-    _emit(envelope(command="dns add", data=result, ok=True), args.json,
+        change=f"the override {host}.{domain} -> {args.ip}"))
+    _emit(envelope(command="dns add", data=result.to_json(), ok=True), args.json,
           f"  added {host}.{domain} -> {args.ip}; unbound restarted and answers it")
     return 0
 
@@ -1793,7 +2003,7 @@ def answered_addresses(host_output: str) -> set:
     return found
 
 
-def restart_and_verify_unbound(target: Target, *, name: str, ip: str, run, change: str) -> dict:
+def restart_and_verify_unbound(target: Target, *, name: str, ip: str, run, change: str) -> UnboundCheck:
     """Restart unbound and resolve `name` through 127.0.0.1, expecting `ip` among the answers.
 
     services_unbound_configure() has been observed to leave unbound stopped, with
@@ -1817,7 +2027,7 @@ def restart_and_verify_unbound(target: Target, *, name: str, ip: str, run, chang
     if ipaddress.ip_address(ip) not in answered_addresses(out):
         reply = " ".join((out or err).split())[:200] or "no output"
         raise down(f"{name} did not resolve to {ip} through 127.0.0.1 (exit {rc}: {reply})")
-    return {"restarted": True, "resolved": name, "ip": ip}
+    return UnboundCheck(restarted=True, resolved=name, ip=ip)
 
 
 def _probe_after_removal(overrides: Sequence[Override], removed_fqdn: str) -> tuple[str, str]:
@@ -1849,15 +2059,16 @@ def cmd_dns_rm(args) -> int:
     # the whole name in its domain, and host 'bare' + domain 'example.com' would match nothing.
     stored_host = entry.host.lower()
     stored_domain = entry.domain.lower()
-    result = run_php(target, php_rm_override(stored_host, stored_domain), parse=_json_value, run=args.run)
-    removed = result.get("removed") or []
+    result = run_php(target, php_rm_override(stored_host, stored_domain), parse=OverrideRemoved.from_json,
+                     run=args.run)
+    removed = result.removed
     _require_effect(removed, f"the override {host}.{domain} matched, but removing it removed nothing "
                              "(it changed since it was listed); config.xml was not written")
     probe_name, probe_ip = _probe_after_removal(overrides, entry.fqdn)
-    result["unbound"] = restart_and_verify_unbound(
+    result = replace(result, unbound=restart_and_verify_unbound(
         target, name=probe_name, ip=probe_ip, run=args.run,
-        change=f"the removal of the override {entry.fqdn}")
-    _emit(envelope(command="dns rm", data=result, ok=True), args.json,
+        change=f"the removal of the override {entry.fqdn}"))
+    _emit(envelope(command="dns rm", data=result.to_json(), ok=True), args.json,
           f"  removed {len(removed)} override(s) for {host}.{domain}; "
           f"unbound restarted and answers {probe_name}")
     return 0

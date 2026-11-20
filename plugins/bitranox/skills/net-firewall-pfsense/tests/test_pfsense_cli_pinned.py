@@ -3,7 +3,8 @@
 The digests in pfsense_cli_digests.json were recorded from the CLI as it stood before run_php's
 results became typed records. Each one covers a scenario's exit code, stdout, stderr, every
 command sent to the box and the config the fake is left holding, for every verb in human and
---json form over six firewall states (three of them seeded random ones with adversarial strings).
+--json form over seven firewall states (one with mixed case and padding everywhere, three seeded
+random ones with adversarial strings).
 A change to what any verb prints or sends fails here naming the scenario.
 
 When an output is changed ON PURPOSE, do not re-pin the whole file to today's output: a

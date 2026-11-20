@@ -173,6 +173,49 @@ def test_a_pool_reply_of_another_shape_is_refused_before_the_audit(capsys):
     assert "a DHCP pool has no text field 'to'" in capsys.readouterr().err
 
 
+# Each write's reply is checked too, and its refusal says the change may already be written: the
+# reply only arrives after write_config() ran. Before, a missing unbound_follows read as false and
+# skipped the unbound check, "changed": "yes" counted as 3 cleared reservations, and an echoed
+# override without its address was printed as added.
+_WRITE_REPLIES = [
+    (["dhcp", "rm", "--mac", "00:11:22:33:44:30"], "$removed",
+     '{"removed":[{"interface":"lan","ip":"192.0.2.30"}]}', "has no true/false field 'unbound_follows'"),
+    (["dhcp", "rm-static-arp", "--mac", "00:11:22:33:44:30"], "$changed",
+     '{"changed":"yes"}', "its changed list is not a JSON array"),
+    (["dhcp", "rename", "--mac", "00:11:22:33:44:31", "--hostname", "storage"], "$renamed",
+     '{"renamed":[{"interface":"lan"}],"unbound_follows":false}', "its renamed list has no text field 'ip'"),
+    (["dhcp", "add", "--mac", "00:11:22:33:44:50", "--ip", "192.0.2.50", "--hostname", "printer"], "$added",
+     '{"added":{"interface":"lan","mac":"00:11:22:33:44:50","ip":"192.0.2.50"},"unbound_follows":false}',
+     "the added reservation has no text field 'hostname'"),
+    (["dns", "add", "--name", "x.example.com", "--ip", "192.0.2.9"], "$hosts[] =",
+     '{"added":{"host":"x","domain":"example.com"}}', "the added override has no text field 'ip'"),
+    (["dns", "rm", "--name", "nas.example.com"], "$kept = array(); $removed = array();",
+     '{"removed":[{"interface":"lan","ip":"192.0.2.31"}]}', "has no text field 'host'"),
+]
+
+
+@pytest.mark.parametrize(("argv", "marker", "reply", "why"), _WRITE_REPLIES)
+def test_a_write_reply_of_another_shape_is_refused_saying_the_change_may_be_written(
+        argv, marker, reply, why, tmp_path, capsys):
+    fake = FakeRun([(marker, (0, reply, "")), *_unbound_up(),
+                    ('"dhcp_backend"', (0, INFO_JSON, "")),
+                    ('config_get_path("unbound/hosts"', (0, BARE_OVERRIDES, "")),
+                    ('config_get_path("dhcpd"', (0, RESERVATIONS_JSON, "")),
+                    ("cat /conf/config.xml", (0, CONFIG_XML, ""))])
+    rc = P.main(["--host", "192.0.2.1", "--apply", "--snapshot-dir", str(tmp_path), *argv], run=fake)
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "php on 192.0.2.1 returned an unexpected reply: " in err and why in err
+    assert "the change may already be written to config.xml" in err
+
+
+def test_a_read_reply_of_another_shape_does_not_claim_a_write():
+    fake = FakeRun([('config_get_path("dhcpd"', (0, '{"interface":"lan"}', ""))])
+    with pytest.raises(P.PfsenseError) as caught:
+        P.run_php(TARGET, P.php_list_reservations(), parse=P.Reservation.list_from_json, run=fake)
+    assert "config.xml" not in str(caught.value)
+
+
 # ---- ssh argv -----------------------------------------------------------------------------------
 def test_batchmode_is_forced_so_a_rejected_key_cannot_prompt():
     """With only -i, ssh falls back to a password prompt and hangs an unattended run."""
@@ -546,7 +589,7 @@ def _fake_for_mutation():
     # Order matters: the mutation payloads ALSO read config_get_path("dhcpd"), so the specific
     # markers have to be matched before the listing one or every write answers with the listing.
     return FakeRun([
-        ("$removed", (0, '{"removed":[{"interface":"lan","ip":"192.0.2.30"}]}', "")),
+        ("$removed", (0, '{"removed":[{"interface":"lan","ip":"192.0.2.30"}],"unbound_follows":false}', "")),
         ("$changed", (0, '{"changed":[{"interface":"lan","ip":"192.0.2.30"}]}', "")),
         ('config_get_path("dhcpd"', (0, RESERVATIONS_JSON, BANNER)),
         ("cat /conf/config.xml", (0, CONFIG_XML, BANNER)),
@@ -597,7 +640,7 @@ def test_clearing_static_arp_on_a_reservation_that_has_none_does_nothing():
 # action, exit 2 - never exit 1, which is a well-formed "no" (a finding, a partial outcome).
 def _fake_that_removes_nothing():
     return FakeRun([
-        ("$removed", (0, '{"removed":[]}', "")),
+        ("$removed", (0, '{"removed":[],"unbound_follows":false}', "")),
         ("$changed", (0, '{"changed":[]}', "")),
         ('config_get_path("unbound/hosts"', (0, BARE_OVERRIDES, BANNER)),
         ('config_get_path("dhcpd"', (0, RESERVATIONS_JSON, BANNER)),
@@ -626,6 +669,9 @@ def test_a_matched_removal_that_removed_nothing_is_exit_2_with_ok_false(argv, tm
 ])
 def test_control_a_removal_that_removed_its_entry_is_exit_0(argv, tmp_path):
     fake = _fake_for_mutation()
+    # The dns removal echoes overrides, not reservations, so it gets its own reply ahead of $removed.
+    fake.responses[:0] = [("$kept = array(); $removed = array();",
+                           (0, '{"removed":[{"host":"nas","domain":"example.com","ip":"192.0.2.31"}]}', ""))]
     fake.responses += [*_unbound_up(), ('config_get_path("unbound/hosts"', (0, BARE_OVERRIDES, BANNER))]
     assert P.main(["--host", "192.0.2.1", "--apply", "--snapshot-dir", str(tmp_path / "s"), *argv],
                   run=fake) == 0
@@ -1462,8 +1508,9 @@ INFO_JSON = json.dumps({
 def _dhcp_edit_fake():
     # The edit payloads also read config_get_path("dhcpd"), so their markers come first.
     return FakeRun([
-        ("$added", (0, '{"added":{"interface":"lan","mac":"00:11:22:33:44:50","ip":"192.0.2.50"}}', "")),
-        ("$renamed", (0, '{"renamed":[{"interface":"lan","ip":"192.0.2.31"}]}', "")),
+        ("$added", (0, '{"added":{"interface":"lan","mac":"00:11:22:33:44:50","ip":"192.0.2.50",'
+                       '"hostname":"printer"},"unbound_follows":false}', "")),
+        ("$renamed", (0, '{"renamed":[{"interface":"lan","ip":"192.0.2.31"}],"unbound_follows":false}', "")),
         ('"dhcp_backend"', (0, INFO_JSON, BANNER)),
         ('config_get_path("dhcpd"', (0, RESERVATIONS_JSON, BANNER)),
         ("cat /conf/config.xml", (0, CONFIG_XML, BANNER)),
@@ -2164,7 +2211,8 @@ def _dhcp_unbound_fake(follows, *, probe=None):
         (RESTART, (0, "", "")),
         ("host localhost. 127.0.0.1", probe or _answer("localhost", "127.0.0.1")),
         ("$removed", (0, '{"removed":[{"interface":"lan","ip":"192.0.2.30"}],"unbound_follows":' + flag + "}", "")),
-        ("$added", (0, '{"added":{"interface":"lan","mac":"00:11:22:33:44:50","ip":"192.0.2.50"},'
+        ("$added", (0, '{"added":{"interface":"lan","mac":"00:11:22:33:44:50","ip":"192.0.2.50",'
+                       '"hostname":"printer"},'
                        '"unbound_follows":' + flag + "}", "")),
         ("$renamed", (0, '{"renamed":[{"interface":"lan","ip":"192.0.2.31"}],"unbound_follows":' + flag + "}", "")),
         ('"dhcp_backend"', (0, INFO_JSON, BANNER)),
