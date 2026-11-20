@@ -17,6 +17,7 @@ if sys.platform != "win32":
 
 import ci_triage as T
 import gate as G
+import procsig as P
 
 # Linear is about 8x and the quadratic shapes were 50x and more; 24 leaves room for timer noise
 # without letting a quadratic pattern through.
@@ -108,8 +109,11 @@ def _is_linear(call, unit, length=2000, tail=""):
     (lambda t: T._PATH_OR_FLAG.sub("", t), "0"),
     (lambda t: T._PATH_OR_FLAG.sub("", t), "a/"),
     (lambda t: G._CARGO_RUNNING.findall(t), "\n"),
+    (lambda t: P._looks_like_a_shell_name(t + "x"), "0"),
+    (lambda t: P._looks_like_a_shell_name(t + "x"), "0."),
 ], ids=["ci_triage path-or-flag: one name", "ci_triage path-or-flag: components",
-        "gate cargo running: blank lines"])
+        "gate cargo running: blank lines", "procsig name suffix: digits",
+        "procsig name suffix: dotted digits"])
 def test_a_long_run_costs_linear_time(call, unit):
     assert _is_linear(call, unit)
 

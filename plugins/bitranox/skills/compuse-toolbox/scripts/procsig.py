@@ -231,7 +231,13 @@ _SHELL_NAME_MAX_CORE = 5                        # sh, ash, ksh, zsh, yash, posh,
 # made the whole OpenSSH toolchain (`ssh-agent`, `ssh-add`, `ssh-keygen`, `ssh-keyscan`,
 # `ssh-copy-id`, `ssh-import-id`, `ssh-argv0`, `ssh-askpass`) unfindable although not one of
 # them is a shell or hands anything to one. `-agent` is part of the name, not a variant of ssh.
-_NAME_SUFFIX_RE = re.compile(r"(?:[.\-](?:static|distrib|real))?(?:[.\-]?\d+(?:\.\d+)*)?$")
+# The version may not START inside a longer version: a digit after a digit, `.` or `-`, or a `.`
+# after a digit, only shortens a version that starts earlier, so such a start is never the
+# leftmost match `sub` takes - and without the lookbehinds each one rescanned the rest of the
+# run, quadratic in a long digit run such as `0000...x`.
+_NAME_SUFFIX_RE = re.compile(
+    r"(?:[.\-](?:static|distrib|real))?"
+    r"(?:(?<!\d)\.\d+(?:\.\d+)*|-\d+(?:\.\d+)*|(?<![\d.\-])\d+(?:\.\d+)*)?$")
 _COMMAND_STRING_FLAGS = frozenset({"-c", "--command"})
 # A short-option CLUSTER ending in c (`script -qc`, `su root -lc`) hands its value over exactly
 # like a standalone -c does; testing only the standalone spelling searched those argvs in full.
