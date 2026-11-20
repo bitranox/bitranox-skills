@@ -58,6 +58,20 @@ read by hand were all genuine instances, none a quoting or parsing false positiv
 grep 178, git diff/grep 20, cmp 15, diff 11. Grep reading a PIPE stays in scope on purpose: the
 motivating case read a pipe, and an option or pattern error needs no file.
 
+Decisions:
+- A start whose program word matched but whose element held no verdict skips every later start
+  up to the end of that element (`_matches`): those starts read a suffix of the same element and
+  meet the same `||`, so they cannot match. Without it `grep (grep (grep ...` cost 43x to 65x for
+  8x the input. Replayed against the earlier finditer over 5,204 recorded Bash commands holding
+  `||`, 30,000 random token strings and 10,000 strings built around process substitution, brace
+  words and redirections: 0 differences; two planted changes gave 22 and 313. Pinned by the
+  "failing" cases in test_quadratic_regex_starts.py and
+  test_process_substitution_and_brace_words_keep_their_reading.
+- Each element character has one reading (`_ELEMENT_CHAR`): an `&` passes only next to a `>`.
+  The token form `[0-9]?>&[0-9-]?` read `2>&1` four ways, so a failing element retried 4**k
+  parses (12 redirections took 7 s per Bash call). Same replay, same pins, plus
+  test_redirections_in_a_failing_element_cost_linear_time_not_exponential.
+
 Pure standard library. Reads the PreToolUse event JSON on stdin. Exit 2 blocks the call and
 shows stderr to the model; every other path, including any internal error, exits 0, so a broken
 guard never wedges a turn.
@@ -66,6 +80,8 @@ guard never wedges a turn.
 import json
 import re
 import sys
+from collections.abc import Iterator
+from typing import cast
 
 import shell_text
 from shell_text import blank_heredoc_bodies, mask_data_regions
@@ -107,8 +123,11 @@ _PROGRAM = (
 )
 
 # One pipeline element's worth of text: no list separator, no pipe, no newline. `2>&1`, `>&2`
-# and `&>` are redirections, not separators, so they are allowed through.
-_ELEMENT = r"(?:[^;&|\n]|[0-9]?>&[0-9-]?|&>)*?"
+# and `&>` are redirections, not separators, so an `&` next to a `>` is allowed through. Each
+# character has ONE way to be read: the token form `[0-9]?>&[0-9-]?` let `2>&1` be read four
+# ways, so a failing element holding k of them was retried 4**k times (12 took 7 s).
+_ELEMENT_CHAR = r"(?:[^;&|\n]|(?<=>)&|&(?=>))"
+_ELEMENT = _ELEMENT_CHAR + r"*?"
 
 # Blanks after a start never cross a newline: every newline is a start of its own, and a
 # blanked heredoc is lines of whitespace, so \s* there rescanned the rest of the heredoc from
@@ -119,6 +138,11 @@ _PATTERN = re.compile(
     + r"(?:&&\s*(?:echo|printf)\b" + _ELEMENT + r")?"
     + r"(?P<op>\|\|)\s*[{(]?\s*(?P<echo>echo|printf)\b(?P<label>[^;&|\n)}]*)"
 )
+
+# A start where a program word matched: the whole element is then read to its end for the `||`.
+_HEAD = re.compile(_START + r"[^\S\n]*" + _LAUNCHER + _PROGRAM)
+_START_AT = re.compile(_START)
+_REACH = re.compile(_ELEMENT_CHAR + r"*")
 
 _VERDICT = re.compile(
     r"\b(?:clean|no|none|nothing|not[\s_-]?found|missing|absent|identical|same|different|differs?"
@@ -180,9 +204,33 @@ def _verdict_label(raw_label: str) -> bool:
     return not _HONEST.search(words)
 
 
+def _matches(masked: str) -> Iterator[re.Match[str]]:
+    """What `_PATTERN.finditer(masked)` yields, without rescanning one element from every start.
+
+    A program word that repeats inside one element (`grep (grep (grep ...`) is a start at each
+    repeat, and each start read the rest of the element looking for `||`: 52x to 62x the cost for
+    8x the input. A later start in the same element reads a suffix of what the earlier one read
+    and meets the same `||` and label, so once a start whose program word matched has failed,
+    every start up to the end of its element fails too and is skipped."""
+    pos, size = 0, len(masked)
+    while pos <= size:
+        start = _START_AT.search(masked, pos)
+        if start is None:
+            return
+        at = start.start()
+        match = _PATTERN.match(masked, at)
+        if match is not None:
+            yield match
+            pos = match.end()
+        elif _HEAD.match(masked, at) is not None:
+            pos = max(at + 1, cast(re.Match[str], _REACH.match(masked, at)).end())
+        else:
+            pos = at + 1
+
+
 def _scan(text: str, depth: int = 0) -> str | None:
     masked = mask_data_regions(text, tool_name="Bash")
-    for match in _PATTERN.finditer(masked):
+    for match in _matches(masked):
         label = text[match.start("label"):match.end("label")]
         if _verdict_label(label):
             return text[match.start("prog"):match.end("label")].strip()

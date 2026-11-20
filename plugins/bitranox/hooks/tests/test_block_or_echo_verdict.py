@@ -154,3 +154,35 @@ def test_the_refused_shape_starts_at_the_program_after_a_separator() -> None:
     # not the statement before it glued on.
     shape = mod.refused_shape("true;/usr/bin/grep -q x f || echo none")
     assert shape == "/usr/bin/grep -q x f || echo none"
+
+
+@pytest.mark.parametrize(
+    "command, shape",
+    [
+        # process substitution and brace words are read as they were before the skip over an
+        # element whose program already failed: the pins replay the earlier pattern's answers
+        ("diff <(sort a) <(sort b) || echo different",
+         "diff <(sort a) <(sort b) || echo different"),
+        ("cat <(grep x f) || echo none", "grep x f) || echo none"),
+        ("grep x f{1,2} || echo none", "grep x f{1,2} || echo none"),
+        ("grep (grep x f || echo none", "grep (grep x f || echo none"),
+        ("grep x 2>&1 grep y 2>&1 || echo none", "grep x 2>&1 grep y 2>&1 || echo none"),
+        ("grep x f &>/dev/null || echo none", "grep x f &>/dev/null || echo none"),
+        ("sort <(grep x f) | head || echo none", None),
+        ("{ grep x f; } || echo none", None),
+    ],
+)
+def test_process_substitution_and_brace_words_keep_their_reading(command, shape) -> None:
+    assert mod.refused_shape(command) == shape
+
+
+def test_redirections_in_a_failing_element_cost_linear_time_not_exponential():
+    # `2>&1` matched the element's token form four ways, so a failing element holding k of them
+    # was retried 4**k times: 11 took about 2 s and 12 took 7 s. Each character now has one
+    # reading, and 11 take well under a millisecond; the bound is absolute so that a regression
+    # fails here instead of hanging the run, as a growth test at a larger k would.
+    assert _best_refusal_seconds("grep x 2>&1 " * 11 + " || true", rounds=1) < 0.25
+    unit = "grep x 2>&1 "
+    small = _best_refusal_seconds(unit * 40 + " || true")
+    large = _best_refusal_seconds(unit * 320 + " || true")
+    assert large / small < 24, (small, large)

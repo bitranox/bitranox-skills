@@ -132,6 +132,12 @@ _CASES = [
     # Every `;`, `&`, `|`, `(` and `{` is a start, and a newline after a launcher ends it.
     *[(f"block-or-echo-verdict: {unit!r} run", lambda t: BOEV.refused_shape(t + " || echo clean"),
        unit) for unit in ("&", "(", ";", "{", "|", "sudo\n", "nice\n", "A=(", "/&")],
+    # A program word that repeats inside one element is a start at each repeat; with no verdict
+    # at the end, each start read the rest of the element (52x to 65x for 8x the input).
+    *[(f"block-or-echo-verdict: {unit!r} run, failing",
+       lambda t: BOEV.refused_shape(t + " || true"), unit)
+      for unit in ("grep (", "grep {", "grep then ", "grep do ", "git grep (", "diff (",
+                   "sudo grep (", "(grep ", "grep 2>&", "grep x 2>&1 ")],
     ("compact-resume checkpoint path", lambda t: list(CR._BASH_PATH.finditer(t)), "0"),
     ("git-footgun upstream mark", lambda t: GF._UPSTREAM_MARK.search(t), "0"),
     ("harness_checks non-zero exit", lambda t: HC._NONZERO_EXIT_RX.search(t), "\n"),
