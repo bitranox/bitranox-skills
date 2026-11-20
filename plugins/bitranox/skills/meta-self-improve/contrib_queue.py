@@ -164,7 +164,7 @@ def _print_queues():
     # `proj` stamp landed carry their own path; older ones cannot be resolved and say so.
     # The DIRECTORY, asked for directly: routing a fake key through `contrib_file` just to take
     # `.parent` stopped working once that function refused keys that are not real ones.
-    rows = _queue_rows(sig._audit_dir())
+    rows = _queue_rows(sig.audit_dir())
     _hint_orphans()
     shown = [r for r in rows if r[1] is None or r[1]]
     if not shown:

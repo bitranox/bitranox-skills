@@ -442,7 +442,7 @@ def test_check_tree_reports_a_frame_only_body(tmp_path):
     slug = ME.add_or_update_entry(str(proj), "Real Fact", "When x happens, do y.",
                                  body="a real body", type_="reference")
     # simulate a pre-refusal store: strip the body back to its frame
-    p = us.body_path(Path(ME._anchor(str(proj))), slug)
+    p = us.body_path(Path(ME.anchor_dir(str(proj))), slug)
     head, sep, _body = p.read_text(encoding="utf-8")[4:].partition("\n---\n")
     assert sep, "fixture assumption: the body carries a frontmatter frame"
     p.write_text("---\n" + head + "\n---\n", encoding="utf-8")
@@ -465,10 +465,10 @@ def test_check_tree_does_not_flag_a_real_body(tmp_path):
 def test_find_frame_only_bodies_sees_a_pre_pivot_sharded_body(tmp_path):
     """A pre-pivot sharded body (`facts/<shard>/<uuid>.md`) that is frame-only must be reported
     too - listing only `facts/*.md` left every sharded body out, frame-only or not, exactly the
-    gap `find_dangling_bodies` was already fixed for via `_store_bodies`."""
+    gap `find_dangling_bodies` was already fixed for via `store_bodies`."""
     proj = tmp_path / "proj"
     proj.mkdir()
-    anchor = Path(ME._anchor(str(proj)))  # noqa: SLF001 - test needs the real anchor path
+    anchor = Path(ME.anchor_dir(str(proj)))
     fact_uuid = "ab123456-0000-0000-0000-000000000001"
     sharded_dir = us.central_facts_dir(anchor) / us.shard(fact_uuid)
     sharded_dir.mkdir(parents=True, exist_ok=True)
@@ -485,7 +485,7 @@ def test_find_frame_only_bodies_does_not_flag_a_real_sharded_body(tmp_path):
     empty string and flag it as frame-only for the wrong reason."""
     proj = tmp_path / "proj"
     proj.mkdir()
-    anchor = Path(ME._anchor(str(proj)))  # noqa: SLF001 - test needs the real anchor path
+    anchor = Path(ME.anchor_dir(str(proj)))
     fact_uuid = "ef654321-0000-0000-0000-000000000003"
     sharded_dir = us.central_facts_dir(anchor) / us.shard(fact_uuid)
     sharded_dir.mkdir(parents=True, exist_ok=True)
@@ -813,7 +813,7 @@ def _damaged_fact(tmp_path, body, title="Ruled fact", pin=False):
     proj.mkdir(exist_ok=True)
     slug = ME.add_or_update_entry(str(proj), title, "When ruled, do ruled.",
                                   body="placeholder", pin=pin)
-    p = us.body_path(Path(ME._anchor(str(proj))), slug)
+    p = us.body_path(Path(ME.anchor_dir(str(proj))), slug)
     p.write_text(_old_retype(body, "feedback") + "\n", encoding="utf-8", newline="")
     return proj, slug, p
 
@@ -864,7 +864,7 @@ def test_repair_reframes_the_prose_with_the_appended_kind(tmp_path, capsys):
     assert R.main(["--repair-appended-type", str(proj)]) == 0
     assert "repaired: %s" % slug in capsys.readouterr().out
     text = p.read_text(encoding="utf-8")
-    assert ME._has_frontmatter(text) and ME._body_type(text) == "feedback"
+    assert ME._has_frontmatter(text) and ME.body_type(text) == "feedback"
     assert text.endswith(RULE_BODY) or text.rstrip("\n").endswith(RULE_BODY.rstrip("\n"))
     assert text.count("metadata:") == 1
     assert R.check_tree(str(proj))["appended_type_damage"] == []

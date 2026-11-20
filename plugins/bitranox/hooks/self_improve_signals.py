@@ -239,10 +239,10 @@ def session_key(session: object) -> str:
 def session_state_path(session: object, suffix: str) -> Path:
     """The audit-dir path of `session`'s `suffix` state file, confined to a single component.
 
-    Hooks call THIS rather than joining `_audit_dir()` themselves: making the sink shared is what
+    Hooks call THIS rather than joining `audit_dir()` themselves: making the sink shared is what
     stops the next session-keyed state file from reintroducing the traversal one hook at a time.
     """
-    return _audit_dir() / (session_key(session) + suffix)
+    return audit_dir() / (session_key(session) + suffix)
 
 
 # ---- meta-dream-tree consolidation: cadence markers + mode (shared by session-start + dream_state) --
@@ -407,7 +407,7 @@ def curated_state_dir(proj: _StrPath | None) -> Path:
 # ImportError on Windows and kill every hook. On contention past `timeout` we raise so the caller can
 # skip-and-report the WHOLE target (never a partial write).
 
-_LOCK_STALE_S = 120.0
+LOCK_STALE_S = 120.0
 
 # Windows reports "another handle has this name open" as PermissionError, not as a distinct error.
 # A lock file the previous holder just deleted stays delete-pending while any handle (a virus
@@ -445,7 +445,7 @@ def retry_while_shared[*Ts, T](op: Callable[[*Ts], T], *args: *Ts, timeout: floa
 def _reclaim_stale_lock(lock: Path, clock: Callable[[], float]) -> bool:
     """Delete a lock whose holder crashed; True when it was stale and is now gone."""
     try:
-        if clock() - lock.stat().st_mtime > _LOCK_STALE_S:
+        if clock() - lock.stat().st_mtime > LOCK_STALE_S:
             lock.unlink()
             return True
     except OSError:
@@ -458,7 +458,7 @@ def memory_lock(target_path: _StrPath, timeout: float = 5.0, poll: float = 0.05,
                 now: Callable[[], float] | None = None) -> Generator[None]:
     """Advisory exclusive lock around a memory read-modify-write, via an atomic `<target>.lock`
     O_EXCL create (cross-platform, no fcntl/msvcrt). Raises TimeoutError on contention past `timeout`;
-    reclaims a lock older than `_LOCK_STALE_S` (holder crashed). `now` injectable for tests.
+    reclaims a lock older than `LOCK_STALE_S` (holder crashed). `now` injectable for tests.
 
     On Windows a create refused with PermissionError is contention too (see `_WINDOWS`): a waiter
     that arrives while the previous holder's lock is still being deleted must wait, not abandon
@@ -537,7 +537,7 @@ def _newest_mtime(d: Path) -> float:
 # under gap-fill and non-content writes (and self_improve_signals does not import the memory engine,
 # to avoid a cycle - it reads the curated store with a light, grammar-free scan).
 
-def _strip_scope(text: str | None) -> str:
+def strip_scope(text: str | None) -> str:
     text = text or ""
     b = text.find(SCOPE_MARK_BEGIN)
     if b < 0:
@@ -717,7 +717,7 @@ def contrib_file(proj: _StrPath | None) -> Path:
     otherwise unreachable by every verb - it cannot be listed, shipped or dropped, and the operator
     cannot even see that it exists. `contrib_queue.py queues` prints these keys. The prefix is
     queue-scoped by NAME because only the queue and its tombstones (`rejected_file`) honor it."""
-    return _audit_dir() / (_queue_file_key(proj) + ".contrib.jsonl")
+    return audit_dir() / (_queue_file_key(proj) + ".contrib.jsonl")
 
 
 def _main_root_from_gitfile(repo: Path, gitfile: Path) -> Path:
@@ -944,7 +944,7 @@ def rejected_file(proj: _StrPath | None) -> Path:
     The name says rejected but the file holds shipped records too; `outcome` tells them apart.
     It is not renamed because every installed plugin version reads this path: an open session
     on an older version would find no closed set and let a dream re-queue every closed entry."""
-    return _audit_dir() / (_queue_file_key(proj) + ".contrib-rejected.jsonl")
+    return audit_dir() / (_queue_file_key(proj) + ".contrib-rejected.jsonl")
 
 
 def read_closed(proj: _StrPath | None) -> list[JsonRecord]:
@@ -1275,7 +1275,7 @@ def _classify_tombstone_file(path: Path) -> OrphanTombstone | AmbiguousTombstone
     homes = {proj_key(r["proj"]) for r in records if r.get("proj")}
     if not homes or homes == {key}:
         return None
-    if key in homes or len(homes) > 1 or (_audit_dir() / (key + ".contrib.jsonl")).exists():
+    if key in homes or len(homes) > 1 or (audit_dir() / (key + ".contrib.jsonl")).exists():
         return {"path": path, "status": "ambiguous", "home": None, "records": records}
     return {"path": path, "status": "orphan", "home": homes.pop(), "records": records}
 
@@ -1286,7 +1286,7 @@ def find_orphan_tombstones() -> list[OrphanTombstone | AmbiguousTombstone]:
     queue lives at its key - reported, never moved). An unreadable file raises OSError."""
     out: list[OrphanTombstone | AmbiguousTombstone] = []
     try:
-        paths = sorted(_audit_dir().glob("*" + _TOMBSTONE_SUFFIX))
+        paths = sorted(audit_dir().glob("*" + _TOMBSTONE_SUFFIX))
     except OSError:
         return out
     for path in paths:
@@ -1405,8 +1405,8 @@ def _nap_owed_files(proj: _StrPath | None) -> list[Path]:
     """[canonical, legacy raw-cwd] marker paths, deduped. The legacy one was written before the
     marker was keyed by repository; it is read and cleared so an old obligation does not silently
     stop blocking, and never written again."""
-    files = [_audit_dir() / (proj_key(nap_owner(proj)) + ".nap-owed")]
-    legacy = _audit_dir() / (proj_key(proj) + ".nap-owed")
+    files = [audit_dir() / (proj_key(nap_owner(proj)) + ".nap-owed")]
+    legacy = audit_dir() / (proj_key(proj) + ".nap-owed")
     return files if legacy == files[0] else files + [legacy]
 
 
@@ -1701,7 +1701,7 @@ def save_config(updates: Mapping[str, object], strict: bool = False) -> dict[str
 
 # ---- altitude homes (always-present tiers, narrowest -> broadest) --------------------
 
-def _excluded_anchor_dirs() -> set[Path]:
+def excluded_anchor_dirs() -> set[Path]:
     """Dirs that must NEVER be a memory altitude anchor even if they carry a `CLAUDE.md` + store: the
     user's HOME and the system temp dir (the filesystem root is handled separately via `d.anchor`).
     Walking UP by `.parent` from a real project cwd never reaches these in practice - a project lives
@@ -1733,7 +1733,7 @@ def resolve_anchor(proj: _StrPath | None) -> Path | None:
     levels) from hijacking the tree top - a real fragility a probe caught. Only at BOOTSTRAP, when no
     dir in the chain has a store yet, fall back to the topmost `CLAUDE.md` (the first write creates the
     store there and thereafter the colocation pins it). Never anchors at `/`, `~`, or the temp dir
-    (see `_excluded_anchor_dirs`). Returns a Path, or None when no ancestor has a `CLAUDE.md` at all.
+    (see `excluded_anchor_dirs`). Returns a Path, or None when no ancestor has a `CLAUDE.md` at all.
     With MULTIPLE independent trees on one machine, each cwd resolves to its OWN tree's anchor."""
     if proj is None:                                 # os.fspath(None) raised the TypeError below
         return None
@@ -1746,7 +1746,7 @@ def resolve_anchor(proj: _StrPath | None) -> Path | None:
         ladder = [here, *here.parents]
     except (TypeError, ValueError):
         return None
-    excluded = _excluded_anchor_dirs()
+    excluded = excluded_anchor_dirs()
     highest_both: Path | None = None                 # topmost dir with a CLAUDE.md AND a store (robust)
     highest_md: Path | None = None                   # topmost dir with a CLAUDE.md (bootstrap fallback)
     for d in ladder:
@@ -1800,13 +1800,13 @@ def discovery_roots() -> list[Path]:
     return sorted({p for p in roots if _is_dir(p)}, key=str)
 
 
-def _audit_dir() -> Path:
+def audit_dir() -> Path:
     """Machine-local scratch dir the recall/gather caches and the stores-generation marker share."""
     return claude_paths.audit_dir()
 
 
 def _stores_gen_file() -> Path:
-    return _audit_dir() / "stores-generation.txt"
+    return audit_dir() / "stores-generation.txt"
 
 
 def stores_generation() -> int:
@@ -1853,7 +1853,7 @@ def find_claude_md_dirs(roots: Iterable[_StrPath]) -> list[Path]:
     Prunes vendor/hidden/backup dirs, the store dirs themselves, Claude's config dir, and the
     excluded anchor dirs; never follows symlinks (a link into another tree must not merge them)."""
     out: set[Path] = set()
-    excluded = {str(d) for d in _excluded_anchor_dirs()}
+    excluded = {str(d) for d in excluded_anchor_dirs()}
     config_dir = str(claude_paths.config_dir())
     for root in roots:
         try:
@@ -1905,7 +1905,7 @@ def altitude_chain(proj: _StrPath) -> list[Path]:
         # root guard below fired for every relative input and returned an empty chain in silence -
         # callers then saw a level with no ancestors and read that as a clean result.
         here = Path(proj).resolve()
-        if here == Path(here.anchor) or here in _excluded_anchor_dirs():
+        if here == Path(here.anchor) or here in excluded_anchor_dirs():
             return []                             # /, ~, tempdir: never an altitude, never a top
         ladder = [here, *here.parents]            # project dir up toward /
         top = resolve_anchor(str(here))           # the tree's anchor, or None
@@ -1931,7 +1931,7 @@ def altitude_chain(proj: _StrPath) -> list[Path]:
 
 def session_meta_file(proj: _StrPath | None) -> Path:
     """Where the current session's id + transcript path are recorded for `proj` (a dream input)."""
-    return _audit_dir() / (proj_key(proj) + ".session.json")
+    return audit_dir() / (proj_key(proj) + ".session.json")
 
 
 def record_session_meta(proj: _StrPath | None, session: str | None,
@@ -2036,7 +2036,7 @@ def _write_text_state(path: _StrPath, text: str) -> None:
 
 def watermark_file(proj: _StrPath | None) -> Path:
     """Per-(transcript, reviewer) high-water marks: how far each reviewer has consumed."""
-    return _audit_dir() / (proj_key(proj) + ".watermark.json")
+    return audit_dir() / (proj_key(proj) + ".watermark.json")
 
 
 def _watermarks(proj: _StrPath | None) -> JsonRecord:
@@ -2068,7 +2068,7 @@ def furthest_watermark(transcript: _StrPath, reviewer: str) -> int:
     that later reached the end from the launch checkout, and the Stop gate kept blocking."""
     furthest = 0
     try:
-        stores = list(_audit_dir().glob("*.watermark.json"))
+        stores = list(audit_dir().glob("*.watermark.json"))
     except OSError:
         return 0
     for store in stores:
@@ -2404,7 +2404,7 @@ def nearest_level(path: _StrPath) -> str | None:
         # Absolute first, for the reason `resolve_anchor` gives: a relative path stopped at once.
         here = Path(os.path.abspath(os.fspath(path)))
         here = here if here.is_dir() else here.parent
-        excluded = _excluded_anchor_dirs()
+        excluded = excluded_anchor_dirs()
         for d in [here, *here.parents]:
             if d == Path(d.anchor) or d in excluded:
                 break                              # /, ~, tempdir: never a level

@@ -111,11 +111,11 @@ def test_single_entry_write_path_refuses_when_off_and_writes_when_on(fn, tmp_pat
     assert (tmp_path / "CLAUDE.local.md").is_file(), "control: the same call writes with the switch unset"
 
 
-# The other library writers a caller outside the CLI can reach: `_commit_store` is the pointer
+# The other library writers a caller outside the CLI can reach: `commit_store` is the pointer
 # commit reconcile's archive uses directly; `ensure_level` and `scaffold` write level files with
 # no entry. Each takes a level under tmp_path, so an unguarded arm writes there and is caught.
 _LEVEL_WRITERS = [
-    ("_commit_store", lambda level: ME._commit_store(level, "scope", [], {})),
+    ("commit_store", lambda level: ME.commit_store(level, "scope", [], {})),
     ("ensure_level", lambda level: ME.ensure_level(level, scope_default="scope")),
     ("scaffold", lambda level: ME.scaffold(level)),
 ]

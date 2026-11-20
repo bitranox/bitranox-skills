@@ -170,7 +170,7 @@ def test_move_carries_the_last_concurrent_update(tmp_path):
         body = us.body_path(str(tmp_path / ("t%d" % i)), "fact").read_text(encoding="utf-8")
         rows.append({"updated": res["updated"], "ended": res["ended"],
                      "home": (_counter(ptr.hook), _counter(ptr.title),
-                              _counter(E._body_title(body)))})
+                              _counter(E.body_title(body)))})
     _assert_home_carries(rows)
 
 

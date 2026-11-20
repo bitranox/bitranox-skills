@@ -87,7 +87,7 @@ def _legacy_row(slug):
 
 
 def test_placed_by_topic_is_the_engines_own_verdict_on_every_edge_case(tmp_path):
-    """mem_levels asks the engine (`memory_engine._managed_topics` on `_read_body_head`) rather
+    """mem_levels asks the engine (`memory_engine.managed_topics` on `read_body_head`) rather
     than keeping a copy of its rule, so the two cannot drift. Pinned at one level, bound with no
     description, untagged at two levels, and held by a legacy `uuid:` line at one level: the facts
     listed as placed are exactly those the engine's own `_placed_slugs` places (a pinned or a

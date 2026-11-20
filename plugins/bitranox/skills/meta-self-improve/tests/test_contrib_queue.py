@@ -295,7 +295,7 @@ def _fake_session(home, key, cwd, sid="s1"):
     tdir.mkdir(parents=True, exist_ok=True)
     tp = tdir / (sid + ".jsonl")
     tp.write_text(json.dumps({"type": "user", "cwd": cwd}) + "\n", encoding="utf-8")
-    adir = S._audit_dir()      # the DIRECTORY, asked for directly - not a fake key via contrib_file
+    adir = S.audit_dir()      # the DIRECTORY, asked for directly - not a fake key via contrib_file
     adir.mkdir(parents=True, exist_ok=True)
     (adir / (key + ".session.json")).write_text(
         json.dumps({"session_id": sid, "transcript_path": str(tp)}), encoding="utf-8")

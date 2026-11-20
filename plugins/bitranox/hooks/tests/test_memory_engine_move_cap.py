@@ -46,7 +46,7 @@ def _chain(tmp_path):
 
 
 def _size(slug, hook_len, pin=False):
-    return E._line_size(us.Pointer(slug=slug, title="T", hook="k" * hook_len, pin=pin))
+    return E.line_size(us.Pointer(slug=slug, title="T", hook="k" * hook_len, pin=pin))
 
 
 def _plant(level, pointers):
@@ -76,7 +76,7 @@ def _fill(level, total, prefix="feedback-kept"):
 
 def _bytes(level):
     text = sig.claude_local_md_path(level).read_text(encoding="utf-8")
-    return sum(E._line_size(p) for p in us.parse_pointer_index(text)[1])
+    return sum(E.line_size(p) for p in us.parse_pointer_index(text)[1])
 
 
 def _slugs(level):

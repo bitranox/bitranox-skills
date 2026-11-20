@@ -1,6 +1,6 @@
 """Tests that a long holder of the placement lock never looks stale to a waiter: a render
 refreshes the lock file's mtime once per level it walks in each pass, and set-topics once per
-row, so the 120 s reclaim (`sig._LOCK_STALE_S`, judged by the lock file's mtime) only ever takes
+row, so the 120 s reclaim (`sig.LOCK_STALE_S`, judged by the lock file's mtime) only ever takes
 the lock of a holder that stopped.
 
 The only thing faked is the clock at its external edge: through the documented `write` port,
@@ -74,7 +74,7 @@ class _AgingPort:
         done = us.write_if_changed(path, text)
         if self.seen or self.check(path):
             age = time.time() - self.lock.stat().st_mtime
-            self.seen.append((str(path), age < sig._LOCK_STALE_S))
+            self.seen.append((str(path), age < sig.LOCK_STALE_S))
         aged = time.time() - AGED_S
         os.utime(self.lock, (aged, aged))
         return done
@@ -137,5 +137,5 @@ def test_a_fresh_lock_is_not_touched(tmp_path):
         aged = time.time() - AGED_S
         os.utime(lock, (aged, aged))
         E._placement_heartbeat()
-        assert time.time() - lock.stat().st_mtime < sig._LOCK_STALE_S
+        assert time.time() - lock.stat().st_mtime < sig.LOCK_STALE_S
     assert not lock.exists()

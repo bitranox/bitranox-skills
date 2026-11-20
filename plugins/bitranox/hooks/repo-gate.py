@@ -2695,8 +2695,8 @@ def _log_decision_refusal(record):
     skipped."""
     try:
         # Imported here as an optional sink: a broken audit module must not break the gate.
-        from self_improve_signals import _audit_dir  # noqa: PLC0415 - optional sink
-        path = _audit_dir() / "skill-decision-gate.jsonl"
+        from self_improve_signals import audit_dir  # noqa: PLC0415 - optional sink
+        path = audit_dir() / "skill-decision-gate.jsonl"
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(record) + "\n")

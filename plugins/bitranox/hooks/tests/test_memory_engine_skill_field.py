@@ -91,7 +91,7 @@ def test_a_skill_with_no_body_tags_the_stored_fact_in_place(proj):
     E.add_or_update_entry(proj, "R", "When X, do Y.", skill="bitranox:infra-proxmox", slug=slug)
     after = _body(proj, slug)
     assert E._body_skill(after) == "bitranox:infra-proxmox"
-    assert E._body_type(after) == "reference"                       # the kind is untouched
+    assert E.body_type(after) == "reference"                       # the kind is untouched
     assert after.split("\n---\n", 1)[1] == before.split("\n---\n", 1)[1]   # prose untouched
 
 

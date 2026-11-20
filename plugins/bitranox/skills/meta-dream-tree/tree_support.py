@@ -41,7 +41,7 @@ def store_anchor(start: Path | str, resolve: Callable[[str], object]) -> Path | 
 
     `resolve` is the engine's `resolve_anchor` (from `uuid_store`), passed in so a tool bound to a
     particular engine keeps using THAT engine's rule. The fallback to `start` itself is the engine's
-    too (`memory_engine._anchor`): with no `CLAUDE.md` anywhere above, a level is its own anchor.
+    too (`memory_engine.anchor_dir`): with no `CLAUDE.md` anywhere above, a level is its own anchor.
     The answer is None rather than a guess when that dir holds no store, because a nearer store is
     exactly the one the engine would NOT read.
 

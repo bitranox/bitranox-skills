@@ -113,7 +113,7 @@ def test_migrate_apply_writes_curated_store_and_receipt(env):
     # provenance is no longer persisted anywhere (5.300.0); the migration still PLACES both
     # facts, which is what this test is for
     assert {e.slug for e in entries} == {"project-a", "project-b"}
-    anchor = ME._anchor(str(proj))
+    anchor = ME.anchor_dir(str(proj))
     assert "x" * 400 in ME.us.body_path(anchor, "project-b").read_text(encoding="utf-8")
     assert "Body A." in ME.us.body_path(anchor, "project-a").read_text(encoding="utf-8")
     # receipt written; a backup of the native store exists out of tree
@@ -441,14 +441,14 @@ def test_a_run_resumed_after_an_upgrade_reuses_a_placement_written_without_a_tit
     _raw_store(home, slug, {"notes.md": "---\nname: notes\ndescription: d\n---\nNew body.\n",
                             "other.md": "---\nname: other\ndescription: o\n---\nOther.\n"})
     M.migrate_store(slug, dry_run=False)
-    anchor = ME._anchor(str(proj))
+    anchor = ME.anchor_dir(str(proj))
     placed = [s for s in _placed_bodies(proj) if s != "notes"]
     for s in placed:                                  # as the pre-title engine left them
         path = ME.us.body_path(anchor, s)
         text = path.read_text(encoding="utf-8")
         path.write_text("".join(line for line in text.splitlines(keepends=True)
                                 if not line.startswith("title:")), encoding="utf-8")
-        assert ME._body_title(path.read_text(encoding="utf-8")) == ""
+        assert ME.body_title(path.read_text(encoding="utf-8")) == ""
     M._receipt_path(str(proj)).unlink()               # the crash lost the receipt
     rep = M.migrate_store(slug, dry_run=False)
     assert rep["placed"] == 2 and not rep["failed"]

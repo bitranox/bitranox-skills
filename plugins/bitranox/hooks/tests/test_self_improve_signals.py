@@ -902,7 +902,7 @@ def test_a_legacy_marker_under_the_raw_cwd_key_still_blocks_and_is_cleared(home,
     repo = _git_repo(tmp_path / "repo")
     sub = repo / "sub"
     sub.mkdir()
-    legacy = S._audit_dir() / (S.proj_key(str(sub)) + ".nap-owed")
+    legacy = S.audit_dir() / (S.proj_key(str(sub)) + ".nap-owed")
     legacy.parent.mkdir(parents=True, exist_ok=True)
     legacy.write_text(json.dumps({"ts": 1.0, "session_id": "old"}), encoding="utf-8")
     assert S.nap_owed_blocks(str(sub)) is True
@@ -1558,7 +1558,7 @@ def test_memory_lock_reclaims_stale(tmp_path):
     stale = tmp_path / "m3.lock"
     stale.write_text("", encoding="utf-8")
     import os as _os
-    old = time.time() - (S._LOCK_STALE_S + 10)
+    old = time.time() - (S.LOCK_STALE_S + 10)
     _os.utime(stale, (old, old))                      # make the lock look stale (crashed holder)
     with S.memory_lock(target, timeout=0.05):         # reclaims it instead of timing out
         assert stale.exists()

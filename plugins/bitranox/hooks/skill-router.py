@@ -71,7 +71,7 @@ PROJECT_CAP = 200
 def _state_file(cwd, sid):
     """Per-project, per-session router state. Both keys are confined by their shared helper:
     `proj_key` hashes the project, `session_key` flattens the id to one filename component."""
-    return sig._audit_dir() / ("%s.skillrouter-%s.txt" % (sig.proj_key(cwd), sig.session_key(sid)))
+    return sig.audit_dir() / ("%s.skillrouter-%s.txt" % (sig.proj_key(cwd), sig.session_key(sid)))
 
 
 def load_triggers():

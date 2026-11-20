@@ -104,7 +104,7 @@ def _broken_invariants(anchor):
     bodies = sorted(p.stem for p in us.central_facts_dir(anchor).glob("*.md"))
     for slug in bodies:
         held = lines.get(slug, [])
-        head = E._read_body_head(us.body_path(anchor, slug))
+        head = E.read_body_head(us.body_path(anchor, slug))
         topics = E._body_topics(head)
         if not held:
             bad.append("orphan %s (topics %r)" % (slug, topics))

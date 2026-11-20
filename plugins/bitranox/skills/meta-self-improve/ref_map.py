@@ -56,7 +56,7 @@ import memory_engine as ME  # noqa: E402
 import uuid_store  # noqa: E402 - the engine's pointer parser, so a level holds what the engine reads
 
 # reconcile_memory_index is this script's sibling in meta-self-improve/ (same dir, already on
-# sys.path when this runs as a script or under its own conftest): its `_store_bodies` is the one
+# sys.path when this runs as a script or under its own conftest): its `store_bodies` is the one
 # place that enumerates BOTH body layouts (flat `facts/<slug>.md` and pre-pivot sharded
 # `facts/<shard>/<uuid>.md`), already shared internally by find_dangling_bodies and
 # find_frame_only_bodies, so this does not re-derive the sharded-directory rule a third time.
@@ -68,7 +68,7 @@ REF_RX = re.compile(r"\[\[([^\]]+)\]\]")
 def canon(slug: str) -> str:
     """Canonical slug for MATCHING - the engine's own rule (`_`, `-` and whitespace are one
     separator, case folded), so ref_map and `move` cannot disagree about what a ref names."""
-    return ME._canon_slug(slug)  # noqa: SLF001 - the engine owns the one canonical form
+    return ME.canon_slug(slug)
 
 
 def _pointers(root: Path):
@@ -127,9 +127,9 @@ def read_placed(root: Path, slugs, level_dirs=None) -> set[str]:
     # does: the engine's own set, from the engine's walk.
     if level_dirs is None:
         level_dirs = ME.curated_levels_under(root)
-    fixed = ME._unplaceable_slugs(level_dirs)  # noqa: SLF001
+    fixed = ME.unplaceable_slugs(level_dirs)
     return {slug for slug in slugs
-            if _rmi._placed_by_topic(root, slug, lambda _anchor: fixed)}  # noqa: SLF001
+            if _rmi.placed_by_topic(root, slug, lambda _anchor: fixed)}
 
 
 def read_hooks(root: Path) -> dict[str, str]:
@@ -145,7 +145,7 @@ def _fact_texts(root: Path, hooks: dict[str, str]) -> dict[str, str]:
     """{canonical source: hook + body text} for every fact under `root`, sharded bodies included."""
     texts = dict(hooks)
     facts = root / ".claude-memory" / "facts"
-    flat, sharded = _rmi._store_bodies(facts)  # noqa: SLF001 - the one body-enumeration helper
+    flat, sharded = _rmi.store_bodies(facts)
     for slug in sorted(flat):
         source = canon(slug)
         texts[source] = "%s\n%s" % (texts.get(source, ""), ME.read_store_text(facts / (slug + ".md")))
@@ -177,7 +177,7 @@ def read_refs(root: Path, hooks=None,
     inbound: dict[str, list[str]] = {}
     for source in sorted(texts):
         masked = ME.mask_code_regions(texts[source])
-        targets = {ME._ref_slug(t) for t in REF_RX.findall(masked)}  # noqa: SLF001 - engine rule
+        targets = {ME.ref_slug(t) for t in REF_RX.findall(masked)}
         targets.discard(source)
         targets.discard("")
         outbound[source] = sorted(targets)

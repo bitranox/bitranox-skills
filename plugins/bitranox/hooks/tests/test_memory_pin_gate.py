@@ -63,7 +63,7 @@ def test_add_refuses_a_pinned_target_and_leaves_the_original_hook_on_disk(proj, 
     ptr = _pointer(proj, slug)
     assert ptr is not None and ptr.pin is True
     assert ptr.hook == "When testing, do the original thing."   # unchanged - refused BEFORE any write
-    body = us.body_path(E._anchor(proj), slug).read_text(encoding="utf-8")
+    body = us.body_path(E.anchor_dir(proj), slug).read_text(encoding="utf-8")
     assert "something ELSE" not in body
 
 
@@ -178,7 +178,7 @@ def test_amend_pinned_with_neither_hook_form_is_not_an_error(proj, capsys):
     assert "! refused:" not in out
     ptr = _pointer(proj, slug)
     assert ptr is not None and ptr.hook == "When testing, do the original thing."
-    assert "An amended body." in us.body_path(E._anchor(proj), slug).read_text(encoding="utf-8")
+    assert "An amended body." in us.body_path(E.anchor_dir(proj), slug).read_text(encoding="utf-8")
 
 
 def test_pinned_fact_survives_move_and_the_gate_still_refuses_at_the_destination(tmp_path, capsys):

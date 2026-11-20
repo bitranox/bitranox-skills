@@ -25,7 +25,7 @@ answers back. It never calls the judge and never writes the memory store; the en
 
 `set-topics --batch` refuses the WHOLE batch for one row it cannot apply, so a decided file
 must hold none. A fact row is therefore put through the engine's own row check
-(`memory_engine._topic_row_problem`): an id that is no valid slug, one no level of the tree
+(`memory_engine.topic_row_problem`): an id that is no valid slug, one no level of the tree
 points at, a pinned fact, a body without frontmatter, or a line the engine may not bind goes to
 the unsure file with the engine's reason, whatever the judge answered. That clears every refusal
 of one row, not the one refusal of the batch as a whole: a row of `[]` un-binds a fact, and a
@@ -44,7 +44,7 @@ route is to split the items file into parts of at most that many lines and run t
 Items and rows are streamed, one line held at a time; `decide` also keeps the id of each row,
 to send a second row for one item to the unsure file, so what it holds grows by one short id per
 row and the row limit above bounds it. For `--kind facts` it also holds, read before the first
-row, the engine's pointer record of every fact of the tree (`_pointer_owners`): that
+row, the engine's pointer record of every fact of the tree (`pointer_owners`): that
 grows with the store, never with the rows file. Every output is written to a temporary file
 beside its target and renamed into place only when the whole input was read, so a run that
 fails leaves an earlier output as it was and no half file. Prints one JSON summary on stdout.
@@ -76,7 +76,7 @@ class TaggingError(ValueError):
 
 
 def _topic_list(start):
-    anchor = ME._anchor(os.path.abspath(str(start)))
+    anchor = ME.anchor_dir(os.path.abspath(str(start)))
     data = topic_store.load(anchor)
     if data is None:
         raise TaggingError("%s has no topic list (memory_engine.py topics-set-list --proj %s "
@@ -209,7 +209,7 @@ def _over_batch_limit(rows_path):
 
 
 def fact_owners(anchor):
-    """The engine's pointer record (`memory_engine._pointer_owners`) of every fact a level of the
+    """The engine's pointer record (`memory_engine.pointer_owners`) of every fact a level of the
     tree at `anchor` points at, from the engine's own level walk and pointer parser: what
     `set-topics` resolves a slug against. Two walks of the levels, one for the slugs and the
     engine's own for their record; grows with the store, not with any rows file."""
@@ -217,7 +217,7 @@ def fact_owners(anchor):
     for level in ME.curated_levels_under(anchor):
         pointed.update(ptr.slug for ptr in us.parse_pointer_index(
             ME.read_store_text(sig.claude_local_md_path(level)))[1])
-    return ME._pointer_owners(anchor, pointed)
+    return ME.pointer_owners(anchor, pointed)
 
 
 def _decided_line(key, ident, taken, kind):
@@ -246,7 +246,7 @@ def _unsure_line(row, number, why, topics):
 def decide(rows_path, topics, kind, threshold, band, out_path, unsure_path, *, anchor):
     """Split a rows file into the decided batch and the unsure rest; returns the counts. An id
     seen twice is unsure the second time: two answers for one item are no decision. A fact row
-    the engine would refuse (`_topic_row_problem` against the tree at `anchor`) is unsure with
+    the engine would refuse (`topic_row_problem` against the tree at `anchor`) is unsure with
     the engine's reason. Raises TaggingError, writing neither output, for a file of more than
     MAX_TOPIC_BATCH rows."""
     key = "slug" if kind == "facts" else "level"
@@ -263,7 +263,7 @@ def decide(rows_path, topics, kind, threshold, band, out_path, unsure_path, *, a
             ident = row.get("id") if isinstance(row, dict) else None
             if owners is not None and isinstance(ident, str) and ident:
                 # The engine's reason wins: no reading of the answers makes its line applicable.
-                why = ME._topic_row_problem(ident, tuple(taken or ()), anchor, topics, owners) or why
+                why = ME.topic_row_problem(ident, tuple(taken or ()), anchor, topics, owners) or why
             if why is None and ident in seen:
                 taken, why = None, "a second row for this id"
             if isinstance(ident, str):

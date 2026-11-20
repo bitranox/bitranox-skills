@@ -62,7 +62,7 @@ def test_an_update_with_a_new_title_rewrites_the_body_title(tmp_path):
     anchor, proj = _tree(tmp_path)
     slug = E.add_or_update_entry(proj, "Old title", "When x, do y.", body="B")
     E.add_or_update_entry(proj, "New title", "When x, do y.", slug=slug)
-    assert E._body_title(_body(anchor, slug)) == "New title"
+    assert E.body_title(_body(anchor, slug)) == "New title"
 
 
 def test_an_amend_that_passes_no_title_keeps_it(tmp_path, capsys):
@@ -70,7 +70,7 @@ def test_an_amend_that_passes_no_title_keeps_it(tmp_path, capsys):
     slug = E.add_or_update_entry(proj, "Iron rule", "When x, do y.", body="B", pin=True)
     assert E.main(["amend-pinned", "--proj", proj, "--slug", slug, "--hook", "When x, do z."]) == 0
     capsys.readouterr()
-    assert E._body_title(_body(anchor, slug)) == "Iron rule"
+    assert E.body_title(_body(anchor, slug)) == "Iron rule"
 
 
 def test_a_body_handed_back_with_a_stale_title_takes_the_pointer_title(tmp_path):
@@ -80,14 +80,14 @@ def test_a_body_handed_back_with_a_stale_title_takes_the_pointer_title(tmp_path)
     slug = E.add_or_update_entry(proj, "Old title", "When x, do y.", body="B")
     stale = _body(anchor, slug)
     E.add_or_update_entry(proj, "New title", "When x, do y.", body=stale, slug=slug)
-    assert E._body_title(_body(anchor, slug)) == "New title"
+    assert E.body_title(_body(anchor, slug)) == "New title"
 
 
 def test_a_title_with_a_backslash_and_a_colon_is_stored_literally(tmp_path):
     anchor, proj = _tree(tmp_path)
     slug = E.add_or_update_entry(proj, r"Paths: C:\temp\x", "When x, do y.", body="B",
                                  slug="paths-fact")
-    assert E._body_title(_body(anchor, slug)) == r"Paths: C:\temp\x"
+    assert E.body_title(_body(anchor, slug)) == r"Paths: C:\temp\x"
 
 
 def test_a_retitle_changes_the_body_title_and_nothing_else_in_the_body(tmp_path):
@@ -96,7 +96,7 @@ def test_a_retitle_changes_the_body_title_and_nothing_else_in_the_body(tmp_path)
     before = _body(anchor, slug)
     assert E.retitle_entry(proj, slug, "Accurate title").retitled is True
     after = _body(anchor, slug)
-    assert E._body_title(after) == "Accurate title"
+    assert E.body_title(after) == "Accurate title"
     assert after == before.replace("title: Stale title", "title: Accurate title")
 
 
@@ -141,7 +141,7 @@ def _run_profiled(profile, fn):
 def test_a_retitle_keeps_prose_another_session_wrote_while_it_ran(tmp_path):
     """Session A retitles while session B updates the same fact's prose. B's write lands after A
     read the store and before A writes: A must write the title into B's prose, not into the stale
-    prose it read first. Before the fix A wrote `_with_title(P1)` back and B's prose was lost, with
+    prose it read first. Before the fix A wrote `with_title(P1)` back and B's prose was lost, with
     exit 0 on both sides."""
     anchor, proj = _tree(tmp_path)
     slug = E.add_or_update_entry(proj, "Old title", "When x, do y.", body="Prose one.")
@@ -156,7 +156,7 @@ def test_a_retitle_keeps_prose_another_session_wrote_while_it_ran(tmp_path):
     body = _body(anchor, slug)
     assert "Prose two." in body, body
     assert "Prose one." not in body, body
-    assert E._body_title(body) == "New title"
+    assert E.body_title(body) == "New title"
     assert _pointer_title(proj, slug) == "New title"
 
 
@@ -184,7 +184,7 @@ def test_a_move_leaves_the_body_and_its_title_byte_identical(tmp_path):
     before = us.body_path(anchor, slug).read_bytes()
     assert E.move_entry(proj, anchor, slug).moved is True
     assert us.body_path(anchor, slug).read_bytes() == before
-    assert E._body_title(before.decode("utf-8")) == "Moving fact"
+    assert E.body_title(before.decode("utf-8")) == "Moving fact"
 
 
 def test_the_pointer_line_is_unchanged_by_the_title_field(tmp_path):
@@ -200,7 +200,7 @@ def _pre_title_fact(level, title, slug, extra=""):
     """A fact as every engine before this change left it: written through the engine, then its
     body reset to the frame those engines wrote, which has no `title:` (or `extra` in its place)."""
     E.add_or_update_entry(level, title, "When x, do y.", body="P.", slug=slug, type_="feedback")
-    anchor = E._anchor(level)
+    anchor = E.anchor_dir(level)
     us.body_path(anchor, slug).write_text(
         "---\nname: %s\ndescription: When x, do y.\n%smetadata:\n  type: feedback\n---\n\nP.\n"
         % (slug, extra), encoding="utf-8")
@@ -212,7 +212,7 @@ def test_backfill_copies_the_pointer_title_into_a_body_without_one(tmp_path, cap
     _pre_title_fact(proj, "Old fact title", "old-fact")
     assert E.main(["heal", "--proj", proj, "--backfill-titles"]) == 0
     assert "back-filled 1 title(s)" in capsys.readouterr().out
-    assert E._body_title(_body(anchor, "old-fact")) == "Old fact title"
+    assert E.body_title(_body(anchor, "old-fact")) == "Old fact title"
     assert _body(anchor, "old-fact").endswith("---\n\nP.\n")
 
 
@@ -265,7 +265,7 @@ def test_backfill_is_refused_under_memory_writes_off(tmp_path, monkeypatch, caps
     # The CLI refuses every `heal` before parsing, so call the function too: it refuses on its own.
     with pytest.raises(sig.MemoryWritesOff):
         E.backfill_titles(proj)
-    assert E._body_title(_body(anchor, "old-fact")) == ""
+    assert E.body_title(_body(anchor, "old-fact")) == ""
 
 
 def test_backfill_reports_a_pointer_with_no_title_apart_from_an_unframed_body(tmp_path, capsys):
@@ -305,7 +305,7 @@ def test_backfill_refuses_when_the_bodies_cannot_be_reached(tmp_path, capsys):
         assert "missing central body" not in capsys.readouterr().out
     finally:
         facts.chmod(0o755)
-    assert E._body_title(_body(anchor, "old-fact")) == ""
+    assert E.body_title(_body(anchor, "old-fact")) == ""
 
 
 def test_a_retitle_leaves_an_unframed_body_byte_identical(tmp_path):
@@ -354,7 +354,7 @@ def test_a_legacy_line_at_one_level_does_not_hide_the_slug_from_the_backfill_at_
     top.write_text(us.upsert_pointer_block(text, scope, [*pointers, legacy]), encoding="utf-8")
     rep = E.backfill_titles(proj)
     assert rep.legacy == ["old-fact"] and rep.filled == ["old-fact"]
-    assert E._body_title(_body(anchor, "old-fact")) == "Old fact title"
+    assert E.body_title(_body(anchor, "old-fact")) == "Old fact title"
 
 
 @pytest.mark.skipif(os.name == "nt" or os.geteuid() == 0,
@@ -373,4 +373,4 @@ def test_backfill_exits_2_on_a_level_file_it_cannot_read(tmp_path, capsys):
         assert "back-filled" not in capsys.readouterr().out
     finally:
         local.chmod(0o644)
-    assert E._body_title(_body(anchor, "old-fact")) == ""
+    assert E.body_title(_body(anchor, "old-fact")) == ""

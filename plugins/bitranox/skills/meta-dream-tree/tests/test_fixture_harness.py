@@ -49,9 +49,9 @@ def test_asserter_detects_simulated_dream_effects(fixture):
     E.move_entry(m["tree1"], m["proj1"], s["mis_high"])
     E.move_entry(m["proj1"], m["dept_a"], s["mis_low"])
     E.move_entry(m["proj1"], m["dept_a"], s["dup_a"])
-    E._drop_pointer(m["proj2"], s["dup_b"])
+    E.drop_pointer(m["proj2"], s["dup_b"])
     R.archive_entry(m["proj1"], s["obs"])
-    E._drop_pointer(m["proj2"], s["task"])
+    E.drop_pointer(m["proj2"], s["task"])
     rc = E.main(["set-scope", "--proj", m["dept_b"],
                  "--scope", "WHAT: the data department.\nPLACE-HERE: dept-b-wide rules"])
     assert rc == 0
@@ -88,7 +88,7 @@ def test_nap_profile_parity_chain_effects_pass_siblings_guarded(fixture):
 def test_nap_profile_catches_sibling_touch(fixture):
     root, m = fixture
     import memory_engine as E
-    E._drop_pointer(m["proj2"], m["slugs"]["task"])   # a nap must NOT touch the sibling
+    E.drop_pointer(m["proj2"], m["slugs"]["task"])   # a nap must NOT touch the sibling
     hard, _ = FA.check(root, profile="nap")
     assert hard["SIBLINGS"] is False
 

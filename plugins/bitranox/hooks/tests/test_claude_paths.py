@@ -59,10 +59,10 @@ def test_set_wins_and_never_falls_back_to_home(homes, monkeypatch):
 
 
 def test_the_shared_audit_dir_follows_the_variable(homes, monkeypatch):
-    # self_improve_signals._audit_dir is what most hooks and skill scripts call.
+    # self_improve_signals.audit_dir is what most hooks and skill scripts call.
     _, arm = homes
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(arm))
-    assert sig._audit_dir() == arm / "self-improve-audit"                  # noqa: SLF001
+    assert sig.audit_dir() == arm / "self-improve-audit"
     assert sig.audit_file("/proj/x").parent == arm / "self-improve-audit"
     assert sig.last_dream_file("/proj/x").parent == arm / "self-improve-audit"
 

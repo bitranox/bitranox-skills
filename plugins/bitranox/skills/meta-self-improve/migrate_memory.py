@@ -211,7 +211,7 @@ def _native_type(meta, raw, stem):
     prefix, then an inline `metadata:` value naming one. The nested form is what most native topic
     files carry, and parse_frontmatter drops indented keys, so reading only `meta` stored those
     facts untyped (as project)."""
-    declared = str(meta.get("type") or "") or ME._body_type(raw)  # noqa: SLF001 - engine's reader
+    declared = str(meta.get("type") or "") or ME.body_type(raw)
     if declared in _TYPES:
         return declared
     name = str(meta.get("name") or stem)
@@ -274,8 +274,8 @@ def _is_own_placement(stored, slug, entry):
     crashed before an upgrade and resumes after it would otherwise place a `-2` copy of each fact."""
     hook = (entry["hook"] or "").strip()
     # The engine's frame plus the `title:` its write path adds: what upsert really stores.
-    framed = ME._framed_body(slug, hook, entry["type"], entry["body"])  # noqa: SLF001 - the engine's frame
-    written = ME._with_title(framed, entry["title"])  # noqa: SLF001 - the engine's title field
+    framed = ME.framed_body(slug, hook, entry["type"], entry["body"])
+    written = ME.with_title(framed, entry["title"])
     return bool(entry["body"]) and stored.rstrip("\n") in (written.rstrip("\n"),
                                                            framed.rstrip("\n"))
 
@@ -342,7 +342,7 @@ def _git(proj, *args):
 def _ignore_targets(proj):
     """(dir to ask git from, pattern) for every piece of memory wiring migrating `proj` creates:
     the level's CLAUDE.local.md, the anchor's live store and the level's retired curated dir."""
-    anchor = str(ME._anchor(proj))  # noqa: SLF001 - the engine's anchor resolution
+    anchor = str(ME.anchor_dir(proj))
     return ((proj, "CLAUDE.local.md"),
             (anchor, sig.MEMORY_DIRNAME + "/"),
             (proj, sig.CURATED_DIRNAME + "/"))
@@ -365,7 +365,7 @@ def ensure_gitignore(proj):
     # The live store sits at the ANCHOR, usually above `proj`: a pathspec relative to `proj` looked
     # for `<proj>/.claude-memory/`, which never exists below the tree top, so a committed store
     # was never reported. Absolute pathspecs name the real dirs.
-    stores = (Path(ME._anchor(proj)) / sig.MEMORY_DIRNAME,   # noqa: SLF001 - the engine's anchor
+    stores = (Path(ME.anchor_dir(proj)) / sig.MEMORY_DIRNAME,
               sig.claude_memory_dir(proj))
     for store in stores:
         if _git(proj, "ls-files", "--error-unmatch", "--", str(store))[0] == 0:
@@ -427,7 +427,7 @@ def migrate_store(slug, dry_run=True, scope_default="", redirect=None, backup_ru
     rec = _load_receipt(proj)
     done = set(rec.get("sources", []))
     rec["slugs"] = sorted(set(rec.get("slugs", []) + [slug]))
-    anchor = ME._anchor(proj)  # noqa: SLF001 - the engine's anchor resolution
+    anchor = ME.anchor_dir(proj)
     for e in entries:
         if e["source"] in done:
             rep["skipped"] += 1
@@ -491,7 +491,7 @@ def _repo_exclude(path):
 
 def _written_paths(proj):
     """Every path the migration of `proj` can write, as (path, kind)."""
-    anchor = Path(ME._anchor(proj))  # noqa: SLF001 - the engine's anchor resolution
+    anchor = Path(ME.anchor_dir(proj))
     out = [(anchor / sig.MEMORY_DIRNAME, "dir"),
            (sig.claude_local_md_path(proj), "file"),
            (sig.claude_md_path(proj), "file")]

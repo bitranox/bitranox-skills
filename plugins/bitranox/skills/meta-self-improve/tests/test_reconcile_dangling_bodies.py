@@ -65,7 +65,7 @@ def _tree(tmp_path):
 def _lost_fact(proj):
     slug = E.add_or_update_entry(proj, "A stored title, not the slug", "When rehoming, keep it.",
                                  body="Prose.", slug="lost-fact", type_="feedback")
-    E._drop_pointer(proj, slug)
+    E.drop_pointer(proj, slug)
     return slug
 
 
@@ -79,7 +79,7 @@ def test_rehome_keeps_the_title_the_body_stores(tmp_path):
 
     entry = next(e for e in E.read_store(top)[1] if e.slug == slug)
     assert entry.title == "A stored title, not the slug"
-    assert E._body_title(E.read_store(top)[2][slug]) == "A stored title, not the slug"
+    assert E.body_title(E.read_store(top)[2][slug]) == "A stored title, not the slug"
 
 
 def test_rehome_of_a_body_without_a_title_derives_one_from_the_slug(tmp_path):

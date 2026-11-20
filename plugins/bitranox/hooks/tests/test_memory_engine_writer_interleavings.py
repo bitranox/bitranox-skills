@@ -112,7 +112,7 @@ def test_move_keeps_a_pin_set_after_its_read(tmp_path):
 
 def test_move_refuses_a_line_dropped_after_its_read_and_writes_nothing(tmp_path):
     sub, top = _move_tree(tmp_path)
-    rep, fired = _run_with("_move_cap_refusal", lambda: E._drop_pointer(sub, "fact"),
+    rep, fired = _run_with("_move_cap_refusal", lambda: E.drop_pointer(sub, "fact"),
                            lambda: E.move_entry(sub, top, "fact"))
     assert fired and rep.moved is False and "left" in rep.refused, rep
     assert _line(top, "fact") is None and _line(sub, "fact") is None
@@ -138,7 +138,7 @@ def test_relocate_carries_an_add_that_landed_after_its_read(tmp_path):
 
 def test_relocate_refuses_a_line_dropped_after_its_read_and_writes_nothing(tmp_path):
     src, dst = _relocate_trees(tmp_path)
-    rep, fired = _run_with("_move_cap_refusal", lambda: E._drop_pointer(src, "fact"),
+    rep, fired = _run_with("_move_cap_refusal", lambda: E.drop_pointer(src, "fact"),
                            lambda: E.relocate_entry(src, dst, "fact"))
     assert fired and rep.relocated is False and "left" in rep.refused, rep
     assert _line(dst, "fact") is None
@@ -161,7 +161,7 @@ def test_rename_carries_an_add_that_landed_after_its_read(tmp_path):
 def test_rename_refuses_a_line_dropped_after_its_read_and_writes_nothing(tmp_path):
     (proj,) = _tree(tmp_path / "t", "proj")
     _add(proj, 0)
-    rep, fired = _run_with("_line_growth_refusal", lambda: E._drop_pointer(proj, "fact"),
+    rep, fired = _run_with("_line_growth_refusal", lambda: E.drop_pointer(proj, "fact"),
                            lambda: E.rename_entry(proj, "fact", "renamed"))
     assert fired and rep.renamed is False and "left" in rep.refused, rep
     assert _line(proj, "renamed") is None
@@ -220,7 +220,7 @@ def test_add_never_writes_back_another_fact_s_body(tmp_path):
     _add(top, 0)
     _add(top, 0, slug="other")
     us.add_pointer(sub, "other", "T0", "When racing 0, keep it.")
-    rep, fired = _run_with("_commit_store", lambda: _add(sub, 1, slug="other"),
+    rep, fired = _run_with("commit_store", lambda: _add(sub, 1, slug="other"),
                            lambda: _add(top, 1))
     assert fired and rep == "fact"
     assert _prose(us.body_path(str(tmp_path / "t"), "other")) == "prose 1"

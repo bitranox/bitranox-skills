@@ -137,7 +137,7 @@ def _rewrites_the_tree(command: str, tool_name=None) -> bool:
 def _git_rewrite_marker(cwd):
     """Where the last-git-tree-write time for `cwd` is recorded. Keyed per project (not per
     session): the mtime scan below is itself per-cwd, so the marker must be too."""
-    return sig._audit_dir() / (sig.proj_key(cwd) + ".reformat-md-git-rewrite.txt")
+    return sig.audit_dir() / (sig.proj_key(cwd) + ".reformat-md-git-rewrite.txt")
 
 
 def _record_git_rewrite(cwd):

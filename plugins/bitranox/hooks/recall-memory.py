@@ -70,7 +70,7 @@ SKIPPED_LOG = "recall-skipped.txt"
 def _log_skipped(skipped):
     """Record `skipped` [(path, reason)] in the audit dir, replacing the previous record; remove
     the record when nothing was skipped, so it never outlives the file it names. Never raises."""
-    path = sig._audit_dir() / SKIPPED_LOG
+    path = sig.audit_dir() / SKIPPED_LOG
     try:
         if not skipped:
             if path.exists():
@@ -87,7 +87,7 @@ def _log_skipped(skipped):
 def _state_file(cwd, sid):
     """Per-project, per-session recall state. Both keys are confined by their shared helper:
     `proj_key` hashes the project, `session_key` flattens the id to one filename component."""
-    return sig._audit_dir() / ("%s.recall-%s.txt" % (sig.proj_key(cwd), sig.session_key(sid)))
+    return sig.audit_dir() / ("%s.recall-%s.txt" % (sig.proj_key(cwd), sig.session_key(sid)))
 
 
 def _label(path):
@@ -114,11 +114,11 @@ def _first_match(text, keywords):
     """Index in `text` (already NFC) of the earliest keyword occurrence, else -1.
 
     An occurrence counts only at a word boundary, by the same rule scan() used to match the note
-    (gather_scan._WORD_CHAR may not touch the keyword on either side), so "test" is found in "the
+    (gather_scan.WORD_CHAR may not touch the keyword on either side), so "test" is found in "the
     test suite" and not inside an earlier "latest". A substring search stopped at the decoy and
     centred the window, or chose the section, away from the text that actually matched.
 
-    The keywords arrive folded the way scan() matched them (gather_scan._fold: NFC, then casefold),
+    The keywords arrive folded the way scan() matched them (gather_scan.fold: NFC, then casefold),
     so the text is folded the same way here; a plain lower() leaves a sharp s as one character where
     the keyword has "ss" and never finds it. Casefolding can lengthen the text (a sharp s becomes two
     characters), so each folded character remembers the original character it came from and the
@@ -132,10 +132,10 @@ def _first_match(text, keywords):
     low = "".join(folded)
     hits = []
     for k in keywords:
-        k = gs._fold(k) if k else ""
+        k = gs.fold(k) if k else ""
         if not k:
             continue
-        m = re.search("(?<!%s)%s(?!%s)" % (gs._WORD_CHAR, re.escape(k), gs._WORD_CHAR), low)
+        m = re.search("(?<!%s)%s(?!%s)" % (gs.WORD_CHAR, re.escape(k), gs.WORD_CHAR), low)
         if m:
             hits.append(m.start())
     return owner[min(hits)] if hits else -1
@@ -150,7 +150,7 @@ def _snippet(path, keywords, maxlen):
     except OSError:
         return ""
     if Path(path).name == sig.CURATED_INDEX:      # strip the scope descriptor (meta, not a fact) from a curated index
-        text = sig._strip_scope(text)
+        text = sig.strip_scope(text)
     text = unicodedata.normalize("NFC", text)
     if len(text) <= maxlen:
         return text.strip()
@@ -232,7 +232,7 @@ def _note_view(path, keywords, maxlen):
     except OSError:
         return ""
     if Path(path).name == sig.CURATED_INDEX:
-        text = sig._strip_scope(text)
+        text = sig.strip_scope(text)
     meta = _frontmatter(text)
     if meta.get("description"):
         return "%s: %s" % (meta.get("name") or _label(path), meta["description"])
@@ -355,7 +355,7 @@ def main():
         # test_walled_recall_with_no_anchor_recalls_nothing_not_even_native_notes).
         if sig.load_config().get("cross_tree_search", True):
             for r in sig.discovery_roots():
-                files += gs._find_curated_stores(str(r))
+                files += gs.find_curated_stores(str(r))
             files = sorted({str(f) for f in files})
         else:
             anchor = sig.resolve_anchor(cwd)

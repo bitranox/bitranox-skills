@@ -56,7 +56,7 @@ type _Copy = tuple[str, us.Pointer]
 """One line of a fact at one level: the level dir and the pointer read there."""
 
 type _Owners = dict[str, tuple[str, bool, dict[str, tuple[str, us.Pointer]]]]
-"""`_pointer_owners`: per slug its first level, whether it is pinned anywhere, and its distinct
+"""`pointer_owners`: per slug its first level, whether it is pinned anywhere, and its distinct
 lines, each with the first level holding it."""
 
 type _CopyPlan = dict[str, tuple[list[str], us.Pointer]]
@@ -110,7 +110,7 @@ class _SignalsApi(Protocol):
     def discovery_roots(self) -> list[Path]: ...
     def find_claude_md_dirs(self, roots: Iterable[_StrPath]) -> list[Path]: ...
     def tree_groups(self, md_dirs: Iterable[_StrPath]) -> dict[Path, list[Path]]: ...
-    def _excluded_anchor_dirs(self) -> set[Path]: ...
+    def excluded_anchor_dirs(self) -> set[Path]: ...
 
 
 class _TopicStoreApi(Protocol):
@@ -386,15 +386,15 @@ def _placed_slugs(anchor: _StrPath, slugs: Iterable[str]) -> set[str]:
     """The members of `slugs` whose facts are placed by topic: what the renderer manages, a body
     bound to at least one topic that a line can be built from (`title:` and `description:`),
     with a line at some level and no line of it pinned or legacy (`uuid:`) at any level (see
-    `_unplaceable_slugs`). A bound fact the renderer
+    `unplaceable_slugs`). A bound fact the renderer
     does not manage stays where its lines are, so the verbs that place lines by hand still take
     it, and the refusals of render-topics and set-topics offer to move exactly those lines.
     Reads one body head per slug; walks the tree's levels once, and only when a body is
     managed. Holds one small record per managed slug."""
     managed: set[str] = set()
     for slug in slugs:
-        head = _read_body_head(_us.body_path(anchor, slug))
-        if head is not None and _managed_topics(slug, head, ()) is not None:
+        head = read_body_head(_us.body_path(anchor, slug))
+        if head is not None and managed_topics(slug, head, ()) is not None:
             managed.add(slug)
     if not managed:
         return set()
@@ -410,11 +410,11 @@ def _placed_slugs(anchor: _StrPath, slugs: Iterable[str]) -> set[str]:
     return seen - fixed
 
 
-def _placed_copies(anchor: _StrPath, slug: str) -> list[_Copy]:
+def placed_copies(anchor: _StrPath, slug: str) -> list[_Copy]:
     """[(level dir, Pointer)] for every line of `slug` when its fact is placed by topic (see
     `_placed_slugs`), else []. One body head; one walk over the levels for a managed body."""
-    head = _read_body_head(_us.body_path(anchor, slug))
-    if head is None or _managed_topics(slug, head, ()) is None:
+    head = read_body_head(_us.body_path(anchor, slug))
+    if head is None or managed_topics(slug, head, ()) is None:
         return []
     copies = _copies_of(anchor, slug)
     return [] if any(_keeps_in_place(ptr) for _level, ptr in copies) else copies
@@ -428,7 +428,7 @@ def _keeps_in_place(ptr: us.Pointer) -> bool:
     return ptr.pin or ptr.legacy
 
 
-def _same_level(a: _StrPath, b: _StrPath) -> bool:
+def same_level(a: _StrPath, b: _StrPath) -> bool:
     return os.path.normcase(os.path.abspath(str(a))) == os.path.normcase(os.path.abspath(str(b)))
 
 
@@ -623,7 +623,7 @@ def _move_route_level(anchor: _StrPath, outside: _StrPath, src: _StrPath) -> str
     while d == top or top in d.parents:
         on_chain = d in here.parents or here in d.parents
         if d != here and (on_chain or not same_tree) \
-                and _carries_pointer_block(sig.claude_local_md_path(str(d))):
+                and carries_pointer_block(sig.claude_local_md_path(str(d))):
             return str(d)
         if d == top:
             return None
@@ -644,7 +644,7 @@ class UnknownSlug(ValueError):
 
 # ---- store IO (pointer block in CLAUDE.local.md + central bodies), locked + mtime-neutral --------
 
-def _anchor(proj: _StrPath) -> Path:
+def anchor_dir(proj: _StrPath) -> Path:
     """The anchor dir for `proj` (holds the central `.claude-memory/` body-store). Falls back to `proj`
     itself when there is no CLAUDE.md-bearing ancestor to anchor to (bootstrap)."""
     return _us.resolve_anchor(proj) or Path(proj)
@@ -667,7 +667,7 @@ def _anchor(proj: _StrPath) -> Path:
 # calls any of them.
 #
 # The mechanism is the level locks' own: `sig.memory_lock`, an O_EXCL `<target>.lock` file,
-# reclaimed when its mtime is older than `sig._LOCK_STALE_S` (a crashed holder). A long holder
+# reclaimed when its mtime is older than `sig.LOCK_STALE_S` (a crashed holder). A long holder
 # keeps it from looking stale with a heartbeat (`_placement_heartbeat`): a render refreshes the
 # lock file's mtime once per level it walks in each pass, and set-topics once per row, so only a
 # holder that stops walking (crashed or hung) ages past the reclaim.
@@ -697,12 +697,10 @@ class PlacementLockBusy(TimeoutError):
             "set-topics, topics-set-list, set-level-topics, set-top-topics, or write to a fact "
             "placed by topic holds it. Run %s again once that one finishes; a lock left by a "
             "holder that crashed is reclaimed once it is %d s old"
-            # remove the ignore once self_improve_signals publishes the reclaim age (_LOCK_STALE_S)
-            % (verb, waited, anchor, placement_lock_path(anchor), verb, int(sig._LOCK_STALE_S)))  # pyright: ignore[reportPrivateUsage]
+            % (verb, waited, anchor, placement_lock_path(anchor), verb, int(sig.LOCK_STALE_S)))
 
 
-# remove the ignore once self_improve_signals publishes the reclaim age (_LOCK_STALE_S)
-_HEARTBEAT_AFTER_S = sig._LOCK_STALE_S / 4  # pyright: ignore[reportPrivateUsage]
+_HEARTBEAT_AFTER_S = sig.LOCK_STALE_S / 4
 """How old the held placement lock's mtime may get before a heartbeat refreshes it: well inside
 the reclaim age, so a holder that beats at least once per this many seconds never looks stale,
 and one stat per beat is all a fresh lock costs."""
@@ -741,7 +739,7 @@ def _placement_heartbeat() -> None:
     """Refresh the mtime of every placement lock this process holds once it is older than
     _HEARTBEAT_AFTER_S. The long holders call it once per level they walk in each pass (render)
     and once per row (set-topics), so a holder that is still working never ages past
-    `sig._LOCK_STALE_S` and has its lock reclaimed by a waiter. A lock file gone (a peer
+    `sig.LOCK_STALE_S` and has its lock reclaimed by a waiter. A lock file gone (a peer
     reclaimed it) is left alone: refreshing would not give the lock back."""
     for lock in _HELD_PLACEMENT_LOCKS:
         try:
@@ -846,7 +844,7 @@ def _put_line_locked(level: _StrPath, slug: str, title: str, hook: str, pin: boo
 
 
 def _drop_line_locked(level: _StrPath, slug: str) -> bool:
-    """`_drop_pointer` for a caller that already holds `level`'s lock."""
+    """`drop_pointer` for a caller that already holds `level`'s lock."""
     local = sig.claude_local_md_path(level)
     text = read_store_text(local)
     scope, pointers = _us.parse_pointer_index(text)
@@ -872,7 +870,7 @@ def read_store(proj: _StrPath) -> tuple[str, list[Entry], dict[str, str]]:
     missing body reads as "". Raises TreeWalkError when the level file or a body exists but cannot
     be read or is not UTF-8: every writer builds on this answer, and an entry read as bodiless or a
     level read as empty is one it would then rewrite."""
-    anchor = _anchor(proj)
+    anchor = anchor_dir(proj)
     text = read_store_text(sig.claude_local_md_path(proj))
     scope, pointers = _us.parse_pointer_index(text)
     entries: list[Entry]
@@ -887,7 +885,7 @@ def read_store(proj: _StrPath) -> tuple[str, list[Entry], dict[str, str]]:
     return scope, entries, bodies
 
 
-def _commit_store(proj: _StrPath, scope: str | None, entries: Iterable[Entry], bodies: Mapping[str, str]) -> bool:
+def commit_store(proj: _StrPath, scope: str | None, entries: Iterable[Entry], bodies: Mapping[str, str]) -> bool:
     """Write the pointer block in `CLAUDE.local.md` from `entries`, and the central body of each
     entry named in `bodies`; mtime-neutral. Returns True if anything changed. Refuses first under
     BITRANOX_MEMORY_WRITES=off: reconcile's archive commits a pointer block through here without
@@ -900,7 +898,7 @@ def _commit_store(proj: _StrPath, scope: str | None, entries: Iterable[Entry], b
     another level's `add` wrote to it since (a fact with lines at two levels is written under
     either level's lock)."""
     sig.refuse_if_memory_writes_off()
-    anchor = _anchor(proj)
+    anchor = anchor_dir(proj)
     changed = False
     pointers: list[us.Pointer] = []
     for e in entries:
@@ -944,7 +942,7 @@ _SKILL_VALUE_RX = re.compile(r"(?m)^[ \t]+skill:[ \t]*(\S+)[ \t]*\r?$")
 _SKILL_LINE_RX = re.compile(r"(?m)^([ \t]+skill:)[ \t]*[^\s]*[ \t]*(?=\r?$)")
 
 
-def _frontmatter(body: str | None) -> tuple[str, re.Match[str] | None]:
+def split_frontmatter(body: str | None) -> tuple[str, re.Match[str] | None]:
     """(head, match): `body` without leading whitespace, and the match of its leading frontmatter
     block - None unless the block is CLOSED and carries a `name:` key. `match.group(1)` is the text
     between the delimiters, ending in its line break.
@@ -963,16 +961,16 @@ def _has_prose(body: str | None) -> bool:
     """True when `body` holds text below its frontmatter frame (or any text, unframed). A blank
     body and a frame-only body both say nothing, and either one, taken as a body, replaced a stored
     fact's prose with an empty frame."""
-    head, m = _frontmatter(body)
+    head, m = split_frontmatter(body)
     return bool((head[m.end():] if m else head).strip())
 
 
 def _has_frontmatter(body: str | None) -> bool:
     """True when `body` opens with a closed frontmatter block that carries a `name:` key."""
-    return _frontmatter(body)[1] is not None
+    return split_frontmatter(body)[1] is not None
 
 
-def _framed_body(slug: str, hook: str | None, type_: str | None, body: str) -> str:
+def framed_body(slug: str, hook: str | None, type_: str | None, body: str) -> str:
     """Wrap a bare body in the native memory-entry frame (frontmatter; the capturer adds **Why:**
     and **How to apply:** in the prose). Probe-verified: bodies matching the genuine entry shape
     get APPLIED mid-reasoning far more reliably than bare prose (the model discounts bodies that
@@ -1002,17 +1000,17 @@ def _synced_frame(slug: str, hook: str | None, type_: str | None, text: str) -> 
     `description:` the hook, and an EXPLICIT `type_` replaces the kind the frame records.
 
     A caller that hands back a body it read (the text `factedit.py show --body` prints, or a stored
-    body file) brings the OLD frame with it. `_framed_body` passes such a body through, so without
+    body file) brings the OLD frame with it. `framed_body` passes such a body through, so without
     this its `description:` kept the previous hook while the pointer took the new one, and an
     explicit --type was dropped in silence. The prose below the frame is never touched. An unframed
     `text` is returned unchanged."""
-    head, m = _frontmatter(text)
+    head, m = split_frontmatter(text)
     if m is None:
         return text
     inner = m.group(1)
     inner, _n = _NAME_LINE_RX.subn(lambda d: "%s %s" % (d.group(1), slug), inner, count=1)
     text = _reframe_description(_with_frame(head, m, inner), hook)
-    if type_ and _body_type(text) != type_:
+    if type_ and body_type(text) != type_:
         text = _retype_body(slug, hook, type_, text)
     return text
 
@@ -1087,7 +1085,7 @@ def upsert_entry(proj: _StrPath, title: str, hook: str | None, body: str = "", t
     hook = (hook or "").strip()
     if not allow_over_cap_hook and _us.hook_over_hard_cap(hook):
         raise HookTooLong(len(hook))
-    anchor = _anchor(proj)
+    anchor = anchor_dir(proj)
     pruned = _pruned_part(anchor, proj)
     if pruned is not None:
         raise NonLevelDir(proj, *pruned)
@@ -1121,13 +1119,13 @@ def _upsert_checked(proj: str, anchor: _StrPath, slug: str, title: str, hook: st
     # pinned (a pinned fact is never placed by topic), and it is written from a level that holds
     # one of its lines (adopting it elsewhere would add a line the placement lacks). One tree
     # walk, and only for a body the renderer manages; a new fact has no body and skips it.
-    copies = _placed_copies(anchor, slug)
+    copies = placed_copies(anchor, slug)
     placed = bool(copies)
     if placed and pin:
         raise TopicRefusal(["%s is bound to topics, and a pinned fact is never placed by topic; "
                             "un-bind it first (%s set-topics --proj %s --slug %s --clear), then "
                             "pin it" % (slug, _ENGINE_ROUTE, anchor, slug)])
-    if placed and not any(_same_level(level, proj) for level, _ptr in copies):
+    if placed and not any(same_level(level, proj) for level, _ptr in copies):
         raise PlacedElsewhere(slug, [level for level, _ptr in copies])
     store_dir = _us.central_facts_dir(anchor).parent   # the `.claude-memory` store dir for this tree
     store_existed = store_dir.exists()
@@ -1165,7 +1163,7 @@ def _upsert_checked(proj: str, anchor: _StrPath, slug: str, title: str, hook: st
                 # with the bare frame. No explicit --type on an UPDATE means "leave the kind alone": re-deriving it from
                 # the slug discards what the stored body already records, and for a prefix-less slug
                 # that always lands on "project".
-                framed = _framed_body(slug, e.hook, type_ or _body_type(e.body), body)
+                framed = framed_body(slug, e.hook, type_ or body_type(e.body), body)
                 # A body that brings its own frame sets only the keys it names: a partial frame
                 # (`name:` and `topics:`) replaced the stored one whole and dropped `description:`
                 # and `metadata:`, so the body yielded no line and stopped being placed by topic.
@@ -1180,13 +1178,13 @@ def _upsert_checked(proj: str, anchor: _StrPath, slug: str, title: str, hook: st
             else:
                 if e.hook != old_hook:
                     e.body = _reframe_description(e.body, e.hook)   # keep body description in sync
-                if type_ and _body_type(e.body) != type_:
+                if type_ and body_type(e.body) != type_:
                     # An explicit kind with no new body is a re-type: without this the call printed
                     # the slug and exited 0 while the stored body kept its old kind.
                     e.body = _retype_body(slug, e.hook, type_, e.body)
                 if skill and _body_skill(e.body) != skill:
                     # Tagging an existing fact with its skill must not need its body re-supplied.
-                    e.body = _with_skill(_framed_body(slug, e.hook, _body_type(e.body), e.body), skill)
+                    e.body = _with_skill(framed_body(slug, e.hook, body_type(e.body), e.body), skill)
             e.pin = e.pin or pin
             if e.legacy:                             # first update flips a legacy entry: the body
                 _archive_legacy_body(anchor, e)      # moves to the slug path, the old file archives
@@ -1198,7 +1196,7 @@ def _upsert_checked(proj: str, anchor: _StrPath, slug: str, title: str, hook: st
                 raise SlugCollision(slug, _free_slug(anchor, slug))
             e = Entry(slug=slug, title=title, hook=hook,
                       body=_with_skill(_synced_frame(slug, hook, type_,
-                                                     _framed_body(slug, hook, type_, body)),
+                                                     framed_body(slug, hook, type_, body)),
                                        skill), pin=pin)
             entries.append(e)
         # Every level this write rewrites is held to the block cap before any is written: this
@@ -1206,15 +1204,15 @@ def _upsert_checked(proj: str, anchor: _StrPath, slug: str, title: str, hook: st
         _refuse_add_growth(proj, slug, e, copies, allow_pinned_overwrite)
         # The body carries the pointer's title as data (`title:`); every write through here,
         # amend-pinned and factedit's apply included, keeps the two equal.
-        e.body = _with_title(e.body, e.title)
-        # This fact's body only: the others at this level are not this write's (see _commit_store).
-        _commit_store(proj, scope or scope_default, entries, {slug: e.body})
+        e.body = with_title(e.body, e.title)
+        # This fact's body only: the others at this level are not this write's (see commit_store).
+        commit_store(proj, scope or scope_default, entries, {slug: e.body})
     if placed:
         # The other lines of a fact placed by topic say what this one now says. After the commit
         # and outside its lock (add_pointer takes each level's own): a failure here leaves the
         # body and this level written and the rest as render drift, which --check-tree names.
         for level, ptr in copies:
-            if not _same_level(level, proj) and (ptr.title, ptr.hook) != (e.title, e.hook):
+            if not same_level(level, proj) and (ptr.title, ptr.hook) != (e.title, e.hook):
                 _us.add_pointer(str(level), slug, e.title, e.hook)
     if not store_existed and store_dir.exists():      # this add created a brand-new store dir:
         sig.bump_stores_generation()                  # bust the cross-tree dir-cache so recall sees it
@@ -1232,7 +1230,7 @@ def _refuse_add_growth(proj: str, slug: str, e: Entry, copies: Iterable[_Copy], 
     line = us.Pointer(slug=slug, title=e.title, hook=e.hook, pin=e.pin)
     changes = [(proj, slug, line)] + [
         (level, slug, us.Pointer(slug=slug, title=e.title, hook=e.hook, pin=ptr.pin))
-        for level, ptr in copies if not _same_level(level, proj)]
+        for level, ptr in copies if not same_level(level, proj)]
 
     def retry(shrink: int, old: int, new: int) -> str:
         hook_bytes = len(e.hook.encode("utf-8"))
@@ -1390,29 +1388,29 @@ def _readable_pointers(anchor: _StrPath) -> Iterator[_Copy]:
             yield level, ptr
 
 
-def _body_description(text: str | None) -> str:
+def body_description(text: str | None) -> str:
     """The `description:` value (the hook) from a framed body's frontmatter, or '' if absent.
 
-    Scoped to the LEADING frontmatter block (see `_frontmatter`), like `_body_type`: a
+    Scoped to the LEADING frontmatter block (see `split_frontmatter`), like `body_type`: a
     `description:` line in the prose, or in a body that merely opens with a horizontal rule, is
     the author's text, and adopting a dangling body made it the always-loaded hook."""
-    _head, m = _frontmatter(text)
+    _head, m = split_frontmatter(text)
     if m is None:
         return ""
     d = _DESCRIPTION_VALUE_RX.search(m.group(1))
     return d.group(1).strip() if d else ""
 
 
-def _body_type(text: str | None) -> str:
+def body_type(text: str | None) -> str:
     """The `metadata: type:` value from a framed body's frontmatter, or '' if absent.
 
     A slug records the type only when it was minted with one (`feedback-...`); for a prefix-less
     slug the body IS the only record, so an update that reframes the body has to read it here or
     it silently re-classifies the fact - and nothing downstream reports that (`store_manifest
     verify` reads level/slug/title/pin, `lint --tree` looks for UNLABELLED bodies, and the write
-    prints its usual success line). Scoped to the LEADING frontmatter block (see `_frontmatter`) so
+    prints its usual success line). Scoped to the LEADING frontmatter block (see `split_frontmatter`) so
     a `  type:` line in the prose below cannot answer for it."""
-    _head, m = _frontmatter(text)
+    _head, m = split_frontmatter(text)
     if m is None:
         return ""
     t = _TYPE_VALUE_RX.search(m.group(1))
@@ -1422,8 +1420,8 @@ def _body_type(text: str | None) -> str:
 def _body_skill(text: str | None) -> str:
     """The `metadata: skill:` value from a framed body's frontmatter, or '' if absent - the skill a
     fact is tied to (meta-self-improve step 2). Scoped to the leading frontmatter block like
-    `_body_type`, so a `  skill:` line in the prose cannot answer for it."""
-    _head, m = _frontmatter(text)
+    `body_type`, so a `  skill:` line in the prose cannot answer for it."""
+    _head, m = split_frontmatter(text)
     if m is None:
         return ""
     s = _SKILL_VALUE_RX.search(m.group(1))
@@ -1437,7 +1435,7 @@ def _with_skill(text: str, skill: str | None) -> str:
     the `type:` line when there is one, so the two metadata keys sit together). `text` must already
     be framed - every caller frames first - and an unframed one is returned unchanged rather than
     framed with a guessed kind."""
-    head, m = _frontmatter(text)
+    head, m = split_frontmatter(text)
     if m is None or not skill:
         return text
     inner = m.group(1)
@@ -1472,11 +1470,11 @@ def _with_frame(head: str, m: re.Match[str], inner: str) -> str:
 def _reframe_description(text: str, hook: str | None) -> str:
     """Return `text` with its frontmatter `description:` reset to `hook` (whitespace collapsed), so a
     hook-only pointer update keeps the body's description in sync (spec: the body description IS the
-    hook). A body with no frontmatter (see `_frontmatter`) is returned unchanged, and only a line
+    hook). A body with no frontmatter (see `split_frontmatter`) is returned unchanged, and only a line
     INSIDE the frame is rewritten: a `description:` line in the prose is the author's text. The
     replacement is a lambda: a hook can carry backslashes (Windows paths) that re.sub would
     otherwise treat as template escapes."""
-    head, m = _frontmatter(text)
+    head, m = split_frontmatter(text)
     if m is None:
         return text
     desc = " ".join((hook or "").split())
@@ -1484,17 +1482,17 @@ def _reframe_description(text: str, hook: str | None) -> str:
     return _with_frame(head, m, inner) if n else text
 
 
-def _body_title(text: str | None) -> str:
+def body_title(text: str | None) -> str:
     """The `title:` value from a framed body's frontmatter, or '' if absent. Scoped to the leading
-    frontmatter block (see `_frontmatter`), like `_body_description`."""
-    _head, m = _frontmatter(text)
+    frontmatter block (see `split_frontmatter`), like `body_description`."""
+    _head, m = split_frontmatter(text)
     if m is None:
         return ""
     t = _TITLE_VALUE_RX.search(m.group(1))
     return t.group(1).strip() if t else ""
 
 
-def _with_title(text: str, title: str | None) -> str:
+def with_title(text: str, title: str | None) -> str:
     """Return framed `text` with its frontmatter `title:` set to `title` (one line), prose untouched.
 
     The pointer line is the title's only other home, so the title is kept in the body as data and a
@@ -1502,7 +1500,7 @@ def _with_title(text: str, title: str | None) -> str:
     `description:` (or after `name:` when there is no description). An unframed `text`, or an empty
     title, is returned unchanged: every write path frames first, and a title is never invented.
     The replacement is a lambda, as in `_reframe_description`: a title can carry backslashes."""
-    head, m = _frontmatter(text)
+    head, m = split_frontmatter(text)
     title = _normalised_title(title)
     if m is None or not title:
         return text
@@ -1520,10 +1518,10 @@ def _with_title(text: str, title: str | None) -> str:
 def _body_topics(text: str | None) -> tuple[str, ...] | None:
     """The topics a framed body's frontmatter carries on its `topics:` line: None when the line is
     absent (the fact was never tagged), an empty tuple for `topics: []` (tagged, and bound to no
-    topic), else the sorted tags. Scoped to the leading frontmatter block (see `_frontmatter`),
-    like `_body_title`. A line that does not parse as a topic list reads as None: the fact is
+    topic), else the sorted tags. Scoped to the leading frontmatter block (see `split_frontmatter`),
+    like `body_title`. A line that does not parse as a topic list reads as None: the fact is
     then placed by nothing, and stays where its pointer is."""
-    _head, m = _frontmatter(text)
+    _head, m = split_frontmatter(text)
     if m is None:
         return None
     t = _TOPICS_VALUE_RX.search(m.group(1))
@@ -1539,7 +1537,7 @@ def _body_topics_line(text: str | None) -> str | None:
     """The raw `topics:` line of a framed body's frontmatter, exactly as stored (no line break), or
     None when there is none. Unlike `_body_topics` it does not parse: a line that is no valid topic
     list is still returned, so a writer can carry it over instead of erasing it."""
-    _head, m = _frontmatter(text)
+    _head, m = split_frontmatter(text)
     if m is None:
         return None
     t = _TOPICS_LINE_RX.search(m.group(1))
@@ -1655,7 +1653,7 @@ def _merged_metadata(new_lines: list[str], stored_lines: Sequence[str]) -> list[
     return out
 
 
-# The frame keys the engine writes itself on every update (`_synced_frame`, `_with_title`, the
+# The frame keys the engine writes itself on every update (`_synced_frame`, `with_title`, the
 # stored topics line) or merges key by key (`metadata:`): a bare line never removes one of them.
 _MANAGED_FRAME_KEYS = frozenset({"name", "description", "title", "topics", "metadata"})
 
@@ -1693,8 +1691,8 @@ def _with_stored_frame_keys(text: str, stored: str) -> str:
     a bare line leaves as stored (`--type` changes it). A stored bare key handed back bare stays,
     so an unedited round trip (`factedit.py show --body`, then `apply --body-file`) changes
     nothing."""
-    head, m = _frontmatter(text)
-    _shead, sm = _frontmatter(stored)
+    head, m = split_frontmatter(text)
+    _shead, sm = split_frontmatter(stored)
     if m is None or sm is None:
         return text
     new_blocks = _frame_blocks(m.group(1) or "")
@@ -1724,7 +1722,7 @@ def _with_topics_line(text: str, line: str | None) -> str:
     A hand-edited frame can hold several `topics:` lines. Readers take the first, so a set
     replaces that one and removes the rest, and None removes them all: a later line left behind
     became the first once the first was gone, and the fact's topics changed with nobody tagging."""
-    head, m = _frontmatter(text)
+    head, m = split_frontmatter(text)
     if m is None:
         return text
     inner = m.group(1)
@@ -1748,13 +1746,13 @@ def _with_topics_line(text: str, line: str | None) -> str:
 def _retype_body(slug: str, hook: str | None, type_: str, text: str) -> str:
     """Return `text` with its frontmatter `metadata: type:` set to `type_`, prose untouched.
 
-    Rewrites the same line `_body_type` reads (the first indented `type:` in the leading frontmatter),
+    Rewrites the same line `body_type` reads (the first indented `type:` in the leading frontmatter),
     so the kind read back is the kind written. Frontmatter with no `type:` line gains one; a body with
-    no frontmatter (see `_frontmatter`), a leading horizontal rule included, is framed with the new
+    no frontmatter (see `split_frontmatter`), a leading horizontal rule included, is framed with the new
     kind. The replacement is a lambda for the same reason as `_reframe_description`."""
-    head, m = _frontmatter(text)
+    head, m = split_frontmatter(text)
     if m is None:
-        return _framed_body(slug, hook, type_, text)
+        return framed_body(slug, hook, type_, text)
     inner = m.group(1)
     nl = "\r\n" if inner.endswith("\r\n") else "\n"
     new_inner, n = _TYPE_LINE_RX.subn(lambda t: "%s %s" % (t.group(1), type_), inner, count=1)
@@ -1773,7 +1771,7 @@ def _entry_from_body(anchor: _StrPath, slug: str) -> Entry:
     supplies them. Raises TreeWalkError if the body cannot be read or is not UTF-8: returning
     nothing sent add on to call the slug a collision with a fact it had simply failed to read."""
     text = read_store_text(_us.body_path(anchor, slug)).rstrip("\n")
-    return Entry(slug=slug, title=slug, hook=_body_description(text), body=text)
+    return Entry(slug=slug, title=slug, hook=body_description(text), body=text)
 
 
 def _free_slug(anchor: _StrPath, slug: str) -> str:
@@ -1807,15 +1805,15 @@ _WIKILINK_RX = re.compile(r"\[\[([^\]]+)\]\]")
 _SLUG_SEPARATORS_RX = re.compile(r"[\s_]+")
 
 
-def _canon_slug(s: str | None) -> str:
+def canon_slug(s: str | None) -> str:
     """Separator-insensitive canonical slug form (matches reconcile's semantics)."""
     return _SLUG_SEPARATORS_RX.sub("-", (s or "").strip().lower())
 
 
-def _ref_slug(raw: str) -> str:
+def ref_slug(raw: str) -> str:
     """The slug inside a [[ref]]; tolerates a `type:` prefix and a `|label` suffix."""
     core = raw.split("|", 1)[0].split(":", 1)[-1]
-    return _canon_slug(core)
+    return canon_slug(core)
 
 
 def _blank(chars: list[str], start: int, end: int) -> None:
@@ -1893,12 +1891,12 @@ def dangling_wikilinks(text: str | None, existing: Iterable[str]) -> list[tuple[
     in `existing`. PURE - the write-time catch for an invented-phrase link before it becomes a
     store-wide dangling ref a later `--check-tree` has to find. Deduped, order-preserving."""
     import difflib
-    ex = {_canon_slug(s) for s in existing}
+    ex = {canon_slug(s) for s in existing}
     out: list[tuple[str, str | None]]
     seen: set[str]
     out, seen = [], set()
     for m in _WIKILINK_RX.finditer(mask_code_regions(text)):
-        target = _ref_slug(m.group(1))
+        target = ref_slug(m.group(1))
         if not target or target in ex or target in seen:
             continue
         seen.add(target)
@@ -1932,16 +1930,16 @@ def inbound_ref_sources(levels: Iterable[_StrPath], slug: str) -> list[tuple[str
     """[(level, source_slug)] of every OTHER curated entry across `levels` whose hook or body
     contains a `[[slug]]` reference. THE inbound-ref scan (reconcile delegates here); the dream's
     move safety check keys off it."""
-    qcanon = _canon_slug(slug)
+    qcanon = canon_slug(slug)
     out: list[tuple[str, str]] = []
     for level in levels:
         _scope, entries, bodies = read_store(str(level))
         for e in entries:
-            if _canon_slug(e.slug) == qcanon:
+            if canon_slug(e.slug) == qcanon:
                 continue                             # the target's own line/body does not count
             text = "%s\n%s" % (e.hook, bodies.get(e.slug, ""))
             masked = mask_code_regions(text)
-            if any(_ref_slug(m.group(1)) == qcanon for m in _WIKILINK_RX.finditer(masked)):
+            if any(ref_slug(m.group(1)) == qcanon for m in _WIKILINK_RX.finditer(masked)):
                 out.append((str(level), e.slug))
     return out
 
@@ -1951,7 +1949,7 @@ def has_inbound_refs(levels: Iterable[_StrPath], slug: str) -> bool:
     return bool(inbound_ref_sources(levels, slug))
 
 
-def _drop_pointer(level: _StrPath, slug: str) -> bool:
+def drop_pointer(level: _StrPath, slug: str) -> bool:
     """Remove one pointer line (by slug) from a level's block, under lock, mtime-neutral."""
     with sig.memory_lock(sig.claude_local_md_path(level)):
         return _drop_line_locked(level, slug)
@@ -1983,12 +1981,12 @@ def _dangling_inbound_after_move(src: Path, dst: Path, slugs: Sequence[str]) -> 
     answer cannot depend on the order the members are listed in."""
     chain = {str(Path(x).resolve()) for x in
              (_sig.altitude_chain(str(src)) + _sig.altitude_chain(str(dst)))}
-    moving = {_canon_slug(s) for s in slugs}
+    moving = {canon_slug(s) for s in slugs}
     out: list[tuple[str, str, str]] = []
     for s in slugs:
         for lvl, citer in inbound_ref_sources(sorted(chain), s):
             here = Path(lvl).resolve()
-            if here == src and _canon_slug(citer) in moving:
+            if here == src and canon_slug(citer) in moving:
                 continue                             # a co-mover: it lands at dst too
             if here == dst or dst in here.parents:
                 continue                             # already at or below the new home
@@ -2240,9 +2238,9 @@ def _move_cap_refusal(src: _StrPath, dst: _StrPath, plan: Sequence[tuple[str, tu
     per moving line."""
     pointers = _us.parse_pointer_index(read_store_text(sig.claude_local_md_path(str(dst))))[1]
     moving = {s for s, _fields in plan}
-    before = sum(_line_size(p) for p in pointers)
-    kept = sum(_line_size(p) for p in pointers if p.slug not in moving)
-    sizes = [_line_size(us.Pointer(slug=s, title=title, hook=hook, pin=pin))
+    before = sum(line_size(p) for p in pointers)
+    kept = sum(line_size(p) for p in pointers if p.slug not in moving)
+    sizes = [line_size(us.Pointer(slug=s, title=title, hook=hook, pin=pin))
              for s, (title, hook, pin) in plan]
     after = kept + sum(sizes)
     if after <= MAX_RENDER_BLOCK_BYTES or after <= before:
@@ -2320,7 +2318,7 @@ def ensure_level(proj: _StrPath, scope_default: str = "", _locked: bool = False)
             _us.write_if_changed(local, _us.upsert_pointer_block(text, want_scope, pointers))
         if not _sig.load_config().get("track_private"):     # keep local wiring + central store unpushed
             for where, pattern in ((proj, "CLAUDE.local.md"),
-                                   (str(_anchor(proj)), us.STORE_DIRNAME + "/")):
+                                   (str(anchor_dir(proj)), us.STORE_DIRNAME + "/")):
                 if not _sig.ensure_gitignored(where, pattern):
                     sys.stderr.write("~ warning: could not make sure git ignores %s in %s (git did not "
                                      "answer, or its exclude file could not be read or written) - "
@@ -2345,8 +2343,7 @@ def _is_excluded_level(proj: _StrPath) -> bool:
     if real == Path(real.anchor):
         return True
     excluded: set[Path] = set()
-    # remove the ignore once self_improve_signals publishes _excluded_anchor_dirs
-    for d in _sig._excluded_anchor_dirs():  # pyright: ignore[reportPrivateUsage]
+    for d in _sig.excluded_anchor_dirs():
         excluded.add(Path(d))
         try:
             excluded.add(Path(d).resolve())
@@ -2499,7 +2496,7 @@ def backfill_titles(proj: str | os.PathLike[str]) -> BackfillReport:
     back-filled (its body stays at the legacy path until migrated) and is listed in `legacy`, so a
     tree holding unmigrated facts never reads as fully back-filled."""
     sig.refuse_if_memory_writes_off()
-    anchor = _anchor(proj)
+    anchor = anchor_dir(proj)
     rep = BackfillReport()
     # slug -> (the title at the first level met, every level carrying a line, in walk order).
     # One entry per fact of the tree, as the `seen` set it replaces held.
@@ -2528,13 +2525,13 @@ def _backfill_one(anchor: _StrPath, slug: str, title: str, rep: BackfillReport) 
         rep.missing.append(slug)
         return
     body = raw.rstrip("\n")
-    if _body_title(body):
+    if body_title(body):
         rep.kept += 1
         return
-    if _frontmatter(body)[1] is None:
+    if split_frontmatter(body)[1] is None:
         rep.unframed.append(slug)
         return
-    filled = _with_title(body, title)
+    filled = with_title(body, title)
     if filled == body:
         rep.untitled.append(slug)
         return
@@ -2550,7 +2547,7 @@ def _heal_one_level(level: str, report: HealReport) -> None:
     report.invalid_pointers.extend(LevelLine(level, raw) for raw in _us.invalid_pointer_lines(before))
     if _level_needs_heal(level):                     # skip-fast: healthy level = no lock, no write
         _heal_level(level, report)
-    anchor = _anchor(level)
+    anchor = anchor_dir(level)
     # orphan check by pointer-parse + stat only - bodies are never opened here
     text = read_store_text(sig.claude_local_md_path(level))
     for ptr in _us.parse_pointer_index(text)[1]:
@@ -2591,7 +2588,7 @@ def scaffold(proj: _StrPath, refused_levels: list[LevelReason] | None = None) ->
         except OSError:
             continue                                   # an unwritable level; the next is still scaffolded
     try:
-        facts_dir = _us.central_facts_dir(_anchor(proj))
+        facts_dir = _us.central_facts_dir(anchor_dir(proj))
         store_existed = facts_dir.parent.exists()     # the `.claude-memory` store dir
         facts_dir.mkdir(parents=True, exist_ok=True)
         if not store_existed:                          # scaffolding created a brand-new store dir
@@ -2833,12 +2830,12 @@ def _retarget_refs(text: str | None, canon_old: str, new_slug: str) -> str:
 
     def repl(match: re.Match[str]) -> str:
         inner = match.group(1)
-        if _ref_slug(inner) != canon_old:
+        if ref_slug(inner) != canon_old:
             return match.group(0)
         if masked[match.start():match.end()] != match.group(0):
             return match.group(0)                    # quoted syntax, not a ref - not ours to edit
         head, sep, label = inner.partition("|")
-        parts = head.split(":", 1)                   # mirrors _ref_slug's split, so the two agree
+        parts = head.split(":", 1)                   # mirrors ref_slug's split, so the two agree
         prefix = parts[0] + ":" if len(parts) == 2 else ""
         return "[[%s%s%s%s]]" % (prefix, new_slug, sep, label)
     return _WIKILINK_RX.sub(repl, text or "")
@@ -2875,7 +2872,7 @@ def _rewrite_inbound_refs(anchor: _StrPath, old_slug: str, new_slug: str) -> lis
     line of it. Built from a read taken without them, the rewrite put an older hook, title or
     prose back over an `add` that landed in between.
     """
-    canon_old = _canon_slug(old_slug)
+    canon_old = canon_slug(old_slug)
     levels = curated_levels_under(anchor)
     carriers: dict[str, list[str]] = {}
     for level in levels:
@@ -2967,7 +2964,7 @@ def _rename_entry(level: _StrPath, slug: str, to_slug: str) -> RenameReport:
         rep.refused = "no anchor for this level"
         return rep
 
-    canon_new = _canon_slug(to_slug)
+    canon_new = canon_slug(to_slug)
     if not canon_new:
         rep.refused = "the new slug is empty"
         return rep
@@ -2978,7 +2975,7 @@ def _rename_entry(level: _StrPath, slug: str, to_slug: str) -> RenameReport:
     if not _us.is_valid_slug(to_slug):
         rep.refused = str(InvalidSlug(to_slug))
         return rep
-    if _canon_slug(slug) == canon_new:
+    if canon_slug(slug) == canon_new:
         rep.refused = "the new slug is the same as the old one"
         return rep
 
@@ -3195,8 +3192,8 @@ def _retitle_entry(level: _StrPath, slug: str, to_title: str) -> RetitleReport:
         if rep.refused:
             return rep
         current = read_store_text(_us.body_path(anchor, slug)).rstrip("\n")
-        retitled_body = _with_title(current, title)
-        # `current and` is belt-and-braces: `_with_title("")` returns "", so an absent body
+        retitled_body = with_title(current, title)
+        # `current and` is belt-and-braces: `with_title("")` returns "", so an absent body
         # (read as "") already compares equal and gets no file, which keeps a dangler dangling.
         if current and retitled_body != current:
             _us.put_body(str(anchor), slug, retitled_body)
@@ -3295,7 +3292,7 @@ def _walk_error_sink(unreadable: list[str] | None) -> Callable[[OSError], object
     return lambda err: unreadable.append(str(getattr(err, "filename", None) or err))
 
 
-def _carries_pointer_block(path: _StrPath) -> bool:
+def carries_pointer_block(path: _StrPath) -> bool:
     """True when the `CLAUDE.local.md` at `path` holds a managed pointer block.
 
     False when it has vanished or is a dangling link - absent is a fact about the tree. Any other
@@ -3324,8 +3321,7 @@ def curated_levels_under(anchor: _StrPath, unreadable: list[str] | None = None) 
     the answer every caller would trust, so the walk refuses instead of undercounting. A caller
     that REPORTS rather than acts (check-tree) passes a list as `unreadable` instead: it receives
     the path of each directory or level file that could not be read, and the walk goes on."""
-    # remove the ignore once self_improve_signals publishes _audit_dir
-    audit_root = sig._audit_dir().resolve()  # pyright: ignore[reportPrivateUsage]
+    audit_root = sig.audit_dir().resolve()
     out: list[str] = []
     for root, dirs, files in os.walk(str(anchor), onerror=_walk_error_sink(unreadable)):
         dirs[:] = [d for d in dirs if not _us.is_non_level_dirname(d)
@@ -3333,7 +3329,7 @@ def curated_levels_under(anchor: _StrPath, unreadable: list[str] | None = None) 
         if "CLAUDE.local.md" not in files:
             continue
         try:
-            if _carries_pointer_block(sig.claude_local_md_path(root)):
+            if carries_pointer_block(sig.claude_local_md_path(root)):
                 out.append(root)
         except TreeWalkError as exc:
             if unreadable is None:
@@ -3384,7 +3380,7 @@ def lint_tree(anchor: str | os.PathLike[str]) -> LintReport:
     `_body_unlabelled`). Advisory, never a failure. Also lists pointer lines whose slug is not a plain filename
     (`invalid_pointers`): the parser skips them and the next write drops them. Returns a
     LintReport."""
-    top = _anchor(str(anchor))
+    top = anchor_dir(str(anchor))
     rep = LintReport(anchor=str(top))
     for lvl in curated_levels_under(top):
         text = read_store_text(sig.claude_local_md_path(lvl))
@@ -3405,7 +3401,7 @@ def lint_tree(anchor: str | os.PathLike[str]) -> LintReport:
 FRONTMATTER_HEAD_BYTES = 16384
 """How much of a body a topic scan reads: the frontmatter sits at the head, and a scan over every
 body of a tree must not read every body whole. A body whose frame is still open at this point is
-read whole (`_read_body_head`)."""
+read whole (`read_body_head`)."""
 MAX_TOPIC_BATCH = 5000
 """Most rows one `set-topics --batch` takes: the batch is held as one dict while it is applied."""
 MAX_TOPIC_BATCH_LINE_BYTES = 4096
@@ -3691,7 +3687,7 @@ def _grows_past_cap(before: int, after: int) -> bool:
 
 def _block_bytes(level_dir: _StrPath) -> int:
     """Bytes of every line in one level's block, each counting its line break."""
-    return sum(_line_size(p) for p in
+    return sum(line_size(p) for p in
                _us.parse_pointer_index(read_store_text(sig.claude_local_md_path(str(level_dir))))[1])
 
 
@@ -3718,14 +3714,14 @@ def _line_growth_refusal(verb: str, changes: Iterable[tuple[_StrPath, str, us.Po
     named, shrink = None, 0
     for level, slug, line in changes:
         pointers = _us.parse_pointer_index(read_store_text(sig.claude_local_md_path(str(level))))[1]
-        before = sum(_line_size(p) for p in pointers)
-        old = sum(_line_size(p) for p in pointers if p.slug == slug)
-        after = before - old + _line_size(line)
+        before = sum(line_size(p) for p in pointers)
+        old = sum(line_size(p) for p in pointers if p.slug == slug)
+        after = before - old + line_size(line)
         if not _grows_past_cap(before, after):
             continue
         shrink = max(shrink, after - max(MAX_RENDER_BLOCK_BYTES, before))
         if named is None:
-            named = (level, before, after, old, _line_size(line))
+            named = (level, before, after, old, line_size(line))
     if named is None:
         return None
     level, before, after, old, new = named
@@ -3756,7 +3752,7 @@ def _head_cuts_the_frame(head: str) -> bool:
     return closed is None or closed.end() == len(lead)
 
 
-def _read_body_head(path: _StrPath) -> str | None:
+def read_body_head(path: _StrPath) -> str | None:
     """The head of the body at `path` as text: its first FRONTMATTER_HEAD_BYTES, or the whole
     body when its frame is still open there. None when the file is missing. Raises TreeWalkError
     when it exists and cannot be read.
@@ -3797,7 +3793,7 @@ def _iter_body_heads(anchor: _StrPath) -> Iterator[tuple[str, str]]:
         for item in scan:
             if not item.name.endswith(".md") or not _us.is_valid_slug(item.name[:-3]):
                 continue
-            head = _read_body_head(item.path)
+            head = read_body_head(item.path)
             if head is not None:
                 yield item.name[:-3], head
 
@@ -3813,7 +3809,7 @@ def _line_from_head(slug: str, head: str | None) -> us.Pointer | None:
     """The pointer line a managed fact gets, built from its body alone: title from `title:`, hook
     from `description:`, never pinned. None when the body lacks either: such a fact is never
     rendered, it stays where its pointer is."""
-    title, hook = _body_title(head), _body_description(head)
+    title, hook = body_title(head), body_description(head)
     if not title or not hook:
         return None
     return us.Pointer(slug=slug, title=title, hook=hook)
@@ -3850,7 +3846,7 @@ def topic_level_map(anchor: _StrPath, levels: Iterable[_StrPath] | None = None) 
     return tp.LevelMap(declared), dirs
 
 
-def _unplaceable_slugs(levels: Iterable[_StrPath]) -> set[str]:
+def unplaceable_slugs(levels: Iterable[_StrPath]) -> set[str]:
     """The slugs with a pinned or legacy line at any of `levels` (`_keeps_in_place`): the facts
     the renderer never places, whatever their bodies' `topics:` say. One record per such pointer."""
     fixed: set[str] = set()
@@ -3872,7 +3868,7 @@ def _comparable_line(ptr: us.Pointer) -> str:
 
 def _line_problem(slug: str, anchor: _StrPath, lines: Mapping[str, tuple[str, us.Pointer]]) -> str | None:
     """Why `slug` cannot be bound to a topic yet, or None. `lines` is {comparable line: (level,
-    pointer)} for every distinct line of the fact (see `_pointer_owners`). A rendered line is built
+    pointer)} for every distinct line of the fact (see `pointer_owners`). A rendered line is built
     from the body alone, so a legacy pointer, a body without `description:` or `title:`, or any
     line that says something else than the body would render has to be repaired first; each
     refusal names the route that repairs that cause."""
@@ -3881,13 +3877,13 @@ def _line_problem(slug: str, anchor: _StrPath, lines: Mapping[str, tuple[str, us
             return ("%s: its line at %s is a legacy uuid: pointer, so the fact is not migrated to "
                     "the slug store; run hooks/migrate_to_slug_store.py --root %s --apply (without "
                     "--apply it only reports), then tag it" % (slug, level, anchor))
-    head = _read_body_head(_us.body_path(anchor, slug)) or ""
+    head = read_body_head(_us.body_path(anchor, slug)) or ""
     # The body is shared, so a level holding any line of the fact is a level its repair may
     # target. Every route names one: factedit otherwise walks up from its cwd and cannot run
     # outside the tree, and add without --proj and --slug derives a new slug from the title,
     # writing a second fact while this one stays as it is.
     level = next(iter(lines.values()))[0]
-    if not _body_description(head):
+    if not body_description(head):
         return ("%s: its body has no description:, so no line can be rendered from it; write its "
                 "prose (without the --- frontmatter) to a file and run "
                 "skills/meta-dream-tree/factedit.py apply --slug %s --level %s "
@@ -3895,7 +3891,7 @@ def _line_problem(slug: str, anchor: _StrPath, lines: Mapping[str, tuple[str, us
                 "hooks/memory_engine.py add --proj %s --slug %s --title <the line's title> "
                 "--hook-file <file> --body-file <that file> with the line's hook in <file>), "
                 "then tag it" % (slug, slug, level, level, slug))
-    if not _body_title(head):
+    if not body_title(head):
         return ("%s: its body has no title:, so no line can be rendered from it; run "
                 "hooks/memory_engine.py heal --proj %s --backfill-titles (or "
                 "skills/meta-dream-tree/factedit.py apply --slug %s --level %s "
@@ -3918,9 +3914,9 @@ def _line_problem(slug: str, anchor: _StrPath, lines: Mapping[str, tuple[str, us
 
 
 def read_body_topics(path: _StrPath) -> tuple[str, ...] | None:
-    """`_body_topics` of the body at `path`, reading only its head (`_read_body_head`).
+    """`_body_topics` of the body at `path`, reading only its head (`read_body_head`).
     None too when the file is missing. Raises TreeWalkError when it exists and cannot be read."""
-    head = _read_body_head(path)
+    head = read_body_head(path)
     return None if head is None else _body_topics(head)
 
 
@@ -3960,7 +3956,7 @@ def set_topic_list(proj: _StrPath, topics: Mapping[str, str], tagger: str) -> bo
     sig.refuse_if_memory_writes_off()
     if not topics:
         raise TopicRefusal(["an empty topic list: a tree's list names at least one topic"])
-    anchor = _anchor(proj)
+    anchor = anchor_dir(proj)
     with placement_lock(anchor, "topics-set-list"):
         return _set_topic_list_held(anchor, topics, tagger)
 
@@ -3995,7 +3991,7 @@ def _set_topic_list_held(anchor: _StrPath, topics: Mapping[str, str], tagger: st
     return _topic_store.save_list(anchor, topics, tagger)
 
 
-def _pointer_owners(anchor: _StrPath, wanted: Container[str]) -> _Owners:
+def pointer_owners(anchor: _StrPath, wanted: Container[str]) -> _Owners:
     """{slug: (first level pointing at it, pinned anywhere, {comparable line: (first level holding
     it, its pointer)})} for the slugs in `wanted`, from one walk over the tree's levels. Holds one
     entry per wanted slug, and per slug one record per DISTINCT line (`_comparable_line`): lines
@@ -4010,7 +4006,7 @@ def _pointer_owners(anchor: _StrPath, wanted: Container[str]) -> _Owners:
     return owners
 
 
-def _topic_row_problem(slug: str, topics: tuple[str, ...] | None, anchor: _StrPath, allowed: Container[str], owners: _Owners) -> str | None:
+def topic_row_problem(slug: str, topics: tuple[str, ...] | None, anchor: _StrPath, allowed: Container[str], owners: _Owners) -> str | None:
     """Why this row cannot be applied, or None."""
     if not _us.is_valid_slug(slug):
         return "%r is not a valid slug" % (slug,)
@@ -4027,7 +4023,7 @@ def _topic_row_problem(slug: str, topics: tuple[str, ...] | None, anchor: _StrPa
         # reads as empty and that check would name the wrong cause.
         return _line_problem(slug, anchor, owners[slug][2])
     body = read_store_text(_us.body_path(anchor, slug))
-    if _frontmatter(body)[1] is None:
+    if split_frontmatter(body)[1] is None:
         return "%s: its body has no frontmatter to carry topics" % slug
     if topics:
         # Binding a fact hands its lines to the renderer, which builds them from the body alone.
@@ -4035,7 +4031,7 @@ def _topic_row_problem(slug: str, topics: tuple[str, ...] | None, anchor: _StrPa
     return None
 
 
-def _line_size(ptr: us.Pointer) -> int:
+def line_size(ptr: us.Pointer) -> int:
     """Bytes `ptr`'s line takes in a block, its line break counted."""
     return len(ptr.index_line().encode("utf-8")) + 1
 
@@ -4070,11 +4066,11 @@ def _collapse_plan(anchor: _StrPath, rows: Mapping[str, tuple[str, ...] | None],
         return {}
     plan = {slug: copy for slug, copy in _copy_levels(anchor, unbound).items()
             if len(copy[0]) > 1 and read_body_topics(_us.body_path(anchor, slug))}
-    added = sum(_line_size(line) for holders, line in plan.values()
+    added = sum(line_size(line) for holders, line in plan.values()
                 if _level_parts(anchor, holders[0]) != tp.TOP)
     if added:
         top = os.path.abspath(str(anchor))
-        held = sum(_line_size(ptr) for ptr in
+        held = sum(line_size(ptr) for ptr in
                    _us.parse_pointer_index(read_store_text(sig.claude_local_md_path(top)))[1])
         if held + added > MAX_RENDER_BLOCK_BYTES:
             split = _top_split(anchor, top, unbound)
@@ -4089,7 +4085,7 @@ def _lines_that_fit(plan: Mapping[str, tuple[list[str], us.Pointer]], anchor: _S
     """How many of the lines a collapse `plan` adds at the tree top fit in `room` bytes, smallest
     first: what one smaller call can un-bind now. Holds one size per row of the plan."""
     fit, total = 0, 0
-    for size in sorted(_line_size(line) for holders, line in plan.values()
+    for size in sorted(line_size(line) for holders, line in plan.values()
                        if _level_parts(anchor, holders[0]) != tp.TOP):
         total += size
         if total > room:
@@ -4112,7 +4108,7 @@ def _top_split(anchor: _StrPath, top: _StrPath, unbound: Container[str]) -> dict
     levels = curated_levels_under(anchor)
     level_map = topic_level_map(anchor, levels)[0]
     place = _Placer(level_map)
-    split = _block_split(anchor, _unplaceable_slugs(levels), top,
+    split = _block_split(anchor, unplaceable_slugs(levels), top,
                          lambda slug, topics: "placed" if tp.TOP in place(topics) else "stale",
                          claim=lambda slug: "fixed" if slug in unbound and read_body_topics(
                              _us.body_path(anchor, slug)) else None)
@@ -4179,7 +4175,7 @@ def set_fact_topics(proj: _StrPath, rows: Mapping[str, tuple[str, ...] | None], 
         sig.refuse_if_memory_writes_off()
     if len(rows) > MAX_TOPIC_BATCH:
         raise TopicRefusal(["%d rows, over the limit of %d per call" % (len(rows), MAX_TOPIC_BATCH)])
-    anchor = _anchor(proj)
+    anchor = anchor_dir(proj)
     allowed = _topic_list(anchor)
     if dry_run:
         return _set_fact_topics_held(anchor, rows, allowed, True, write)
@@ -4196,11 +4192,11 @@ def set_fact_topics(proj: _StrPath, rows: Mapping[str, tuple[str, ...] | None], 
 
 def _set_fact_topics_held(anchor: _StrPath, rows: Mapping[str, tuple[str, ...] | None], allowed: Container[str], dry_run: bool, write: _WritePort | None) -> TopicsSetReport:
     """`set_fact_topics` from the row checks on; a real call's caller holds the placement lock."""
-    owners = _pointer_owners(anchor, set(rows))
+    owners = pointer_owners(anchor, set(rows))
     problems: list[str]
     problems, total = [], 0
     for slug in sorted(rows):
-        why = _topic_row_problem(slug, rows[slug], anchor, allowed, owners)
+        why = topic_row_problem(slug, rows[slug], anchor, allowed, owners)
         if why:
             total += 1
             if len(problems) < _REFUSALS_SHOWN:
@@ -4250,7 +4246,7 @@ def set_level_topics(level: _StrPath, topics: Iterable[str], top: bool = False) 
     scan for users to its save, so a TOPICS line can never name a topic that change dropped."""
     sig.refuse_if_memory_writes_off()
     level = os.path.abspath(str(level))
-    anchor = _anchor(level)
+    anchor = anchor_dir(level)
     is_top = os.path.normcase(level) == os.path.normcase(os.path.abspath(str(anchor)))
     _topic_store.level_key(anchor, level)              # a level it cannot key refuses before any write
     if is_top and not top:
@@ -4294,7 +4290,7 @@ def level_topics_stale(level: _StrPath) -> tuple[bool, str]:
     something other than the text its topics were chosen from. (False, "") when fresh, and when
     the tree has no topic list (nothing is tagged there at all)."""
     level = os.path.abspath(str(level))
-    anchor = _anchor(level)
+    anchor = anchor_dir(level)
     data = _topic_store.load(anchor)
     if data is None:
         return False, ""
@@ -4391,10 +4387,10 @@ class _Placer:
                                                         if topics else "")
 
 
-def _managed_topics(slug: str, head: str | None, pinned: Container[str]) -> tuple[str, ...] | None:
+def managed_topics(slug: str, head: str | None, pinned: Container[str]) -> tuple[str, ...] | None:
     """The topics a body head binds its fact to when the renderer manages it, else None: managed
     means a non-empty `topics:` line, a slug not in `pinned` (the slugs with a pinned or legacy
-    line anywhere, `_unplaceable_slugs`, or () when the caller judges that apart), and a body a
+    line anywhere, `unplaceable_slugs`, or () when the caller judges that apart), and a body a
     line can be built from."""
     topics = _body_topics(head)
     if not topics or slug in pinned or _line_from_head(slug, head) is None:
@@ -4416,12 +4412,12 @@ def _block_split(anchor: _StrPath, pinned: Container[str], level_dir: _StrPath, 
     for ptr in _us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level_dir)))[1]:
         name = "kept" if claim is None else claim(ptr.slug) or "kept"
         if name == "kept" and not (ptr.pin or ptr.legacy):
-            head = _read_body_head(_us.body_path(anchor, ptr.slug))
-            topics = None if head is None else _managed_topics(ptr.slug, head, pinned)
+            head = read_body_head(_us.body_path(anchor, ptr.slug))
+            topics = None if head is None else managed_topics(ptr.slug, head, pinned)
             if topics is not None:
                 name = part(ptr.slug, topics)
         if name is not None:
-            split[name] += _line_size(ptr)
+            split[name] += line_size(ptr)
     return split
 
 
@@ -4569,11 +4565,11 @@ def _wanted_lines(anchor: _StrPath, place: _Placer, pinned: Container[str], part
     wanted: dict[str, us.Pointer] | None
     wanted, size = {}, sum(held)
     for slug, head in _iter_body_heads(anchor):
-        topics = _managed_topics(slug, head, pinned)
+        topics = managed_topics(slug, head, pinned)
         if topics is None or slug in skip or parts not in place(topics):
             continue
         line = _line_from_head(slug, head)
-        assert line is not None  # _managed_topics returned topics, so the head renders a line
+        assert line is not None  # managed_topics returned topics, so the head renders a line
         size += len(line.index_line().encode("utf-8")) + 1
         if _grows_past_cap(now, size):
             wanted = None
@@ -4660,8 +4656,8 @@ def _misplaced_lines(anchor: _StrPath, place: _Placer, pinned: Container[str], p
     for ptr in _us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level_dir)))[1]:
         if ptr.pin or ptr.legacy:
             continue
-        head = _read_body_head(_us.body_path(anchor, ptr.slug))
-        topics = None if head is None else _managed_topics(ptr.slug, head, pinned)
+        head = read_body_head(_us.body_path(anchor, ptr.slug))
+        topics = None if head is None else managed_topics(ptr.slug, head, pinned)
         if topics is not None and parts not in place(topics):
             doomed[ptr.slug] = place(topics)
     return doomed
@@ -4795,8 +4791,8 @@ def _held_above(anchor: _StrPath, pinned: Container[str], level_dir: _StrPath, a
     for ptr in _us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level_dir)))[1]:
         if ptr.slug not in above or ptr.pin or ptr.legacy:
             continue
-        head = _read_body_head(_us.body_path(anchor, ptr.slug))
-        if head is not None and _managed_topics(ptr.slug, head, pinned) is not None:
+        head = read_body_head(_us.body_path(anchor, ptr.slug))
+        if head is not None and managed_topics(ptr.slug, head, pinned) is not None:
             doomed.add(ptr.slug)
     return doomed
 
@@ -4866,7 +4862,7 @@ def render_topics(proj: _StrPath, scope: str = "tree", dry_run: bool = False, wr
     if not dry_run:
         sig.refuse_if_memory_writes_off()
     proj = os.path.abspath(str(proj))
-    anchor = _anchor(proj)
+    anchor = anchor_dir(proj)
     if _topic_store.load(anchor) is None:
         return RenderReport(has_list=False)
     if dry_run:
@@ -4886,7 +4882,7 @@ def _render_held(anchor: _StrPath, proj: str, scope: str, dry_run: bool, write: 
     if not any(_level_parts(anchor, level) == tp.TOP for level in levels):
         raise TopicRefusal(["the tree top %s has no pointer block for the lines that fall back to "
                             "it (ensure-memory-structure writes one)" % anchor])
-    pinned = _unplaceable_slugs(levels)     # pinned or legacy anywhere: never placed
+    pinned = unplaceable_slugs(levels)     # pinned or legacy anywhere: never placed
     place, adds = _Placer(level_map), _add_levels(level_map)
     rep = RenderReport(scope=scope, dry_run=bool(dry_run))
     write = write or _us.write_if_changed
@@ -5110,7 +5106,7 @@ def _topic_read(args: argparse.Namespace) -> int:
         stale, why = level_topics_stale(args.proj)
         print("stale: %s" % why if stale else "fresh")
         return 1 if stale else 0
-    data = _topic_store.load(_anchor(args.proj))
+    data = _topic_store.load(anchor_dir(args.proj))
     if data is None:
         # a caller that asked for JSON parses stdout on every exit: the success shape, emptied
         print(json.dumps({"tagger": None, "topics": {}}, sort_keys=True) if args.as_json
@@ -5545,7 +5541,7 @@ def _main(argv: Sequence[str] | None = None) -> int:
         local = sig.claude_local_md_path(args.proj)
         if _is_excluded_level(args.proj):             # before the lock, which creates a file there
             raise ExcludedLevel(args.proj)
-        pruned = _pruned_part(_anchor(os.path.abspath(args.proj)), args.proj)
+        pruned = _pruned_part(anchor_dir(os.path.abspath(args.proj)), args.proj)
         if pruned is not None:                        # same: no walk would read the descriptor
             raise NonLevelDir(os.path.abspath(args.proj), *pruned,
                               route=_ENGINE_ROUTE + " set-scope --proj {level} --scope ...")

@@ -470,7 +470,7 @@ def _tree(tmp_path, *, decoy: bool, name: str = "tree"):
 
 def _clear_stamp():
     """Drop every decoy stamp, whatever the naming scheme, so a test starts un-throttled."""
-    d = SIG._audit_dir()
+    d = SIG.audit_dir()
     if d.is_dir():
         for stamp in d.glob("*decoy-check.stamp"):
             stamp.unlink()
@@ -520,14 +520,14 @@ def test_decoy_context_sweeps_the_superseded_machine_wide_stamp(tmp_path):
     """
     proj = _tree(tmp_path, decoy=False)
     _clear_stamp()
-    legacy = SIG._audit_dir() / "decoy-check.stamp"
+    legacy = SIG.audit_dir() / "decoy-check.stamp"
     legacy.parent.mkdir(parents=True, exist_ok=True)
     legacy.write_text("2026-01-01T00:00:00", encoding="utf-8")
 
     S.decoy_context(str(proj))
 
     assert not legacy.exists()
-    assert (SIG._audit_dir() / (SIG.proj_key(str(proj)) + ".decoy-check.stamp")).exists()
+    assert (SIG.audit_dir() / (SIG.proj_key(str(proj)) + ".decoy-check.stamp")).exists()
 
 
 def test_decoy_context_throttle_is_per_project_not_machine_wide(tmp_path):

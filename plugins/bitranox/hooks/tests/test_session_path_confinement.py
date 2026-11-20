@@ -63,7 +63,7 @@ def audit_dir(tmp_path, monkeypatch):
     (home / ".claude").mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
-    return sig._audit_dir()
+    return sig.audit_dir()
 
 
 @pytest.mark.parametrize("site,builder", BUILDERS, ids=[s for s, _ in BUILDERS])

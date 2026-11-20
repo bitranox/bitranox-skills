@@ -190,27 +190,27 @@ def test_ensure_level_control_a_writable_exclude_file_warns_nothing(tmp_path, ca
     assert "warning" not in capsys.readouterr().err
 
 
-# ---- _body_description reads the frame, never the prose ----------------------------------------
+# ---- body_description reads the frame, never the prose ----------------------------------------
 
 def test_body_description_ignores_a_description_line_in_unframed_prose():
     """A body with no frontmatter has no description; its prose saying `description: x` is the
     author's text, which adopting a dangling body then made the always-loaded hook."""
-    assert E._body_description("Some prose.\ndescription: not a hook\n") == ""
+    assert E.body_description("Some prose.\ndescription: not a hook\n") == ""
 
 
 def test_body_description_ignores_a_horizontal_rule_body():
-    assert E._body_description("---\nprose\ndescription: nope\n---\nmore\n") == ""
+    assert E.body_description("---\nprose\ndescription: nope\n---\nmore\n") == ""
 
 
 def test_body_description_reads_inside_the_frame_not_a_later_prose_line():
     framed = ("---\nname: s\nmetadata:\n  type: project\n---\n\n"
               "description: a prose line below the frame\n")
-    assert E._body_description(framed) == ""
+    assert E.body_description(framed) == ""
 
 
 def test_body_description_control_a_framed_body_reads_its_own():
     framed = "---\nname: s\ndescription: real hook\nmetadata:\n  type: project\n---\n\nbody\n"
-    assert E._body_description(framed) == "real hook"
+    assert E.body_description(framed) == "real hook"
 
 
 # ---- CLI ---------------------------------------------------------------------------------------
@@ -1148,14 +1148,14 @@ def test_an_UPDATE_may_still_omit_the_body(proj):
     slug = E.add_or_update_entry(proj, "Real", "When x, do y.", body="a real body")
     again = E.add_or_update_entry(proj, "Real", "When x, do z.", body="")
     assert again == slug
-    body = us.body_path(Path(E._anchor(proj)), slug).read_text(encoding="utf-8")
+    body = us.body_path(Path(E.anchor_dir(proj)), slug).read_text(encoding="utf-8")
     assert "a real body" in body
 
 
 def test_a_new_fact_with_a_real_body_still_works(proj):
     """Must-not-break: the refusal is for EMPTY only."""
     slug = E.add_or_update_entry(proj, "Fine", "When x, do y.", body="something worth reading")
-    assert us.body_path(Path(E._anchor(proj)), slug).is_file()
+    assert us.body_path(Path(E.anchor_dir(proj)), slug).is_file()
 
 
 def test_move_refusal_names_the_field_that_actually_differs(tmp_path):

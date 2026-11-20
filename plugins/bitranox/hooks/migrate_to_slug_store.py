@@ -60,7 +60,7 @@ def find_pointer_files(root, unreadable=None):
     path), whose dream backups hold copies of pointer blocks that are snapshots, not live levels.
     A file that cannot be read or decoded is appended to `unreadable` (when given) and skipped.
     """
-    audit_root = sig._audit_dir().resolve()
+    audit_root = sig.audit_dir().resolve()
     out = []
     try:
         for dirpath, dirnames, filenames in os.walk(root):

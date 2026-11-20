@@ -228,7 +228,7 @@ def test_find_curated_stores_also_collects_central_uuid_store_bodies(tmp_path, m
     facts = ws / "projB" / ".claude-memory" / "facts" / "ab"
     facts.mkdir(parents=True)
     (facts / "abcd1234-0000-5000-8000-000000000000.md").write_text("central uuid body text", encoding="utf-8")
-    got = G._find_curated_stores(str(ws))
+    got = G.find_curated_stores(str(ws))
     assert any(fwd(p).endswith("/facts/ab/abcd1234-0000-5000-8000-000000000000.md") for p in got)
 
 
@@ -255,9 +255,9 @@ def test_find_curated_stores_reglobs_fresh_facts_after_dir_cache(tmp_path, monke
     # a fact dreamed AFTER the dir-walk is cached must still surface (facts are globbed fresh)
     root = _home_root(tmp_path, monkeypatch)
     _seed_store(root, "projA", "one.md")
-    assert any(fwd(p).endswith("/facts/one.md") for p in G._find_curated_stores(str(root)))
+    assert any(fwd(p).endswith("/facts/one.md") for p in G.find_curated_stores(str(root)))
     (root / "projA" / ".claude-memory" / "facts" / "two.md").write_text("second", encoding="utf-8")
-    assert any(fwd(p).endswith("/facts/two.md") for p in G._find_curated_stores(str(root)))
+    assert any(fwd(p).endswith("/facts/two.md") for p in G.find_curated_stores(str(root)))
 
 
 def test_curated_store_dirs_caches_walk_within_ttl(tmp_path, monkeypatch):
@@ -316,7 +316,7 @@ def test_cli_walled_scan_stays_in_tree_unless_cross_tree(tmp_path, monkeypatch, 
 # ---- debounce store ------------------------------------------------------------------------------
 
 def test_a_freshly_marked_pair_reads_back_as_gathered(tmp_path, monkeypatch):
-    monkeypatch.setattr(sig, "_audit_dir", lambda: tmp_path)
+    monkeypatch.setattr(sig, "audit_dir", lambda: tmp_path)
     assert G.already_gathered("/p/alpha", "zfs snapshots") is False
     G.mark_gathered("/p/alpha", "zfs snapshots")
     assert G.already_gathered("/p/alpha", "zfs snapshots") is True
@@ -324,7 +324,7 @@ def test_a_freshly_marked_pair_reads_back_as_gathered(tmp_path, monkeypatch):
 
 def test_the_debounce_is_per_project_and_per_topic(tmp_path, monkeypatch):
     """The negative: marking one pair must not silence a different project or a different topic."""
-    monkeypatch.setattr(sig, "_audit_dir", lambda: tmp_path)
+    monkeypatch.setattr(sig, "audit_dir", lambda: tmp_path)
     G.mark_gathered("/p/alpha", "zfs snapshots")
     assert G.already_gathered("/p/beta", "zfs snapshots") is False
     assert G.already_gathered("/p/alpha", "pfsense rules") is False
@@ -332,7 +332,7 @@ def test_the_debounce_is_per_project_and_per_topic(tmp_path, monkeypatch):
 
 def test_marking_twice_records_one_row(tmp_path, monkeypatch):
     """Re-gathering the same topic must not grow the file without bound."""
-    monkeypatch.setattr(sig, "_audit_dir", lambda: tmp_path)
+    monkeypatch.setattr(sig, "audit_dir", lambda: tmp_path)
     G.mark_gathered("/p/alpha", "zfs snapshots")
     G.mark_gathered("/p/alpha", "zfs snapshots")
     rows = [ln for ln in (tmp_path / G.GATHERED_FILE).read_text(encoding="utf-8").splitlines() if ln.strip()]
@@ -341,14 +341,14 @@ def test_marking_twice_records_one_row(tmp_path, monkeypatch):
 
 def test_a_topic_matches_regardless_of_case_and_surrounding_space(tmp_path, monkeypatch):
     """A topic is free text a caller retypes; exact-match would debounce almost nothing."""
-    monkeypatch.setattr(sig, "_audit_dir", lambda: tmp_path)
+    monkeypatch.setattr(sig, "audit_dir", lambda: tmp_path)
     G.mark_gathered("/p/alpha", "  ZFS Snapshots ")
     assert G.already_gathered("/p/alpha", "zfs snapshots") is True
 
 
 def test_a_tab_in_the_topic_cannot_forge_a_second_field(tmp_path, monkeypatch):
     """The store is TSV; an unescaped tab in free text would split one row into a wrong pair."""
-    monkeypatch.setattr(sig, "_audit_dir", lambda: tmp_path)
+    monkeypatch.setattr(sig, "audit_dir", lambda: tmp_path)
     G.mark_gathered("/p/alpha", "zfs\tsnapshots")
     assert G.already_gathered("/p/alpha", "zfs\tsnapshots") is True
     assert G.already_gathered("/p/alpha", "snapshots") is False
@@ -356,13 +356,13 @@ def test_a_tab_in_the_topic_cannot_forge_a_second_field(tmp_path, monkeypatch):
 
 def test_an_unreadable_store_reports_not_gathered_rather_than_raising(tmp_path, monkeypatch):
     """Debounce is an optimisation: losing it costs a re-grep, and must never break a gather."""
-    monkeypatch.setattr(sig, "_audit_dir", lambda: tmp_path / "nonexistent")
+    monkeypatch.setattr(sig, "audit_dir", lambda: tmp_path / "nonexistent")
     assert G.already_gathered("/p/alpha", "zfs snapshots") is False
 
 
 def test_seen_exits_zero_when_marked_and_one_when_not(tmp_path, monkeypatch, capsys):
     """Exit-code contract: 0 = yes already gathered, 1 = no. Format-independent, per house rule."""
-    monkeypatch.setattr(sig, "_audit_dir", lambda: tmp_path)
+    monkeypatch.setattr(sig, "audit_dir", lambda: tmp_path)
     assert G.main(["--topic", "zfs snapshots", "--self", "/p/alpha", "--seen"]) == 1
     G.mark_gathered("/p/alpha", "zfs snapshots")
     assert G.main(["--topic", "zfs snapshots", "--self", "/p/alpha", "--seen"]) == 0
@@ -370,7 +370,7 @@ def test_seen_exits_zero_when_marked_and_one_when_not(tmp_path, monkeypatch, cap
 
 def test_seen_answers_without_running_the_scan(tmp_path, monkeypatch):
     """--seen is the cheap pre-check; if it walked the tree it would defeat its own purpose."""
-    monkeypatch.setattr(sig, "_audit_dir", lambda: tmp_path)
+    monkeypatch.setattr(sig, "audit_dir", lambda: tmp_path)
     called = []
     monkeypatch.setattr(G, "discover_files", lambda *a, **k: called.append(1) or [])
     G.main(["--topic", "zfs snapshots", "--self", "/p/alpha", "--seen"])
@@ -378,13 +378,13 @@ def test_seen_answers_without_running_the_scan(tmp_path, monkeypatch):
 
 
 def test_mark_records_the_pair_and_exits_zero(tmp_path, monkeypatch):
-    monkeypatch.setattr(sig, "_audit_dir", lambda: tmp_path)
+    monkeypatch.setattr(sig, "audit_dir", lambda: tmp_path)
     assert G.main(["--topic", "zfs snapshots", "--self", "/p/alpha", "--mark"]) == 0
     assert G.already_gathered("/p/alpha", "zfs snapshots") is True
 
 
 def test_mark_does_not_run_a_scan_either(tmp_path, monkeypatch):
-    monkeypatch.setattr(sig, "_audit_dir", lambda: tmp_path)
+    monkeypatch.setattr(sig, "audit_dir", lambda: tmp_path)
     called = []
     monkeypatch.setattr(G, "discover_files", lambda *a, **k: called.append(1) or [])
     G.main(["--topic", "zfs snapshots", "--self", "/p/alpha", "--mark"])
@@ -395,7 +395,7 @@ def test_a_plain_scan_still_ignores_the_debounce(tmp_path, monkeypatch):
     """The negative that matters: marking a topic must NOT silently stop an explicit scan.
 
     Debounce is advice to the caller, not a gate on the tool - a scan asked for is a scan run."""
-    monkeypatch.setattr(sig, "_audit_dir", lambda: tmp_path)
+    monkeypatch.setattr(sig, "audit_dir", lambda: tmp_path)
     G.mark_gathered("/p/alpha", "zfs snapshots")
     called = []
     monkeypatch.setattr(G, "discover_files", lambda *a, **k: called.append(1) or [])
@@ -552,13 +552,13 @@ def test_ascii_boundaries_are_unchanged_by_unicode_matching(tmp_path):
 def test_mark_exits_two_when_the_record_cannot_be_written(tmp_path, monkeypatch, capsys):
     blocker = tmp_path / "a-file"
     blocker.write_text("x", encoding="utf-8")
-    monkeypatch.setattr(sig, "_audit_dir", lambda: blocker / "audit")   # parent is a FILE
+    monkeypatch.setattr(sig, "audit_dir", lambda: blocker / "audit")   # parent is a FILE
     assert G.main(["--topic", "zfs snapshots", "--self", "/p/alpha", "--mark"]) == 2
     assert "error" in capsys.readouterr().err
 
 
 def test_mark_of_an_already_marked_pair_still_exits_zero(tmp_path, monkeypatch):
-    monkeypatch.setattr(sig, "_audit_dir", lambda: tmp_path)
+    monkeypatch.setattr(sig, "audit_dir", lambda: tmp_path)
     assert G.main(["--topic", "zfs snapshots", "--self", "/p/alpha", "--mark"]) == 0
     assert G.main(["--topic", "zfs snapshots", "--self", "/p/alpha", "--mark"]) == 0
 
@@ -788,7 +788,7 @@ def test_a_store_cache_in_the_old_format_is_rewalked(tmp_path, monkeypatch):
     root = _home_root(tmp_path, monkeypatch)
     _seed_store(root, "projA", "one.md")
     G._curated_store_dirs(str(root))
-    cache = next(sig._audit_dir().glob("curated-dirs.*"))
+    cache = next(sig.audit_dir().glob("curated-dirs.*"))
     stamp = "gen:%d" % sig.stores_generation()
     cache.write_text("\n".join([stamp, str(root / "bogus" / ".claude-memory")]), encoding="utf-8")
     got = G._curated_store_dirs(str(root))

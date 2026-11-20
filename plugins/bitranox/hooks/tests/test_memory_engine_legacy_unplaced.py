@@ -4,7 +4,7 @@
 A fact whose body is bound to a topic but which also has a legacy line at some level used to be
 managed by the renderer: a tree render added its lines at the levels its topics place it at,
 which no render or check could then account for beside the legacy line it never drops. The
-engine's rule (`_unplaceable_slugs`, `_placed_slugs`, `_placed_copies`) now treats a legacy line
+engine's rule (`unplaceable_slugs`, `_placed_slugs`, `placed_copies`) now treats a legacy line
 like a pinned one, and reconcile's --check-tree, mem_levels.py and ref_map.py follow it.
 All content ASCII.
 """
@@ -109,8 +109,8 @@ def test_a_legacy_line_keeps_a_bound_fact_unplaced_in_the_engine(tmp_path):
     L = _tree(tmp_path)
     _bound_with_a_legacy_line(L)
     assert E._placed_slugs(L[""], ["feedback-lg"]) == set()
-    assert E._placed_copies(L[""], "feedback-lg") == []
-    assert "feedback-lg" in E._unplaceable_slugs(E.curated_levels_under(L[""]))
+    assert E.placed_copies(L[""], "feedback-lg") == []
+    assert "feedback-lg" in E.unplaceable_slugs(E.curated_levels_under(L[""]))
 
 
 def test_tree_and_chain_renders_leave_it_alone_and_agree(tmp_path):

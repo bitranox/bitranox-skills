@@ -60,11 +60,11 @@ def _untitled_fact(anchor, level, slug, prose):
 
 def _while_backfill_holds_its_read(start):
     """A profile function that calls `start()` once, when the back-fill first reaches
-    `_with_title`: after it read a body, before it writes it back. It replaces nothing."""
+    `with_title`: after it read a body, before it writes it back. It replaces nothing."""
     fired = []
 
     def profile(frame, event, _arg):
-        if fired or event != "call" or frame.f_code.co_name != "_with_title":
+        if fired or event != "call" or frame.f_code.co_name != "with_title":
             return
         fired.append(start())
 
@@ -112,7 +112,7 @@ def test_an_add_through_another_level_keeps_its_prose(tmp_path):
     assert rep.filled == ["dup-fact"]
     body = us.body_path(anchor, "dup-fact").read_text(encoding="utf-8")
     assert "Prose two." in body and "Prose one." not in body, body
-    assert E._body_title(body.rstrip("\n")) == "Old fact title"
+    assert E.body_title(body.rstrip("\n")) == "Old fact title"
 
 
 def test_an_add_of_another_fact_at_the_same_level_is_not_held_up(tmp_path):
@@ -167,7 +167,7 @@ def test_a_fact_bound_to_a_topic_is_filled_under_the_placement_lock(tmp_path):
     held = []
 
     def profile(frame, event, _arg):
-        if not held and event == "call" and frame.f_code.co_name == "_with_title":
+        if not held and event == "call" and frame.f_code.co_name == "with_title":
             held.append(placement.exists())
 
     previous = sys.getprofile()

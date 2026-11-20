@@ -30,7 +30,7 @@ def _old_bug_tombstone_file(proj, close_cwd, records):
     """Write `records` exactly where the pre-fix close put them: under the hash of the queue_key
     pseudo-path made absolute beneath the cwd the close ran from."""
     pseudo = S.QUEUE_KEY_PREFIX + S.proj_key(proj)
-    wrong = S._audit_dir() / (S.proj_key(os.path.join(str(close_cwd), pseudo))
+    wrong = S.audit_dir() / (S.proj_key(os.path.join(str(close_cwd), pseudo))
                               + ".contrib-rejected.jsonl")
     wrong.parent.mkdir(parents=True, exist_ok=True)
     wrong.write_text("\n".join(json.dumps(r, sort_keys=True) for r in records) + "\n",

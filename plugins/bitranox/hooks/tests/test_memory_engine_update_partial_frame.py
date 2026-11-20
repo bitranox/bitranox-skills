@@ -43,7 +43,7 @@ def _stored(anchor, slug):
 
 
 def _frame(text):
-    _head, m = E._frontmatter(text)
+    _head, m = E.split_frontmatter(text)
     assert m is not None
     return m.group(1)
 
@@ -52,22 +52,22 @@ def test_an_update_with_a_partial_frame_keeps_the_stored_keys_it_does_not_set(fa
     anchor, proj, slug = fact
     E.add_or_update_entry(proj, title="T", hook=HOOK, body=PARTIAL, slug=slug)
     stored = _stored(anchor, slug)
-    assert E._body_description(stored) == HOOK
-    assert E._body_type(stored) == "feedback"
+    assert E.body_description(stored) == HOOK
+    assert E.body_type(stored) == "feedback"
     assert E._body_skill(stored) == "bitranox:compuse-git"
     assert E._body_topics(stored) == ("python",)          # the stored line wins over the frame's
-    assert E._body_title(stored) == "T"
+    assert E.body_title(stored) == "T"
     assert "name: %s" % slug in _frame(stored)
     assert stored.endswith("new prose\n") and "first prose" not in stored
-    head = E._read_body_head(us.body_path(anchor, slug))
-    assert E._managed_topics(slug, head, ()) == ("python",)   # still placed by topic
+    head = E.read_body_head(us.body_path(anchor, slug))
+    assert E.managed_topics(slug, head, ()) == ("python",)   # still placed by topic
 
 
 def test_the_description_still_follows_a_new_hook(fact):
     anchor, proj, slug = fact
     E.add_or_update_entry(proj, title="T", hook="When the hook changes, follow it.",
                           body=PARTIAL, slug=slug)
-    assert E._body_description(_stored(anchor, slug)) == "When the hook changes, follow it."
+    assert E.body_description(_stored(anchor, slug)) == "When the hook changes, follow it."
 
 
 def test_keys_the_new_frame_sets_still_win(fact):
@@ -75,9 +75,9 @@ def test_keys_the_new_frame_sets_still_win(fact):
     body = "---\nname: x\nmetadata:\n  type: reference\n---\n\nnew prose\n"
     E.add_or_update_entry(proj, title="T", hook=HOOK, body=body, slug=slug)
     stored = _stored(anchor, slug)
-    assert E._body_type(stored) == "reference"                # the frame's kind
+    assert E.body_type(stored) == "reference"                # the frame's kind
     assert E._body_skill(stored) == "bitranox:compuse-git"    # a metadata key it did not set
-    assert E._body_description(stored) == HOOK
+    assert E.body_description(stored) == HOOK
 
 
 def test_a_full_frame_update_is_unchanged_by_the_merge(fact):

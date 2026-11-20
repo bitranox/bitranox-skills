@@ -192,10 +192,10 @@ def test_backfill_titles_keeps_the_stored_topics_line(tmp_path):
     anchor, proj, slug = _tagged(tmp_path, topics=())
     untitled = _stored(anchor, slug).replace("title: T\n", "")
     us.put_body(anchor, slug, untitled)
-    assert not E._body_title(untitled)
+    assert not E.body_title(untitled)
     assert E.backfill_titles(proj).filled == [slug]
     stored = _stored(anchor, slug)
-    assert E._body_title(stored) == "T"
+    assert E.body_title(stored) == "T"
     assert E._body_topics(stored) == () and stored.count("topics:") == 1
 
 

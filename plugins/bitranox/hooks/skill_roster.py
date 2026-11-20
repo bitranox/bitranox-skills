@@ -326,7 +326,7 @@ def listing_from_transcript(transcript_path, cwd=None):
 
 
 def _cache_file(cwd):
-    return sig._audit_dir() / ("%s.skill-listing.json" % sig.proj_key(cwd))  # noqa: SLF001
+    return sig.audit_dir() / ("%s.skill-listing.json" % sig.proj_key(cwd))
 
 
 def _write_cache(cwd, skills):

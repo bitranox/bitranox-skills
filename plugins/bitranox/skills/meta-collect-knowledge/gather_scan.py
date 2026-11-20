@@ -69,10 +69,10 @@ def _is_junk_token(tok):
 # the rest may also hold "_" and "-" so hyphenated technical terms stay one token. An ASCII-only
 # class split "Schluessel" spelled with an umlaut into fragments that matched unrelated words.
 _TOKEN_RE = re.compile(r"[^\W_][\w-]{2,}")
-_WORD_CHAR = r"[^\W_]"                      # what a keyword may not touch on either side in scan()
+WORD_CHAR = r"[^\W_]"                      # what a keyword may not touch on either side in scan()
 
 
-def _fold(text):
+def fold(text):
     """The one normalisation topic and note text share: NFC (so a decomposed umlaut equals the
     composed one) then casefold."""
     return unicodedata.normalize("NFC", text or "").casefold()
@@ -93,7 +93,7 @@ def extract_keywords(text, max_n=12, proj=None):
     except Exception:  # noqa: BLE001 - missing/corrupt list must never break extraction
         drop = _STOP
     out = []
-    for tok in _TOKEN_RE.findall(_fold(text)):
+    for tok in _TOKEN_RE.findall(fold(text)):
         if tok in drop or len(tok) < 3 or tok in out or _is_junk_token(tok):
             continue
         out.append(tok)
@@ -177,7 +177,7 @@ def _workspace_root(cwd, max_up=8):
     """The highest ancestor of `cwd` (within `max_up` levels, never above $HOME) that still holds a
     CLAUDE.md - the root of the knowledge tree to search. None if no ancestor has one. The dirs that
     must never be an altitude anchor (HOME itself, the system temp dir, the filesystem root - see
-    self_improve_signals._excluded_anchor_dirs) are skipped: a stray CLAUDE.md at /tmp would
+    self_improve_signals.excluded_anchor_dirs) are skipped: a stray CLAUDE.md at /tmp would
     otherwise turn ALL of the temp dir into one "workspace" and pollute recall with unrelated junk
     (bitten twice on 2026-07-05)."""
     try:
@@ -185,7 +185,7 @@ def _workspace_root(cwd, max_up=8):
     except OSError:
         return None
     home = Path.home()
-    excluded = sig._excluded_anchor_dirs()
+    excluded = sig.excluded_anchor_dirs()
     root = None
     for _ in range(max_up):
         try:
@@ -334,7 +334,7 @@ def _walk_store_dirs(root):
     """os.walk `root` for `.claude-memory` store DIRS - allow-listing the store dot-dir past the
     hidden-dir prune, excluding vendored / other-hidden / backup dirs, not descending INTO a store.
     This walk is the EXPENSIVE part (on a big tree it dominates recall); _curated_store_dirs caches
-    it. Facts are globbed FRESH by _find_curated_stores, so a newly added fact is never hidden by the
+    it. Facts are globbed FRESH by find_curated_stores, so a newly added fact is never hidden by the
     cache - only the appearance of a brand-new store dir needs a refresh (TTL or generation bump)."""
     dirs = []
     try:
@@ -362,12 +362,12 @@ def _curated_store_dirs(root, cache_ttl=3600):
     schedule (see the notes above _SKIPPED). Cache sits with the other recall caches; any IO error
     falls back to a live walk."""
     key = hashlib.sha1(("dirs:" + str(root)).encode("utf-8", "surrogatepass")).hexdigest()[:12]
-    cache = sig._audit_dir() / ("curated-dirs.%s.txt" % key)
+    cache = sig.audit_dir() / ("curated-dirs.%s.txt" % key)
     stamp = "v2 gen:%d" % sig.stores_generation()
     return _cached_walk(cache, stamp, cache_ttl, lambda: _walk_store_dirs(root))
 
 
-def _find_curated_stores(root, cache_ttl=3600):
+def find_curated_stores(root, cache_ttl=3600):
     """Every curated body under `root`: the central slug store's `facts/*.md` (flat, slug-named;
     a transitional sharded remnant `facts/<shard>/<uuid>.md` is still read). The store-dir WALK is
     cached (see _curated_store_dirs); the facts are re-globbed FRESH here, so a just-dreamed fact
@@ -389,9 +389,9 @@ def discover_curated(self_cwd, exclude_proj=None, cache_ttl=3600):
     root = _workspace_root(self_cwd)
     if root is None:
         return []
-    # The expensive store-dir WALK is cached (TTL + stores-generation) inside _find_curated_stores,
+    # The expensive store-dir WALK is cached (TTL + stores-generation) inside find_curated_stores,
     # which re-globs facts FRESH - so a newly dreamed fact is never stale (unlike a cached file list).
-    return _find_curated_stores(root, cache_ttl=cache_ttl)
+    return find_curated_stores(root, cache_ttl=cache_ttl)
 
 
 def scan(keywords, files, skipped=None):
@@ -405,13 +405,13 @@ def scan(keywords, files, skipped=None):
     (path, reason) pair per skipped file."""
     pats = {}
     for k in keywords:
-        k = _fold(k)
+        k = fold(k)
         if k and k not in pats:
-            pats[k] = re.compile("(?<!%s)%s(?!%s)" % (_WORD_CHAR, re.escape(k), _WORD_CHAR))
+            pats[k] = re.compile("(?<!%s)%s(?!%s)" % (WORD_CHAR, re.escape(k), WORD_CHAR))
     out = {}
     for p in files:
         try:
-            text = _fold(Path(p).read_text(encoding="utf-8-sig"))
+            text = fold(Path(p).read_text(encoding="utf-8-sig"))
         except (OSError, UnicodeDecodeError) as exc:
             if skipped is not None:
                 skipped.append((str(p), "%s: %s" % (type(exc).__name__, exc)))
@@ -432,7 +432,7 @@ GATHERED_FILE = "gathered-topics.tsv"
 
 
 def _gathered_path():
-    return sig._audit_dir() / GATHERED_FILE
+    return sig.audit_dir() / GATHERED_FILE
 
 
 def _pair_key(proj, topic, pathmod=os.path):
@@ -528,7 +528,7 @@ def _candidate_files(self_proj, cross_allowed):
         # OTHER knowledge trees are invisible to the workspace walk - discover them via the
         # configured discovery_roots (the multi-tree knob) and scan their stores too.
         for r in sig.discovery_roots():
-            files += _find_curated_stores(str(r))
+            files += find_curated_stores(str(r))
     files = sorted({os.path.realpath(f) for f in files})
     if cross_allowed:
         return files, None

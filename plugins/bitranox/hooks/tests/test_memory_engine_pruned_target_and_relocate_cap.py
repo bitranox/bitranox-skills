@@ -164,18 +164,18 @@ def _fill(level, total):
     pointers, left, i = [], total, 0
     while left:
         slug = "feedback-kept%05d" % i
-        base = E._line_size(us.Pointer(slug=slug, title="T", hook=""))
-        full = E._line_size(us.Pointer(slug=slug, title="T", hook="k" * 1000))
+        base = E.line_size(us.Pointer(slug=slug, title="T", hook=""))
+        full = E.line_size(us.Pointer(slug=slug, title="T", hook="k" * 1000))
         hook_len = 1000 if left - full >= base + 1 else left - base
         pointers.append(us.Pointer(slug=slug, title="T", hook="k" * hook_len))
-        left -= E._line_size(pointers[-1])
+        left -= E.line_size(pointers[-1])
         i += 1
     local.write_text(us.upsert_pointer_block(text, scope, have + pointers), encoding="utf-8")
 
 
 def _block_bytes(level):
     text = sig.claude_local_md_path(level).read_text(encoding="utf-8")
-    return sum(E._line_size(p) for p in us.parse_pointer_index(text)[1])
+    return sum(E.line_size(p) for p in us.parse_pointer_index(text)[1])
 
 
 def test_a_cross_tree_relocate_that_would_pass_the_cap_is_refused(tmp_path, capsys):

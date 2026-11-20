@@ -257,7 +257,7 @@ def test_an_update_at_one_line_refreshes_the_others(tmp_path):
 def test_a_dangling_bound_body_is_still_adopted(tmp_path):
     _anchor, levels = _rendered(tmp_path)
     for rel in ("a/py", "b/py"):
-        E._drop_pointer(levels[rel], "feedback-py-rule")
+        E.drop_pointer(levels[rel], "feedback-py-rule")
     E.add_or_update_entry(levels["a"], title="T feedback-py-rule", hook=HOOK, slug="feedback-py-rule")
     assert _slugs(levels["a"]) == ["feedback-py-rule"]
 

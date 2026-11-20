@@ -46,7 +46,7 @@ def test_archiving_a_traversal_pointer_moves_no_file(proj):
 def test_control_archiving_a_real_fact_still_moves_its_body(proj):
     slug = E.add_or_update_entry(str(proj), "Real", "When real, do real.", body="B",
                                  type_="reference")
-    body = US.body_path(E._anchor(str(proj)), slug)
+    body = US.body_path(E.anchor_dir(str(proj)), slug)
     assert body.is_file()
     assert R.archive_entry(str(proj), slug) is True
     assert not body.is_file()
@@ -54,7 +54,7 @@ def test_control_archiving_a_real_fact_still_moves_its_body(proj):
 
 
 def _dangle(proj: Path, name: str) -> Path:
-    facts = US.central_facts_dir(E._anchor(str(proj)))
+    facts = US.central_facts_dir(E.anchor_dir(str(proj)))
     facts.mkdir(parents=True, exist_ok=True)
     path = facts / (name + ".md")
     path.write_text("---\nname: x\ndescription: When %s, do it.\n---\n\nbody\n" % name,
@@ -89,7 +89,7 @@ def test_control_a_clean_rehome_still_exits_zero(proj, capsys):
 def test_archiving_keeps_an_earlier_archived_body_of_the_same_slug(proj):
     slug = E.add_or_update_entry(str(proj), "Real", "When real, do real.", body="LIVE",
                                  type_="reference")
-    body = US.body_path(E._anchor(str(proj)), slug)
+    body = US.body_path(E.anchor_dir(str(proj)), slug)
     archive = body.parent.parent / ".archive"
     archive.mkdir(parents=True, exist_ok=True)
     (archive / body.name).write_text("EARLIER ARCHIVED FACT\n", encoding="utf-8")

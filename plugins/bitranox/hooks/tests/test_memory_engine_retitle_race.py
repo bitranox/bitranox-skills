@@ -62,7 +62,7 @@ def titles():
     text = Path(proj, "CLAUDE.local.md").read_text(encoding="utf-8")
     ptr = next(p for p in us.parse_pointer_index(text)[1] if p.slug == "fact")
     body = us.body_path(anchor, "fact").read_text(encoding="utf-8").rstrip("\n")
-    return ptr.title, E._body_title(body)
+    return ptr.title, E.body_title(body)
 
 done = differ = 0
 next_gap = time.time() + GAP_EVERY
@@ -165,7 +165,7 @@ def test_no_hold_of_the_level_lock_sees_the_line_and_body_titles_differ(tmp_path
     ptr = next(p for p in us.parse_pointer_index(
         (Path(proj) / "CLAUDE.local.md").read_text(encoding="utf-8"))[1] if p.slug == "fact")
     body = us.body_path(anchor, "fact").read_text(encoding="utf-8").rstrip("\n")
-    assert ptr.title == E._body_title(body)
+    assert ptr.title == E.body_title(body)
     assert "the body" in body, "neither writer may lose the prose"
 
 
@@ -173,7 +173,7 @@ def _titles(anchor, proj):
     """(the line's title, the body's title) as the files hold them now."""
     text = (Path(proj) / "CLAUDE.local.md").read_text(encoding="utf-8")
     ptr = next(p for p in us.parse_pointer_index(text)[1] if p.slug == "fact")
-    return ptr.title, E._body_title(us.body_path(anchor, "fact").read_text(encoding="utf-8"))
+    return ptr.title, E.body_title(us.body_path(anchor, "fact").read_text(encoding="utf-8"))
 
 
 def test_every_take_of_a_lock_by_retitle_finds_the_titles_equal(tmp_path, monkeypatch):
@@ -237,7 +237,7 @@ def test_a_line_dropped_meanwhile_is_not_put_back(tmp_path, monkeypatch):
     anchor, proj = _tree(tmp_path)
     body_before = us.body_path(anchor, "fact").read_bytes()
 
-    profile, fired = _between_read_and_write(lambda: E._drop_pointer(proj, "fact"))
+    profile, fired = _between_read_and_write(lambda: E.drop_pointer(proj, "fact"))
     rep = _retitle_with(profile, proj, "New title")
 
     assert fired, "the interleaving was not exercised"

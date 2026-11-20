@@ -676,7 +676,7 @@ def decoy_context(proj):
         import uuid_store as us
 
         # find_decoy_anchors is only meaningful below a RESOLVED anchor - a CLAUDE.md-bearing
-        # ancestor. memory_engine._anchor falls back to `proj` itself when there is none, which
+        # ancestor. memory_engine.anchor_dir falls back to `proj` itself when there is none, which
         # breaks the precondition in both directions: every live per-tree store underneath then
         # reads as a decoy and the message tells the reader to remove it, and the walk root
         # becomes the cwd, so a session started in a home directory walks the whole of it.
@@ -686,7 +686,7 @@ def decoy_context(proj):
         # Keyed per PROJECT, like audit_file beside it. One machine-wide stamp let whichever
         # project started a session first each day consume every other tree's daily check, so a
         # tree that really did carry a decoy was warned about only if it won that race.
-        stamp = sig._audit_dir() / (sig.proj_key(proj) + ".decoy-check.stamp")
+        stamp = sig.audit_dir() / (sig.proj_key(proj) + ".decoy-check.stamp")
         if stamp.exists() and (time.time() - stamp.stat().st_mtime) < _DECOY_CHECK_INTERVAL_S:
             return ""
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "skills" / "meta-self-improve"))
@@ -699,7 +699,7 @@ def decoy_context(proj):
         # in the user's audit dir with no owner left to remove it and nothing in it saying why it
         # is there. Swept on the first run that writes a per-project one; missing is the normal case.
         try:
-            (sig._audit_dir() / "decoy-check.stamp").unlink()
+            (sig.audit_dir() / "decoy-check.stamp").unlink()
         except OSError:
             pass
         if not found:

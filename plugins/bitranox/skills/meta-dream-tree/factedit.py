@@ -133,7 +133,7 @@ _MARKETPLACE = ".claude/plugins/marketplaces/bitranox-skills/plugins/bitranox/ho
 _DESC_RX = re.compile(r"(?m)^description:[ \t]*(.*)$")
 # `metadata:\n  type: <t>` - indented, so it cannot be confused with the top-level keys above it.
 _TYPE_RX = re.compile(r"(?m)^[ \t]+type:[ \t]*(\S+)[ \t]*\r?$")
-# The engine's frontmatter test (memory_engine._frontmatter): a CLOSED leading block that carries
+# The engine's frontmatter test (memory_engine.split_frontmatter): a CLOSED leading block that carries
 # a `name:` key. A body that merely opens with a horizontal rule has no frame at all.
 _FRAME_RX = re.compile(r"---[ \t]*\r?\n(.*?\r?\n)?---[ \t]*(?:\r?\n|\Z)", re.DOTALL)
 _NAME_RX = re.compile(r"(?m)^name:")

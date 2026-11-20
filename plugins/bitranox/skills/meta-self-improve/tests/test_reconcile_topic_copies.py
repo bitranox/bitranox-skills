@@ -89,7 +89,7 @@ def test_a_rendered_tree_has_no_problem(tmp_path, capsys):
 
 def test_a_missing_copy_is_render_drift(tmp_path, capsys):
     levels = _rendered(tmp_path)
-    ME._drop_pointer(levels["b/py"], "feedback-py-rule")
+    ME.drop_pointer(levels["b/py"], "feedback-py-rule")
     rc, out = _check_tree(levels, capsys)
     assert rc == 1 and "TOTAL tree problems: 1" in out
     assert "! render drift: %s -> 1 line(s) missing, 0 differing from the body, 0 placed elsewhere " \
@@ -232,8 +232,8 @@ def test_each_drift_kind_is_counted_per_level_and_the_tree_route_repairs_all_of_
     levels = _rendered(tmp_path)
     _fact(levels[""], "feedback-py-two", ("python",))
     ME.render_topics(levels[""])
-    ME._drop_pointer(levels["b/py"], "feedback-py-rule")
-    ME._drop_pointer(levels["b/py"], "feedback-py-two")
+    ME.drop_pointer(levels["b/py"], "feedback-py-rule")
+    ME.drop_pointer(levels["b/py"], "feedback-py-two")
     _plant_line(levels["a/py"], "feedback-py-rule", hook="When this line went stale, it says this.")
     _plant_line(levels["a/other"], "feedback-py-rule")
     rc, out = _check_tree(levels, capsys)
@@ -339,7 +339,7 @@ def test_a_read_only_tree_checks_clean(tmp_path, capsys):
 def _untitled(level, slug):
     """A python-bound fact whose body has no `title:`: the renderer never places it."""
     _fact(level, slug, ("python",))
-    path = us.body_path(ME._anchor(level), slug)
+    path = us.body_path(ME.anchor_dir(level), slug)
     text = path.read_text(encoding="utf-8")
     assert re.search(r"(?m)^title:.*\n", text)
     path.write_text(re.sub(r"(?m)^title:.*\n", "", text, count=1), encoding="utf-8")

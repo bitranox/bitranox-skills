@@ -32,7 +32,7 @@ when the exit is 2, so "no level holds it" (exit 1) is `ok: true`. Unreadable pa
 `skipped`.
 
 A level is a `CLAUDE.local.md` carrying a managed pointer block - the engine's own predicate
-(`memory_engine._carries_pointer_block`). A file of bare pointer lines with no block is not a level,
+(`memory_engine.carries_pointer_block`). A file of bare pointer lines with no block is not a level,
 because the engine neither counts nor maintains one.
 
 Pre-pivot `uuid:` pointers count as facts at their level; their bodies are looked for at the old
@@ -160,7 +160,7 @@ def slugs_in(text: str) -> list[str]:
 
 def _carries_block(text: str) -> bool:
     """Whether a level file holds a managed pointer block, current or legacy - the engine's own
-    curated-level test (`memory_engine._carries_pointer_block`)."""
+    curated-level test (`memory_engine.carries_pointer_block`)."""
     return uuid_store.INDEX_BEGIN in text or uuid_store.LEGACY_INDEX_BEGIN in text
 
 
@@ -229,17 +229,17 @@ def _store_bodies(facts: Path, unreadable: list[str]) -> tuple[set[str], dict[st
 
 def _bound_to_a_topic(root: Path, slug: str) -> bool:
     """Whether the engine places `slug`'s lines by topic: the engine's own test
-    (`memory_engine._managed_topics`) on the head of the body it reads (`_read_body_head`), so the
+    (`memory_engine.managed_topics`) on the head of the body it reads (`read_body_head`), so the
     two cannot disagree. A level that pins the fact is the caller's check. A body that is missing
     or cannot be read is not judged placed: its lines at several levels stay duplicates. Reads the
     head of the body only."""
     if not uuid_store.is_valid_slug(slug):
         return False
     try:
-        head = memory_engine._read_body_head(uuid_store.body_path(root, slug))  # noqa: SLF001
+        head = memory_engine.read_body_head(uuid_store.body_path(root, slug))
     except uuid_store.TreeWalkError:
         return False
-    return head is not None and memory_engine._managed_topics(slug, head, ()) is not None  # noqa: SLF001
+    return head is not None and memory_engine.managed_topics(slug, head, ()) is not None
 
 
 def scan(root: str | Path) -> Report:
@@ -259,7 +259,7 @@ def scan(root: str | Path) -> Report:
         for s in slugs:
             pointed.setdefault(s, []).append(lvl)
     several = {s: sorted(l) for s, l in pointed.items() if len(set(l)) > 1}
-    # The engine's rule (`memory_engine._unplaceable_slugs`): a pinned or legacy line anywhere
+    # The engine's rule (`memory_engine.unplaceable_slugs`): a pinned or legacy line anywhere
     # keeps a fact from being placed, so its lines at several levels stay duplicates.
     report.placed = {s: l for s, l in several.items()
                      if s not in report.pinned and s not in report.legacy

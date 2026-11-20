@@ -2,7 +2,7 @@
 
 Three ways a write used to store something other than what the caller meant:
 
-* `_framed_body` joined `---\\n\\n` and the body verbatim, so a body file that opened with a blank
+* `framed_body` joined `---\\n\\n` and the body verbatim, so a body file that opened with a blank
   line got a doubled blank under the frontmatter.
 * A body that already CARRIED a frame (the text `factedit.py show --body` prints, or a body read
   back from the store) passed through untouched, so its `description:` kept the OLD hook while the
@@ -36,18 +36,18 @@ def level(tmp_path):
 
 
 def _stored(level, slug):
-    return us.body_path(ME._anchor(str(level)), slug).read_text(encoding="utf-8")
+    return us.body_path(ME.anchor_dir(str(level)), slug).read_text(encoding="utf-8")
 
 
 # ---- leading blank lines --------------------------------------------------------------------------
 
 def test_a_body_opening_with_blank_lines_gets_exactly_one_blank_under_the_frame():
-    framed = ME._framed_body("s", "h", "project", "\n\nprose\n")
+    framed = ME.framed_body("s", "h", "project", "\n\nprose\n")
     assert framed == "---\nname: s\ndescription: h\nmetadata:\n  type: project\n---\n\nprose\n"
 
 
 def test_stripping_leading_blank_lines_keeps_the_first_content_line_s_indentation():
-    framed = ME._framed_body("s", "h", "project", "\n    code block\n")
+    framed = ME.framed_body("s", "h", "project", "\n    code block\n")
     assert framed.endswith("---\n\n    code block\n")
 
 
@@ -70,7 +70,7 @@ def test_a_framed_body_sent_with_a_new_hook_stores_the_new_hook_as_its_descripti
     text = _stored(level, slug)
     assert "description: When x happens, do z.\n" in text, text
     assert "do y." not in text
-    assert ME._body_type(text) == "feedback"
+    assert ME.body_type(text) == "feedback"
 
 
 def test_a_framed_body_on_create_takes_the_hook_as_its_description(level):
@@ -78,7 +78,7 @@ def test_a_framed_body_on_create_takes_the_hook_as_its_description(level):
     slug = ME.add_or_update_entry(str(level), "Fresh", "When a, do b.", body=body)
     text = _stored(level, slug)
     assert "description: When a, do b.\n" in text and "stale words" not in text
-    assert ME._body_type(text) == "reference"
+    assert ME.body_type(text) == "reference"
     assert text.startswith("---\nname: %s\n" % slug), text
 
 
@@ -88,7 +88,7 @@ def test_an_explicit_type_wins_over_the_type_a_framed_body_carries(level):
     old_text = _stored(level, slug)
     ME.add_or_update_entry(str(level), "Rule", "When x, do y.", body=old_text, slug=slug,
                            type_="reference")
-    assert ME._body_type(_stored(level, slug)) == "reference"
+    assert ME.body_type(_stored(level, slug)) == "reference"
 
 
 def test_a_framed_body_keeps_its_prose_byte_for_byte(level):

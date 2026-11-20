@@ -78,7 +78,7 @@ def _plant(level, pointers):
 
 def _bytes(level):
     text = sig.claude_local_md_path(level).read_text(encoding="utf-8")
-    return sum(E._line_size(p) for p in us.parse_pointer_index(text)[1])
+    return sum(E.line_size(p) for p in us.parse_pointer_index(text)[1])
 
 
 def _fill_to(level, total):
@@ -87,12 +87,12 @@ def _fill_to(level, total):
     pointers, left, i = [], total - _bytes(level), len(us.parse_pointer_index(text)[1])
     while left:
         slug = "feedback-fill%05d" % i
-        base = E._line_size(us.Pointer(slug=slug, title="T", hook=""))
-        n = 1000 if left - E._line_size(us.Pointer(slug=slug, title="T", hook="k" * 1000)) >= base + 1 \
+        base = E.line_size(us.Pointer(slug=slug, title="T", hook=""))
+        n = 1000 if left - E.line_size(us.Pointer(slug=slug, title="T", hook="k" * 1000)) >= base + 1 \
             else left - base
         assert n >= 1
         pointers.append(us.Pointer(slug=slug, title="T", hook="k" * n))
-        left -= E._line_size(pointers[-1])
+        left -= E.line_size(pointers[-1])
         i += 1
     _plant(level, pointers)
     assert _bytes(level) == total
