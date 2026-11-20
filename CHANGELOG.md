@@ -37,6 +37,9 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 - `compuse-toolbox` `mutation_arm`: a kill whose failing tests all died on a raised exception or
   an ERROR line, and none on an assertion, prints `KILLED BY ERROR` (`killed_by` in the JSON);
   a refused battery arm prints the expected spec shape.
+- `meta-self-improve` `jev_shadow.py items`: a fact whose pointer line sits at several levels (placed
+  by topic) is one item for `dream-prune`, `dream-firing` and `crosstree-misplaced`, so `run` no
+  longer refuses the items file with "duplicate id".
 
 ## [11.13.6]
 

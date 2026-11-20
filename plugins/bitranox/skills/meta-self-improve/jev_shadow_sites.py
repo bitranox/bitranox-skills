@@ -181,9 +181,17 @@ def _require_anchor(req: BuildRequest) -> Path:
 
 
 def _hook_body(req: BuildRequest) -> list[ShadowItem]:
-    """dream-prune and dream-firing: one item per fact, `{hook, body}`, id = slug."""
+    """dream-prune and dream-firing: one item per fact, `{hook, body}`, id = slug.
+
+    One per SLUG, not per pointer line: a fact placed by topic has a line at every level its topic
+    reaches, all naming one body, and an item per line gave `run` an items file it refuses
+    ("duplicate id"). The first line read wins; every line of a fact carries the same hook.
+    """
     facts, _scopes = _facts(_require_anchor(req))
-    return [ShadowItem(f.slug, {"hook": f.hook, "body": f.body}) for f in facts]
+    items: dict[str, ShadowItem] = {}
+    for f in facts:
+        items.setdefault(f.slug, ShadowItem(f.slug, {"hook": f.hook, "body": f.body}))
+    return list(items.values())
 
 
 def _level_label(anchor: Path, level: str) -> str:
@@ -215,16 +223,22 @@ def _placement(req: BuildRequest) -> list[ShadowItem]:
 
 
 def _misplaced(req: BuildRequest) -> list[ShadowItem]:
-    """crosstree-misplaced: one item per `find_misplaced` candidate, id = slug."""
+    """crosstree-misplaced: one item per misplaced fact, id = slug.
+
+    `find_misplaced` reports a candidate per pointer line, so a fact placed by topic comes once
+    per level; only its first line becomes an item, for the reason `_hook_body` gives.
+    """
     anchor = _require_anchor(req)
     facts, scopes = _facts(anchor)
     by_key = {(str(Path(f.level).resolve()), f.slug): f for f in facts}
     items: list[ShadowItem] = []
+    seen: set[str] = set()
     for cand in ports.find_misplaced(str(anchor)):
         level = str(Path(cand["level"]).resolve())
         f = by_key.get((level, cand["slug"]))
-        if f is None:
+        if f is None or cand["slug"] in seen:
             continue
+        seen.add(cand["slug"])
         state = {
             "hook": f.hook,
             "body": f.body,

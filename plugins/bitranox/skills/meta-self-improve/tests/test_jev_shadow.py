@@ -1848,3 +1848,52 @@ def test_a_non_utf8_line_in_the_log_is_skipped_not_fatal(home):
     good = json.dumps({"dream_id": "d1", "site": "dream-prune"}).encode() + b"\n"
     (d / "jev-skill-shadow-2026-01.jsonl").write_bytes(good + b"\xff\xfe not utf-8\n" + good)
     assert js._dream_rows("d1") == {"dream-prune": 2}
+
+
+# ---- a fact whose pointer line sits at several levels ------------------------------------------
+# A fact placed by topic has a line at every level its topic reaches. Built per LINE, the per-fact
+# sites drew it once per line, and `run` then refused the items file ("duplicate id").
+
+
+def _render_at(level, slug):
+    """Put `slug`'s pointer line at `level` too, as a topic render does."""
+    sig = importlib.import_module("self_improve_signals")
+    us = importlib.import_module("uuid_store")
+    local = sig.claude_local_md_path(level)
+    text = local.read_text(encoding="utf-8")
+    scope, pointers = us.parse_pointer_index(text)
+    pointers = [p for p in pointers if p.slug != slug]
+    pointers.append(us.Pointer(slug=slug, title="Top rule", hook="When anything, do the top thing.",
+                               pin=False))
+    local.write_text(us.upsert_pointer_block(text, scope, pointers), encoding="utf-8")
+
+
+@pytest.mark.parametrize("site", ["dream-prune", "dream-firing"])
+def test_a_fact_rendered_at_two_levels_is_one_item(store, tmp_path, home, site):
+    _render_at(str(store["proj"]), "top-rule")
+    out = tmp_path / "items.jsonl"
+    assert js.main(["items", "--site", site, "--anchor", str(store["anchor"]),
+                    "--out", str(out)]) == 0
+    ids = [i["id"] for i in read_jsonl(out)]
+    assert sorted(ids) == ["beta-deploy", "proj-rule", "top-rule"]
+
+
+def test_a_sample_over_a_fact_rendered_at_two_levels_has_no_duplicate_id(store, tmp_path, home):
+    _render_at(str(store["proj"]), "top-rule")
+    _rc, ids = _items(store, tmp_path, "--sample", "40", "--seed", "tree-1")
+    assert len(ids) == len(set(ids)) == 3
+
+
+def test_a_misplaced_fact_rendered_at_two_levels_is_one_item(store, tmp_path, home):
+    sig = importlib.import_module("self_improve_signals")
+    us = importlib.import_module("uuid_store")
+    local = sig.claude_local_md_path(str(store["anchor"]))
+    text = local.read_text(encoding="utf-8")
+    scope, pointers = us.parse_pointer_index(text)
+    pointers.append(us.Pointer(slug="beta-deploy", title="Beta deploy",
+                               hook="When deploying beta, drain first.", pin=False))
+    local.write_text(us.upsert_pointer_block(text, scope, pointers), encoding="utf-8")
+    out = tmp_path / "items.jsonl"
+    assert js.main(["items", "--site", "crosstree-misplaced", "--anchor", str(store["anchor"]),
+                    "--out", str(out)]) == 0
+    assert [i["id"] for i in read_jsonl(out)] == ["beta-deploy"]
