@@ -2741,7 +2741,12 @@ def relocate_entry(from_level: _StrPath, to_level: _StrPath, slug: str, force: b
                 archive = _us.central_facts_dir(a_from).parent / ".archive"
                 archive.mkdir(parents=True, exist_ok=True)
                 if src_body.is_file():
-                    src_body.rename(_us.free_archive_path(archive, slug + ".md"))
+                    # Another session's unlocked read of the body (an `add`'s placement check,
+                    # a recall) holds it open for a moment, and Windows refuses to rename an open
+                    # file. Left in place, the body is one no level points at, and the next `add`
+                    # of the slug in this tree adopts it back.
+                    sig.retry_while_shared(src_body.rename,
+                                           _us.free_archive_path(archive, slug + ".md"))
             except OSError as exc:
                 archive_warning = "source body left in place (archive failed: %s)" % exc
     if dropped_topics:
@@ -3089,7 +3094,10 @@ def _rename_locked(anchor: _StrPath, lvl: Path, *, others: Sequence[str], slug: 
         if src_body.is_file():
             archive = _us.central_facts_dir(anchor).parent / ".archive"
             archive.mkdir(parents=True, exist_ok=True)
-            src_body.rename(_us.free_archive_path(archive, slug + ".md"))
+            # Waits out a reader holding the body open, as relocate's archive does: left in
+            # place, the next `add` of the old slug adopts it and the fact answers to that name
+            # again.
+            sig.retry_while_shared(src_body.rename, _us.free_archive_path(archive, slug + ".md"))
     except OSError as exc:
         warnings.append("old body left in place (archive failed: %s)" % exc)
     return None

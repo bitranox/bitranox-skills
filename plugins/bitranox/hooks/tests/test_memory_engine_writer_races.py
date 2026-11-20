@@ -20,10 +20,12 @@ All content ASCII.
 """
 
 import json
+import os
 import random
 import re
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -195,6 +197,63 @@ def test_rename_carries_the_last_concurrent_update(tmp_path):
         rows.append({"updated": res["updated"], "ended": res["ended"],
                      "home": (_counter(ptr.hook), _counter(ptr.title), _counter(prose))})
     _assert_home_carries(rows)
+
+
+class _HeldOpen:
+    """The file at `path` held open for reading, the way another session's unlocked read of a
+    body holds it (an `add`'s placement check, a recall hook), and closed `seconds` later from a
+    second thread. Python opens without FILE_SHARE_DELETE, so on Windows a rename of the file
+    fails with a sharing violation while it is held; on POSIX it does not."""
+
+    def __init__(self, path, seconds):
+        self.fd = os.open(str(path), os.O_RDONLY)
+        self.timer = threading.Timer(seconds, os.close, args=(self.fd,))
+
+    def __enter__(self):
+        self.timer.start()
+        return self
+
+    def __exit__(self, *exc):
+        self.timer.join()
+
+
+def _old_slug_answers_again(level):
+    """True when an `add` of the old slug updates a fact rather than creating one: the old name
+    still resolves after the verb took the fact away."""
+    _slug, created = E.upsert_entry(level, "New", "When reusing the old name, a new fact.",
+                                    body="new prose", slug="fact")
+    return not created
+
+
+def test_rename_waits_out_a_reader_holding_the_old_body(tmp_path):
+    """A rename that meets the old body held open by another reader archives it once the reader
+    lets go, instead of leaving it in place. Left in place it is a body no level points at, and
+    the next `add` of the old slug adopts it: the renamed fact comes back under its old name.
+    This is the Windows failure of test_rename_carries_the_last_concurrent_update (an updater
+    that kept UPDATING the old slug until its deadline)."""
+    root = tmp_path / "tree"
+    (proj,) = _tree(root, "proj")
+    E.add_or_update_entry(proj, "T0", "When racing 0, keep it.", body="prose 0", slug="fact")
+    with _HeldOpen(us.body_path(str(root), "fact"), 0.3):
+        rep = E.rename_entry(proj, "fact", "renamed")
+    assert rep.renamed, rep.refused
+    assert rep.warnings == []
+    assert not us.body_path(str(root), "fact").exists()
+    assert not _old_slug_answers_again(proj)
+
+
+def test_relocate_waits_out_a_reader_holding_the_source_body(tmp_path):
+    """The same for a cross-tree relocate: the source body is archived once the reader lets go,
+    so the source tree has no dangling copy for the next `add` of the slug to adopt."""
+    (src,) = _tree(tmp_path / "a", "proj")
+    (dst,) = _tree(tmp_path / "b", "proj")
+    E.add_or_update_entry(src, "T0", "When racing 0, keep it.", body="prose 0", slug="fact")
+    with _HeldOpen(us.body_path(str(tmp_path / "a"), "fact"), 0.3):
+        rep = E.relocate_entry(src, dst, "fact")
+    assert rep.relocated, rep.refused
+    assert rep.warnings == []
+    assert not us.body_path(str(tmp_path / "a"), "fact").exists()
+    assert not _old_slug_answers_again(src)
 
 
 _CITER = r'''
