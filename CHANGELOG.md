@@ -30,6 +30,30 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.14.0]
+
+### Fixed
+
+- `block-or-echo-verdict` no longer takes exponential time on a pipeline element holding several `2>&1`-style redirections with no verdict (twelve took 7 s per Bash call), and stays linear when a program word repeats inside one element (`grep (grep (grep ...`), which cost 43x to 65x for 8x the input. What it refuses is unchanged over 5,204 recorded commands and 40,000 generated ones.
+- `memory_engine retitle` writes the pointer line and the body title in one hold of the level lock, so an add landing in between no longer loses its hook or prose. A line dropped or pinned in the meantime is refused, not put back.
+- `memory_engine heal --backfill-titles` fills one fact at a time under the lock of every level carrying it (and the placement lock for a bound fact), so an add through a second level is no longer overwritten.
+- `reconcile_memory_index.py --rehome` keeps the body's stored title instead of a slug-derived one, and prints the bytes the re-homed lines add to the target's always-loaded block. `memory-backend.md` lists it among the title-keeping writes.
+- meta-dream-crosstree and the dream-core report contract list a promotion to a common ancestor below the tree top by slug, with its level and cost.
+- net-firewall-pfsense: a PHP reply of an unexpected shape is refused with exit 2 naming the box; a malformed write reply also says the change may already be in config.xml. Before, a missing field could crash with a traceback, print "None", or be read as false and skip the unbound check after a write.
+- Two memory_engine render test regexes are anchored, so a long digit run is no longer rescanned from every digit.
+
+### Changed
+
+- net-firewall-pfsense reads every PHP reply into a typed record (Reservation, Pool, Override, FirewallInfo, one record per write result). Every verb's human and `--json` output is pinned byte for byte against a fake firewall: 616 scenarios over 7 states.
+- meta-skill-ab-test: `abscore.run_floor` returns a typed `FloorResult`, `score_arm` returns an `ArmScore` and reads result.json through `RecordedResult`; `abtest.run_arm` returns an `ArmRecord` and `load_journal` returns `JournalRow`s. Every CLI line, `--json` envelope, result.json, scores.json and journal row is byte-identical. A new test runs an arm over a real memory store, so the taken-snapshot shape of result.json is checked.
+- `find_uncompiled_regex.py` lists each call site it could not check, as `not checked: file:line - <kind>: <reason>` under its `Examined` line. Step 4b of coding-python-performance-review describes the listing.
+- `self_improve_signals`: `memory_lock`, `retry_while_shared`, `is_transient_sharing_error` and ten shared path and write-switch helpers are fully annotated; `open_work.py` passes pyright strict with no errors. `guard_replay` declares its public API in `__all__`.
+- compact-resume reads a Git Bash drive path through `shell_text.msys_drive_path_for_tool`, the same drive decision every other reader takes. Git Bash mounts other than the drives (`/tmp`, `/usr`) stay unresolved on purpose; shell_text records why.
+
+### Added
+
+- `shell_text.msys_drive_path_for_tool`: one word's Git Bash drive reading for a tool on this host.
+
 ## [11.13.10]
 
 ### Fixed
