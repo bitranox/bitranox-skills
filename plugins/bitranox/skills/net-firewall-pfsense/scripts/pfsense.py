@@ -68,6 +68,7 @@ import socket
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from enum import StrEnum
@@ -216,6 +217,95 @@ class Finding:
         # The exit code counts only WARN, so a misspelled severity would be filed as context and
         # doctor would exit 0 over it; parsing refuses it where the finding is built.
         object.__setattr__(self, "severity", Severity(self.severity))
+
+
+# ---- typed replies from the box -----------------------------------------------------------------
+# run_php decodes the JSON a PHP body echoes; the records below are what the rest of this module
+# reads. Each reply is checked where it enters (every key present, every value of its type), so no
+# reader meets a missing key or a list where text belongs, and a reader cannot misspell a key and
+# silently read a default. `to_json` rebuilds the object the PHP echoed, keys in the same order,
+# because that object is what --json prints.
+def _preview(value: object) -> str:
+    return json.dumps(value)[:200]
+
+
+def _object(value: object, what: str) -> dict:
+    if not isinstance(value, dict):
+        raise PfsenseError(f"{what} is not a JSON object: {_preview(value)}")
+    return value
+
+
+def _array(value: object, what: str) -> list:
+    if not isinstance(value, list):
+        raise PfsenseError(f"{what} is not a JSON array: {_preview(value)}")
+    return value
+
+
+def _text(obj: dict, key: str, what: str) -> str:
+    value = obj.get(key)
+    if not isinstance(value, str):
+        raise PfsenseError(f"{what} has no text field {key!r}: {_preview(obj)}")
+    return value
+
+
+def _flag(obj: dict, key: str, what: str) -> bool:
+    value = obj.get(key)
+    if not isinstance(value, bool):
+        raise PfsenseError(f"{what} has no true/false field {key!r}: {_preview(obj)}")
+    return value
+
+
+@dataclass(frozen=True)
+class Reservation:
+    """One DHCP static mapping: what `dhcp list` prints and every reservation check reads."""
+
+    interface: str
+    mac: str
+    ip: str
+    hostname: str
+    descr: str
+    static_arp: bool
+
+    @classmethod
+    def from_json(cls, value: object) -> "Reservation":
+        what = "a DHCP reservation"
+        obj = _object(value, what)
+        return cls(interface=_text(obj, "interface", what), mac=_text(obj, "mac", what),
+                   ip=_text(obj, "ip", what), hostname=_text(obj, "hostname", what),
+                   descr=_text(obj, "descr", what), static_arp=_flag(obj, "static_arp", what))
+
+    @classmethod
+    def list_from_json(cls, value: object) -> list["Reservation"]:
+        return [cls.from_json(item) for item in _array(value, "the DHCP reservation list")]
+
+    def to_json(self) -> dict:
+        return {"interface": self.interface, "mac": self.mac, "ip": self.ip,
+                "hostname": self.hostname, "descr": self.descr, "static_arp": self.static_arp}
+
+
+@dataclass(frozen=True)
+class Pool:
+    """One dynamic DHCP range of an enabled server, `first` to `last` inclusive."""
+
+    interface: str
+    first: str
+    last: str
+
+    @classmethod
+    def from_json(cls, value: object) -> "Pool":
+        what = "a DHCP pool"
+        obj = _object(value, what)
+        return cls(interface=_text(obj, "interface", what), first=_text(obj, "from", what),
+                   last=_text(obj, "to", what))
+
+    @classmethod
+    def list_from_json(cls, value: object) -> list["Pool"]:
+        return [cls.from_json(item) for item in _array(value, "the DHCP pool list")]
+
+
+def _json_value(value: object) -> object:
+    """The reply as decoded, for a shape that has no record yet."""
+    return value
 
 
 # ---- target resolution --------------------------------------------------------------------------
@@ -372,13 +462,26 @@ def run_remote(target: Target, command: str, *, run=_run, stdin_text: str | None
     return run(build_ssh_argv(target, command), stdin_text=stdin_text, timeout=timeout or target.timeout)
 
 
-def run_php(target: Target, php_body: str, *, run=_run, timeout: int | None = None) -> object:
-    """Run PHP against the live config API and decode the JSON it echoes.
+def run_php[T](target: Target, php_body: str, *, parse: Callable[[object], T], run=_run,
+                timeout: int | None = None) -> T:
+    """Run PHP against the live config API and return its JSON reply as `parse` reads it.
 
     The source goes over STDIN, so no part of it is ever parsed by the local shell, the remote
     shell, or php's own -r argument handling. That is what removes the quoting layer that mangles
     a hand-rolled `php -r "..."` into plausible-but-wrong output.
+
+    `parse` is required so that no call site can take the decoded JSON untyped: each one names the
+    record its PHP body answers with (Reservation.list_from_json, ReservationRemoved.from_json,
+    ...), and a reply of any other shape is refused here, naming the box.
     """
+    decoded = _run_php_json(target, php_body, run=run, timeout=timeout)
+    try:
+        return parse(decoded)
+    except PfsenseError as exc:
+        raise PfsenseError(f"php on {target.host} returned an unexpected reply: {exc}") from None
+
+
+def _run_php_json(target: Target, php_body: str, *, run, timeout: int | None) -> object:
     script = '<?php\nrequire_once("config.inc");\nrequire_once("util.inc");\n' + php_body
     rc, out, err = run_remote(target, "php", run=run, stdin_text=script, timeout=timeout)
     if rc != 0:
@@ -562,19 +665,26 @@ def parse_arp(text: str) -> list[dict]:
     return entries
 
 
-def select_one(items: list[dict], key: str, value: str, *, what: str) -> dict:
-    """The single item whose `key` equals `value`; refuse on no match AND on ambiguity.
+def select_one[T](items: Sequence[T], value: str, *, key: Callable[[T], str], field: str,
+                  what: str) -> T:
+    """The single item whose `key` equals `value`, ignoring case; refuse on no match AND on
+    ambiguity. `field` names the key in the refusal.
 
     Selection is by stable text, never by position: an index taken from a listing shifts the moment
     anything before it is removed, so a second command from the same listing hits the wrong row and
     still exits 0.
     """
-    hits = [item for item in items if str(item.get(key, "")).lower() == value.lower()]
+    hits = [item for item in items if key(item).lower() == value.lower()]
     if not hits:
-        raise PfsenseError(f"no {what} with {key}={value}")
+        raise PfsenseError(f"no {what} with {field}={value}")
     if len(hits) > 1:
-        raise PfsenseError(f"{len(hits)} {what} entries share {key}={value}; refusing to guess which")
+        raise PfsenseError(f"{len(hits)} {what} entries share {field}={value}; refusing to guess which")
     return hits[0]
+
+
+def select_reservation(reservations: Sequence[Reservation], mac: str) -> Reservation:
+    """The one reservation for `mac` (normalised), refusing none and several."""
+    return select_one(reservations, mac, key=lambda r: r.mac, field="mac", what="reservation")
 
 
 def _is_loopback(address: str) -> str | bool:
@@ -589,7 +699,7 @@ def override_name(entry: dict) -> str:
 
 
 # ---- offline config parsing ---------------------------------------------------------------------
-def reservations_from_config_xml(text: str) -> list[dict]:
+def reservations_from_config_xml(text: str) -> list[Reservation]:
     """DHCP reservations read straight out of a config.xml snapshot.
 
     Offline parsing exists so `doctor` can audit a saved snapshot with no network, and so its
@@ -600,18 +710,18 @@ def reservations_from_config_xml(text: str) -> list[dict]:
     for dhcpd in root.findall("dhcpd"):
         for iface in dhcpd:
             for entry in iface.findall("staticmap"):
-                out.append({
-                    "interface": iface.tag,
-                    "mac": (entry.findtext("mac") or "").strip().lower(),
-                    "ip": (entry.findtext("ipaddr") or "").strip(),
-                    "hostname": (entry.findtext("hostname") or "").strip(),
-                    "descr": (entry.findtext("descr") or "").strip(),
-                    "static_arp": entry.find("arp_table_static_entry") is not None,
-                })
+                out.append(Reservation(
+                    interface=iface.tag,
+                    mac=(entry.findtext("mac") or "").strip().lower(),
+                    ip=(entry.findtext("ipaddr") or "").strip(),
+                    hostname=(entry.findtext("hostname") or "").strip(),
+                    descr=(entry.findtext("descr") or "").strip(),
+                    static_arp=entry.find("arp_table_static_entry") is not None,
+                ))
     return out
 
 
-def pools_from_config_xml(text: str) -> list[dict]:
+def pools_from_config_xml(text: str) -> list[Pool]:
     """The dynamic ranges of every ENABLED DHCP server in a snapshot: the main range plus each
     additional pool, as {interface, from, to}.
 
@@ -631,7 +741,7 @@ def pools_from_config_xml(text: str) -> list[dict]:
                     continue
                 low, high = (rng.findtext("from") or "").strip(), (rng.findtext("to") or "").strip()
                 if low and high:
-                    out.append({"interface": iface.tag, "from": low, "to": high})
+                    out.append(Pool(interface=iface.tag, first=low, last=high))
     return out
 
 
@@ -651,13 +761,13 @@ def overrides_from_config_xml(text: str) -> list[dict]:
 
 # ---- doctor: pure checks over plain data --------------------------------------------------------
 def _pool_holding(address: ipaddress.IPv4Address | ipaddress.IPv6Address, interface: str,
-                  pools: list[dict]) -> dict | None:
-    """The first pool on `interface` whose inclusive from-to range holds `address`."""
+                  pools: Sequence[Pool]) -> Pool | None:
+    """The first pool on `interface` whose inclusive first-last range holds `address`."""
     for pool in pools:
-        if pool.get("interface") != interface:
+        if pool.interface != interface:
             continue
         try:
-            low, high = ipaddress.ip_address(pool.get("from", "")), ipaddress.ip_address(pool.get("to", ""))
+            low, high = ipaddress.ip_address(pool.first), ipaddress.ip_address(pool.last)
         except ValueError:
             continue
         if low.version == address.version and low <= address <= high:
@@ -665,7 +775,7 @@ def _pool_holding(address: ipaddress.IPv4Address | ipaddress.IPv6Address, interf
     return None
 
 
-def _reservations_in_pools(reservations: list[dict], pools: list[dict]) -> list[Finding]:
+def _reservations_in_pools(reservations: Sequence[Reservation], pools: Sequence[Pool]) -> list[Finding]:
     """A reservation whose address lies in its own interface's dynamic pool.
 
     A pool widened after the reservation was made produces one, as can a reservation written by a
@@ -675,17 +785,17 @@ def _reservations_in_pools(reservations: list[dict], pools: list[dict]) -> list[
     findings = []
     for res in reservations:
         try:
-            address = ipaddress.ip_address(res.get("ip", ""))
+            address = ipaddress.ip_address(res.ip)
         except ValueError:
             continue
-        pool = _pool_holding(address, res.get("interface", ""), pools)
+        pool = _pool_holding(address, res.interface, pools)
         if pool is None:
             continue
-        name = res.get("hostname") or res.get("descr") or "(no hostname)"
+        name = res.hostname or res.descr or "(no hostname)"
         findings.append(Finding(
             check="static_map_in_dynamic_pool", severity=Severity.WARN,
-            subject=f"{res['ip']} {res.get('mac', '?')} {name} on {res.get('interface', '?')}, "
-                    f"inside the pool {pool['from']}-{pool['to']}",
+            subject=f"{res.ip} {res.mac} {name} on {res.interface}, "
+                    f"inside the pool {pool.first}-{pool.last}",
             detail="ISC dhcpd, pfSense's default DHCP backend, does not keep a reserved address out "
                    "of its dynamic pool: it can lease this address to another client, and its "
                    "pre-lease ping check misses a host that does not answer ping (Windows by "
@@ -696,10 +806,10 @@ def _reservations_in_pools(reservations: list[dict], pools: list[dict]) -> list[
     return findings
 
 
-def doctor_findings(*, reservations: list[dict], overrides: list[dict],
+def doctor_findings(*, reservations: Sequence[Reservation], overrides: Sequence,
                     arp: list[dict] | None = None, resolv_conf: str | None = None,
                     upgrade_locks: list[str] | None = None,
-                    pools: list[dict] | None = None) -> list[Finding]:
+                    pools: Sequence[Pool] | None = None) -> list[Finding]:
     """Every audit check, as pure logic over plain data.
 
     Each one is a fault that raises no error of its own and so goes unnoticed: they were all found
@@ -711,19 +821,19 @@ def doctor_findings(*, reservations: list[dict], overrides: list[dict],
     # single identity, so it is context, not a fault. It matters only because it is the precondition
     # for the static-ARP fault below: reporting it as a problem on its own cries wolf on a healthy
     # config (measured: 5 warnings on a config with nothing wrong with it).
-    by_ip: dict[str, list[dict]] = {}
+    by_ip: dict[str, list[Reservation]] = {}
     for res in reservations:
-        if res.get("ip"):
-            by_ip.setdefault(res["ip"], []).append(res)
+        if res.ip:
+            by_ip.setdefault(res.ip, []).append(res)
 
     for res in reservations:
-        if res.get("static_arp"):
-            shared = len(by_ip.get(res.get("ip", ""), []))
+        if res.static_arp:
+            shared = len(by_ip.get(res.ip, []))
             extra = (f" This address is reserved for {shared} MACs, which is exactly the case that "
                      f"breaks: the firewall pins one of them permanently." if shared > 1 else "")
             findings.append(Finding(
                 check="static_arp_armed", severity=Severity.WARN,
-                subject=f"{res.get('ip','?')} {res.get('mac','?')} {res.get('hostname') or res.get('descr') or ''}".strip(),
+                subject=f"{res.ip} {res.mac} {res.hostname or res.descr or ''}".strip(),
                 detail="ARP Table Static Entry is ticked. On a device with more than one interface "
                        "the firewall answers for whichever one is down: reachable inside its subnet, "
                        "dead beyond it, and nothing logs an error." + extra,
@@ -734,7 +844,7 @@ def doctor_findings(*, reservations: list[dict], overrides: list[dict],
             findings.append(Finding(
                 check="shared_ip_multi_mac", severity=Severity.INFO, subject=ip,
                 detail="reserved for " + str(len(group)) + " MACs (" +
-                       ", ".join(r.get("mac", "?") for r in group) +
+                       ", ".join(r.mac for r in group) +
                        "). Normal for a device with wired and wireless interfaces; only a problem "
                        "if static ARP is also ticked.",
             ))
@@ -750,8 +860,8 @@ def doctor_findings(*, reservations: list[dict], overrides: list[dict],
     if arp is not None:
         macs_for_ip: dict[str, set[str]] = {}
         for res in reservations:
-            if res.get("ip"):
-                macs_for_ip.setdefault(res["ip"], set()).add(res.get("mac", ""))
+            if res.ip:
+                macs_for_ip.setdefault(res.ip, set()).add(res.mac)
         for entry in arp:
             reserved_macs = macs_for_ip.get(entry["ip"])
             if entry.get("mac") and reserved_macs and entry["mac"] not in reserved_macs:
@@ -1315,7 +1425,7 @@ def _write_private(path: Path, text: str) -> None:
 # ---- commands -----------------------------------------------------------------------------------
 def cmd_info(args) -> int:
     target = _target_from_args(args)
-    data = run_php(target, php_info(), run=args.run)
+    data = run_php(target, php_info(), parse=_json_value, run=args.run)
     lines = [
         f"  version:      {data['version']}",
         f"  dhcp backend: {data['dhcp_backend']}",
@@ -1342,11 +1452,12 @@ def cmd_snapshot(args) -> int:
 
 def cmd_dhcp_list(args) -> int:
     target = _target_from_args(args)
-    reservations = run_php(target, php_list_reservations(), run=args.run)
-    lines = [f"  {r['ip']:<16} {r['mac']:<18} {'STATIC-ARP' if r['static_arp'] else '          '}  "
-             f"{r['hostname'] or r['descr']}" for r in reservations]
+    reservations = run_php(target, php_list_reservations(), parse=Reservation.list_from_json, run=args.run)
+    lines = [f"  {r.ip:<16} {r.mac:<18} {'STATIC-ARP' if r.static_arp else '          '}  "
+             f"{r.hostname or r.descr}" for r in reservations]
     lines.append(f"  ({len(reservations)} reservations)")
-    _emit(envelope(command="dhcp list", data=reservations, ok=True), args.json, "\n".join(lines))
+    _emit(envelope(command="dhcp list", data=[r.to_json() for r in reservations], ok=True), args.json,
+          "\n".join(lines))
     return 0
 
 
@@ -1385,12 +1496,12 @@ def cmd_dhcp_add(args) -> int:
     mac = normalize_mac(args.mac)
     ipaddress.ip_address(args.ip)
     hostname = valid_hostname(args.hostname)
-    reservations = run_php(target, php_list_reservations(), run=args.run)
-    taken = [r for r in reservations if r["mac"] == mac or r["ip"] == args.ip]
+    reservations = run_php(target, php_list_reservations(), parse=Reservation.list_from_json, run=args.run)
+    taken = [r for r in reservations if r.mac == mac or r.ip == args.ip]
     if taken:
-        raise PfsenseError(f"already reserved: {taken[0]['ip']} {taken[0]['mac']} "
-                           f"({taken[0]['hostname'] or taken[0]['descr']}) - rename or rm it instead")
-    interfaces = run_php(target, php_info(), run=args.run)["interfaces"]
+        raise PfsenseError(f"already reserved: {taken[0].ip} {taken[0].mac} "
+                           f"({taken[0].hostname or taken[0].descr}) - rename or rm it instead")
+    interfaces = run_php(target, php_info(), parse=_json_value, run=args.run)["interfaces"]
     if args.interface:
         # A named interface must still hold the address: the GUI checks this, and this tool
         # bypasses the GUI, so a reservation outside the subnet would be stored and never served.
@@ -1403,7 +1514,8 @@ def cmd_dhcp_add(args) -> int:
                          "Re-run with --apply.")
         return 0
     _guard_mutation(args, target, f"adding the reservation {args.ip} for {mac}")
-    result = run_php(target, php_add_reservation(interface, mac, args.ip, hostname, args.descr), run=args.run)
+    result = run_php(target, php_add_reservation(interface, mac, args.ip, hostname, args.descr),
+                     parse=_json_value, run=args.run)
     if not result.get("added"):
         raise PfsenseError(str(result.get("error") or "the reservation was not added"))
     note = _restart_unbound_after_dhcp(target, result, run=args.run,
@@ -1432,37 +1544,38 @@ def cmd_dhcp_rename(args) -> int:
     target = _target_from_args(args)
     mac = normalize_mac(args.mac)
     hostname = valid_hostname(args.hostname)
-    reservations = run_php(target, php_list_reservations(), run=args.run)
-    entry = select_one(reservations, "mac", mac, what="reservation")
+    reservations = run_php(target, php_list_reservations(), parse=Reservation.list_from_json, run=args.run)
+    entry = select_reservation(reservations, mac)
     if not args.apply:
-        _emit(envelope(command="dhcp rename", data={"would_rename": entry, "to": hostname}, ok=True,
+        _emit(envelope(command="dhcp rename", data={"would_rename": entry.to_json(), "to": hostname}, ok=True,
                        skipped=["--apply not given"]),
-              args.json, f"  DRY RUN: would rename {entry['ip']} {mac} from "
-                         f"{entry['hostname'] or '(no hostname)'} to {hostname}.  Re-run with --apply.")
+              args.json, f"  DRY RUN: would rename {entry.ip} {mac} from "
+                         f"{entry.hostname or '(no hostname)'} to {hostname}.  Re-run with --apply.")
         return 0
     _guard_mutation(args, target, f"renaming the reservation for {mac}")
-    result = run_php(target, php_rename_reservation(mac, hostname), run=args.run)
+    result = run_php(target, php_rename_reservation(mac, hostname), parse=_json_value, run=args.run)
     if len(result.get("renamed") or []) != 1:
         raise PfsenseError(f"the reservation for {mac} was not renamed (it changed since it was listed)")
     note = _restart_unbound_after_dhcp(target, result, run=args.run,
                                        change=f"the rename of the reservation for {mac} to {hostname}")
     _emit(envelope(command="dhcp rename", data=result, ok=True), args.json,
-          f"  renamed {entry['ip']} {mac} to {hostname}{note}")
+          f"  renamed {entry.ip} {mac} to {hostname}{note}")
     return 0
 
 
 def cmd_dhcp_rm(args) -> int:
     target = _target_from_args(args)
     mac = normalize_mac(args.mac)
-    reservations = run_php(target, php_list_reservations(), run=args.run)
-    entry = select_one(reservations, "mac", mac, what="reservation")
+    reservations = run_php(target, php_list_reservations(), parse=Reservation.list_from_json, run=args.run)
+    entry = select_reservation(reservations, mac)
     if not args.apply:
-        _emit(envelope(command="dhcp rm", data={"would_remove": entry}, ok=True, skipped=["--apply not given"]),
-              args.json, f"  DRY RUN: would remove {entry['ip']} {entry['mac']} "
-                         f"({entry['hostname'] or entry['descr']}).  Re-run with --apply.")
+        _emit(envelope(command="dhcp rm", data={"would_remove": entry.to_json()}, ok=True,
+                       skipped=["--apply not given"]),
+              args.json, f"  DRY RUN: would remove {entry.ip} {entry.mac} "
+                         f"({entry.hostname or entry.descr}).  Re-run with --apply.")
         return 0
     _guard_mutation(args, target, f"removing the reservation for {mac}")
-    result = run_php(target, php_rm_reservation(mac), run=args.run)
+    result = run_php(target, php_rm_reservation(mac), parse=_json_value, run=args.run)
     removed = result.get("removed") or []
     _require_effect(removed, f"the reservation for {mac} matched, but removing it removed nothing "
                              "(it changed since it was listed); config.xml was not written")
@@ -1501,20 +1614,20 @@ def _removal_exit(requested: list[str], still: list[str], *, where: str) -> int:
 def cmd_dhcp_rm_static_arp(args) -> int:
     target = _target_from_args(args)
     mac = normalize_mac(args.mac)
-    reservations = run_php(target, php_list_reservations(), run=args.run)
-    entry = select_one(reservations, "mac", mac, what="reservation")
-    if not entry["static_arp"]:
-        _emit(envelope(command="dhcp rm-static-arp", data={"entry": entry}, ok=True,
+    reservations = run_php(target, php_list_reservations(), parse=Reservation.list_from_json, run=args.run)
+    entry = select_reservation(reservations, mac)
+    if not entry.static_arp:
+        _emit(envelope(command="dhcp rm-static-arp", data={"entry": entry.to_json()}, ok=True,
                        skipped=["static ARP was not set"]),
-              args.json, f"  {entry['ip']} {mac} does not have static ARP set; nothing to do.")
+              args.json, f"  {entry.ip} {mac} does not have static ARP set; nothing to do.")
         return 0
     if not args.apply:
-        _emit(envelope(command="dhcp rm-static-arp", data={"would_clear": entry}, ok=True,
+        _emit(envelope(command="dhcp rm-static-arp", data={"would_clear": entry.to_json()}, ok=True,
                        skipped=["--apply not given"]),
-              args.json, f"  DRY RUN: would clear static ARP on {entry['ip']} {mac}.  Re-run with --apply.")
+              args.json, f"  DRY RUN: would clear static ARP on {entry.ip} {mac}.  Re-run with --apply.")
         return 0
     _guard_mutation(args, target, f"clearing static ARP for {mac}")
-    result = run_php(target, php_rm_static_arp(mac), run=args.run)
+    result = run_php(target, php_rm_static_arp(mac), parse=_json_value, run=args.run)
     changed = result.get("changed") or []
     _require_effect(changed, f"static ARP is set on the reservation for {mac}, but clearing it "
                              "changed nothing (it changed since it was listed); config.xml was not written")
@@ -1525,7 +1638,7 @@ def cmd_dhcp_rm_static_arp(args) -> int:
 
 def cmd_dns_list(args) -> int:
     target = _target_from_args(args)
-    overrides = run_php(target, php_list_overrides(), run=args.run)
+    overrides = run_php(target, php_list_overrides(), parse=_json_value, run=args.run)
     lines = [f"  {override_name(o):<44} -> {o['ip']}" for o in overrides]
     lines.append(f"  ({len(overrides)} host overrides)")
     _emit(envelope(command="dns list", data=overrides, ok=True), args.json, "\n".join(lines))
@@ -1552,11 +1665,12 @@ def cmd_dns_add(args) -> int:
     # The PHP duplicate check compares host and domain separately, so it cannot see an override
     # stored with an EMPTY host whose domain is this whole name. Compare full names here, with the
     # same rule the listing uses, before anything is snapshotted or written.
-    existing = run_php(target, php_list_overrides(), run=args.run)
+    existing = run_php(target, php_list_overrides(), parse=_json_value, run=args.run)
     if any(override_name(o).lower() == f"{host}.{domain}" for o in existing):
         raise PfsenseError(f"an override for {host}.{domain} already exists")
     _guard_mutation(args, target, f"adding {host}.{domain}")
-    result = run_php(target, php_add_override(host, domain, args.ip, args.descr), run=args.run)
+    result = run_php(target, php_add_override(host, domain, args.ip, args.descr), parse=_json_value,
+                     run=args.run)
     if result.get("error"):
         raise PfsenseError(str(result["error"]))
     result["unbound"] = restart_and_verify_unbound(
@@ -1627,9 +1741,9 @@ def _probe_after_removal(overrides: list[dict], removed_fqdn: str) -> tuple[str,
 def cmd_dns_rm(args) -> int:
     target = _target_from_args(args)
     host, domain = _split_name(args.name)
-    overrides = run_php(target, php_list_overrides(), run=args.run)
+    overrides = run_php(target, php_list_overrides(), parse=_json_value, run=args.run)
     named = [dict(o, fqdn=override_name(o)) for o in overrides]
-    entry = select_one(named, "fqdn", f"{host}.{domain}", what="host override")
+    entry = select_one(named, f"{host}.{domain}", key=lambda o: o["fqdn"], field="fqdn", what="host override")
     if not args.apply:
         _emit(envelope(command="dns rm", data={"would_remove": entry}, ok=True, skipped=["--apply not given"]),
               args.json, f"  DRY RUN: would remove {entry['fqdn']} -> {entry['ip']}.  Re-run with --apply.")
@@ -1639,7 +1753,7 @@ def cmd_dns_rm(args) -> int:
     # the whole name in its domain, and host 'bare' + domain 'example.com' would match nothing.
     stored_host = (entry.get("host") or "").lower()
     stored_domain = (entry.get("domain") or "").lower()
-    result = run_php(target, php_rm_override(stored_host, stored_domain), run=args.run)
+    result = run_php(target, php_rm_override(stored_host, stored_domain), parse=_json_value, run=args.run)
     removed = result.get("removed") or []
     _require_effect(removed, f"the override {host}.{domain} matched, but removing it removed nothing "
                              "(it changed since it was listed); config.xml was not written")
@@ -2146,9 +2260,9 @@ def cmd_doctor(args) -> int:
         source = args.config
     else:
         target = _target_from_args(args)
-        reservations = run_php(target, php_list_reservations(), run=args.run)
-        overrides = run_php(target, php_list_overrides(), run=args.run)
-        pools = run_php(target, php_list_pools(), run=args.run)
+        reservations = run_php(target, php_list_reservations(), parse=Reservation.list_from_json, run=args.run)
+        overrides = run_php(target, php_list_overrides(), parse=_json_value, run=args.run)
+        pools = run_php(target, php_list_pools(), parse=Pool.list_from_json, run=args.run)
         arp_out = _read_or_raise(target, "arp -an", run=args.run)
         resolv = _read_or_raise(target, "cat /etc/resolv.conf", run=args.run)
         findings = doctor_findings(reservations=reservations, overrides=overrides,

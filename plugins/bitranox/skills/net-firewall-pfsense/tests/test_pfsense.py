@@ -81,11 +81,19 @@ class FakeRun:
         return [c["stdin"] for c in self.calls if c["stdin"]]
 
 
+def res(ip, mac, *, static_arp=False, interface="lan", hostname="", descr=""):
+    """A Reservation with the fields a test does not care about left empty."""
+    return P.Reservation(interface=interface, mac=mac, ip=ip, hostname=hostname, descr=descr,
+                         static_arp=static_arp)
+
+
 # ---- the streams stay apart ---------------------------------------------------------------------
 def test_stderr_banner_never_reaches_the_parsed_data():
     """The whole point: the banner is on stderr, so a parser that keeps them apart never sees it."""
-    fake = FakeRun([('config_get_path("dhcpd"', (0, '[{"mac":"00:11:22:33:44:30","ip":"192.0.2.30"}]', BANNER))])
-    assert P.run_php(TARGET, P.php_list_reservations(), run=fake) == [{"mac": "00:11:22:33:44:30", "ip": "192.0.2.30"}]
+    fake = FakeRun([('config_get_path("dhcpd"', (0, RESERVATIONS_JSON, BANNER))])
+    assert P.run_php(TARGET, P.php_list_reservations(), parse=P.Reservation.list_from_json, run=fake) == [
+        res("192.0.2.30", "00:11:22:33:44:30", static_arp=True, hostname="speaker"),
+        res("192.0.2.31", "00:11:22:33:44:31", hostname="nas")]
 
 
 def test_a_banner_merged_into_stdout_would_break_the_parse():
@@ -96,13 +104,13 @@ def test_a_banner_merged_into_stdout_would_break_the_parse():
     """
     fake = FakeRun([('config_get_path("dhcpd"', (0, BANNER + "[]", ""))])
     with pytest.raises(P.PfsenseError):
-        P.run_php(TARGET, P.php_list_reservations(), run=fake)
+        P.run_php(TARGET, P.php_list_reservations(), parse=P.Reservation.list_from_json, run=fake)
 
 
 def test_php_source_travels_on_stdin_not_in_the_command():
     """No quoting layer can mangle what it never parses: the remote command is the bare word php."""
     fake = FakeRun([("config_get_path", (0, "[]", ""))])
-    P.run_php(TARGET, P.php_list_reservations(), run=fake)
+    P.run_php(TARGET, P.php_list_reservations(), parse=P.Reservation.list_from_json, run=fake)
     assert fake.calls[0]["remote"] == "php"
     assert 'require_once("config.inc")' in fake.calls[0]["stdin"]
 
@@ -110,7 +118,34 @@ def test_php_source_travels_on_stdin_not_in_the_command():
 def test_php_that_returns_nothing_is_an_error_not_an_empty_result():
     fake = FakeRun([("config_get_path", (0, "", BANNER))])
     with pytest.raises(P.PfsenseError):
-        P.run_php(TARGET, P.php_list_reservations(), run=fake)
+        P.run_php(TARGET, P.php_list_reservations(), parse=P.Reservation.list_from_json, run=fake)
+
+
+# ---- a reply is checked where it enters ---------------------------------------------------------
+# A reply of another shape used to reach the readers: a missing key or a list where text belongs
+# crashed with a traceback, the string "yes" where a flag belongs read as true, and a pool with no
+# end was skipped by the audit without a word. It is now refused at run_php, naming the box.
+_ONE_RES = '"interface":"lan","mac":"00:11:22:33:44:30","hostname":"x","descr":""'
+
+
+@pytest.mark.parametrize("reply", [
+    "[{" + _ONE_RES + ',"ip":"192.0.2.30"}]',                                   # no static_arp
+    "[{" + _ONE_RES + ',"ip":["192.0.2.30"],"static_arp":false}]',              # a list for text
+    "[{" + _ONE_RES + ',"ip":"192.0.2.30","static_arp":"yes"}]',                # text for a flag
+    '{"interface":"lan"}',                                                      # not a list at all
+])
+def test_a_reservation_reply_of_another_shape_is_refused_naming_the_box(reply, capsys):
+    fake = FakeRun([('config_get_path("dhcpd"', (0, reply, BANNER))])
+    assert P.main(["--host", "192.0.2.1", "dhcp", "list"], run=fake) == 2
+    assert "php on 192.0.2.1 returned an unexpected reply: " in capsys.readouterr().err
+
+
+def test_a_pool_reply_of_another_shape_is_refused_before_the_audit(capsys):
+    fake = FakeRun([('$pools = array()', (0, '[{"interface":"lan","from":"192.0.2.100"}]', "")),
+                    ('config_get_path("dhcpd"', (0, RESERVATIONS_JSON, "")),
+                    ('config_get_path("unbound/hosts"', (0, "[]", ""))])
+    assert P.main(["--host", "192.0.2.1", "doctor"], run=fake) == 2
+    assert "a DHCP pool has no text field 'to'" in capsys.readouterr().err
 
 
 # ---- ssh argv -----------------------------------------------------------------------------------
@@ -232,20 +267,20 @@ def test_override_name_handles_an_override_with_no_host_part():
 
 # ---- selection refuses to guess -----------------------------------------------------------------
 def test_select_one_finds_the_single_match():
-    items = [{"mac": "aa:aa:aa:aa:aa:aa"}, {"mac": "bb:bb:bb:bb:bb:bb"}]
-    assert P.select_one(items, "mac", "BB:BB:BB:BB:BB:BB", what="reservation")["mac"] == "bb:bb:bb:bb:bb:bb"
+    items = [res("192.0.2.5", "aa:aa:aa:aa:aa:aa"), res("192.0.2.6", "bb:bb:bb:bb:bb:bb")]
+    assert P.select_reservation(items, "BB:BB:BB:BB:BB:BB").mac == "bb:bb:bb:bb:bb:bb"
 
 
 def test_select_one_refuses_when_nothing_matches():
-    with pytest.raises(P.PfsenseError, match="no reservation"):
-        P.select_one([{"mac": "aa:aa:aa:aa:aa:aa"}], "mac", "bb:bb:bb:bb:bb:bb", what="reservation")
+    with pytest.raises(P.PfsenseError, match="no reservation with mac=bb:bb:bb:bb:bb:bb$"):
+        P.select_reservation([res("192.0.2.5", "aa:aa:aa:aa:aa:aa")], "bb:bb:bb:bb:bb:bb")
 
 
 def test_select_one_refuses_an_ambiguous_match_rather_than_taking_the_first():
     """Taking the first is how a second command from the same listing hits the wrong row."""
-    items = [{"mac": "aa:aa:aa:aa:aa:aa", "ip": "192.0.2.5"}, {"mac": "aa:aa:aa:aa:aa:aa", "ip": "192.0.2.6"}]
-    with pytest.raises(P.PfsenseError, match="refusing to guess"):
-        P.select_one(items, "mac", "aa:aa:aa:aa:aa:aa", what="reservation")
+    items = [res("192.0.2.5", "aa:aa:aa:aa:aa:aa"), res("192.0.2.6", "aa:aa:aa:aa:aa:aa")]
+    with pytest.raises(P.PfsenseError, match="2 reservation entries share mac=aa:aa:aa:aa:aa:aa; refusing to guess"):
+        P.select_reservation(items, "aa:aa:aa:aa:aa:aa")
 
 
 # ---- generated PHP is escaped at the sink -------------------------------------------------------
@@ -305,9 +340,9 @@ def test_parse_xml_accepts_a_real_config():
 
 
 def test_reservations_are_read_out_of_a_snapshot_with_the_static_arp_flag():
-    reservations = P.reservations_from_config_xml(CONFIG_XML)
-    assert [r["ip"] for r in reservations] == ["192.0.2.30", "192.0.2.31"]
-    assert [r["static_arp"] for r in reservations] == [True, False]
+    assert P.reservations_from_config_xml(CONFIG_XML) == [
+        res("192.0.2.30", "00:11:22:33:44:30", static_arp=True, hostname="speaker"),
+        res("192.0.2.31", "00:11:22:33:44:31", hostname="nas")]
 
 
 def test_overrides_are_read_from_unbound_hosts_not_hostoverride():
@@ -325,7 +360,7 @@ def test_doctor_warns_about_an_armed_static_arp_entry():
 
 def test_doctor_stays_quiet_on_a_config_with_nothing_wrong():
     """A check that fires on a healthy config is as useless as one that never fires."""
-    clean = [{"ip": "192.0.2.31", "mac": "00:11:22:33:44:31", "static_arp": False}]
+    clean = [res("192.0.2.31", "00:11:22:33:44:31")]
     assert [f for f in P.doctor_findings(reservations=clean, overrides=[]) if f.severity == "warn"] == []
 
 
@@ -347,23 +382,21 @@ def test_one_address_shared_by_several_macs_is_context_not_a_warning():
 
     A wired and a wireless interface sharing one reserved address is the intended setup.
     """
-    shared = [{"ip": "192.0.2.31", "mac": "00:11:22:33:44:31", "static_arp": False},
-              {"ip": "192.0.2.31", "mac": "00:11:22:33:44:32", "static_arp": False}]
+    shared = [res("192.0.2.31", "00:11:22:33:44:31"), res("192.0.2.31", "00:11:22:33:44:32")]
     findings = P.doctor_findings(reservations=shared, overrides=[])
     assert [f.check for f in findings] == ["shared_ip_multi_mac"]
     assert findings[0].severity == "info"
 
 
 def test_static_arp_on_a_shared_address_names_the_lethal_combination():
-    shared = [{"ip": "192.0.2.31", "mac": "00:11:22:33:44:31", "static_arp": True},
-              {"ip": "192.0.2.31", "mac": "00:11:22:33:44:32", "static_arp": False}]
+    shared = [res("192.0.2.31", "00:11:22:33:44:31", static_arp=True), res("192.0.2.31", "00:11:22:33:44:32")]
     armed = [f for f in P.doctor_findings(reservations=shared, overrides=[]) if f.check == "static_arp_armed"]
     assert "2 MACs" in armed[0].detail
 
 
 def test_doctor_reports_an_address_held_by_hardware_the_reservation_does_not_name():
     """The stale-reservation-versus-live-device collision, which shows up as flaky wifi."""
-    reservations = [{"ip": "192.0.2.30", "mac": "aa:aa:aa:aa:aa:aa", "static_arp": False, "descr": "old AP"}]
+    reservations = [res("192.0.2.30", "aa:aa:aa:aa:aa:aa", descr="old AP")]
     findings = P.doctor_findings(reservations=reservations, overrides=[], arp=P.parse_arp(ARP_TEXT))
     mismatch = [f for f in findings if f.check == "reservation_mac_mismatch"]
     assert len(mismatch) == 1 and "00:11:22:33:44:30" in mismatch[0].subject
@@ -376,7 +409,7 @@ def test_an_idle_device_is_never_reported_as_gone():
     network with nothing wrong with it. The DHCP lease file cannot rescue it either, because ISC
     dhcpd writes no lease for a fixed-address reservation.
     """
-    reservations = [{"ip": "192.0.2.77", "mac": "aa:aa:aa:aa:aa:aa", "static_arp": False, "descr": "idle"}]
+    reservations = [res("192.0.2.77", "aa:aa:aa:aa:aa:aa", descr="idle")]
     assert P.doctor_findings(reservations=reservations, overrides=[], arp=P.parse_arp(ARP_TEXT)) == []
 
 
@@ -385,8 +418,7 @@ def test_one_reserved_mac_answering_for_a_shared_address_is_not_a_mismatch():
 
     Measured: treating the others as mismatches produced 5 false warnings against a live config.
     """
-    shared = [{"ip": "192.0.2.30", "mac": "00:11:22:33:44:30", "static_arp": False},
-              {"ip": "192.0.2.30", "mac": "00:11:22:33:44:99", "static_arp": False}]
+    shared = [res("192.0.2.30", "00:11:22:33:44:30"), res("192.0.2.30", "00:11:22:33:44:99")]
     findings = P.doctor_findings(reservations=shared, overrides=[], arp=P.parse_arp(ARP_TEXT))
     assert [f.check for f in findings] == ["shared_ip_multi_mac"]
 
@@ -2019,9 +2051,9 @@ def _pool_findings_subjects():
 def test_pools_are_read_from_enabled_dhcp_servers_including_additional_pools():
     """opt1 has a range but no <enable>: its DHCP server is off, so its range leases nothing."""
     assert P.pools_from_config_xml(POOL_CONFIG_XML) == [
-        {"interface": "lan", "from": "192.0.2.100", "to": "192.0.2.199"},
-        {"interface": "lan", "from": "192.0.2.220", "to": "192.0.2.229"},
-        {"interface": "opt2", "from": "203.0.113.100", "to": "203.0.113.199"},
+        P.Pool(interface="lan", first="192.0.2.100", last="192.0.2.199"),
+        P.Pool(interface="lan", first="192.0.2.220", last="192.0.2.229"),
+        P.Pool(interface="opt2", first="203.0.113.100", last="203.0.113.199"),
     ]
 
 
@@ -2046,9 +2078,8 @@ def test_doctor_ignores_a_static_map_outside_the_pool_and_on_a_disabled_server()
 
 
 def test_a_pool_on_another_interface_does_not_claim_a_reservation():
-    reservations = [{"interface": "lan", "mac": "00:11:22:33:44:70", "ip": "203.0.113.150",
-                     "hostname": "x", "descr": "", "static_arp": False}]
-    pools = [{"interface": "opt2", "from": "203.0.113.100", "to": "203.0.113.199"}]
+    reservations = [res("203.0.113.150", "00:11:22:33:44:70", hostname="x")]
+    pools = [P.Pool(interface="opt2", first="203.0.113.100", last="203.0.113.199")]
     assert P.doctor_findings(reservations=reservations, overrides=[], pools=pools) == []
 
 
