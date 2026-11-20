@@ -8,6 +8,7 @@ import inspect
 import sys
 import json
 import os
+import subprocess
 import threading
 import time
 from collections.abc import Callable
@@ -2504,3 +2505,90 @@ def test_a_word_list_of_the_wrong_type_reads_as_no_words(home, capsys, doc):
     assert str(p) in capsys.readouterr().err
     S.add_filler_words(["alpha"], _PROJ)                 # a read-modify-write replaces it
     assert "alpha" in S.load_filler_words(_PROJ)
+
+
+# ---- a polling waiter is let in by a holder that re-takes the lock at once ---------------------
+
+_HOLDER = r'''
+import os, sys, time
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import self_improve_signals as S
+target, started, stop = sys.argv[2], Path(sys.argv[3]), Path(sys.argv[4])
+holds = 0
+while not stop.exists():
+    with S.memory_lock(target, timeout=60.0):
+        holds += 1
+        Path(started).write_text(str(holds), encoding="utf-8")
+        time.sleep(0.02)                 # a write that takes a while, then the lock again AT ONCE
+print(holds)
+'''
+
+
+def _holds(path):
+    try:
+        return int(path.read_text(encoding="utf-8") or 0)
+    except (OSError, ValueError):
+        return 0
+
+
+def test_a_waiter_is_let_in_by_a_holder_that_retakes_the_lock_at_once(tmp_path):
+    """The lock was a bare O_EXCL create polled every 50 ms: a holder that re-took it the moment it
+    let go left the poller a gap of microseconds, and the waiter timed out behind a holder that
+    was making progress the whole time. A waiter that has been refused once now queues, and a
+    holder coming back for the lock waits behind it. Counted, not timed: the waiter must get in
+    within a few of the holder's holds, whatever the runner's speed."""
+    hooks = str(Path(S.__file__).resolve().parent)
+    target = tmp_path / "level" / "CLAUDE.local.md"
+    target.parent.mkdir()
+    started, stop, holder = tmp_path / "started", tmp_path / "stop", tmp_path / "holder.py"
+    holder.write_text(_HOLDER, encoding="utf-8")
+    proc = subprocess.Popen([sys.executable, str(holder), hooks, str(target), str(started),
+                             str(stop)], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            encoding="utf-8")
+    try:
+        while _holds(started) < 3:
+            assert proc.poll() is None, proc.communicate()
+            time.sleep(0.005)
+        before = _holds(started)
+        with S.memory_lock(target, timeout=60.0):
+            during = _holds(started)
+        stop.write_text("x", encoding="utf-8")
+        out, err = proc.communicate(timeout=60)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.communicate()
+    assert proc.returncode == 0, err
+    assert int(out.strip()) > during                 # the holder went on after the waiter
+    assert during - before <= 3, "the waiter waited out %d holds" % (during - before)
+    assert sorted(p.name for p in target.parent.iterdir()) == []   # no lock, no queue left
+
+
+def test_a_queue_place_whose_waiter_stopped_polling_does_not_hold_up_the_line(tmp_path):
+    """A waiter that crashed (or stalls) leaves its place behind; once it has gone quiet for the
+    freshness window it no longer blocks a caller, and once it is as old as a stale lock it is
+    removed."""
+    target = tmp_path / "m6"
+    quiet = tmp_path / "m6.lock.q00000000000000000001-1-1"
+    gone = tmp_path / "m6.lock.q00000000000000000002-1-1"
+    for place, age in ((quiet, S._QUEUE_PLACE_FRESH_S + 5), (gone, S.LOCK_STALE_S + 10)):
+        place.write_text("", encoding="utf-8")
+        old = time.time() - age
+        os.utime(place, (old, old))
+    with S.memory_lock(target, timeout=0.2):
+        pass
+    assert quiet.exists() and not gone.exists()
+
+
+def test_a_live_queue_place_taken_earlier_is_served_first(tmp_path):
+    """A caller arriving while an earlier waiter's place is live waits its turn even though the
+    lock itself is free, and times out if that waiter never takes it."""
+    target = tmp_path / "m7"
+    earlier = tmp_path / "m7.lock.q00000000000000000001-1-1"
+    earlier.write_text("", encoding="utf-8")         # fresh: its waiter is polling
+    with pytest.raises(TimeoutError):
+        with S.memory_lock(target, timeout=0.2):
+            pass
+    assert not (tmp_path / "m7.lock").exists()
+    assert sorted(p.name for p in tmp_path.iterdir()) == [earlier.name]   # its own place is gone

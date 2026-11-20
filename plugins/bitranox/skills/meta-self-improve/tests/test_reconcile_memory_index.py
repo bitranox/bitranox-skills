@@ -936,8 +936,7 @@ while not Path(stop).exists():
     if new:
         created.append(slug)
     Path(progress).write_text(str(len(created)), encoding="utf-8")
-    # a real session pauses between its writes; a worker that re-takes the level lock at once
-    # leaves a 50 ms-polling waiter no gap (see the race tests in hooks/tests)
+    # a real session pauses between its writes
     time.sleep(random.uniform(0.0, 0.005))
 print(json.dumps({"created": created}))
 '''

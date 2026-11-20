@@ -39,10 +39,10 @@ if sys.platform == "win32":
 
 HOOKS = Path(E.__file__).resolve().parent
 
-# The longest pause, in seconds, a worker takes after each of its writes. The level lock is an
-# O_EXCL create polled every 50 ms, so a worker that takes it again the moment it lets go leaves
-# a waiting verb no gap to land in: on a slow runner (macOS CI) the verb's 5 s wait ran out. A
-# real session pauses between its writes; this keeps the adds landing many times per verb.
+# The longest pause, in seconds, a worker takes after each of its writes. A real session pauses
+# between its writes, and the pause spreads the adds over the verb's whole run so that they land
+# many times per verb. (The level lock serves its waiters in arrival order, so an unpaced worker
+# no longer keeps a waiting verb out; see `sig.memory_lock`.)
 _PACE = 0.005
 
 # Every _GAP_EVERY-th write the pause is _GAP instead, a little more than one poll. On Windows an
@@ -467,7 +467,7 @@ def test_an_amend_without_a_title_never_writes_back_an_older_title(tmp_path):
         while _progress(progress) < AMENDS_TO_MEET and body_amends < 20000:
             body_amends += 1
             E.amend_pinned_entry(proj, "pinned-fact", body="prose %d" % body_amends)
-            # paced like the worker: re-taking the level lock at once starves its 50 ms poll
+            # paced like the worker, as a real session paces its writes
             time.sleep(random.uniform(0.0, _PACE))
         stop.write_text("x", encoding="utf-8")
         out, err = proc.communicate(timeout=60)
