@@ -28,17 +28,17 @@ def _result(tid, text, is_error=True):
 def test_extract_calls_carries_the_cwd_the_command_ran_under():
     calls = G.extract_calls(_mk([_use("t1", "git status", cwd="/srv/project")]))
     assert len(calls) == 1
-    assert calls[0]["cwd"] == "/srv/project"
+    assert calls[0].cwd == "/srv/project"
 
 
 def test_extract_calls_joins_the_error_result_to_its_call():
     calls = G.extract_calls(_mk([_use("t1", "git commit"), _result("t1", "boom")]))
-    assert calls[0]["error"] == "boom"
+    assert calls[0].error == "boom"
 
 
 def test_extract_calls_leaves_a_successful_call_with_no_error():
     calls = G.extract_calls(_mk([_use("t1", "git status"), _result("t1", "fine", is_error=False)]))
-    assert calls[0]["error"] is None
+    assert calls[0].error is None
 
 
 def test_extract_calls_ignores_other_tools():
@@ -72,10 +72,10 @@ def test_no_error_at_all_is_not_a_gate_block():
 
 def test_classify_reports_rate_and_precision_as_different_numbers():
     calls = [
-        {"id": "a", "command": "fire", "cwd": "/r", "error": "PreToolUse:Bash hook error: nope"},
-        {"id": "b", "command": "fire", "cwd": "/r", "error": None},
-        {"id": "c", "command": "fire", "cwd": "/r", "error": None},
-        {"id": "d", "command": "quiet", "cwd": "/r", "error": None},
+        G.Call(id="a", command="fire", cwd="/r", error="PreToolUse:Bash hook error: nope"),
+        G.Call(id="b", command="fire", cwd="/r", error=None),
+        G.Call(id="c", command="fire", cwd="/r", error=None),
+        G.Call(id="d", command="quiet", cwd="/r", error=None),
     ]
     report = G.classify(calls, lambda cmd: "fire" in cmd)
     assert report["commands"] == 4
@@ -86,7 +86,7 @@ def test_classify_reports_rate_and_precision_as_different_numbers():
 
 
 def test_a_predicate_that_never_fires_reports_precision_as_none():
-    calls = [{"id": "a", "command": "x", "cwd": "/r", "error": None}]
+    calls = [G.Call(id="a", command="x", cwd="/r", error=None)]
     report = G.classify(calls, lambda cmd: False)
     assert report["fires"] == 0
     assert report["precision_pct"] is None
@@ -94,14 +94,14 @@ def test_a_predicate_that_never_fires_reports_precision_as_none():
 
 def test_a_two_argument_predicate_is_called_with_the_cwd():
     seen = []
-    calls = [{"id": "a", "command": "git status", "cwd": "/srv/here", "error": None}]
+    calls = [G.Call(id="a", command="git status", cwd="/srv/here", error=None)]
     G.classify(calls, lambda cmd, cwd: seen.append(cwd) or False)
     assert seen == ["/srv/here"]
 
 
 def test_a_predicate_that_raises_does_not_abort_the_replay():
-    calls = [{"id": "a", "command": "boom", "cwd": "/r", "error": None},
-             {"id": "b", "command": "fire", "cwd": "/r", "error": None}]
+    calls = [G.Call(id="a", command="boom", cwd="/r", error=None),
+             G.Call(id="b", command="fire", cwd="/r", error=None)]
 
     def flaky(cmd):
         if cmd == "boom":
@@ -122,7 +122,7 @@ def test_the_sample_is_spread_across_the_corpus_not_the_first_n():
     what a reader judges the firings from, so drawing it from one end of the corpus is the half
     that turns a volume figure into a wrong conclusion.
     """
-    calls = [{"id": str(i), "command": "fire %03d" % i, "cwd": "/r", "error": None}
+    calls = [G.Call(id=str(i), command="fire %03d" % i, cwd="/r", error=None)
              for i in range(100)]
     got = [s["command"] for s in G.classify(calls, lambda cmd: True, sample=5)["samples"]]
 
@@ -135,15 +135,15 @@ def test_the_sample_is_spread_across_the_corpus_not_the_first_n():
 
 
 def test_a_sample_larger_than_the_firings_returns_them_all():
-    calls = [{"id": "a", "command": "fire one", "cwd": "/r", "error": None},
-             {"id": "b", "command": "quiet", "cwd": "/r", "error": None}]
+    calls = [G.Call(id="a", command="fire one", cwd="/r", error=None),
+             G.Call(id="b", command="quiet", cwd="/r", error=None)]
     report = G.classify(calls, lambda cmd: cmd.startswith("fire"), sample=5)
     assert [s["command"] for s in report["samples"]] == ["fire one"]
 
 
 def test_samples_carry_the_firing_commands_for_eyeballing():
-    calls = [{"id": "a", "command": "fire one", "cwd": "/r", "error": None},
-             {"id": "b", "command": "quiet", "cwd": "/r", "error": None}]
+    calls = [G.Call(id="a", command="fire one", cwd="/r", error=None),
+             G.Call(id="b", command="quiet", cwd="/r", error=None)]
     report = G.classify(calls, lambda cmd: cmd.startswith("fire"), sample=5)
     assert [s["command"] for s in report["samples"]] == ["fire one"]
 
@@ -235,14 +235,14 @@ def test_calls_with_no_id_are_not_collapsed_into_one(tmp_path):
 
 def test_a_tool_name_parameter_receives_the_tool_not_the_cwd():
     seen = []
-    calls = [{"id": "a", "command": "git status", "cwd": "/srv/here", "error": None}]
+    calls = [G.Call(id="a", command="git status", cwd="/srv/here", error=None)]
     G.classify(calls, lambda command, tool_name: seen.append(tool_name) or False, tool="Bash")
     assert seen == ["Bash"], "a tool_name parameter must get the tool, never the cwd"
 
 
 def test_the_tool_forwarded_is_the_one_being_replayed():
     seen = []
-    calls = [{"id": "a", "command": "Get-Item x", "cwd": "/srv/here", "error": None}]
+    calls = [G.Call(id="a", command="Get-Item x", cwd="/srv/here", error=None)]
     G.classify(calls, lambda command, tool_name: seen.append(tool_name) or False, tool="PowerShell")
     assert seen == ["PowerShell"]
 
@@ -250,7 +250,7 @@ def test_the_tool_forwarded_is_the_one_being_replayed():
 def test_a_cwd_parameter_still_receives_the_cwd():
     """The direction that must NOT change."""
     seen = []
-    calls = [{"id": "a", "command": "git status", "cwd": "/srv/here", "error": None}]
+    calls = [G.Call(id="a", command="git status", cwd="/srv/here", error=None)]
     G.classify(calls, lambda cmd, cwd: seen.append(cwd) or False)
     assert seen == ["/srv/here"]
 
@@ -260,14 +260,14 @@ def test_an_unrecognised_second_parameter_is_not_filled_in():
     haystack slot would quietly change what the guard searches. Only names we understand get
     forwarded; anything else is called with the command alone."""
     seen = []
-    calls = [{"id": "a", "command": "git status", "cwd": "/srv/here", "error": None}]
+    calls = [G.Call(id="a", command="git status", cwd="/srv/here", error=None)]
     G.classify(calls, lambda cmd, haystack=None: seen.append(haystack) or False)
     assert seen == [None], "an unknown second parameter must be left at its default"
 
 
 def test_the_report_names_which_second_argument_was_forwarded():
     """A silent choice here is what made the wrong number unnoticeable, so the run states it."""
-    calls = [{"id": "a", "command": "git status", "cwd": "/srv/here", "error": None}]
+    calls = [G.Call(id="a", command="git status", cwd="/srv/here", error=None)]
     assert G.classify(calls, lambda command, tool_name: False)["forwarded_second_arg"] == "tool_name"
     assert G.classify(calls, lambda cmd, cwd: False)["forwarded_second_arg"] == "cwd"
     assert G.classify(calls, lambda cmd: False)["forwarded_second_arg"] is None
@@ -281,7 +281,7 @@ def test_the_report_names_which_second_argument_was_forwarded():
 # second quiet change in the same commit would repeat the defect one level up.
 
 def test_an_unrecognised_second_parameter_warns_on_stderr(capsys):
-    calls = [{"id": "a", "command": "git status", "cwd": "/srv/here", "error": None}]
+    calls = [G.Call(id="a", command="git status", cwd="/srv/here", error=None)]
     G.classify(calls, lambda cmd, haystack=None: False)
     err = capsys.readouterr().err
     assert "haystack" in err, "the warning must NAME the parameter being dropped"
@@ -289,14 +289,14 @@ def test_an_unrecognised_second_parameter_warns_on_stderr(capsys):
 
 def test_the_warning_never_touches_stdout(capsys):
     """stdout carries the JSON envelope; a warning there would corrupt a parsed run."""
-    calls = [{"id": "a", "command": "git status", "cwd": "/srv/here", "error": None}]
+    calls = [G.Call(id="a", command="git status", cwd="/srv/here", error=None)]
     G.classify(calls, lambda cmd, haystack=None: False)
     assert capsys.readouterr().out == ""
 
 
 def test_a_recognised_second_parameter_is_not_warned_about(capsys):
     """The direction where it must NOT fire - twice, because both names are recognised."""
-    calls = [{"id": "a", "command": "git status", "cwd": "/srv/here", "error": None}]
+    calls = [G.Call(id="a", command="git status", cwd="/srv/here", error=None)]
     G.classify(calls, lambda command, tool_name: False)
     G.classify(calls, lambda cmd, cwd: False)
     assert capsys.readouterr().err == ""
@@ -304,14 +304,14 @@ def test_a_recognised_second_parameter_is_not_warned_about(capsys):
 
 def test_a_single_argument_predicate_is_not_warned_about(capsys):
     """Nothing is being dropped, so there is nothing to say."""
-    calls = [{"id": "a", "command": "git status", "cwd": "/srv/here", "error": None}]
+    calls = [G.Call(id="a", command="git status", cwd="/srv/here", error=None)]
     G.classify(calls, lambda cmd: False)
     assert capsys.readouterr().err == ""
 
 
 def test_the_warning_is_emitted_once_not_per_call():
     """66,000 copies of one warning is the same as no warning."""
-    calls = [{"id": str(n), "command": "git status", "cwd": "/x", "error": None}
+    calls = [G.Call(id=str(n), command="git status", cwd="/x", error=None)
              for n in range(50)]
     import io, contextlib
     buf = io.StringIO()
@@ -344,24 +344,24 @@ def _use_edit(tid, new_string, cwd="/repo"):
 
 def test_a_write_call_yields_the_text_it_would_write():
     calls = G.extract_calls(_mk([_use_write("t1", "39 of 40 candidates")]), tool="Write")
-    assert [c["command"] for c in calls] == ["39 of 40 candidates"]
+    assert [c.command for c in calls] == ["39 of 40 candidates"]
 
 
 def test_an_edit_call_yields_the_replacement_text_not_the_replaced_text():
     calls = G.extract_calls(_mk([_use_edit("t1", "the new claim")]), tool="Edit")
-    assert [c["command"] for c in calls] == ["the new claim"], \
+    assert [c.command for c in calls] == ["the new claim"], \
         "a guard judges what is about to be written, so the payload is new_string"
 
 
 def test_the_bash_path_is_unchanged():
     calls = G.extract_calls(_mk([_use("t1", "git status")]), tool="Bash")
-    assert [c["command"] for c in calls] == ["git status"]
+    assert [c.command for c in calls] == ["git status"]
 
 
 def test_a_write_still_carries_its_cwd_and_its_error():
     text = _mk([_use_write("t1", "body", cwd="/srv/p"), _result("t1", "denied by hook")])
     call = G.extract_calls(text, tool="Write")[0]
-    assert call["cwd"] == "/srv/p" and call["error"] == "denied by hook"
+    assert call.cwd == "/srv/p" and call.error == "denied by hook"
 
 
 def test_a_call_missing_its_payload_field_is_skipped_not_fatal():
@@ -416,8 +416,8 @@ def test_a_field_override_replays_the_named_input_field():
     """A guard about WHERE a write lands is judged on the path, not on the text: `--field` picks
     the input field, and the tool's default payload stays the default."""
     text = _mk([_use_edit("t1", "the new claim")])
-    assert [c["command"] for c in G.extract_calls(text, tool="Edit", field="file_path")] == ["/repo/x.md"]
-    assert [c["command"] for c in G.extract_calls(text, tool="Edit")] == ["the new claim"]
+    assert [c.command for c in G.extract_calls(text, tool="Edit", field="file_path")] == ["/repo/x.md"]
+    assert [c.command for c in G.extract_calls(text, tool="Edit")] == ["the new claim"]
 
 
 def test_a_field_override_reaches_the_replay(tmp_path):
@@ -521,7 +521,7 @@ def test_a_predicate_that_calls_sys_exit_is_counted_as_a_predicate_error():
     def exiting(cmd):
         sys.exit(0)
 
-    report = G.classify([{"id": "a", "command": "x", "cwd": "/r", "error": None}], exiting)
+    report = G.classify([G.Call(id="a", command="x", cwd="/r", error=None)], exiting)
     assert report["predicate_errors"] == 1
 
 
@@ -530,7 +530,7 @@ def test_a_verdict_whose_truth_test_raises_is_a_predicate_error():
         def __bool__(self):
             raise ValueError("no truth")
 
-    report = G.classify([{"id": "a", "command": "x", "cwd": "/r", "error": None}],
+    report = G.classify([G.Call(id="a", command="x", cwd="/r", error=None)],
                         lambda cmd: Bad())
     assert report["predicate_errors"] == 1 and report["fires"] == 0
 
@@ -555,8 +555,8 @@ def test_predicate_crashes_make_the_run_not_ok(tmp_path, capsys):
 
 
 def test_the_rate_is_computed_over_the_calls_actually_judged():
-    calls = [{"id": "a", "command": "fire", "cwd": "/r", "error": None},
-             {"id": "b", "command": "boom", "cwd": "/r", "error": None}]
+    calls = [G.Call(id="a", command="fire", cwd="/r", error=None),
+             G.Call(id="b", command="boom", cwd="/r", error=None)]
 
     def pred(cmd):
         if cmd == "boom":
@@ -716,7 +716,7 @@ def test_an_unexpected_crash_exits_2_not_1(tmp_path, capsys, monkeypatch):
 
 def test_a_keyword_only_cwd_is_forwarded():
     seen = []
-    calls = [{"id": "a", "command": "git status", "cwd": "/srv/here", "error": None}]
+    calls = [G.Call(id="a", command="git status", cwd="/srv/here", error=None)]
 
     def notice(command, *, cwd=None):
         seen.append(cwd)
@@ -729,7 +729,7 @@ def test_a_keyword_only_cwd_is_forwarded():
 
 def test_a_keyword_only_tool_name_is_forwarded():
     seen = []
-    calls = [{"id": "a", "command": "git status", "cwd": "/srv/here", "error": None}]
+    calls = [G.Call(id="a", command="git status", cwd="/srv/here", error=None)]
 
     def notice(command, *, tool_name=None):
         seen.append(tool_name)
@@ -766,7 +766,7 @@ def test_a_line_separator_inside_a_command_does_not_split_the_record():
     """JSONL records are split on newline only; U+2028 and form feed are legal raw in a string."""
     text = json.dumps(_use("t1", "echo a\u2028b\fc"), ensure_ascii=False) + "\n"
     calls = G.extract_calls(text)
-    assert [c["command"] for c in calls] == ["echo a\u2028b\fc"]
+    assert [c.command for c in calls] == ["echo a\u2028b\fc"]
 
 
 @pytest.mark.skipif(sys.platform == "win32" or getattr(os, "geteuid", lambda: 1)() == 0,
@@ -880,8 +880,8 @@ def test_write_firings_raises_usage_error_not_oserror(tmp_path):
     """The library-level contract behind the CLI refusal above."""
     bad_out = tmp_path / "no-such-dir" / "firings.jsonl"
     try:
-        G.write_firings(str(bad_out), [{"id": "a", "command": "x", "cwd": "/r", "error": None,
-                                        "transcript": "/t.jsonl"}])
+        G.write_firings(str(bad_out), [G.Call(id="a", command="x", cwd="/r",
+                                              transcript="/t.jsonl")])
     except G.UsageError as exc:
         assert str(bad_out) in str(exc)
     else:
@@ -894,8 +894,8 @@ def test_write_firings_error_shows_the_path_as_given_not_repr_quoted(tmp_path):
     surrounding quotes, so the regression is visible without a Windows path at all."""
     bad_out = tmp_path / "no-such-dir" / "firings.jsonl"
     try:
-        G.write_firings(str(bad_out), [{"id": "a", "command": "x", "cwd": "/r", "error": None,
-                                        "transcript": "/t.jsonl"}])
+        G.write_firings(str(bad_out), [G.Call(id="a", command="x", cwd="/r",
+                                              transcript="/t.jsonl")])
     except G.UsageError as exc:
         message = str(exc)
         assert repr(str(bad_out)) not in message, "path must not be repr-quoted"
@@ -908,15 +908,15 @@ def test_write_firings_error_shows_the_path_as_given_not_repr_quoted(tmp_path):
 # cwd and error just because --firings happened to be requested.
 
 def test_classify_does_not_carry_fire_calls_by_default():
-    calls = [{"id": "a", "command": "fire", "cwd": "/r", "error": None}]
+    calls = [G.Call(id="a", command="fire", cwd="/r", error=None)]
     report = G.classify(calls, lambda cmd: "fire" in cmd)
     assert "fire_calls" not in report
 
 
 def test_classify_carries_fire_calls_only_when_asked():
-    calls = [{"id": "a", "command": "fire", "cwd": "/r", "error": None}]
+    calls = [G.Call(id="a", command="fire", cwd="/r", error=None)]
     report = G.classify(calls, lambda cmd: "fire" in cmd, collect_fires=True)
-    assert report["fire_calls"][0]["id"] == "a"
+    assert report["fire_calls"][0].id == "a"
 
 
 def test_replay_never_leaves_fire_calls_in_its_report_even_with_firings(tmp_path):
@@ -1062,3 +1062,21 @@ def test_replay_still_joins_a_failed_result_to_its_call_across_a_bom_and_crlf(tm
                      + json.dumps(_result("t1", "PreToolUse:Bash hook refused")).encode() + b"\n")
     report = G.replay(str(path), lambda cmd: "fire" in cmd)
     assert (report["commands"], report["fires"], report["blocked"]) == (1, 1, 1)
+
+
+def test_a_call_is_one_record_with_a_key_set_per_output(tmp_path):
+    """extract_calls yields Call records; a --sample entry carries command, cwd, error and a
+    --firings line exactly id, transcript, cwd, command, error, in that order. An error stays
+    None for a call whose result never arrived, not only for one that succeeded."""
+    calls = G.extract_calls(_mk([_use("t1", "fire", cwd="/srv/p"), _result("t1", "no"),
+                                 _use("t2", "fire later")]), transcript="/t.jsonl")
+    assert [type(c) for c in calls] == [G.Call, G.Call]
+    assert calls[1].error is None and calls[1].transcript == "/t.jsonl"
+    assert list(calls[0].sample_data().items()) == [
+        ("command", "fire"), ("cwd", "/srv/p"), ("error", "no")]
+    assert list(calls[0].firing_data()) == ["id", "transcript", "cwd", "command", "error"]
+    out = tmp_path / "f.jsonl"
+    G.write_firings(str(out), calls)
+    assert out.read_text(encoding="utf-8").splitlines()[0] == (
+        '{"id": "t1", "transcript": "/t.jsonl", "cwd": "/srv/p", "command": "fire", '
+        '"error": "no"}')

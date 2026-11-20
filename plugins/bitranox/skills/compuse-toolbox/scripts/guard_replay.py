@@ -64,6 +64,7 @@ import os
 import re
 import sys
 from collections import deque
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -180,11 +181,41 @@ def _extract_lines(lines, tool: str, field: str, transcript: str | None = None):
     return calls, scan.without_field
 
 
+@dataclass(slots=True)
+class Call:
+    """One recorded tool call: its tool_use `id`, the `command` (the input field replayed), the
+    `cwd` its record carried, the `error` text of a failed result, and the `transcript` it came from.
+
+    `id` is None for a call recorded without one, and such a call is never deduplicated. `cwd` is
+    None when the record carried none. `error` stays None for a call that succeeded AND for one
+    whose result never arrived (an interrupted session): only a result marked `is_error` fills it.
+    `transcript` is None when a caller handed in text with no file behind it.
+
+    The same call shows up in two outputs, each with its own key set: a `--sample` entry
+    (`sample_data`) and a `--firings` line (`firing_data`).
+    """
+
+    id: str | None
+    command: str
+    cwd: str | None = None
+    error: str | None = None
+    transcript: str | None = None
+
+    def sample_data(self) -> dict[str, str | None]:
+        """The report's `samples` entry: what a person spot-checking a firing reads."""
+        return {"command": self.command, "cwd": self.cwd, "error": self.error}
+
+    def firing_data(self) -> dict[str, str | None]:
+        """One `--firings` line: exactly `id`, `transcript`, `cwd`, `command`, `error`."""
+        return {"id": self.id, "transcript": self.transcript, "cwd": self.cwd,
+                "command": self.command, "error": self.error}
+
+
 @dataclass
 class _Pending:
     """A call waiting for its tool_result, which tells whether it failed and with what."""
 
-    call: dict
+    call: Call
     resolved: bool
 
 
@@ -229,8 +260,8 @@ class _CallScan:
             self.without_field += 1
             return
         call_id = block.get("id")
-        entry = _Pending({"id": call_id, "command": command, "cwd": cwd, "error": None,
-                          "transcript": self.transcript}, resolved=not isinstance(call_id, str))
+        entry = _Pending(Call(id=call_id, command=command, cwd=cwd, transcript=self.transcript),
+                         resolved=not isinstance(call_id, str))
         pending.append(entry)
         if isinstance(call_id, str):
             waiting.setdefault(call_id, []).append(entry)
@@ -244,7 +275,7 @@ def _resolve(block, waiting) -> None:
     for entry in waiting.pop(tool_use_id, ()):
         if block.get("is_error"):
             body = block.get("content")
-            entry.call["error"] = body if isinstance(body, str) else _dumps(body)
+            entry.call.error = body if isinstance(body, str) else _dumps(body)
         entry.resolved = True
 
 
@@ -271,7 +302,7 @@ def _content_blocks(line: str):
 
 
 def extract_calls(text: str, tool: str = "Bash", field: str | None = None,
-                  transcript: str | None = None):
+                  transcript: str | None = None) -> list[Call]:
     """Every call of `tool` in one transcript, each with the cwd it ran under and its error.
 
     `field` overrides which input field is handed to the predicate. The default is the tool's
@@ -365,7 +396,7 @@ def _judge(predicate, command, second, by_keyword, value):
     return bool(predicate(command, value))
 
 
-def _spread_sample(fires, n):
+def _spread_sample(fires: list[Call], n: int) -> list[dict[str, str | None]]:
     """`n` firings drawn evenly across `fires`, in corpus order - never the first `n`.
 
     The corpus is walked file by file, so the firings arrive grouped by PROJECT. Filling the
@@ -385,7 +416,7 @@ def _spread_sample(fires, n):
     else:
         step = len(fires) / n
         picked = [fires[int(i * step)] for i in range(n)]
-    return [{"command": c["command"], "cwd": c["cwd"], "error": c["error"]} for c in picked]
+    return [c.sample_data() for c in picked]
 
 
 def classify(calls, predicate, sample: int = 0, block_pattern: str = DEFAULT_BLOCK_PATTERN,
@@ -438,15 +469,15 @@ class _Tally:
                   "leaving it at its default"
                   % (declared, ", ".join(_SECOND_ARG_NAMES)), file=sys.stderr)
         self.extra = {"cwd": None, "tool_name": tool}
-        self.fires = []
+        self.fires: list[Call] = []
         self.total = self.blocked = self.errored = self.clean = self.predicate_errors = 0
 
-    def judge(self, call) -> None:
+    def judge(self, call: Call) -> None:
         """Judge one call and count it; keep it only if the predicate fired."""
         self.total += 1
-        self.extra["cwd"] = call["cwd"]
+        self.extra["cwd"] = call.cwd
         try:
-            verdict = _judge(self.predicate, call["command"], self.second, self.by_keyword,
+            verdict = _judge(self.predicate, call.command, self.second, self.by_keyword,
                              self.extra.get(self.second))
         except (Exception, SystemExit):                  # noqa: BLE001 - a crash is a finding, not a stop
             self.predicate_errors += 1
@@ -454,9 +485,9 @@ class _Tally:
         if not verdict:
             return
         self.fires.append(call)
-        if is_gate_block(call["error"], self.block_pattern):
+        if is_gate_block(call.error, self.block_pattern):
             self.blocked += 1
-        elif call["error"]:
+        elif call.error:
             self.errored += 1
         else:
             self.clean += 1
@@ -591,16 +622,16 @@ def _replay_file(path: Path, tally, seen: set, *, tool: str, field: str):
     scan = _CallScan(tool, field, str(path))
     duplicates = 0
     for call in scan.calls(line for _n, line in iter_transcript_lines(path)):
-        if call["id"] is not None:
-            if call["id"] in seen:
+        if call.id is not None:
+            if call.id in seen:
                 duplicates += 1
                 continue
-            seen.add(call["id"])
+            seen.add(call.id)
         tally.judge(call)
     return scan.without_field, duplicates
 
 
-def write_firings(path: str, fire_calls) -> None:
+def write_firings(path: str, fire_calls: Iterable[Call]) -> None:
     """Write every firing to `path` as one JSON object per line.
 
     Exactly the keys `id`, `transcript`, `cwd`, `command`, `error` - no more, no less, so a reader
@@ -616,10 +647,7 @@ def write_firings(path: str, fire_calls) -> None:
     try:
         with open(path, "w", encoding="utf-8") as fh:
             for call in fire_calls:
-                record = {"id": call.get("id"), "transcript": call.get("transcript"),
-                          "cwd": call.get("cwd"), "command": call.get("command"),
-                          "error": call.get("error")}
-                fh.write(json.dumps(record, ensure_ascii=False))
+                fh.write(json.dumps(call.firing_data(), ensure_ascii=False))
                 fh.write("\n")
     except OSError as exc:
         raise UsageError("cannot write --firings %s: %s" % (path, exc.strerror or exc)) from exc
