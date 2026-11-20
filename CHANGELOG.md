@@ -30,6 +30,12 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.17.4]
+
+### Added
+
+- infra-proxmox: troubleshooting row "tc state on a VM tap gone". A qdisc or filter on a guest tap lives as long as the QEMU process, so `qm reboot`, stop/start, migration and a host reboot drop it silently while a guest-internal reboot keeps it; re-apply from an idempotent `post-start` hookscript.
+
 ## [11.17.3]
 
 ### Fixed
