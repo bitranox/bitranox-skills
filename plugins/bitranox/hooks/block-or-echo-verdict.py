@@ -74,19 +74,36 @@ from shell_text import blank_heredoc_bodies, mask_data_regions
 # subshell or group, or after a compound-command keyword. `!` is absent on purpose (see above).
 _START = r"(?:^|(?<=[;&|(\n{])|(?<=\bthen)|(?<=\bdo)|(?<=\belse)|(?<=\belif)|(?<=\btime))"
 
+# The launcher and program words below are built from these two pieces, never from \S and \s.
+# Every `;`, `&`, `|`, `(` and `{` is a start of its own, so a word that could run over one
+# rescanned the rest of the text from each start: a value or path prefix (`\S*/`, `A=\S*`) ran to
+# the end of a run of `&` or `(`, and a launcher chain (`sudo\s+`) ran down every following line,
+# quadratic in the run (a 4000-character run of `(` cost 39x the 500-character one, not 8x). A
+# word stops where the next start begins, which is also where the shell ends it: the command
+# text is masked first, so `$(...)` and `${...}` inside a value are filler by then, and a newline
+# ends the command, so `sudo` on one line does not launch the program on the next.
+_WORD = r"[^\s;&|({]"
+_BLANK = r"[^\S\n]"
+
 # Launchers that leave the next word the real program. A leading `NAME=value` is an assignment
 # prefix for the same reason.
+# Joined with `+`, not an f-string: the perf-review regex finder folds constant concatenation and
+# checks the result for quadratic starts, while an f-string is a pattern built at run time to it.
+_OPTION = _BLANK + r"+-" + _WORD + r"+"
 _LAUNCHER = (
     r"(?:(?:sudo|nice|command|nohup"
-    r"|stdbuf(?:\s+-\S+)+"
-    r"|timeout(?:\s+-\S+)*\s+\S+"
-    r"|env(?:\s+-u\s+\S+|\s+-\S+|\s+[A-Za-z_]\w*=\S*)*"
-    r"|[A-Za-z_]\w*=\S*)\s+)*"
+    r"|stdbuf(?:" + _OPTION + r")+"
+    r"|timeout(?:" + _OPTION + r")*" + _BLANK + r"+" + _WORD + r"+"
+    r"|env(?:" + _BLANK + r"+-u" + _BLANK + r"+" + _WORD + r"+|" + _OPTION
+    + r"|" + _BLANK + r"+[A-Za-z_]\w*=" + _WORD + r"*)*"
+    r"|[A-Za-z_]\w*=" + _WORD + r"*)" + _BLANK + r"+)*"
 )
 
 _PROGRAM = (
-    r"(?P<prog>(?:\S*/)?(?:[efz]?grep|rg|diff|cmp)"
-    r"|git(?:\s+-C\s+\S+|\s+-c\s+\S+|\s+--no-pager)*\s+(?:grep|diff))(?=[\s)]|$)"
+    r"(?P<prog>(?:" + _WORD + r"*/)?(?:[efz]?grep|rg|diff|cmp)"
+    r"|git(?:" + _BLANK + r"+-C" + _BLANK + r"+" + _WORD + r"+|" + _BLANK + r"+-c" + _BLANK + r"+"
+    + _WORD + r"+|" + _BLANK + r"+--no-pager)*"
+    + _BLANK + r"+(?:grep|diff))(?=[\s)]|$)"
 )
 
 # One pipeline element's worth of text: no list separator, no pipe, no newline. `2>&1`, `>&2`

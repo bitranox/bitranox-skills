@@ -1246,3 +1246,73 @@ def test_the_owner_search_walks_every_name_the_engine_rule_walks():
     walked = [n for n in _parity_names() if not US.is_non_level_dirname(n)]
     assert set(ORDINARY_NAMES) <= set(walked)
     assert [n for n in walked if FE._skip_dir(n)] == []
+
+
+# ---- clean_body: the blank edges it trims, and that trimming them is linear ----------------------
+
+@pytest.mark.parametrize("text, cleaned", [
+    ("body\n", "body\n"),
+    ("\n\n  \nbody  \n\n \t\n", "body  \n"),          # the content line keeps its own blanks
+    ("body\r\n\r\n", "body\n"),
+    ("body\r \n", "body\r \n"),                        # a lone CR is not a line break
+    ("body\n\r\n \r", "body\n\r\n \r\n"),
+    (" \n\t\n", ""),
+    ("a\n\nb\n\n\n", "a\n\nb\n"),                      # a blank line inside the body stays
+])
+def test_clean_body_trims_whole_blank_lines_at_both_edges(text, cleaned):
+    assert FE.clean_body(text) == cleaned
+
+
+# A growth check by the process-test-design rule: USER CPU time, the small arm timed as 8 calls
+# back to back so both windows are equal, each window at least 10 clock steps, best of 3.
+if sys.platform == "win32":
+    def _user_cpu():
+        return os.times().user
+else:
+    import resource
+
+    def _user_cpu():
+        return resource.getrusage(resource.RUSAGE_SELF).ru_utime
+
+
+def _clock_step():
+    """The smallest advance _user_cpu() reports over a busy loop, best of three."""
+    steps = []
+    for _ in range(3):
+        start = now = _user_cpu()
+        spin = 0
+        while now == start:
+            for _ in range(2000):
+                spin += 1
+            now = _user_cpu()
+        steps.append(now - start)
+    return min(steps)
+
+
+def _is_linear(call, small, big):
+    """True when `call` on `big` (8 times `small`) costs under 24 times what it costs on `small`.
+
+    Linear is about 8x and the quadratic shapes measured 50x and more. A large arm under 5 ms is
+    linear without a ratio: a quadratic scan of it takes far longer."""
+    floor = max(0.02, 10 * _clock_step())
+
+    def window(text, calls):
+        start = _user_cpu()
+        for _ in range(calls):
+            call(text)
+        return _user_cpu() - start
+
+    reps = 1
+    while window(small, 8 * reps) < floor and reps < 1 << 16:
+        reps *= 2
+    small_time = min(window(small, 8 * reps) for _ in range(3)) / (8 * reps)
+    big_time = min(window(big, reps) for _ in range(3)) / reps
+    return big_time < 0.005 or big_time < 24 * small_time
+
+
+@pytest.mark.parametrize("unit", ["\n", "\n ", "\n\t", "\r\n"])
+def test_clean_body_costs_linear_time_on_a_run_of_blank_lines(unit):
+    # The run ends in content, so no blank line is trailing and every line break is a dead end.
+    small = "x" + unit * 2000 + "x"
+    big = "x" + unit * 16000 + "x"
+    assert _is_linear(FE.clean_body, small, big)

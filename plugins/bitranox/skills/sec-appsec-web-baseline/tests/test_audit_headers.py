@@ -1,6 +1,8 @@
 """Behaviour tests for the pure graders in audit_headers (no network)."""
 
 import json
+import os
+import sys
 
 import audit_headers as a
 import pytest
@@ -646,3 +648,64 @@ def test_summary_counts_keep_their_wire_strings():
     counts = a.summarize([a.Finding("hsts", "SEVERE", "d"), a.Finding("csp", "OK", "d")])
     assert json.dumps(counts) == '{"SEVERE": 1, "MEDIUM": 0, "MINOR": 0, "OK": 1}'
     assert a.Finding("hsts", "MEDIUM", "d").severity is a.Severity.MEDIUM
+
+
+# ---- the version test costs linear time on a long digit run ----
+# A growth check by the process-test-design rule: USER CPU time, the small arm timed as 8 calls
+# back to back so both windows are equal, each window at least 10 clock steps, best of 3.
+if sys.platform == "win32":
+    def _user_cpu():
+        return os.times().user
+else:
+    import resource
+
+    def _user_cpu():
+        return resource.getrusage(resource.RUSAGE_SELF).ru_utime
+
+
+def _clock_step():
+    """The smallest advance _user_cpu() reports over a busy loop, best of three."""
+    steps = []
+    for _ in range(3):
+        start = now = _user_cpu()
+        spin = 0
+        while now == start:
+            for _ in range(2000):
+                spin += 1
+            now = _user_cpu()
+        steps.append(now - start)
+    return min(steps)
+
+
+def _is_linear(call, small, big):
+    """True when `call` on `big` (8 times `small`) costs under 24 times what it costs on `small`.
+
+    Linear is about 8x and the quadratic shape measured 30x to 80x. A large arm under 5 ms is
+    linear without a ratio: a quadratic scan of it takes far longer."""
+    floor = max(0.02, 10 * _clock_step())
+
+    def window(text, calls):
+        start = _user_cpu()
+        for _ in range(calls):
+            call(text)
+        return _user_cpu() - start
+
+    reps = 1
+    while window(small, 8 * reps) < floor and reps < 1 << 16:
+        reps *= 2
+    small_time = min(window(small, 8 * reps) for _ in range(3)) / (8 * reps)
+    big_time = min(window(big, reps) for _ in range(3)) / reps
+    return big_time < 0.005 or big_time < 24 * small_time
+
+
+def test_a_long_digit_run_without_a_dot_is_scanned_in_linear_time():
+    assert _is_linear(a._leaks_version, "0" * 2000, "0" * 16000)
+
+
+@pytest.mark.parametrize("value, leaks", [
+    ("nginx/1.25.3", True), ("Apache/2.4.7 (Ubuntu)", True), ("v3.1", True), ("x12.5", True),
+    ("AmazonS3", False), ("v3", False), ("1.", False), ("2024", False), ("", False),
+])
+def test_a_version_is_digits_a_dot_and_digits(value, leaks):
+    assert a._leaks_version(value) is leaks
+

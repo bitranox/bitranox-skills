@@ -34,7 +34,9 @@ from urllib.parse import urlsplit, urlunsplit
 
 _MAX_AGE_RE = re.compile(r'max-age\s*=\s*"?(\d+)', re.I)
 _CSP_NONCE_OR_HASH_RE = re.compile(r"'(?:nonce-|sha256-|sha384-|sha512-)")
-_VERSION_NUMBER_RE = re.compile(r"v?\d+\.\d+")
+# A version never starts after a digit: that start only shortens one beginning a digit earlier,
+# and without the lookbehind every digit of a long run rescanned the rest of it, quadratic.
+_VERSION_NUMBER_RE = re.compile(r"(?<!\d)v?\d+\.\d+")
 _SRCSET_SPLIT_RE = re.compile(r"[,\s]+")
 
 
@@ -397,7 +399,8 @@ def _xss_auditor(value: str | None) -> Finding:
 
 
 def _leaks_version(value: str | None) -> bool:
-    # A version looks like 1.2 / 2.4.7 / v3 - a bare product name with a digit (AmazonS3) is not.
+    # A version has a dot between digits: 1.2, 2.4.7, v3.1. A bare product name with a digit
+    # (AmazonS3) is not one, and neither is a lone `v3`.
     return bool(value and _VERSION_NUMBER_RE.search(value))
 
 
