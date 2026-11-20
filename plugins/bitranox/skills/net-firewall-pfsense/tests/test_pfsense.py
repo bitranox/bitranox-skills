@@ -11,6 +11,7 @@ The load-bearing properties, each one a fault that has actually shipped:
 
 Addresses are RFC 5737 documentation ranges throughout.
 """
+import argparse
 import datetime
 import os
 import pathlib
@@ -919,6 +920,27 @@ def test_inside_git_worktree_is_false_when_git_cannot_answer(tmp_path):
         raise OSError("no git")
     assert P.inside_git_worktree(tmp_path, run=boom) is False
     assert P.inside_git_worktree(tmp_path, run=_git_says("", 128)) is False
+
+
+@pytest.mark.parametrize("failure", [OSError("no git"), subprocess.TimeoutExpired("git", 10),
+                                     ValueError("embedded null byte")])
+def test_the_git_probes_answer_their_safe_default_for_every_way_a_process_fails(tmp_path, failure):
+    """What starting git can raise: OSError, a timeout (a SubprocessError) and ValueError."""
+    def fails(*_a, **_k):
+        raise failure
+    assert P.inside_git_worktree(tmp_path, run=fails) is False
+    assert P.ignored_by_git(tmp_path, run=fails) is False
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="the work-tree probe asks only when git exists")
+def test_a_defect_in_the_runner_is_not_read_as_git_answering_no(tmp_path):
+    """Only a failing PROCESS earns the safe default; a bug in the seam surfaces instead of hiding."""
+    def broken(*_a, **_k):
+        raise KeyError("a defect, not a process failure")
+    with pytest.raises(KeyError):
+        P.inside_git_worktree(tmp_path, run=broken)
+    with pytest.raises(KeyError):
+        P.ignored_by_git(tmp_path, run=broken)
 
 
 # ---- the git guard must see a directory that does not exist yet ---------------------------------
@@ -2193,6 +2215,17 @@ def test_a_pool_on_another_interface_does_not_claim_a_reservation():
     assert P.doctor_findings(reservations=reservations, pools=pools) == []
 
 
+@pytest.mark.parametrize(("first", "last", "address"), [
+    ("192.0.2.100", "2001:db8::ff", "192.0.2.150"),     # comparing 192.0.2.150 <= 2001:db8::ff raised
+    ("2001:db8::1", "192.0.2.199", "2001:db8::5"),
+])
+def test_a_pool_whose_ends_are_two_address_families_holds_nothing(first, last, address):
+    """Comparing addresses of two families raises TypeError, which crashed doctor (exit 1, a traceback)."""
+    reservations = [res(address, "00:11:22:33:44:71", hostname="x")]
+    pools = [P.Pool(interface="lan", first=first, last=last)]
+    assert P.doctor_findings(reservations=reservations, pools=pools) == []
+
+
 def test_doctor_from_a_snapshot_reports_the_pool_overlap(tmp_path, capsys):
     config = tmp_path / "config.xml"
     config.write_text(POOL_CONFIG_XML, encoding="utf-8", newline="")
@@ -2289,3 +2322,36 @@ def test_a_dhcp_write_over_a_dead_unbound_is_exit_2_saying_the_change_is_written
     rc = P.main(["--host", "192.0.2.1", "--apply", "--snapshot-dir", str(tmp_path), *argv], run=fake)
     assert rc == 2
     assert "written to config.xml" in capsys.readouterr().err
+
+
+# ---- the command line is read into typed records once, at the edge ------------------------------
+def test_every_verb_reads_its_options_into_its_own_record():
+    """Each subcommand carries a Verb whose reader builds the record its command function takes."""
+    parser = P.build_parser()
+    parsed = P.ParsedArgs(parser.parse_args(["--host", "192.0.2.1", "--apply", "snort", "verify",
+                                             "--sid", "1:2000", "--ip", "192.0.2.5", "--ip", "192.0.2.6"]))
+    common = P.CommonOptions.read(parsed, P._run)
+    verb = parsed.namespace.verb
+    assert verb.func is P.cmd_snort_verify
+    assert verb.read(parsed) == P.SnortVerifyArgs(sid="1:2000", cidr=None, ip=("192.0.2.5", "192.0.2.6"))
+    assert (common.host, common.apply, common.json, parsed.command()) == ("192.0.2.1", True, False, "snort verify")
+
+
+def test_an_append_option_never_given_reads_as_no_values():
+    parsed = P.ParsedArgs(P.build_parser().parse_args(["snort", "verify", "--sid", "2000"]))
+    assert parsed.texts("ip") == ()
+
+
+@pytest.mark.parametrize(("namespace", "read"), [
+    (argparse.Namespace(mac=3), lambda p: p.text("mac")),
+    (argparse.Namespace(host=["192.0.2.1"]), lambda p: p.optional_text("host")),
+    (argparse.Namespace(apply="yes"), lambda p: p.flag("apply")),
+    (argparse.Namespace(timeout=True), lambda p: p.number("timeout")),
+    (argparse.Namespace(ips="192.0.2.5"), lambda p: p.texts("ips")),
+    (argparse.Namespace(ips=["192.0.2.5", 7]), lambda p: p.texts("ips")),
+    (argparse.Namespace(verb=P.cmd_info), lambda p: p.handler()),
+])
+def test_a_parsed_value_of_the_wrong_type_is_a_defect_not_an_answer(namespace, read):
+    """A parser and reader that disagree raise TypeError, which main() does not turn into exit 2."""
+    with pytest.raises(TypeError, match="the parsed option"):
+        read(P.ParsedArgs(namespace))

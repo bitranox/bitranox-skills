@@ -45,7 +45,7 @@ def test_every_verb_still_prints_and_sends_what_was_pinned(tmp_path):
 
 def test_the_matrix_drives_every_cmd_function_in_both_output_forms():
     parser = P.build_parser()
-    driven = {parser.parse_args(["--host", "192.0.2.1", *argv]).func.__name__
+    driven = {parser.parse_args(["--host", "192.0.2.1", *argv]).verb.func.__name__
               for argv in F.scenario_argvs(F.rich_state(), "/opt/config.xml").values()}
     assert driven == {name for name in dir(P) if name.startswith("cmd_")}
     assert {key.rsplit("/", 1)[1] for key in _pinned()} == {"human", "json"}
