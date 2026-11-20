@@ -5,8 +5,12 @@ from pathlib import Path
 import pytest
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
-if str(SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS))
+# The tests dir too, for the fake_firewall double: the repo gate runs pytest with
+# --import-mode=importlib, which puts no test directory on sys.path by itself.
+HERE = Path(__file__).resolve().parent
+for path in (SCRIPTS, HERE):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
 
 @pytest.fixture(autouse=True)
