@@ -39,7 +39,11 @@ _FILENAME_TAIL = re.compile(r"/[^/]*\.[A-Za-z0-9]{1,8}$")
 # The `:12`, `:12:5` or `:84-85` a traceback, linter or `grep -n` appends to a file name, or the
 # `#L12` / `#L12-L20` a GitHub URL uses for the same thing. None of it is part of the name, and
 # left on it hid the file from the one-separator test and stuck to the file type.
-_LINE_SUFFIX = re.compile(r"(?:(?::\d+(?:-\d+)?)+|#L\d+(?:-L\d+)?)$")
+# The colon form is cut by `_strip_line_suffix`, not by an end-anchored `(?::\d+(?:-\d+)?)+$`
+# search: such a search retries from every colon of a run like `:0:0:0...x` and walks to its end
+# each time, quadratic in the run.
+_LINE_PART = re.compile(r"\d+(?:-\d+)?")
+_GITHUB_LINES = re.compile(r"#L\d+(?:-L\d+)?$")
 
 # Opaque identifiers: a uuid, a long hex run (a sha or an id fragment), a Claude tool-use id. The
 # bar is 16 hex characters because the SHORT hex codes are real trigger keywords - `0xc1900200`
@@ -68,10 +72,27 @@ def typed_by_a_person(prompt):
     return transcript_turns.looks_typed(prompt)
 
 
+def _strip_line_suffix(core):
+    """`core` without a trailing `:12`, `:12:5`, `:84-85` or `#L12-L20` line suffix.
+
+    `core` is one whitespace-free token. The colon form cuts every trailing `:`-separated part
+    that is a line number or range, so the cut starts at the earliest colon all later parts
+    agree with - the same span an end-anchored search for it takes, in one pass from the end.
+    """
+    github = _GITHUB_LINES.search(core)
+    if github:
+        return core[:github.start()]
+    parts = core.split(":")
+    keep = len(parts)
+    while keep > 1 and _LINE_PART.fullmatch(parts[keep - 1]):
+        keep -= 1
+    return core if keep == len(parts) else ":".join(parts[:keep])
+
+
 def _looks_like_a_path(token):
     """True for a filesystem path. One separator is not enough on its own - `and/or`, `yes/no` and
     `24/7` are prose - so a single-separator token counts only when a segment names a file."""
-    core = _LINE_SUFFIX.sub("", token.strip(_EDGE_PUNCTUATION))
+    core = _strip_line_suffix(token.strip(_EDGE_PUNCTUATION))
     if not core:
         return False
     if core.startswith(("/", "~/", "./", "../")) or _WINDOWS_DRIVE.match(core):
@@ -99,7 +120,7 @@ def _file_type(token):
     admitted nothing - the directories carry project and tool names, the stem carries a branch or
     a scratch script, and the extension carries the file TYPE a request is usually about.
     """
-    core = _LINE_SUFFIX.sub("", token.strip(_EDGE_PUNCTUATION))
+    core = _strip_line_suffix(token.strip(_EDGE_PUNCTUATION))
     base = core.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
     return base.rsplit(".", 1)[-1] if "." in base[1:] else ""
 

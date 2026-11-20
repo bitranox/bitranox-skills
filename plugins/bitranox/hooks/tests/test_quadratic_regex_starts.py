@@ -25,6 +25,7 @@ import git_footgun_guard as GF
 import harness_checks as HC
 import jig_repetition_nudge as JR
 import open_work as OW
+import prompt_text as PT
 import repo_gate as RG
 import self_improve_signals as SIS
 import subagent_model_gate as SM
@@ -142,6 +143,9 @@ _CASES = [
     ("missing-mechanism evidence: digits", lambda t: MM._EVIDENCE.search(t), "0-"),
     ("missing-mechanism evidence: dashes", lambda t: MM._EVIDENCE.search(t), "-a"),
     ("open_work field split", lambda t: OW._FIELD_RX.split(t), " "),
+    # One whitespace-free token, so the run reaches the path test whole; `x` ends the suffix.
+    *[(f"prompt_text line suffix: {unit!r} run", lambda t: PT.prose(t + "x"), unit)
+      for unit in (":0", ":0-0", ":0-1")],
     ("repo-gate H1 parenthetical", lambda t: RG._H1_PAREN_RX.sub(" (<per-repo>)", t), " "),
     ("self_improve run opener: equals", lambda t: SIS._RUN_OPENS.search(t), "="),
     ("self_improve run opener: dashes", lambda t: SIS._RUN_OPENS.search(t), "-"),

@@ -133,6 +133,18 @@ def test_prose_reduces_a_path_with_a_github_line_anchor_to_its_file_type():
         assert P.prose("look at %s now" % token).lower() == "look at py now", token
 
 
+def test_a_line_suffix_is_cut_from_the_earliest_colon_every_later_part_agrees_with():
+    # The cut an end-anchored `(?::\d+(?:-\d+)?)+$` search takes, made in one pass from the end.
+    cases = {
+        "a.py:12:5": "a.py", "a.py:x:12": "a.py:x", "a::5": "a:", ":7": "", "a.py#L3-L4": "a.py",
+        "a:1#L2": "a:1",
+        # nothing to cut: a part that is not a line number or range ends the suffix at once
+        "a.py:1-2-3": "a.py:1-2-3", "a.py:12:": "a.py:12:", "12": "12",
+    }
+    for core, stripped in cases.items():
+        assert P._strip_line_suffix(core) == stripped, core
+
+
 def test_prose_keeps_the_words_between_a_comparison_and_a_later_greater_than():
     # A `<` followed by a space or a digit opens no tag; the old rule deleted everything up to
     # the next `>`, which here was the whole subject of the sentence.
