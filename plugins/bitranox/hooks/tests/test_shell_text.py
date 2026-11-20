@@ -4,9 +4,13 @@ This module exists so the command-scanning guards agree about what counts as DAT
 are the corpus that proved the two former copies behaviourally identical before they were merged;
 keeping them here is what stops the next edit from splitting the behaviour again.
 """
+import copy
 import cProfile
 import os
+import pickle
 import pstats
+import random
+import shlex
 import subprocess
 import pytest
 import shell_text as S
@@ -1446,6 +1450,82 @@ def test_drop_redirections_removes_each_operator_with_its_target(tokens, kept):
 def test_drop_redirections_on_a_trailing_bare_operator_drops_it_alone():
     """A cut segment can end on `>`; there is no target word to consume, and nothing raises."""
     assert S.drop_redirections(["origin", "v1", ">"]) == ["origin", "v1"]
+
+
+# A redirection operator is only ever UNQUOTED text. The split words used to lose that, so a quoted
+# message beginning with `<` or `>` was dropped as one, and a guard read `-m` as having no value.
+@pytest.mark.parametrize("command, kept", [
+    ('git stash push -m "<worktree>: <why>"', ["git", "stash", "push", "-m", "<worktree>: <why>"]),
+    ("git commit -m '<a>' f", ["git", "commit", "-m", "<a>", "f"]),
+    ('git commit -m ">" f', ["git", "commit", "-m", ">", "f"]),
+    ("git commit -m '<' f", ["git", "commit", "-m", "<", "f"]),
+    (r"git commit -m \<a f", ["git", "commit", "-m", "<a", "f"]),
+    (r"echo \> f", ["echo", ">", "f"]),
+    ('echo 2">"x f', ["echo", "2>x", "f"]),                # the operator itself is quoted
+    ('echo "2>&1" f', ["echo", "2>&1", "f"]),
+    ('git commit -m "x <a> y" f', ["git", "commit", "-m", "x <a> y", "f"]),
+])
+def test_a_quoted_word_is_never_a_redirection(command, kept):
+    assert S.drop_redirections(S.split_for_tool(command)) == kept
+    assert S.drop_redirections(S.argv_for_match(command)) == kept
+
+
+@pytest.mark.parametrize("command, kept", [
+    ("cmd < in > out 2>&1 arg", ["cmd", "arg"]),
+    ("cmd >file arg", ["cmd", "arg"]),
+    ("cat <<<word x", ["cat", "x"]),
+    ('cmd >"a b" x', ["cmd", "x"]),                         # a quoted TARGET is still a target
+    ("cmd 2>'/tmp/e r' x", ["cmd", "x"]),
+    ('cmd ""<in x', ["cmd", "x"]),                          # an empty quote adds no character
+])
+def test_an_unquoted_redirection_is_still_dropped(command, kept):
+    assert S.drop_redirections(S.split_for_tool(command)) == kept
+
+
+@pytest.mark.parametrize("command, kept", [
+    ('Write-Output "<a>" x', ["Write-Output", "<a>", "x"]),
+    ("Write-Output '>' x", ["Write-Output", ">", "x"]),
+    ("cmd *> log x", ["cmd", "x"]),
+    ("cmd 2>&1 x", ["cmd", "x"]),
+    ('cmd >"C:\\a b\\log" x', ["cmd", "x"]),
+])
+def test_the_powershell_reading_keeps_quoting_too(command, kept):
+    assert S.drop_redirections(S.split_for_tool(command, "PowerShell")) == kept
+
+
+def _shlex_outcome(text, comments):
+    try:
+        return shlex.split(text, comments=comments)
+    except ValueError as exc:
+        return "ValueError: %s" % exc
+
+
+def _reader_outcome(text, comments):
+    try:
+        return S._posix_words(text, comments=comments)
+    except ValueError as exc:
+        return "ValueError: %s" % exc
+
+
+@pytest.mark.parametrize("comments", [False, True])
+def test_the_posix_reader_splits_exactly_as_shlex_does(comments):
+    """Every guard read shlex's words before the reader learned quoting; the words must not move.
+
+    Seeded random text over the characters the state machine branches on, plus the shapes that
+    end in an error, compared outcome for outcome (word lists AND error messages)."""
+    rng = random.Random(20261120)
+    alphabet = "ab <>2&|\"'\\#\n\t\r "
+    texts = ["", " ", "''", '""', "a''b", '"', "'", "\\", "a\\", '"a\\"', "a#b c", "#x\ny",
+             '"x\\y\\"z\\\\"', "'a\\'"]
+    texts += ["".join(rng.choice(alphabet) for _ in range(rng.randint(1, 14))) for _ in range(20000)]
+    for text in texts:
+        assert _reader_outcome(text, comments) == _shlex_outcome(text, comments), repr(text)
+
+
+def test_a_shell_word_survives_copy_and_pickle_with_its_quoting():
+    word = S.split_for_tool("'<a>'")[0]
+    for clone in (copy.copy(word), copy.deepcopy(word), pickle.loads(pickle.dumps(word))):
+        assert clone == "<a>" and clone.unquoted_lead == 0
 
 
 def test_git_verb_operands_keeps_redirections_so_callers_can_locate_the_verb():

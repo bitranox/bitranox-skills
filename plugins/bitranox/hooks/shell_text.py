@@ -49,7 +49,6 @@ import bisect
 import functools
 import os
 import re
-import shlex
 import sys
 from pathlib import PurePosixPath, PureWindowsPath
 
@@ -550,16 +549,29 @@ def drop_redirections(tokens):
     Deliberately NOT done inside `git_verb_operands`: several callers locate the verb as
     `tokens[len(tokens) - len(operands) - 1]`, which holds only while the operands are an unbroken
     suffix of the tokens. Apply this to the operands a caller is about to READ.
+
+    The shell recognises an operator only in UNQUOTED text, so a word whose operator characters
+    were quoted or escaped (`-m "<topic>: <why>"`, `'>'`, `\\<a`) is an argument. The quotes are gone
+    from a split word, so that is read from the `ShellWord` the splitter returned. A plain `str` is
+    taken as raw command text (a `str.split()` of the command): its quotes are still in the word, so
+    a quoted operator cannot sit at its start.
     """
     kept, at = [], 0
     while at < len(tokens):
         match = _REDIRECTION_WORD.match(tokens[at])
+        if match is not None and match.start(1) > _unquoted_lead(tokens[at]):
+            match = None                          # the operator was quoted or escaped: a plain word
         at += 1
         if match is None:
             kept.append(tokens[at - 1])
         elif not match.group(1):
             at += 1                               # the target is the next word
     return kept
+
+
+def _unquoted_lead(token):
+    """How many leading characters of `token` the shell saw unquoted; all of a plain `str`."""
+    return token.unquoted_lead if isinstance(token, ShellWord) else len(token)
 
 
 # Programs that move the shell's directory. `popd` returns somewhere no static read tracks.
@@ -1357,6 +1369,112 @@ def _segments(text, tool_name=None):
 
 
 
+class ShellWord(str):
+    """A word of a split command line that remembers how much of its start was unquoted.
+
+    `unquoted_lead` counts the leading characters that came from bare source text, neither inside
+    quotes nor escaped. A split word has lost its quotes, and without this a quoted `"<topic>"`
+    and the redirection `<topic` are the same string. An empty quote adds no character, so it
+    does not end the lead: bash reads `""<in` as an empty word plus a redirection too.
+
+    It compares, hashes and prints as the plain string, so a caller that only compares words
+    never notices it; a caller that builds a new string from a word gets a plain `str` back.
+    """
+
+    unquoted_lead: int
+
+    def __new__(cls, value, unquoted_lead):
+        word = super().__new__(cls, value)
+        word.unquoted_lead = unquoted_lead
+        return word
+
+    def __getnewargs__(self):
+        return str(self), self.unquoted_lead     # copy and pickle call __new__ with these
+
+
+class _WordBuilder:
+    """The characters of one word as they are read, and how long its unquoted lead runs."""
+
+    def __init__(self):
+        self.parts, self.lead, self.lead_open = [], 0, True
+
+    def add(self, text, bare):
+        if not text:
+            return
+        self.parts.append(text)
+        if not bare:
+            self.lead_open = False
+        elif self.lead_open:
+            self.lead += len(text)
+
+    def word(self):
+        return ShellWord("".join(self.parts), self.lead)
+
+
+_POSIX_BLANKS = " \t\r\n"
+_POSIX_QUOTES = "'\""
+
+
+def _posix_words(text, comments=False):
+    """`shlex.split(text, comments=comments)` as `ShellWord`s, with the same words and errors.
+
+    A port of shlex's POSIX `read_token` for the whitespace-split mode `shlex.split` uses, so the
+    values cannot drift from what every guard read before; what it adds is the quoting each word
+    had, which shlex drops. Raises ValueError("No closing quotation") and ValueError("No escaped
+    character") where shlex does.
+    """
+    words, at = [], 0
+    while True:
+        word, at = _posix_word(text, at, comments)
+        if word is None:
+            return words
+        words.append(word)
+
+
+def _posix_word(text, at, comments):
+    """(the next word from `at`, the index after it), or (None, len(text)) past the last word."""
+    built, state, back, n = _WordBuilder(), " ", "a", len(text)
+    while at < n:
+        ch, at = text[at], at + 1
+        if state in _POSIX_QUOTES:
+            if ch == state:
+                state = "a"
+            elif ch == "\\" and state == '"':
+                state, back = "\\", '"'
+            else:
+                built.add(ch, bare=False)
+        elif state == "\\":
+            # Inside double quotes only `\\` and `"` are escaped; any other backslash is kept.
+            keep = "\\" if back == '"' and ch not in '\\"' else ""
+            built.add(keep + ch, bare=False)
+            state = back
+        elif ch in _POSIX_BLANKS:
+            if state == "a":
+                return built.word(), at
+        elif comments and ch == "#":
+            at = _after_line(text, at)
+            if state == "a":
+                return built.word(), at
+        elif ch == "\\":
+            state, back = "\\", "a"
+        elif ch in _POSIX_QUOTES:
+            state = ch
+        else:
+            built.add(ch, bare=True)
+            state = "a"
+    if state in _POSIX_QUOTES:
+        raise ValueError("No closing quotation")
+    if state == "\\":
+        raise ValueError("No escaped character")
+    return (built.word() if state == "a" else None), n
+
+
+def _after_line(text, at):
+    """The index just past the newline that ends the line `at` is on, or len(text)."""
+    end = text.find("\n", at)
+    return len(text) if end < 0 else end + 1
+
+
 def _windows_command_argv(command):
     r"""Split a Windows command line by the documented C-runtime rules.
 
@@ -1374,7 +1492,7 @@ def _windows_command_argv(command):
     string is PowerShell before any C runtime sees it: `-newermt '-3 minutes'` is one argument,
     and splitting it at the space made two hooks each keep a private re-join.
     """
-    args, cur, in_quotes, started, i, n = [], [], False, False, 0, len(command)
+    args, cur, in_quotes, started, i, n = [], _WordBuilder(), False, False, 0, len(command)
     while i < n:
         ch = command[i]
         if ch == "\\":
@@ -1383,14 +1501,14 @@ def _windows_command_argv(command):
                 j += 1
             slashes = j - i
             if j < n and command[j] == '"':
-                cur.append("\\" * (slashes // 2))
+                cur.add("\\" * (slashes // 2), bare=not in_quotes)
                 if slashes % 2:
-                    cur.append('"')
+                    cur.add('"', bare=False)              # an escaped quote is a literal
                 else:
                     in_quotes = not in_quotes
                 started, i = True, j + 1
             else:
-                cur.append("\\" * slashes)
+                cur.add("\\" * slashes, bare=not in_quotes)
                 started, i = True, j
             continue
         if ch == '"':
@@ -1399,19 +1517,19 @@ def _windows_command_argv(command):
         if ch == "'" and not in_quotes:
             verbatim, stop = _powershell_single_quoted(command, i)
             if verbatim is not None:
-                cur.append(verbatim)
+                cur.add(verbatim, bare=False)
                 started, i = True, stop
                 continue
         if ch in " \t" and not in_quotes:
             if started:
-                args.append("".join(cur))
-                cur, started = [], False
+                args.append(cur.word())
+                cur, started = _WordBuilder(), False
             i += 1
             continue
-        cur.append(ch)
+        cur.add(ch, bare=not in_quotes)
         started, i = True, i + 1
     if started:
-        args.append("".join(cur))
+        args.append(cur.word())
     return args
 
 
@@ -1463,7 +1581,7 @@ def split_for_tool(command, tool_name="Bash", comments=False):
     """
     if tool_name == "PowerShell":
         return _windows_command_argv(command)
-    return shlex.split(_join_line_continuations(command), comments=comments)
+    return _posix_words(_join_line_continuations(command), comments=comments)
 
 
 def _join_line_continuations(command):

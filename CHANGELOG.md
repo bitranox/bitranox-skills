@@ -30,6 +30,13 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.17.2]
+
+### Fixed
+
+- `shell_text.drop_redirections` no longer takes a quoted or escaped word for a redirection. A split word had lost its quotes, so a message that merely began with an angle bracket (`git stash push -m "<worktree>: <why>"`, `git commit -m '>' f`, `\<a`) was dropped as `<file`/`>file`, and a bare quoted `<` or `>` took the next word with it. git-footgun-guard refused the named stash above as unnamed. `split_for_tool` now returns `ShellWord`s (plain strings that also record how many leading characters were unquoted) from a port of shlex's POSIX reader that produces the same words and errors, and the PowerShell reader records the same; a real redirection (`2>&1`, `>"a b"`, `<<<w`, `""<in`) is still dropped. A replay over 243,561 recorded Bash commands changed no guard decision; 340 commands now keep a quoted word they used to drop.
+- git-footgun-guard's unnamed-stash refusal offers `git stash push -m "<worktree>: <why>"` again, which it now lets through.
+
 ## [11.17.1]
 
 ### Fixed

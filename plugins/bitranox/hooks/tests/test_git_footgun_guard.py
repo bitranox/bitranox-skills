@@ -553,6 +553,8 @@ def test_the_worktree_is_found_through_dash_c_and_cd(repo, linked, monkeypatch, 
 
 @pytest.mark.parametrize("command", [
     'git stash push -m "wt topic: red arm"',
+    'git stash push -m "<worktree>: <why>"',
+    "git stash push --message='<topic>' -- f.txt",
     "git stash push --message=wt-red-arm -- f.txt",
     "git stash push -mwt-red-arm",
     'git stash save "wt topic: red arm"',

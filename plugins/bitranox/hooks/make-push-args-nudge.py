@@ -83,8 +83,8 @@ def _segment_channel(argv, tool_name):
         return None
     target_seen, words, args_value = False, [], None
     # A redirection (`>log`, `2>&1`, `*> log`, a bare `>` and its target) is consumed by the shell
-    # before make runs, so it is never part of the message. Read per word, so a QUOTED word that
-    # starts with `>` is taken for one too - rare, and a miss rather than a false alarm.
+    # before make runs, so it is never part of the message. A QUOTED word that starts with `>` is a
+    # word, not a redirection: the split words keep their quoting (`shell_text.ShellWord`).
     operands = drop_redirections(argv[idx + 1:])
     index = 0
     while index < len(operands):

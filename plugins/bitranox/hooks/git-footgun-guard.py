@@ -78,9 +78,11 @@ Decisions:
       NOT refused yet. Why: scope as approved covered saving only. Evidence: argued.
       Reopen if: a loss caused by a positional pop in a worktree.
       Pinned by: tests/test_git_footgun_guard.py::test_a_named_stash_or_a_reading_stash_command_in_a_worktree_passes
-    - The refusal's offered command has no angle brackets. Why: the shell-word reader drops quotes,
-      so `-m "<a> <b>"` reads as two redirections and the guard refused its own offer.
-      Evidence: measured (the test below failed with the bracketed form).
+    - The refusal's offered command passes this guard, angle-bracket placeholders included. Why: a
+      refusal must name a way through. The shell-word reader once dropped quotes, so the offered
+      `-m "<worktree>: <why>"` read as a redirection and the guard refused its own offer; it now
+      keeps each word's quoting (`shell_text.ShellWord`). Evidence: measured (the test below failed
+      with the bracketed form before the reader kept quoting).
       Pinned by: tests/test_git_footgun_guard.py::test_the_named_form_the_refusal_offers_passes
 """
 import json
@@ -520,9 +522,7 @@ _STASH_REFUSAL = (
     "any other worktree - can apply the wrong work.\n"
     "Prefer a WIP commit on this worktree's own branch (a branch IS private to the worktree). "
     "If it must be a stash, name it, capture its sha, and restore by sha:\n"
-    # No angle brackets in the placeholder: the shell-word reader drops quotes, so a "<x> <y>"
-    # message reads as two redirections and the offered form would be refused by this guard.
-    '  git stash push -m "WORKTREE-NAME: WHY"\n'
+    '  git stash push -m "<worktree>: <why>"\n'
     "  git stash list --format='%H %gs'      # take the sha of your entry\n"
     "  git stash apply <sha>                  # then drop that entry, found by its message\n"
     "For a RED arm (does the test fail without my change?), mutate a scratch copy instead of "
