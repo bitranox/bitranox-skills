@@ -22,6 +22,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import time
 from collections.abc import Callable, Generator, Iterable, Iterator, Mapping, Sequence
@@ -81,11 +82,14 @@ def proj_key(proj: object) -> str:
       A test pins that with a literal digest.
 
     A non-string argument is coerced rather than raised on - a key that throws would take down
-    every hook that names a state file.
+    every hook that names a state file. A bytes path is decoded the way the OS decodes a file
+    name (`os.fsdecode`), so `b"/x"` and `"/x"` name one project; hashing the bytes path itself
+    raised AttributeError.
     """
     try:
         # Any object reaches here; os.fspath raises the TypeError a non-path gets.
-        normalized: str = os.path.abspath(os.fspath(cast("_StrPath", proj)) if proj else os.getcwd())
+        normalized: str = (os.path.abspath(os.fsdecode(os.fspath(cast("_StrPath", proj))))
+                           if proj else os.getcwd())
     except (TypeError, ValueError):
         normalized = str(proj)
     return hashlib.sha1(normalized.encode("utf-8", "replace")).hexdigest()[:16]
@@ -1788,16 +1792,37 @@ def discovery_roots() -> list[Path]:
     backstopped by reverse-resolving native slugs (see resolve_slug), so a project outside these
     roots is still discoverable. Deduped, existing dirs only."""
     roots: set[Path] = set()
-    # The configured value is iterated as it stands; a hand edit that is not a list fails here as
-    # it always did.
-    for r in cast("Iterable[object]", load_config().get("discovery_roots") or []):
+    for r in _configured_roots(load_config().get("discovery_roots")):
         try:
-            roots.add(Path(str(r)).expanduser())
+            roots.add(Path(r).expanduser())
         except (OSError, ValueError):
             continue
     if not roots:                       # no explicit config -> the public-safe derived default
         roots.add(Path.home())
     return sorted({p for p in roots if _is_dir(p)}, key=str)
+
+
+def _configured_roots(raw: object) -> list[str]:
+    """The root paths of a configured `discovery_roots` value: its string elements. Only a hand
+    edit can write anything else (the settings CLI writes a list of strings), and the answer is
+    the one `mcp_search` gives a hand-edited mode: what cannot be read as roots is reported on
+    stderr and left out, never raised (the per-prompt recall hook asks), never iterated as it
+    stands (a string read per character named one root per letter). A value that is not a list
+    contributes no root, so the derived default applies, as for an unset one."""
+    if raw is None or raw == []:
+        return []
+    if not _is_list(raw):
+        print("self_improve_signals: config discovery_roots is a JSON %s, not a list of paths; "
+              "using the default ($HOME)" % type(raw).__name__, file=sys.stderr)
+        return []
+    bad = [r for r in raw if not isinstance(r, str)]
+    if bad:
+        print("self_improve_signals: config discovery_roots holds %d entr%s that %s not a path "
+              "string (%s); skipped" % (len(bad), "y" if len(bad) == 1 else "ies",
+                                       "is" if len(bad) == 1 else "are",
+                                       ", ".join(sorted({type(r).__name__ for r in bad}))),
+              file=sys.stderr)
+    return [r for r in raw if isinstance(r, str)]
 
 
 def audit_dir() -> Path:
@@ -2730,27 +2755,43 @@ def _read_word_json(path: _StrPath) -> list[str]:
         data = _decode_json_file(path)
     except (OSError, ValueError):
         return []
-    return _words_of(data)
+    return _words_of(data, path)
 
 
-def _words_of(data: object) -> list[str]:
-    """The normalised words of a parsed word-list document (a bare list or a keyed object)."""
-    words: Iterable[object]
-    if _is_list(data):
+def _words_of(data: object, source: _StrPath) -> list[str]:
+    """The normalised words of a parsed word-list document (a bare list or a keyed object) read
+    from `source`.
+
+    A document of another shape - a keyed value or a whole document that is not a list - holds no
+    words: reported on stderr naming `source`, never raised (the recall hook reads these lists
+    per prompt), and never iterated as it stands (a string read per character gave one word per
+    letter, a number raised TypeError). That is the answer the readers already give a file that
+    is not JSON at all, and a read-modify-write then replaces it as it replaces one of those."""
+    if data is None:                        # absent or not JSON (`_load_any_json_for_update`)
+        words: list[object] = []
+    elif _is_list(data):
         words = data
     elif _is_record(data):
-        # A keyed value is iterated as it stands; one a hand edit made no list fails as before.
-        words = cast("Iterable[object]", data.get("filler") or data.get("words") or data.get("topical") or [])
+        none: list[object] = []
+        value = data.get("filler") or data.get("words") or data.get("topical") or none
+        words = value if _is_list(value) else _not_a_word_list(source, value)
     else:
-        words = []
-    return [str(w).strip().lower() for w in words if isinstance(w, str) and str(w).strip()]
+        words = _not_a_word_list(source, data)
+    return [w.strip().lower() for w in words if isinstance(w, str) and w.strip()]
+
+
+def _not_a_word_list(source: _StrPath, value: object) -> list[object]:
+    """Report on stderr that `source` holds `value` where a list of words belongs; no words."""
+    print("self_improve_signals: %s holds a JSON %s where a list of words belongs; read as no "
+          "words" % (source, type(value).__name__), file=sys.stderr)
+    return []
 
 
 def _load_words_for_update(path: _StrPath) -> list[str]:
     """A learned word list for a read-modify-write: [] when absent or unparseable. Raises
     StateWriteError when the file exists but cannot be read - the fail-open reader's [] there made
     the write that followed replace every learned word with the new ones."""
-    return _words_of(_load_any_json_for_update(path))
+    return _words_of(_load_any_json_for_update(path), path)
 
 
 def _write_word_json(path: _StrPath, words: Iterable[str], key: str = "words") -> None:

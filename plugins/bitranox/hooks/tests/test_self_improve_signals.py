@@ -2461,3 +2461,46 @@ def test_has_any_facts_does_not_count_the_index_or_an_unreadable_entry(home):
     assert S.has_any_facts("/p/few") is False
     (d / "real.md").write_text("", encoding="utf-8")   # an empty fact still exists
     assert S.has_any_facts("/p/few") is True
+
+
+# ---- a value of the wrong type is reported and read as nothing, never raised or split ----------
+
+def test_proj_key_reads_a_bytes_path_as_the_same_project():
+    """The docstring promises a non-string argument is coerced, never raised on: a bytes path
+    raised AttributeError (bytes has no .encode)."""
+    assert S.proj_key(b"/opt/project-x") == S.proj_key("/opt/project-x") == "528c04d3cbe1a627"
+
+
+@pytest.mark.parametrize("raw", ["/opt/one-root", 5, {"a": "/opt/x"}], ids=["str", "int", "object"])
+def test_discovery_roots_reads_a_non_list_value_as_unconfigured(home, capsys, raw):
+    """A hand edit left something other than a list: a string was walked per character (one
+    root per letter, each relative to the cwd), a number raised TypeError in the recall hook. It
+    is reported on stderr and the derived default applies, as for an unset value."""
+    S.save_config({"discovery_roots": raw})
+    roots = [str(r) for r in S.discovery_roots()]
+    assert roots == [str(home)]
+    err = capsys.readouterr().err
+    assert "discovery_roots" in err and type(raw).__name__ in err
+
+
+def test_discovery_roots_skips_an_entry_that_is_not_a_path_string(home, capsys):
+    extra = home / "elsewhere"
+    extra.mkdir()
+    S.save_config({"discovery_roots": [str(extra), 7, None]})
+    assert [str(r) for r in S.discovery_roots()] == [str(extra)]
+    assert "2 entries" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("doc", [{"filler": "frobnicate"}, {"words": 5}, "frobnicate", 5],
+                         ids=["keyed-str", "keyed-int", "bare-str", "bare-int"])
+def test_a_word_list_of_the_wrong_type_reads_as_no_words(home, capsys, doc):
+    """A keyed string was read per character (one filler word per letter), a number raised
+    TypeError. Either is reported naming the file and holds no words, like a file that is not
+    JSON at all."""
+    p = S._filler_local_path(_PROJ)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(doc), encoding="utf-8")
+    assert S.load_filler_words(_PROJ) == S.load_filler_words()
+    assert str(p) in capsys.readouterr().err
+    S.add_filler_words(["alpha"], _PROJ)                 # a read-modify-write replaces it
+    assert "alpha" in S.load_filler_words(_PROJ)
