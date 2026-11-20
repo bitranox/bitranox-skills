@@ -24,11 +24,11 @@ import re
 import subprocess
 import tempfile
 import time
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from enum import StrEnum
 from pathlib import Path
 from types import MappingProxyType
-from typing import NamedTuple
+from typing import BinaryIO, Final, Literal, NamedTuple, TypedDict, TypeIs, cast
 
 import claude_paths
 import process_liveness
@@ -37,9 +37,30 @@ import shell_text
 # A filesystem path as callers hand it in: a str from hook stdin or argv, or a Path built here.
 type _StrPath = str | os.PathLike[str]
 
+# One decoded JSON object: a queue entry, a tombstone, a session or nap marker. The values are
+# whatever the file held, so each reader narrows the field it uses.
+type JsonRecord = dict[str, object]
+
+
+def _is_record(value: object) -> TypeIs[JsonRecord]:
+    """True for a decoded JSON object. Its keys are str for anything json.loads produced, which
+    is the only source the readers here take."""
+    return isinstance(value, dict)
+
+
+def _is_list(value: object) -> TypeIs[list[object]]:
+    """True for a decoded JSON array."""
+    return isinstance(value, list)
+
+
+# float() and int() refuse what they cannot convert with TypeError or ValueError, and every caller
+# here catches both: a stored value is whatever a hand edit left, so the conversion IS the check.
+_coerce_float = cast("Callable[[object], float]", float)
+_coerce_int = cast("Callable[[object], int]", int)
+
 # ---- Audit-file location (shared by self-improve-audit.py writer + session-start reader) --
 
-def proj_key(proj):
+def proj_key(proj: object) -> str:
     """Stable per-project key (matches the gate's state-file scheme).
 
     The path is normalized to an absolute, dot-free form BEFORE hashing, so one project spelled
@@ -63,7 +84,8 @@ def proj_key(proj):
     every hook that names a state file.
     """
     try:
-        normalized = os.path.abspath(os.fspath(proj) if proj else os.getcwd())
+        # Any object reaches here; os.fspath raises the TypeError a non-path gets.
+        normalized: str = os.path.abspath(os.fspath(cast("_StrPath", proj)) if proj else os.getcwd())
     except (TypeError, ValueError):
         normalized = str(proj)
     return hashlib.sha1(normalized.encode("utf-8", "replace")).hexdigest()[:16]
@@ -85,7 +107,7 @@ _SNIPPET_ESCAPED_MARK = " [escaped]"   # rendered OUTSIDE the fence, never insid
 _SNIPPET_LEAD = "..."    # marks a snippet whose window does not start at the text's first character
 
 
-def inert_snippet(text, limit=None, *, around=None):
+def inert_snippet(text: object, limit: int | None = None, *, around: int | None = None) -> str:
     """`text` as one line of quoted evidence that cannot escape the frame it is displayed in.
 
     `around` is an offset into the WHITESPACE-COLLAPSED text (what `" ".join(text.split())` gives,
@@ -129,7 +151,7 @@ def inert_snippet(text, limit=None, *, around=None):
     return _SNIPPET_LEAD + inert[start + len(_SNIPPET_LEAD):start + limit]
 
 
-def snippet_was_escaped(text):
+def snippet_was_escaped(text: object) -> bool:
     """True when `inert_snippet` would substitute something in `text`.
 
     A CONTROL signal, kept out of the data band on purpose. Appending a marker to the snippet put
@@ -141,7 +163,7 @@ def snippet_was_escaped(text):
     return collapsed.translate(_SNIPPET_INERT) != collapsed
 
 
-def quoted_snippet(record):
+def quoted_snippet(record: Mapping[str, object]) -> str:
     """A STORED snippet as it must appear in any frame a model reads: re-neutralised, then fenced.
 
     Deliberate defense in depth, against the usual rule that internal calls trust the type
@@ -166,11 +188,18 @@ def quoted_snippet(record):
     raw by a producer that skipped `inert_snippet`. Either alone leaves half the records silently
     misrepresented. The marker sits OUTSIDE the quotes, so nothing within them can imitate it.
     """
+    fields = _snippet_record(record)
+    text = fields.get("snippet") or ""
+    mark = _SNIPPET_ESCAPED_MARK if (fields.get("escaped") or snippet_was_escaped(text)) else ""
+    return '"%s"%s' % (inert_snippet(text), mark)
+
+
+def _snippet_record(record: object) -> Mapping[str, object]:
+    """`record` as the mapping `quoted_snippet` reads; TypeError for anything else, a bare snippet
+    string above all. Typed `object` because the refusal is for callers the type does not stop."""
     if not isinstance(record, Mapping):
         raise TypeError("quoted_snippet takes the record, not the snippet text: %r" % type(record).__name__)
-    text = record.get("snippet") or ""
-    mark = _SNIPPET_ESCAPED_MARK if (record.get("escaped") or snippet_was_escaped(text)) else ""
-    return '"%s"%s' % (inert_snippet(text), mark)
+    return cast("Mapping[str, object]", record)
 
 
 _SESSION_KEY_MAX = 64
@@ -284,7 +313,7 @@ def claude_local_md_path(proj: _StrPath) -> Path:
     return Path(proj) / "CLAUDE.local.md"
 
 
-def _git_in(proj, *args):
+def _git_in(proj: _StrPath, *args: str) -> tuple[int, str] | None:
     """One git call from `proj`: (returncode, stdout as a path string), or None when git could not
     run. git prints paths as raw filename bytes; text mode decoded them with the locale's codec
     (ASCII under LANG=C) and raised UnicodeDecodeError, which no OSError guard catches, so the
@@ -300,7 +329,7 @@ def _git_in(proj, *args):
 _EXCLUDE_HEADER = "# bitranox curated memory (local; CLAUDE.local.md @imports it)"
 
 
-def ensure_gitignored(proj, *patterns):
+def ensure_gitignored(proj: _StrPath, *patterns: str) -> bool:
     """Best-effort: on a git repo, make sure git ignores each `pattern`. Honors `track_private`
     (skip if set - the user wants memory committed). Used by per-turn capture so a fresh untracked
     `CLAUDE.local.md` + curated store are never accidentally staged into a public repo.
@@ -331,7 +360,7 @@ def ensure_gitignored(proj, *patterns):
         return False
     if not top[1]:
         return True
-    add = []
+    add: list[str] = []
     for pattern in patterns:
         asked = _git_in(proj, "check-ignore", "-q", "--no-index", pattern)
         if asked is None or asked[0] not in (0, 1):
@@ -360,12 +389,12 @@ def ensure_gitignored(proj, *patterns):
     return True
 
 
-def curated_index(proj):
+def curated_index(proj: _StrPath) -> Path:
     """The always-@imported curated index file (`index.md`) for a project."""
     return claude_memory_dir(proj) / CURATED_INDEX
 
 
-def curated_state_dir(proj):
+def curated_state_dir(proj: _StrPath | None) -> Path:
     """Tree-shared state dir in the LIVE store: `<anchor>/.claude-memory/state`. Per-project files
     inside it encode the project in their filename (see migrate_memory's receipts)."""
     return global_rules_dir(proj) / "state"
@@ -470,12 +499,12 @@ def memory_lock(target_path: _StrPath, timeout: float = 5.0, poll: float = 0.05,
             pass
 
 
-def last_dream_file(proj):
+def last_dream_file(proj: _StrPath | None) -> Path:
     """Marker holding the unix timestamp of the last completed dream for this project."""
     return claude_paths.audit_dir() / (proj_key(proj) + ".dream")
 
 
-def dream_mode(proj=None):
+def dream_mode(proj: _StrPath | None = None) -> object:
     """Dream mode (single source of truth = the machine-local config; see load_config):
       off     -> no dream nudges; a manual dream (every skill of the family, the cross-tree ones
                  included) consolidates private memory only: no CLAUDE.md edit, no skill change
@@ -487,7 +516,7 @@ def dream_mode(proj=None):
     return load_config().get("dream_mode", "propose")
 
 
-def _newest_mtime(d):
+def _newest_mtime(d: Path) -> float:
     newest = 0.0
     try:
         for p in d.glob("*.md"):
@@ -508,23 +537,24 @@ def _newest_mtime(d):
 # under gap-fill and non-content writes (and self_improve_signals does not import the memory engine,
 # to avoid a cycle - it reads the curated store with a light, grammar-free scan).
 
-def _strip_scope(text):
-    b = (text or "").find(SCOPE_MARK_BEGIN)
+def _strip_scope(text: str | None) -> str:
+    text = text or ""
+    b = text.find(SCOPE_MARK_BEGIN)
     if b < 0:
-        return text or ""
+        return text
     e = text.find(SCOPE_MARK_END, b)
     if e < 0:
         return text
     return text[:b] + text[e + len(SCOPE_MARK_END):]
 
 
-def _curated_fact_parts(proj):
+def _curated_fact_parts(proj: _StrPath) -> list[str]:
     """Signature parts for the curated tier: the fact POINTER lines (`- [Title](uuid:..) - hook ...`)
     from this level's `CLAUDE.local.md` pointer block (scope descriptor excluded). Empty when the level
     holds no real facts (a scope-only block contributes nothing). A pointer line's title + hook + slug
     change whenever a fact is added, edited, or removed, so this is a stable fact fingerprint without
     reading every central body."""
-    parts = []
+    parts: list[str] = []
     try:
         text = claude_local_md_path(proj).read_text(encoding="utf-8")
         region = "\n".join(ln for ln in text.splitlines() if ln.startswith("- ["))
@@ -535,9 +565,9 @@ def _curated_fact_parts(proj):
     return parts
 
 
-def _native_fact_parts(proj):
+def _native_fact_parts(proj: str) -> list[str]:
     """Signature parts for the native raw tier: each topic `*.md` (excluding the MEMORY.md index)."""
-    parts = []
+    parts: list[str] = []
     try:
         for p in sorted(memory_dir(proj).glob("*.md")):
             if p.name == "MEMORY.md":
@@ -551,7 +581,7 @@ def _native_fact_parts(proj):
     return parts
 
 
-def store_signature(proj):
+def store_signature(proj: str) -> str:
     """Content hash over the REAL facts in BOTH tiers (scope block excluded). '' when there are none.
     Stable under gap-fill / mtime churn; changes only when a fact is added, edited, or removed."""
     parts = sorted(_native_fact_parts(proj) + _curated_fact_parts(proj))
@@ -560,7 +590,7 @@ def store_signature(proj):
     return hashlib.sha1("\x00".join(parts).encode("utf-8", "replace")).hexdigest()
 
 
-def _has_native_fact(proj):
+def _has_native_fact(proj: str) -> bool:
     """True at the first topic `*.md` (not the MEMORY.md index) that can be opened.
 
     Opened, never read: a fact counts as soon as it exists readably, and reading every body of a
@@ -580,12 +610,12 @@ def _has_native_fact(proj):
     return False
 
 
-def has_any_facts(proj):
+def has_any_facts(proj: str) -> bool:
     """True if the project holds at least one real fact in either tier (native or curated)."""
     return _has_native_fact(proj) or bool(_curated_fact_parts(proj))
 
 
-def _read_dream_record(proj):
+def _read_dream_record(proj: _StrPath | None) -> tuple[float, str] | None:
     """(last_ts, last_sig) from the .dream marker, or None. New format = JSON {ts, sig}; a legacy
     bare-float timestamp yields (ts, '') so the first post-upgrade check re-dreams once."""
     try:
@@ -602,7 +632,7 @@ def _read_dream_record(proj):
             return None
 
 
-def dream_due(proj, threshold_s=_DREAM_THRESHOLD_S, now=None):
+def dream_due(proj: str, threshold_s: float = _DREAM_THRESHOLD_S, now: float | None = None) -> bool:
     """True if a memory consolidation is due: mode not off, the fact SIGNATURE changed since the last
     dream (real facts added/edited/removed - not mtime churn, not a gap-fill scope-only write), and
     the last dream is older than the threshold. No facts or mode off -> not due."""
@@ -619,7 +649,7 @@ def dream_due(proj, threshold_s=_DREAM_THRESHOLD_S, now=None):
     return sig_now != last_sig and (now - last_ts) > threshold_s
 
 
-def mark_dream_done(proj, now=None):
+def mark_dream_done(proj: str, now: float | None = None) -> bool:
     """Record that a dream just completed: store the current timestamp AND fact signature, so the
     nudge stays silent until a real fact changes (not merely a file mtime). Also discharges an owed
     post-compaction nap - running the dream IS what the marker was demanding."""
@@ -679,7 +709,7 @@ def refuse_if_memory_writes_off() -> None:
         raise MemoryWritesOff(MEMORY_WRITES_OFF_LINE)
 
 
-def contrib_file(proj):
+def contrib_file(proj: _StrPath | None) -> Path:
     """Queue of pending upstream contributions (skill/hook changes a learning warrants).
 
     `proj` may also be the pseudo-path `queue_key:<hash>`, naming a queue by its own file key. The
@@ -690,7 +720,7 @@ def contrib_file(proj):
     return _audit_dir() / (_queue_file_key(proj) + ".contrib.jsonl")
 
 
-def _main_root_from_gitfile(repo, gitfile):
+def _main_root_from_gitfile(repo: Path, gitfile: Path) -> Path:
     """The main checkout a linked worktree's `.git` FILE points at; `repo` itself for anything
     else that uses a gitfile (a submodule is a repository of its own)."""
     text = gitfile.read_text(encoding="utf-8", errors="replace").strip()
@@ -703,7 +733,7 @@ def _main_root_from_gitfile(repo, gitfile):
     return common.parent if common.name == ".git" else common
 
 
-def queue_home(proj):
+def queue_home(proj: _StrPath | None) -> _StrPath | None:
     """The directory whose contribution queue `proj` belongs to: the repo's MAIN checkout.
 
     An entry is about the repo, not about where the session happened to stand, so one added from
@@ -731,7 +761,7 @@ def queue_home(proj):
     return str(start)
 
 
-def _queue_file_key(proj):
+def _queue_file_key(proj: _StrPath | None) -> str:
     """The file key of `proj`'s queue AND its tombstones: a `queue_key:` pseudo-path names it
     directly, anything else is hashed. One resolver for both files, because a tombstone written
     under a different key than its queue does not block the re-queue it exists to block."""
@@ -748,7 +778,7 @@ def _queue_file_key(proj):
     return proj_key(queue_home(proj))
 
 
-def _read_jsonl_records(path):
+def _read_jsonl_records(path: Path) -> list[JsonRecord]:
     """The dict records of a JSONL file that carry a `what`, in order. Raises OSError (including
     FileNotFoundError) when the file cannot be read; malformed lines are skipped.
 
@@ -756,7 +786,7 @@ def _read_jsonl_records(path):
     so the queue read as empty and the next add rewrote it with only the new entry. utf-8-sig
     drops a BOM that would otherwise make the first line unparseable, and the split is on "\\n"
     only - splitlines() also breaks on U+2028 and \\f, which can sit inside a JSON string."""
-    out = []
+    out: list[JsonRecord] = []
     for ln in path.read_text(encoding="utf-8-sig", errors="replace").split("\n"):
         ln = ln.strip()
         if not ln:
@@ -765,12 +795,12 @@ def _read_jsonl_records(path):
             rec = json.loads(ln)
         except ValueError:
             continue
-        if isinstance(rec, dict) and rec.get("what"):
+        if _is_record(rec) and rec.get("what"):
             out.append(rec)
     return out
 
 
-def _load_queue(f):
+def _load_queue(f: Path) -> list[JsonRecord]:
     """The queue at `f` for a read-modify-write: [] only when the file does not exist. Any other
     read failure raises, because answering [] there makes the writer replace the whole queue."""
     try:
@@ -779,7 +809,7 @@ def _load_queue(f):
         return []
 
 
-def read_contributions(proj):
+def read_contributions(proj: _StrPath | None) -> list[JsonRecord]:
     """The pending contributions for `proj`, oldest first. Never consumes.
 
     [] only when there is no queue: the file is absent, or `proj` is a malformed queue key (which
@@ -794,13 +824,14 @@ def read_contributions(proj):
     return _load_queue(f)
 
 
-def _contribution_key(rec):
+def _contribution_key(rec: Mapping[str, object]) -> tuple[str, str]:
     """The identity of a contribution intent: (what, target). The queue dedups on it, a closed
     one blocks a re-queue by it, and the closed set holds one tombstone per key."""
     return str(rec.get("what")), str(rec.get("target") or "")
 
 
-def add_contribution(proj, record, max_items=100, strict=False):
+def add_contribution(proj: _StrPath | None, record: Mapping[str, object], max_items: int = 100,
+                     strict: bool = False) -> bool:
     """Queue one pending contribution: {'what' (required), 'target', 'why', 'source'}.
 
     Deduped on (what, target) - re-noticing the same gap is not a second TODO. Stamped with `ts`.
@@ -841,7 +872,9 @@ def add_contribution(proj, record, max_items=100, strict=False):
             if (not rec.get("proj")
                     and not (isinstance(proj, str) and proj.startswith(QUEUE_KEY_PREFIX))):
                 try:
-                    rec["proj"] = os.path.abspath(queue_home(proj))
+                    home = queue_home(proj)
+                    if home is not None:        # abspath(None) raised the TypeError skipped here
+                        rec["proj"] = os.path.abspath(home)
                 except (TypeError, ValueError):
                     pass
             cur.append(rec)
@@ -859,7 +892,8 @@ def add_contribution(proj, record, max_items=100, strict=False):
         return False
 
 
-def drain_contributions(proj, note="", strict=False, max_items=200):
+def drain_contributions(proj: _StrPath | None, note: str = "", strict: bool = False,
+                        max_items: int = 200) -> list[JsonRecord]:
     """Close the WHOLE queue as SHIPPED - ONLY after the contributions actually shipped. Returns
     the drained records ([] when the queue was empty or absent).
 
@@ -897,11 +931,13 @@ def drain_contributions(proj, note="", strict=False, max_items=200):
 # forgotten one silently resurrects a delivered contribution. Reporting filters by outcome instead,
 # so a shipped contribution is never described to the reader as rejected.
 
-SHIPPED = "shipped"
-REJECTED = "rejected"
+SHIPPED: Final = "shipped"
+REJECTED: Final = "rejected"
+# How an intent left the queue: the two values a tombstone's `outcome` field takes.
+type Outcome = Literal["shipped", "rejected"]
 
 
-def rejected_file(proj):
+def rejected_file(proj: _StrPath | None) -> Path:
     """Tombstones for contributions that have left the queue, either outcome (never re-queued).
     Keyed exactly like `contrib_file`, `queue_key:` included.
 
@@ -911,7 +947,7 @@ def rejected_file(proj):
     return _audit_dir() / (_queue_file_key(proj) + ".contrib-rejected.jsonl")
 
 
-def read_closed(proj):
+def read_closed(proj: _StrPath | None) -> list[JsonRecord]:
     """Every contribution that has left the queue, oldest first, both outcomes. [] when none.
 
     This is the set the re-queue block must consult: a delivered intent and a disproven one are
@@ -927,7 +963,7 @@ def read_closed(proj):
         return []
 
 
-def why_not_queued(proj, what, target):
+def why_not_queued(proj: _StrPath | None, what: str, target: str | None) -> str:
     """Why an add was refused: "shipped earlier", "rejected earlier" or "already queued".
 
     The add itself already read the closed set through the raising loader, so an unreadable one
@@ -938,11 +974,12 @@ def why_not_queued(proj, what, target):
                   for r in read_closed(proj)}
     except OSError as exc:
         return "already queued or closed - the closed set could not be read: %s" % exc
-    return {SHIPPED: "shipped earlier", REJECTED: "rejected earlier"}.get(
-        closed.get((what, target or "")), "already queued")
+    # Keyed by object: the stored outcome is whatever the closed set holds.
+    labels: dict[object, str] = {SHIPPED: "shipped earlier", REJECTED: "rejected earlier"}
+    return labels.get(closed.get((what, target or "")), "already queued")
 
 
-def _tombstone(rec, outcome, note=""):
+def _tombstone(rec: Mapping[str, object], outcome: Outcome, note: str = "") -> JsonRecord:
     """The closed-record form of queue entry `rec` under `outcome`."""
     tomb = dict(rec)
     tomb["outcome"] = outcome
@@ -951,7 +988,7 @@ def _tombstone(rec, outcome, note=""):
     return tomb
 
 
-def _load_closed(proj):
+def _load_closed(proj: _StrPath | None) -> list[JsonRecord]:
     """`proj`'s closed set: [] only when the file does not exist. Any other read failure raises,
     because an [] there made the next close REPLACE every earlier tombstone with its own - each
     earlier intent then became re-queueable. Raises ValueError for a malformed queue key."""
@@ -964,7 +1001,7 @@ def _load_closed(proj):
     return out
 
 
-def _write_closed(proj, records):
+def _write_closed(proj: _StrPath | None, records: Iterable[Mapping[str, object]]) -> None:
     """Replace `proj`'s closed set with `records`. Raises OSError when it cannot be written."""
     rf = rejected_file(proj)
     rf.parent.mkdir(parents=True, exist_ok=True)
@@ -972,7 +1009,7 @@ def _write_closed(proj, records):
                   encoding="utf-8")
 
 
-def _append_tombstones(proj, tombs, max_items=200):
+def _append_tombstones(proj: _StrPath | None, tombs: Sequence[JsonRecord], max_items: int = 200) -> None:
     """Append `tombs` to `proj`'s closed set (capped). Raises OSError when it cannot be written,
     or when the existing set cannot be read (it is never replaced blind).
 
@@ -989,19 +1026,20 @@ def _append_tombstones(proj, tombs, max_items=200):
     _write_closed(proj, prev)
 
 
-def read_rejected(proj):
+def read_rejected(proj: _StrPath | None) -> list[JsonRecord]:
     """The contributions dropped as wrong or stale, oldest first. Excludes what SHIPPED. Raises
     OSError on an unreadable closed set, like `read_closed`."""
     return [r for r in read_closed(proj) if r.get("outcome") != SHIPPED]
 
 
-def read_shipped(proj):
+def read_shipped(proj: _StrPath | None) -> list[JsonRecord]:
     """The contributions that actually shipped, oldest first. Raises OSError on an unreadable
     closed set, like `read_closed`."""
     return [r for r in read_closed(proj) if r.get("outcome") == SHIPPED]
 
 
-def resolve_contribution(proj, index=None, match=None):
+def resolve_contribution(proj: _StrPath | None, index: int | None = None,
+                         match: str | None = None) -> int:
     """The 0-based position of exactly ONE queued contribution, by `index` (1-based) or `match`.
 
     `match` is a case-insensitive substring of the entry's `what` or `target`, or `<what> -> <target>`
@@ -1013,7 +1051,7 @@ def resolve_contribution(proj, index=None, match=None):
     return _resolve_in(read_contributions(proj), index, match)
 
 
-def _contribution_matches(record, needle):
+def _contribution_matches(record: Mapping[str, object], needle: str) -> bool:
     """Does lowercased `needle` select `record`: a substring of what or target, or `what -> target`."""
     what = str(record.get("what") or "").lower()
     target = str(record.get("target") or "").lower()
@@ -1023,7 +1061,8 @@ def _contribution_matches(record, needle):
     return bool(arrow) and head.strip() in what and tail.strip() in target
 
 
-def _resolve_in(cur, index=None, match=None):
+def _resolve_in(cur: Sequence[Mapping[str, object]], index: int | None = None,
+                match: str | None = None) -> int:
     """`resolve_contribution` over an already-loaded queue `cur` (the close holds the lock and
     must select from the records it will rewrite, not from a second read)."""
     if match:
@@ -1040,7 +1079,8 @@ def _resolve_in(cur, index=None, match=None):
     return index - 1
 
 
-def _close_contribution(proj, index, outcome, note="", max_items=200, match=None):
+def _close_contribution(proj: _StrPath | None, index: int | None, outcome: Outcome, note: str = "",
+                        max_items: int = 200, match: str | None = None) -> JsonRecord:
     """Remove ONE entry from the queue (by `index` or `match`) and tombstone it under `outcome`.
 
     Raises IndexError on a selector that does not resolve to exactly one entry, so a mistyped or
@@ -1069,12 +1109,14 @@ def _close_contribution(proj, index, outcome, note="", max_items=200, match=None
     return rec
 
 
-def drop_contribution(proj, index=None, reason="", max_items=200, match=None):
+def drop_contribution(proj: _StrPath | None, index: int | None = None, reason: str = "",
+                      max_items: int = 200, match: str | None = None) -> JsonRecord:
     """Close ONE entry (by 1-based `index` or by `match`) as DISPROVEN or stale."""
     return _close_contribution(proj, index, REJECTED, reason, max_items, match)
 
 
-def ship_contribution(proj, index=None, note="", max_items=200, match=None):
+def ship_contribution(proj: _StrPath | None, index: int | None = None, note: str = "",
+                      max_items: int = 200, match: str | None = None) -> JsonRecord:
     """Close ONE entry (by 1-based `index` or by `match`) as DELIVERED. Returns the record.
 
     Distinct from `drop_contribution` only in the outcome recorded: both leave the queue and both
@@ -1094,7 +1136,7 @@ def ship_contribution(proj, index=None, note="", max_items=200, match=None):
 class ClaimHeld(Exception):
     """Another holder has an unexpired claim on the entry. `.claim` is that claim."""
 
-    def __init__(self, claim):
+    def __init__(self, claim: Mapping[str, object]) -> None:
         super().__init__("claimed by %s until %s" % (claim.get("session"), claim.get("until")))
         self.claim = claim
 
@@ -1107,10 +1149,10 @@ class ClaimState(StrEnum):
     EXPIRED = "expired"
 
 
-def claim_state(rec, now=None):
+def claim_state(rec: Mapping[str, object], now: float | None = None) -> ClaimState | None:
     """ClaimState.LIVE or .EXPIRED for a record carrying a claim, None for one without."""
     claim = rec.get("claim") if isinstance(rec, dict) else None
-    if not isinstance(claim, dict):
+    if not _is_record(claim):
         return None
     until = claim.get("until")
     if not isinstance(until, (int, float)):
@@ -1121,31 +1163,36 @@ def claim_state(rec, now=None):
 _SESSION_ID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
 
-def claim_holder(holder):
+def claim_holder(holder: object) -> str:
     """A claim's holder for display: a session id cut to the 8 characters its transcript file name
     starts with, any other name as it is."""
     holder = str(holder or "?")
     return holder[:8] if _SESSION_ID_RE.fullmatch(holder) else holder
 
 
-def claim_label(rec, now=None):
+def claim_label(rec: Mapping[str, object], now: float | None = None) -> str:
     """'[claimed by X, Nm left] ', '[expired claim by X] ' or '' - the prefix a listing gives an
     entry, so every reader of the queue sees the same claim the same way."""
     state = claim_state(rec, now)
-    if state is None:
+    if state is None:                                # also every `rec` that is not a dict
         return ""
-    claim = rec["claim"]
-    if state is ClaimState.EXPIRED:
+    claim = rec.get("claim")
+    if not _is_record(claim):                        # never: a state is only set for a dict claim
+        return ""
+    until = claim.get("until")
+    # A LIVE claim always has a numeric `until`; the second test only tells the checker so.
+    if state is ClaimState.EXPIRED or not isinstance(until, (int, float)):
         return "[expired claim by %s] " % claim_holder(claim.get("session"))
-    left = (claim["until"] - (time.time() if now is None else now)) / 60
+    left = (until - (time.time() if now is None else now)) / 60
     return "[claimed by %s, %dm left] " % (claim_holder(claim.get("session")), left)
 
 
-def _rewrite_queue(f, cur):
+def _rewrite_queue(f: Path, cur: Iterable[Mapping[str, object]]) -> None:
     f.write_text("\n".join(json.dumps(r, sort_keys=True) for r in cur) + "\n", encoding="utf-8")
 
 
-def claim_contribution(proj, match, holder, hours, now=None):
+def claim_contribution(proj: _StrPath | None, match: str, holder: str, hours: float,
+                       now: float | None = None) -> JsonRecord:
     """Mark the ONE entry `match` selects as worked on by `holder` for `hours`. Returns the record.
 
     Raises ClaimHeld when a DIFFERENT holder's claim on it has not expired; the same holder claiming
@@ -1160,7 +1207,9 @@ def claim_contribution(proj, match, holder, hours, now=None):
         cur = _load_queue(f)
         rec = cur[_resolve_in(cur, match=match)]
         held = rec.get("claim")
-        if claim_state(rec, stamp) is ClaimState.LIVE and held.get("session") != holder:
+        # claim_state answers LIVE only for a dict claim; _is_record states that for the checker.
+        if (claim_state(rec, stamp) is ClaimState.LIVE and _is_record(held)
+                and held.get("session") != holder):
             raise ClaimHeld(held)
         rec["claim"] = {"session": str(holder), "cwd": os.getcwd(), "ts": stamp,
                         "until": stamp + float(hours) * 3600}
@@ -1168,7 +1217,7 @@ def claim_contribution(proj, match, holder, hours, now=None):
     return rec
 
 
-def release_contribution(proj, match):
+def release_contribution(proj: _StrPath | None, match: str) -> object:
     """Remove the claim from the ONE entry `match` selects. Returns the removed claim, or None when
     it carried none. Raises like `claim_contribution`, except never ClaimHeld."""
     try:
@@ -1201,44 +1250,61 @@ _TOMBSTONE_SUFFIX = ".contrib-rejected.jsonl"
 _REHOMED_SUFFIX = ".rehomed"
 
 
-def _classify_tombstone_file(path):
-    """(status, home_key, records) for one closed-set file: status is "home" (correctly keyed or
-    unattributable - leave it), "orphan" (belongs to queue `home_key`), or "ambiguous"."""
+class OrphanTombstone(TypedDict):
+    """A closed-set file whose every stamp names ONE other queue: `home`, its key."""
+    path: Path
+    status: Literal["orphan"]
+    home: str
+    records: list[JsonRecord]
+
+
+class AmbiguousTombstone(TypedDict):
+    """A closed-set file that is not its own queue's but cannot be moved: its stamps disagree,
+    or a queue lives at its key. Reported, never rehomed, so it names no `home`."""
+    path: Path
+    status: Literal["ambiguous"]
+    home: None
+    records: list[JsonRecord]
+
+
+def _classify_tombstone_file(path: Path) -> OrphanTombstone | AmbiguousTombstone | None:
+    """The entry for one closed-set file, or None when it is its own queue's ("home": correctly
+    keyed or unattributable - leave it)."""
     key = path.name[:-len(_TOMBSTONE_SUFFIX)]
     records = _read_jsonl_records(path)
     homes = {proj_key(r["proj"]) for r in records if r.get("proj")}
     if not homes or homes == {key}:
-        return "home", None, records
+        return None
     if key in homes or len(homes) > 1 or (_audit_dir() / (key + ".contrib.jsonl")).exists():
-        return "ambiguous", None, records
-    return "orphan", homes.pop(), records
+        return {"path": path, "status": "ambiguous", "home": None, "records": records}
+    return {"path": path, "status": "orphan", "home": homes.pop(), "records": records}
 
 
-def find_orphan_tombstones():
+def find_orphan_tombstones() -> list[OrphanTombstone | AmbiguousTombstone]:
     """[{path, status, home, records}] for every closed-set file that is NOT its own queue's:
     status "orphan" (with the queue key `home` it belongs to) or "ambiguous" (stamps disagree, or a
     queue lives at its key - reported, never moved). An unreadable file raises OSError."""
-    out = []
+    out: list[OrphanTombstone | AmbiguousTombstone] = []
     try:
         paths = sorted(_audit_dir().glob("*" + _TOMBSTONE_SUFFIX))
     except OSError:
         return out
     for path in paths:
-        status, home, records = _classify_tombstone_file(path)
-        if status != "home":
-            out.append({"path": path, "status": status, "home": home, "records": records})
+        found = _classify_tombstone_file(path)
+        if found is not None:
+            out.append(found)
     return out
 
 
-def _closed_ts(rec):
+def _closed_ts(rec: Mapping[str, object]) -> float:
     """A tombstone's close time for ordering; 0 when absent or not a number."""
     try:
-        return float(rec.get("closed_ts") or 0)
+        return _coerce_float(rec.get("closed_ts") or 0)
     except (TypeError, ValueError):
         return 0.0
 
 
-def _free_rehomed_path(path):
+def _free_rehomed_path(path: Path) -> Path:
     """`<path>.rehomed`, or `.rehomed-<n>` when an earlier repair already used that name."""
     cand = path.with_name(path.name + _REHOMED_SUFFIX)
     n = 1
@@ -1248,7 +1314,7 @@ def _free_rehomed_path(path):
     return cand
 
 
-def rehome_orphan_tombstone(orphan):
+def rehome_orphan_tombstone(orphan: OrphanTombstone) -> int:
     """Merge one orphan (from `find_orphan_tombstones`) into its queue's closed set, then rename
     the orphan file aside (kept as `<name>.rehomed`, never deleted). Returns the number of records
     that were new to the home set. Raises OSError when either step fails.
@@ -1261,7 +1327,7 @@ def rehome_orphan_tombstone(orphan):
     with memory_lock(contrib_file(home)):
         prev = _load_closed(home)
         have = {(str(r.get("what")), str(r.get("target") or "")) for r in prev}
-        new = []
+        new: list[JsonRecord] = []
         for rec in sorted(orphan["records"], key=_closed_ts):
             ident = (str(rec.get("what")), str(rec.get("target") or ""))
             if ident not in have:
@@ -1291,7 +1357,7 @@ def rehome_orphan_tombstone(orphan):
 _GIT_SCOPE_PREFIX = "GIT_"
 
 
-def git_scoped(cwd, *args):
+def git_scoped(cwd: _StrPath, *args: str) -> tuple[int, str] | None:
     """(returncode, stdout) of one git call in `cwd` with inherited GIT_* scoping removed, or None."""
     env = {k: v for k, v in os.environ.items() if not k.startswith(_GIT_SCOPE_PREFIX)}
     try:
@@ -1302,7 +1368,7 @@ def git_scoped(cwd, *args):
     return r.returncode, os.fsdecode(r.stdout).strip()
 
 
-def main_checkout_root(cwd):
+def main_checkout_root(cwd: _StrPath) -> Path | None:
     """The main checkout's root for the repository `cwd` is in, or None outside a work tree."""
     top = git_scoped(cwd, "rev-parse", "--path-format=absolute", "--show-toplevel",
                      "--git-common-dir")
@@ -1320,22 +1386,22 @@ def main_checkout_root(cwd):
 
 
 @functools.lru_cache(maxsize=64)
-def _nap_owner_of(absolute):
+def _nap_owner_of(absolute: str) -> str:
     root = main_checkout_root(absolute) if os.path.isdir(absolute) else None
     return str(root) if root else absolute
 
 
-def nap_owner(proj):
+def nap_owner(proj: _StrPath | None) -> _StrPath | None:
     """The directory an owed nap is keyed by: the main checkout of `proj`'s repository, else
     `proj` itself (normalized). Cached per process: the Stop gate reads the marker several times."""
     try:
-        absolute = os.path.abspath(os.fspath(proj) if proj else os.getcwd())
+        absolute: str = os.path.abspath(os.fspath(proj) if proj else os.getcwd())
     except (TypeError, ValueError):
         return proj
     return _nap_owner_of(absolute)
 
 
-def _nap_owed_files(proj):
+def _nap_owed_files(proj: _StrPath | None) -> list[Path]:
     """[canonical, legacy raw-cwd] marker paths, deduped. The legacy one was written before the
     marker was keyed by repository; it is read and cleared so an old obligation does not silently
     stop blocking, and never written again."""
@@ -1344,7 +1410,7 @@ def _nap_owed_files(proj):
     return files if legacy == files[0] else files + [legacy]
 
 
-def nap_owed_file(proj):
+def nap_owed_file(proj: _StrPath | None) -> Path:
     """Marker: a compaction happened and the consolidation pass has not run since. The existing
     file when there is one (canonical first), else the canonical path a new marker is written to."""
     files = _nap_owed_files(proj)
@@ -1357,15 +1423,16 @@ def nap_owed_file(proj):
     return files[0]
 
 
-def mark_nap_owed(proj, session_id=None, transcript_path=None):
+def mark_nap_owed(proj: _StrPath | None, session_id: str | None = None,
+                  transcript_path: _StrPath | None = None) -> None:
     """Record that a post-compaction nap is owed for `proj`. Best-effort.
 
     The obligation is keyed per PROJECT but the material it protects is per SESSION, so the
     compacting session's id and transcript path are recorded WITH it. Without them a nap run in a
     later session reviews only its own transcript while clearing the flag, discharging the
     compacted stretch unread - and the block text asserts a compaction that session never had."""
-    record = {"ts": time.time(), "session_id": str(session_id or ""),
-              "transcript_path": str(transcript_path or "")}
+    record: JsonRecord = {"ts": time.time(), "session_id": str(session_id or ""),
+                          "transcript_path": str(transcript_path or "")}
     # Where the transcript ended at the compaction: the stretch the nap owes. Recorded so a review
     # past it discharges even the current session's obligation, whatever cwd it ran from.
     try:
@@ -1384,7 +1451,7 @@ def mark_nap_owed(proj, session_id=None, transcript_path=None):
         pass
 
 
-def is_nap_owed(proj):
+def is_nap_owed(proj: _StrPath | None) -> bool:
     """True while a post-compaction nap is owed for `proj`."""
     try:
         return nap_owed_file(proj).is_file()
@@ -1392,19 +1459,19 @@ def is_nap_owed(proj):
         return False
 
 
-def nap_owed_info(proj):
+def nap_owed_info(proj: _StrPath | None) -> JsonRecord:
     """{'ts','session_id','transcript_path'} for the owed nap, or {} when none is owed.
 
     Tolerates a LEGACY marker written before the session was recorded (it carries only `ts`), so an
     obligation from an older plugin version still blocks - it just cannot name its transcript."""
     try:
         d = _decode_json_file(nap_owed_file(proj))
-        return d if isinstance(d, dict) else {}
+        return d if _is_record(d) else {}
     except (OSError, ValueError):
         return {}
 
 
-def decline_nap_owed(proj, by, now=None):
+def decline_nap_owed(proj: _StrPath | None, by: str | None, now: float | None = None) -> bool:
     """Record that `by` (normally "user") declined the owed nap; False when none is owed.
 
     The decline is stored INSIDE the obligation it answers, so the next compaction - the only
@@ -1424,24 +1491,24 @@ def decline_nap_owed(proj, by, now=None):
     return True
 
 
-def nap_owed_declined(proj):
+def nap_owed_declined(proj: _StrPath | None) -> JsonRecord:
     """{'by', 'ts'} of the decline standing on the owed nap, or {} when none (or nothing owed)."""
     rec = nap_owed_info(proj).get("declined")
-    return rec if isinstance(rec, dict) and rec.get("by") else {}
+    return rec if _is_record(rec) and rec.get("by") else {}
 
 
-def calling_session_id():
+def calling_session_id() -> str:
     """The Claude Code session this process runs under, or "" outside one. The CLI exports it to
     every Bash call, so a script knows whose transcript is its own without asking the cwd."""
     return os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
 
 
-def _live_sessions():
+def _live_sessions() -> frozenset[str]:
     """The ids of the Claude Code sessions with a live process behind them."""
     return process_liveness.live_session_ids(claude_paths.config_dir() / "sessions").ids
 
 
-def nap_owed_by_live_peer(proj, session_id):
+def nap_owed_by_live_peer(proj: _StrPath | None, session_id: str | None) -> bool:
     """True when the owed nap names ANOTHER session that is still running.
 
     That session's transcript is still growing and its own Stop gate owes the nap, so a second
@@ -1453,7 +1520,7 @@ def nap_owed_by_live_peer(proj, session_id):
     return owner in _live_sessions()
 
 
-def nap_owed_blocks(proj, session_id=""):
+def nap_owed_blocks(proj: _StrPath | None, session_id: str | None = "") -> bool:
     """True while an owed nap still blocks a Stop: owed, not declined, and not owed by a live peer
     of `session_id`. The Stop gate blocks on this and the context watcher yields on it, so the two
     cannot disagree about a declined nap."""
@@ -1461,7 +1528,7 @@ def nap_owed_blocks(proj, session_id=""):
             and not nap_owed_by_live_peer(proj, session_id))
 
 
-def clear_nap_owed(proj):
+def clear_nap_owed(proj: _StrPath | None) -> None:
     """Discharge the owed nap (best-effort), the legacy raw-cwd marker included."""
     for f in _nap_owed_files(proj):
         with contextlib.suppress(OSError):
@@ -1472,11 +1539,14 @@ def clear_nap_owed(proj):
 # with this same name, so the gate can tell whether an owed transcript has any unread bytes left.
 DREAM_REVIEWER = "dream"
 
-NAP_OWED_TRANSCRIPT_GONE = "gone"
-NAP_OWED_TRANSCRIPT_CONSUMED = "consumed"
+NAP_OWED_TRANSCRIPT_GONE: Final = "gone"
+NAP_OWED_TRANSCRIPT_CONSUMED: Final = "consumed"
+# Why an owed nap cannot be satisfied; "" while the obligation is real.
+type NapOwedUnsatisfiable = Literal["", "gone", "consumed"]
 
 
-def unsatisfiable_nap_owed(proj, session_id=""):
+def unsatisfiable_nap_owed(proj: _StrPath | None,
+                           session_id: str | None = "") -> tuple[str, NapOwedUnsatisfiable]:
     """(transcript_path, why) when the owed nap names a transcript nothing can still consume.
 
     The flag is written at compaction and cleared only by `dream_state.py done`, so it can outlive
@@ -1517,11 +1587,11 @@ def unsatisfiable_nap_owed(proj, session_id=""):
 # Every habit-dependent decision is recorded here and applied automatically (asked once, never
 # re-nagged). The `meta-memory-settings` skill views / sets / resets it.
 
-def _config_path():
+def _config_path() -> Path:
     return claude_paths.config_dir() / ".bitranox-memory.json"
 
 
-DEFAULT_CONFIG = {
+DEFAULT_CONFIG: dict[str, object] = {
     "dream_mode": "propose",       # off | auto | propose
     "privacy": "open",             # open (secret/PII scrub only) | walled (by privacy domain)
     "promotion": "corroborated",   # corroborated (inferred needs dwell) | eager
@@ -1562,7 +1632,7 @@ class ConfigUnreadable(OSError):
     """The config file exists but is not a readable JSON object, so it cannot be safely rewritten."""
 
 
-def _read_config_file():
+def _read_config_file() -> tuple[dict[str, object] | None, str | None]:
     """(settings, problem) for the config file: ({}, None) when there is none, (object, None)
     when it holds a JSON object, and (None, why) when it exists but cannot be used - unreadable,
     not UTF-8, not JSON, or JSON that is not an object. THE one reader, so `load_config` and
@@ -1582,21 +1652,25 @@ def _read_config_file():
         raw = json.loads(text)
     except ValueError as exc:
         return None, "%s is not valid JSON (%s)" % (p, exc)
-    if not isinstance(raw, dict):
+    if not _is_record(raw):
         return None, "%s holds a JSON %s, not an object" % (p, type(raw).__name__)
     return raw, None
 
 
-def load_config():
+def load_config() -> dict[str, object]:
     """Config merged over DEFAULT_CONFIG. Robust: a missing or unusable file yields the
-    recommended defaults."""
+    recommended defaults.
+
+    Each value is whatever the file holds for a known key, which a hand edit can make any JSON
+    type, so it is typed `object` and every reader checks the value it uses."""
     cfg = dict(DEFAULT_CONFIG)
     raw, _problem = _read_config_file()
-    cfg.update({k: raw[k] for k in (raw or {}) if k in DEFAULT_CONFIG})
+    known = raw or {}
+    cfg.update({k: known[k] for k in known if k in DEFAULT_CONFIG})
     return cfg
 
 
-def save_config(updates, strict=False):
+def save_config(updates: Mapping[str, object], strict: bool = False) -> dict[str, object]:
     """Merge known keys from `updates` into the config file (created if missing); return the
     merged dict. Unknown keys are ignored so the file stays a clean, known schema.
 
@@ -1610,7 +1684,8 @@ def save_config(updates, strict=False):
     OSError) naming why; best-effort returns the merged dict unsaved."""
     raw, problem = _read_config_file()
     cfg = dict(DEFAULT_CONFIG)
-    cfg.update({k: raw[k] for k in (raw or {}) if k in DEFAULT_CONFIG})
+    known = raw or {}
+    cfg.update({k: known[k] for k in known if k in DEFAULT_CONFIG})
     cfg.update({k: updates[k] for k in updates if k in DEFAULT_CONFIG})
     try:
         if problem:
@@ -1626,7 +1701,7 @@ def save_config(updates, strict=False):
 
 # ---- altitude homes (always-present tiers, narrowest -> broadest) --------------------
 
-def _excluded_anchor_dirs():
+def _excluded_anchor_dirs() -> set[Path]:
     """Dirs that must NEVER be a memory altitude anchor even if they carry a `CLAUDE.md` + store: the
     user's HOME and the system temp dir (the filesystem root is handled separately via `d.anchor`).
     Walking UP by `.parent` from a real project cwd never reaches these in practice - a project lives
@@ -1634,7 +1709,7 @@ def _excluded_anchor_dirs():
     not the primary bound: it stops a stray `CLAUDE.md` left at `~` / `/tmp`, or a test/probe running
     under the temp dir, from hijacking the anchor. Read fresh each call so a monkeypatched HOME/TMPDIR
     is honored."""
-    out = set()
+    out: set[Path] = set()
     for env in ("HOME", "USERPROFILE"):
         h = os.environ.get(env)
         if h:
@@ -1649,7 +1724,7 @@ def _excluded_anchor_dirs():
     return out
 
 
-def resolve_anchor(proj):
+def resolve_anchor(proj: _StrPath | None) -> Path | None:
     """THE canonical anchor resolver (single source; `uuid_store.resolve_anchor` delegates here).
 
     The anchor of `proj`'s knowledge TREE: the TOPMOST ancestor (including `proj`) that carries a
@@ -1660,6 +1735,8 @@ def resolve_anchor(proj):
     store there and thereafter the colocation pins it). Never anchors at `/`, `~`, or the temp dir
     (see `_excluded_anchor_dirs`). Returns a Path, or None when no ancestor has a `CLAUDE.md` at all.
     With MULTIPLE independent trees on one machine, each cwd resolves to its OWN tree's anchor."""
+    if proj is None:                                 # os.fspath(None) raised the TypeError below
+        return None
     try:
         # Absolute FIRST: a relative path has an empty anchor and Path("") == Path("."), so the
         # root guard below skipped the only rung and the walk never climbed above the cwd. abspath
@@ -1670,8 +1747,8 @@ def resolve_anchor(proj):
     except (TypeError, ValueError):
         return None
     excluded = _excluded_anchor_dirs()
-    highest_both = None                              # topmost dir with a CLAUDE.md AND a store (robust)
-    highest_md = None                                # topmost dir with a CLAUDE.md (bootstrap fallback)
+    highest_both: Path | None = None                 # topmost dir with a CLAUDE.md AND a store (robust)
+    highest_md: Path | None = None                   # topmost dir with a CLAUDE.md (bootstrap fallback)
     for d in ladder:
         try:
             if d == Path(d.anchor) or d in excluded:  # never anchor at /, ~, or the temp dir
@@ -1691,7 +1768,7 @@ def resolve_anchor(proj):
 topmost_claude_md_dir = resolve_anchor
 
 
-def global_rules_dir(proj=None):
+def global_rules_dir(proj: _StrPath | None = None) -> Path:
     """The tree-top central store: `<anchor>/.claude-memory` for `proj`'s OWN tree (share-visible, so
     it reaches every machine that mounts the tree). NEVER `~/.claude` (machine-local, invisible from a
     remote mount). If no ancestor - nor `proj` itself - has a `CLAUDE.md`, `proj` IS the top level and
@@ -1700,7 +1777,7 @@ def global_rules_dir(proj=None):
     return (resolve_anchor(base) or Path(base)) / MEMORY_DIRNAME
 
 
-def discovery_roots():
+def discovery_roots() -> list[Path]:
     """Filesystem roots to WALK for other projects' curated `.claude-memory` stores (used by
     cross-project recall + as the MCP's watched roots). When the config `discovery_roots` list (a
     machine-local override in ~/.claude/.bitranox-memory.json) is set, it is honored EXACTLY -
@@ -1710,8 +1787,10 @@ def discovery_roots():
     walk; an explicit config is a precise statement of where the stores are. The walk is additionally
     backstopped by reverse-resolving native slugs (see resolve_slug), so a project outside these
     roots is still discoverable. Deduped, existing dirs only."""
-    roots = set()
-    for r in (load_config().get("discovery_roots") or []):
+    roots: set[Path] = set()
+    # The configured value is iterated as it stands; a hand edit that is not a list fails here as
+    # it always did.
+    for r in cast("Iterable[object]", load_config().get("discovery_roots") or []):
         try:
             roots.add(Path(str(r)).expanduser())
         except (OSError, ValueError):
@@ -1726,11 +1805,11 @@ def _audit_dir() -> Path:
     return claude_paths.audit_dir()
 
 
-def _stores_gen_file():
+def _stores_gen_file() -> Path:
     return _audit_dir() / "stores-generation.txt"
 
 
-def stores_generation():
+def stores_generation() -> int:
     """Monotonic counter bumped whenever a NEW curated store dir is created (see the engine). The
     cross-tree dir-cache stamps itself with this value, so a brand-new store busts the cache at once
     while a cached walk of unchanged roots stays valid. Absent/garbled marker -> 0 (cache still valid
@@ -1741,7 +1820,7 @@ def stores_generation():
         return 0
 
 
-def bump_stores_generation():
+def bump_stores_generation() -> None:
     """Increment the stores-generation marker under a lock, busting the cross-tree dir-cache. Called
     by the engine only when it actually creates a new `.claude-memory` store dir (rare), so it does
     NOT run on the hot per-fact write path. Best-effort: a missed bump merely means a new store waits
@@ -1762,18 +1841,18 @@ def bump_stores_generation():
         pass
 
 
-def _is_dir(p):
+def _is_dir(p: _StrPath) -> bool:
     try:
         return Path(p).is_dir()
     except OSError:
         return False
 
 
-def find_claude_md_dirs(roots):
+def find_claude_md_dirs(roots: Iterable[_StrPath]) -> list[Path]:
     """Every dir under `roots` that carries a `CLAUDE.md` - the raw material for tree discovery.
     Prunes vendor/hidden/backup dirs, the store dirs themselves, Claude's config dir, and the
     excluded anchor dirs; never follows symlinks (a link into another tree must not merge them)."""
-    out = set()
+    out: set[Path] = set()
     excluded = {str(d) for d in _excluded_anchor_dirs()}
     config_dir = str(claude_paths.config_dir())
     for root in roots:
@@ -1797,12 +1876,12 @@ def find_claude_md_dirs(roots):
     return sorted(out, key=str)
 
 
-def tree_groups(md_dirs):
+def tree_groups(md_dirs: Iterable[_StrPath]) -> dict[Path, list[Path]]:
     """Group CLAUDE.md-bearing dirs into their knowledge TREES: {top_dir: [members]}, members
     deepest-first (lexicographic ties). The top is each member's `resolve_anchor` - so independent
     trees (a marketing company and a bakery share nothing) come out as separate groups, each with
     its own top and store."""
-    groups = {}
+    groups: dict[Path, list[Path]] = {}
     for d in md_dirs:
         top = resolve_anchor(str(d))
         if top is None:
@@ -1813,7 +1892,7 @@ def tree_groups(md_dirs):
     return groups
 
 
-def altitude_chain(proj):
+def altitude_chain(proj: _StrPath) -> list[Path]:
     """Ordered altitude LEVEL DIRS for `proj`, narrowest -> broadest: the project dir itself, then
     each ancestor directory up to and INCLUDING the tree's anchor (gap levels between are included so
     they can be filled). The LAST (broadest) position is the tree top - NEVER `~/.claude`. If no
@@ -1850,12 +1929,13 @@ def altitude_chain(proj):
 # INCREMENTAL: each reviewer (the regex audit, the LLM review) has its own mark, so an
 # already-reviewed prefix is never re-read (re-feeding it to the model is the expensive waste).
 
-def session_meta_file(proj):
+def session_meta_file(proj: _StrPath | None) -> Path:
     """Where the current session's id + transcript path are recorded for `proj` (a dream input)."""
     return _audit_dir() / (proj_key(proj) + ".session.json")
 
 
-def record_session_meta(proj, session, transcript_path):
+def record_session_meta(proj: _StrPath | None, session: str | None,
+                        transcript_path: _StrPath | None) -> None:
     """Record the live session id + transcript path for `proj`. Best-effort; called from a hook."""
     if not (proj and transcript_path):
         return
@@ -1869,11 +1949,11 @@ def record_session_meta(proj, session, transcript_path):
         pass
 
 
-def read_session_meta(proj):
+def read_session_meta(proj: _StrPath | None) -> JsonRecord:
     """{'session_id','transcript_path','ts'} for `proj`, or {} when unknown."""
     try:
         d = _decode_json_file(session_meta_file(proj))
-        return d if isinstance(d, dict) else {}
+        return d if _is_record(d) else {}
     except (OSError, ValueError):
         return {}
 
@@ -1888,7 +1968,7 @@ class StateWriteError(OSError):
     a hook's fail-open handler that already catches OSError still keeps the turn moving."""
 
 
-def _decode_json_file(path):
+def _decode_json_file(path: _StrPath) -> object:
     """The parsed JSON at `path`. Raises OSError (unreadable) or ValueError (does not parse).
 
     The ONE decoder for this module's JSON state files, readers and updaters alike. utf-8-sig
@@ -1898,7 +1978,7 @@ def _decode_json_file(path):
     return json.loads(Path(path).read_text(encoding="utf-8-sig"))
 
 
-def _load_any_json_for_update(path):
+def _load_any_json_for_update(path: _StrPath) -> object:
     """The parsed JSON at `path` for a read-modify-write, any shape: None when the file is absent
     or does not parse (it then holds nothing to lose). A file that EXISTS but cannot be READ
     raises StateWriteError: answering empty there makes the writer replace every other entry with
@@ -1914,19 +1994,19 @@ def _load_any_json_for_update(path):
                               % (path, exc)) from exc
 
 
-def _load_json_for_update(path):
+def _load_json_for_update(path: _StrPath) -> JsonRecord:
     """The JSON object at `path` for a read-modify-write: {} when the file is absent or does not
     parse into an object. Raises StateWriteError like `_load_any_json_for_update`."""
     data = _load_any_json_for_update(path)
-    return data if isinstance(data, dict) else {}
+    return data if _is_record(data) else {}
 
 
-def _write_json_state(path, data):
+def _write_json_state(path: _StrPath, data: object) -> None:
     """Write `data` to `path` as JSON; see `_write_text_state`. Raises StateWriteError."""
     _write_text_state(path, json.dumps(data, sort_keys=True))
 
 
-def _write_text_state(path, text):
+def _write_text_state(path: _StrPath, text: str) -> None:
     """Write `text` to `path` through a temp file and a replace, so a failure leaves the
     previous content whole rather than a torn file that later reads as empty. Raises
     StateWriteError when the write does not land.
@@ -1936,7 +2016,7 @@ def _write_text_state(path, text):
     path = Path(path)
     if os.path.lexists(path) and path.is_file() and not os.access(path, os.W_OK):
         raise StateWriteError("could not write %s (the file is read-only)" % path)
-    tmp = None
+    tmp: str | None = None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
@@ -1954,20 +2034,20 @@ def _write_text_state(path, text):
                 pass
 
 
-def watermark_file(proj):
+def watermark_file(proj: _StrPath | None) -> Path:
     """Per-(transcript, reviewer) high-water marks: how far each reviewer has consumed."""
     return _audit_dir() / (proj_key(proj) + ".watermark.json")
 
 
-def _watermarks(proj):
+def _watermarks(proj: _StrPath | None) -> JsonRecord:
     try:
         d = _decode_json_file(watermark_file(proj))
-        return d if isinstance(d, dict) else {}
+        return d if _is_record(d) else {}
     except (OSError, ValueError):
         return {}
 
 
-def get_watermark(proj, transcript, reviewer):
+def get_watermark(proj: _StrPath | None, transcript: _StrPath, reviewer: str) -> int:
     """Byte offset `reviewer` has already consumed of `transcript`. 0 when unmarked.
 
     `proj`'s own mark when it has one, since that is what it last wrote and a write is checked by
@@ -1975,12 +2055,12 @@ def get_watermark(proj, transcript, reviewer):
     marks are filed under the cwd a review ran from, and one `cd` into another repository moved
     that cwd, so a session already reviewed to its end read as unreviewed from byte 0 there."""
     own = _watermarks(proj).get(str(reviewer), {})
-    if isinstance(own, dict) and str(transcript) in own:
+    if _is_record(own) and str(transcript) in own:
         return _as_offset(own.get(str(transcript)))
     return furthest_watermark(transcript, reviewer)
 
 
-def furthest_watermark(transcript, reviewer):
+def furthest_watermark(transcript: _StrPath, reviewer: str) -> int:
     """The furthest offset `reviewer` has consumed of `transcript` from ANY cwd. 0 when unmarked.
 
     The question an owed nap asks: were these bytes read at all? `get_watermark` prefers the
@@ -1996,21 +2076,21 @@ def furthest_watermark(transcript, reviewer):
             marks = _decode_json_file(store)
         except (OSError, ValueError):
             continue
-        per = marks.get(str(reviewer)) if isinstance(marks, dict) else None
-        if isinstance(per, dict):
+        per = marks.get(str(reviewer)) if _is_record(marks) else None
+        if _is_record(per):
             furthest = max(furthest, _as_offset(per.get(str(transcript))))
     return furthest
 
 
-def _as_offset(value):
+def _as_offset(value: object) -> int:
     """A stored mark as an int; 0 for anything that is not one."""
     try:
-        return int(value or 0)
+        return _coerce_int(value or 0)
     except (TypeError, ValueError):
         return 0
 
 
-def set_watermark(proj, transcript, reviewer, offset):
+def set_watermark(proj: _StrPath | None, transcript: _StrPath, reviewer: str, offset: int) -> None:
     """Record that `reviewer` has consumed `transcript` up to `offset`.
 
     Raises StateWriteError when the mark is not recorded (a failed write, or an existing store
@@ -2022,7 +2102,7 @@ def set_watermark(proj, transcript, reviewer, offset):
     f = watermark_file(proj)
     marks = _load_json_for_update(f)
     per_reviewer = marks.get(str(reviewer))
-    if not isinstance(per_reviewer, dict):
+    if not _is_record(per_reviewer):
         per_reviewer = marks[str(reviewer)] = {}
     per_reviewer[str(transcript)] = offset
     _write_json_state(f, marks)
@@ -2037,7 +2117,8 @@ class TranscriptPart(NamedTuple):
     size: int
 
 
-def unreviewed_transcript_part(proj, reviewer, transcript=None, max_bytes=2_000_000):
+def unreviewed_transcript_part(proj: _StrPath | None, reviewer: str, transcript: _StrPath | None = None,
+                               max_bytes: int = 2_000_000) -> TranscriptPart:
     """The OLDEST part of the transcript `reviewer` has NOT consumed yet, as a TranscriptPart.
 
     `end` is always the end of the text returned, never further: marking it reviewed can only ever
@@ -2057,7 +2138,10 @@ def unreviewed_transcript_part(proj, reviewer, transcript=None, max_bytes=2_000_
 
     Raises OSError when the transcript exists but cannot be read. Answering "nothing new" there let
     a caller that marks the returned end discharge every unread byte of it."""
-    transcript = transcript or (read_session_meta(proj) or {}).get("transcript_path") or ""
+    # The recorded path is whatever the meta file holds; a value that is no path fails below, in
+    # getsize or open, as it always did.
+    transcript = cast("_StrPath", transcript or (read_session_meta(proj) or {}).get("transcript_path")
+                      or "")
     if not transcript:
         return TranscriptPart("", 0, 0, 0)
     try:
@@ -2079,7 +2163,7 @@ def unreviewed_transcript_part(proj, reviewer, transcript=None, max_bytes=2_000_
     return TranscriptPart(data.decode("utf-8", "replace"), mark, mark + len(data), size)
 
 
-def _whole_characters(data, fh):
+def _whole_characters(data: bytes, fh: BinaryIO) -> bytes:
     """`data` cut back to the last complete UTF-8 character; extended from `fh` to complete the
     first one instead when nothing whole would be left, so every call still makes progress.
 
@@ -2101,41 +2185,42 @@ def _whole_characters(data, fh):
     return data + fh.read(need - len(data))        # only a partial first character: finish it
 
 
-def unreviewed_transcript_text(proj, reviewer, transcript=None, max_bytes=2_000_000):
+def unreviewed_transcript_text(proj: _StrPath | None, reviewer: str, transcript: _StrPath | None = None,
+                               max_bytes: int = 2_000_000) -> tuple[str, int]:
     """(new_text, new_offset) of `unreviewed_transcript_part`: the oldest unreviewed part and the
     byte offset where it ends. Raises OSError, like it, for a transcript that cannot be read."""
     part = unreviewed_transcript_part(proj, reviewer, transcript, max_bytes)
     return part.text, part.end
 
 
-def live_transcripts(proj):
+def live_transcripts(proj: str) -> list[str]:
     """The transcripts in `proj`'s native dir whose session is running right now."""
     native = memory_dir(proj).parent
     return [str(native / (sid + ".jsonl")) for sid in _live_sessions()
             if (native / (sid + ".jsonl")).is_file()]
 
 
-def _review_shown_file(proj):
+def _review_shown_file(proj: _StrPath | None) -> Path:
     # Per session as well as per project: two live sessions in one cwd review different transcripts.
     return session_state_path("%s-%s" % (calling_session_id(), proj_key(proj)), ".review-shown")
 
 
-def record_review_shown(proj, transcript):
+def record_review_shown(proj: _StrPath | None, transcript: _StrPath) -> None:
     """Remember which transcript the calling session's last session-review showed.
     Raises StateWriteError when the write does not land."""
     _write_json_state(_review_shown_file(proj), {"path": str(transcript)})
 
 
-def last_review_shown(proj):
+def last_review_shown(proj: _StrPath | None) -> str:
     """The transcript the calling session's last session-review showed, or ""."""
     try:
         d = _decode_json_file(_review_shown_file(proj))
     except (OSError, ValueError):
         return ""
-    return str(d.get("path") or "") if isinstance(d, dict) else ""
+    return str(d.get("path") or "") if _is_record(d) else ""
 
 
-def resolve_transcript(proj):
+def resolve_transcript(proj: str) -> str:
     """The transcript path for `proj`: the calling session's own when it has one here, else the
     hook-recorded one, else the newest *.jsonl under the project's native dir, else "".
 
@@ -2152,7 +2237,8 @@ def resolve_transcript(proj):
         with contextlib.suppress(OSError):
             if own.is_file():
                 return str(own)
-    recorded = (read_session_meta(proj) or {}).get("transcript_path") or ""
+    # Whatever the meta file holds, returned as it stands when it names a path that exists.
+    recorded = cast("str", (read_session_meta(proj) or {}).get("transcript_path") or "")
     if recorded and os.path.exists(recorded):
         return recorded
     try:
@@ -2160,7 +2246,7 @@ def resolve_transcript(proj):
     except OSError:
         return ""
 
-    def _mtime(p):
+    def _mtime(p: Path) -> float:
         try:
             return p.stat().st_mtime
         except OSError:
@@ -2176,16 +2262,16 @@ def resolve_transcript(proj):
 # (its cwd/subject may differ and it is scoped to one task), so the hook BUFFERS the signal here and
 # the main session's capture routes + writes it. Session-keyed, out of the dreamed store.
 
-def subagent_learnings_file(session):
+def subagent_learnings_file(session: object) -> Path:
     """Queue of learning signals detected in this session's SUBAGENT transcripts."""
     return session_state_path(session, ".subagent-learnings")
 
 
-def read_subagent_learnings(session):
+def read_subagent_learnings(session: object) -> list[JsonRecord]:
     """The buffered subagent learning records for `session`, oldest first. [] when none."""
     if not session:
         return []
-    out = []
+    out: list[JsonRecord] = []
     try:
         for ln in subagent_learnings_file(session).read_text(encoding="utf-8").splitlines():
             ln = ln.strip()
@@ -2195,14 +2281,14 @@ def read_subagent_learnings(session):
                 rec = json.loads(ln)
             except ValueError:
                 continue
-            if isinstance(rec, dict):
+            if _is_record(rec):
                 out.append(rec)
     except OSError:
         return []
     return out
 
 
-def buffer_subagent_learning(session, record, max_items=60):
+def buffer_subagent_learning(session: object, record: Mapping[str, object], max_items: int = 60) -> None:
     """Append one subagent learning record (newest-capped). Best-effort: never raises."""
     if not session or not isinstance(record, dict):
         return
@@ -2218,7 +2304,7 @@ def buffer_subagent_learning(session, record, max_items=60):
         pass
 
 
-def drain_subagent_learnings(session):
+def drain_subagent_learnings(session: object) -> None:
     """Consume the queue (the main capture has surfaced it). Best-effort."""
     try:
         subagent_learnings_file(session).unlink()
@@ -2231,11 +2317,11 @@ def drain_subagent_learnings(session):
 # compact-resume.py after the compaction: a handover.md written AFTER this moment is the session's
 # own checkpoint, while an older one describes an earlier moment and must not be re-fed as current.
 
-def checkpoint_asked_file(session):
+def checkpoint_asked_file(session: object) -> Path:
     return session_state_path(session, ".checkpoint-asked")
 
 
-def mark_checkpoint_asked(session, now=None):
+def mark_checkpoint_asked(session: object, now: float | None = None) -> None:
     """Record the moment of a checkpoint request (epoch seconds). Best-effort: never raises."""
     try:
         flag = checkpoint_asked_file(session)
@@ -2245,7 +2331,7 @@ def mark_checkpoint_asked(session, now=None):
         pass
 
 
-def checkpoint_asked_at(session):
+def checkpoint_asked_at(session: object) -> float:
     """Epoch seconds of this session's latest checkpoint request, or 0.0 when it has none."""
     try:
         return float(checkpoint_asked_file(session).read_text(encoding="utf-8").strip() or 0)
@@ -2258,12 +2344,12 @@ def checkpoint_asked_at(session):
 # (the probe proved `session_id` is stable across PostToolUse/Stop/SubagentStop), OUT of the dreamed
 # store so it never bumps a store mtime or affects convergence.
 
-def touched_file(session):
+def touched_file(session: object) -> Path:
     """Scratch file holding the paths this session's turns wrote/edited (capture-routing evidence)."""
     return session_state_path(session, ".touched")
 
 
-def read_touched_paths(session):
+def read_touched_paths(session: object) -> list[str]:
     """The distinct paths recorded for `session`, least recently touched first. [] when none."""
     try:
         lines = touched_file(session).read_text(encoding="utf-8").splitlines()
@@ -2272,7 +2358,7 @@ def read_touched_paths(session):
     return [ln for ln in (x.strip() for x in lines) if ln]
 
 
-def record_touched_path(session, path, max_lines=400):
+def record_touched_path(session: object, path: _StrPath | None, max_lines: int = 400) -> None:
     """Record `path` for `session` as its newest entry (deduped, newest-capped). Never raises.
 
     A path carrying a line break (CR or LF) is REFUSED, not recorded: the file holds one path per
@@ -2301,7 +2387,7 @@ def record_touched_path(session, path, max_lines=400):
         pass
 
 
-def clear_touched_paths(session):
+def clear_touched_paths(session: object) -> None:
     """Drop the session's touched-path evidence (best-effort)."""
     try:
         touched_file(session).unlink()
@@ -2309,7 +2395,7 @@ def clear_touched_paths(session):
         pass
 
 
-def nearest_level(path):
+def nearest_level(path: _StrPath) -> str | None:
     """The memory LEVEL a filesystem path belongs to: the NEAREST ancestor (including `path` itself
     when it is a dir) that carries a `CLAUDE.md` - i.e. the project a fact about that file would be
     filed at. `resolve_anchor` gives the TOPMOST rung; this gives the narrowest one. Returns a str
@@ -2329,7 +2415,14 @@ def nearest_level(path):
     return None
 
 
-def subject_levels(touched, cwd):
+class SubjectLevel(TypedDict):
+    """One memory level a touched path belongs to, as `subject_levels` reports it."""
+    level: str
+    anchor: str
+    cross_tree: bool
+
+
+def subject_levels(touched: Iterable[_StrPath] | None, cwd: _StrPath) -> list[SubjectLevel]:
     """The OTHER memory levels the given paths belong to - the routing evidence for capture.
 
     Capture is cwd-keyed, so a learning ABOUT a repo you edited from somewhere else lands in the
@@ -2344,7 +2437,7 @@ def subject_levels(touched, cwd):
     of these repos or about the cwd workflow itself."""
     own = nearest_level(cwd)
     own_anchor = resolve_anchor(cwd) if own else None
-    out = {}
+    out: dict[str, SubjectLevel] = {}
     for p in touched or ():
         lvl = nearest_level(p)
         if not lvl or lvl == own:
@@ -2357,12 +2450,12 @@ def subject_levels(touched, cwd):
 
 # ---- new-project seeding (one-time /collect-knowledge bootstrap nudge) ---------------
 
-def seeded_file(proj):
+def seeded_file(proj: _StrPath | None) -> Path:
     """Marker that this project has been seed-nudged (so the bootstrap nudge fires once)."""
     return claude_paths.audit_dir() / (proj_key(proj) + ".seeded")
 
 
-def mark_seeded(proj, now=None):
+def mark_seeded(proj: _StrPath | None, now: float | None = None) -> bool:
     f = seeded_file(proj)
     try:
         f.parent.mkdir(parents=True, exist_ok=True)
@@ -2372,7 +2465,7 @@ def mark_seeded(proj, now=None):
         return False
 
 
-def project_unseeded(proj):
+def project_unseeded(proj: str) -> bool:
     """True if this project has no REAL facts in EITHER tier yet AND has not been seed-nudged - a fresh
     project that could be bootstrapped from the existing knowledge tree via /collect-knowledge. Counts
     real facts (not a gap-fill scope-only index.md), so the nudge never misfires on an empty store."""
@@ -2394,7 +2487,7 @@ def project_unseeded(proj):
 # to one corroborator, and the mechanism now says what the prose always claimed.
 
 
-def promotion_file():
+def promotion_file() -> Path:
     """The sighting store: candidate key -> the project keys that have sighted it.
 
     SHARED across projects, not per-project, because the question it answers is "how many DISTINCT
@@ -2403,7 +2496,12 @@ def promotion_file():
     return claude_paths.audit_dir() / "promotion-candidates.json"
 
 
-def _read_sightings():
+def _sightings_of(data: Mapping[str, object]) -> dict[str, list[str]]:
+    """key -> sorted distinct project keys, for every key whose value is a list; others dropped."""
+    return {k: sorted({str(p) for p in v}) for k, v in data.items() if _is_list(v)}
+
+
+def _read_sightings() -> dict[str, list[str]]:
     """key -> sorted list of project keys that sighted it. Any other shape reads as EMPTY.
 
     Failing CLOSED is the point. The pre-fix store was per-project and held key -> SIGHTING COUNT,
@@ -2413,25 +2511,24 @@ def _read_sightings():
         data = _decode_json_file(promotion_file())     # the updater's decoder, BOM included
     except (OSError, ValueError):
         return {}
-    if not isinstance(data, dict):
+    if not _is_record(data):
         return {}
-    return {k: sorted({str(p) for p in v}) for k, v in data.items() if isinstance(v, list)}
+    return _sightings_of(data)
 
 
-def _sightings_for_update():
+def _sightings_for_update() -> dict[str, list[str]]:
     """The sighting store for a read-modify-write: normalised like `_read_sightings`, but a store
     that exists and cannot be READ raises StateWriteError instead of reading as empty, because the
     write that follows would then erase every other key's corroborators."""
-    data = _load_json_for_update(promotion_file())
-    return {k: sorted({str(p) for p in v}) for k, v in data.items() if isinstance(v, list)}
+    return _sightings_of(_load_json_for_update(promotion_file()))
 
 
-def _write_sightings(data):
+def _write_sightings(data: Mapping[str, list[str]]) -> None:
     """Persist the sighting store. Raises StateWriteError when the write does not land."""
     _write_json_state(promotion_file(), data)
 
 
-def note_promotion_candidate(proj, key):
+def note_promotion_candidate(proj: _StrPath | None, key: str) -> int:
     """Record that `proj` sighted promotion-candidate `key`; return its dwell - the number of
     DISTINCT projects that have sighted it. Idempotent within a project: re-recording the same
     project adds no evidence, so N sightings of an unchanged fact body still count as one.
@@ -2446,7 +2543,7 @@ def note_promotion_candidate(proj, key):
     return len(seen)
 
 
-def clear_promotion_candidate(proj, key):
+def clear_promotion_candidate(proj: _StrPath | None, key: str) -> None:
     """Forget EVERY project's sighting of `key` (call after it is promoted, so it is not re-counted).
 
     The whole set goes, not the calling project's entry: leaving the other corroborators behind
@@ -2462,7 +2559,7 @@ def clear_promotion_candidate(proj, key):
         _write_sightings(data)
 
 
-def promotion_dwell(proj, key):
+def promotion_dwell(proj: _StrPath | None, key: str) -> int:
     """How many DISTINCT projects have sighted `key`, WITHOUT recording a new sighting (read-only) -
     so a promote/hold decision can be re-queried without inflating the count. 0 if never seen.
 
@@ -2471,13 +2568,13 @@ def promotion_dwell(proj, key):
     return len(_read_sightings().get(key, ()))
 
 
-def should_promote(source, dwell_count, mode=None, threshold=2):
+def should_promote(source: str, dwell_count: int, mode: str | None = None, threshold: int = 2) -> bool:
     """Whether a generalization may be promoted to the always-everywhere global layer.
     source is "user" (user-stated concrete rule -> eager) or "inferred" (model generalization ->
     needs corroboration from >= threshold distinct projects, per `promotion_dwell`).
     mode comes from the config (`promotion`: corroborated | eager)."""
-    mode = load_config().get("promotion", "corroborated") if mode is None else mode
-    if mode == "eager" or source == "user":
+    effective = load_config().get("promotion", "corroborated") if mode is None else mode
+    if effective == "eager" or source == "user":
         return True
     return int(dwell_count) >= threshold
 
@@ -2491,9 +2588,10 @@ SCOPE_MARK_BEGIN = "<!-- bitranox:self-learning -->"
 SCOPE_MARK_END = "<!-- /bitranox:self-learning -->"
 
 
-def read_scope_block(text):
+def read_scope_block(text: str | None) -> str | None:
     """Return the descriptor inside the bitranox:self-learning markers in `text`, or None."""
-    b = (text or "").find(SCOPE_MARK_BEGIN)
+    text = text or ""
+    b = text.find(SCOPE_MARK_BEGIN)
     if b < 0:
         return None
     e = text.find(SCOPE_MARK_END, b)
@@ -2502,7 +2600,7 @@ def read_scope_block(text):
     return text[b + len(SCOPE_MARK_BEGIN):e].strip()
 
 
-def upsert_scope_block(text, descriptor):
+def upsert_scope_block(text: str | None, descriptor: str | None) -> str:
     """Return CLAUDE.md `text` with the marked scope block set to `descriptor` (replaced in place if
     present, appended if absent). DIFF-FREE: if the block already holds `descriptor`, return `text`
     unchanged so a no-change refresh writes nothing."""
@@ -2520,7 +2618,7 @@ def upsert_scope_block(text, descriptor):
     return text + sep + block + "\n"
 
 
-def store_changed(memory_dir_path, since_mtime):
+def store_changed(memory_dir_path: _StrPath, since_mtime: float) -> bool:
     """True if a memory dir changed since `since_mtime` (a 'store changed under me' guard for the
     dream's read-modify-write; pair with the pre-flight backup)."""
     return _newest_mtime(Path(memory_dir_path)) > float(since_mtime)
@@ -2534,11 +2632,11 @@ def store_changed(memory_dir_path, since_mtime):
 # helper here.
 
 
-def _model_review_file():
+def _model_review_file() -> Path:
     return claude_paths.audit_dir() / "model-review.txt"
 
 
-def model_review_due(interval_days=30, now=None):
+def model_review_due(interval_days: float = 30, now: float | None = None) -> bool:
     """True if the periodic model-hierarchy review (run by meta-dream-tree) is due: no prior review, or the
     last one is older than `interval_days`. GLOBAL (not per-project) and OUT of any memory store, so it
     never bumps a store's mtime (convergence holds). Model releases are infrequent -> a monthly default."""
@@ -2551,7 +2649,7 @@ def model_review_due(interval_days=30, now=None):
     return (now - last) >= interval_days * 86400
 
 
-def mark_model_reviewed(now=None):
+def mark_model_reviewed(now: float | None = None) -> float:
     """Record that the model-hierarchy review just ran, so it does not re-fire until due again."""
     import time as _time
     now = _time.time() if now is None else now
@@ -2564,11 +2662,11 @@ def mark_model_reviewed(now=None):
     return now
 
 
-def _backup_reminder_file():
+def _backup_reminder_file() -> Path:
     return claude_paths.audit_dir() / "offsite-backup-reminder.txt"
 
 
-def backup_reminder_due(interval_days=30, now=None):
+def backup_reminder_due(interval_days: float = 30, now: float | None = None) -> bool:
     """True if the periodic off-machine-backup reminder (run by meta-dream-tree) is due: no prior
     reminder, or the last one is older than `interval_days`. The curated memory stores are LOCAL git
     repos (durable against rm/reset) but NOT against disk failure - so from time to time the dream
@@ -2583,7 +2681,7 @@ def backup_reminder_due(interval_days=30, now=None):
     return (now - last) >= interval_days * 86400
 
 
-def mark_backup_reminded(now=None):
+def mark_backup_reminded(now: float | None = None) -> float:
     """Record that the off-machine-backup reminder just fired, so it does not re-fire until due again."""
     import time as _time
     now = _time.time() if now is None else now
@@ -2607,26 +2705,26 @@ def mark_backup_reminded(now=None):
 # The per-prompt hook only USES these (deterministic, no model), keyed to the CURRENT project (the
 # prompt's origin); GROWING them is a slow dream pass. See meta-dream-tree's "Filler-word classification".
 
-def _filler_baseline_path():
+def _filler_baseline_path() -> Path:
     return Path(__file__).resolve().parent / "filler_words.json"
 
 
-def _filler_local_path(proj):
+def _filler_local_path(proj: _StrPath | None) -> Path:
     """PER-PROJECT learned filler blacklist (out-of-store, machine-local)."""
     return claude_paths.audit_dir() / (proj_key(proj) + ".filler.json")
 
 
-def _topical_words_path(proj):
+def _topical_words_path(proj: _StrPath | None) -> Path:
     """PER-PROJECT learned topical whitelist - confirmed genuine topics, not re-queued for classification."""
     return claude_paths.audit_dir() / (proj_key(proj) + ".topical.json")
 
 
-def _recall_pending_path(proj):
+def _recall_pending_path(proj: _StrPath | None) -> Path:
     """PER-PROJECT queue of as-yet-unclassified recall keywords, drained by the dream classifier."""
     return claude_paths.audit_dir() / (proj_key(proj) + ".recall-unknown.txt")
 
 
-def _read_word_json(path):
+def _read_word_json(path: _StrPath) -> list[str]:
     """Read a word-list JSON that may be a bare list or {"filler"/"words"/"topical": [...]}. Fail-open []."""
     try:
         data = _decode_json_file(path)
@@ -2635,25 +2733,27 @@ def _read_word_json(path):
     return _words_of(data)
 
 
-def _words_of(data):
+def _words_of(data: object) -> list[str]:
     """The normalised words of a parsed word-list document (a bare list or a keyed object)."""
-    if isinstance(data, list):
+    words: Iterable[object]
+    if _is_list(data):
         words = data
-    elif isinstance(data, dict):
-        words = data.get("filler") or data.get("words") or data.get("topical") or []
+    elif _is_record(data):
+        # A keyed value is iterated as it stands; one a hand edit made no list fails as before.
+        words = cast("Iterable[object]", data.get("filler") or data.get("words") or data.get("topical") or [])
     else:
         words = []
     return [str(w).strip().lower() for w in words if isinstance(w, str) and str(w).strip()]
 
 
-def _load_words_for_update(path):
+def _load_words_for_update(path: _StrPath) -> list[str]:
     """A learned word list for a read-modify-write: [] when absent or unparseable. Raises
     StateWriteError when the file exists but cannot be read - the fail-open reader's [] there made
     the write that followed replace every learned word with the new ones."""
     return _words_of(_load_any_json_for_update(path))
 
 
-def _write_word_json(path, words, key="words"):
+def _write_word_json(path: _StrPath, words: Iterable[str], key: str = "words") -> None:
     """Persist a learned word list. Raises StateWriteError when the write does not land.
 
     Raised, not swallowed: no hook writes these lists. The dream's filler pass does, and it clears
@@ -2662,7 +2762,7 @@ def _write_word_json(path, words, key="words"):
     _write_text_state(path, json.dumps({key: sorted(set(words))}, indent=2) + "\n")
 
 
-def load_filler_words(proj=None):
+def load_filler_words(proj: _StrPath | None = None) -> frozenset[str]:
     """The effective filler blacklist for `proj`: GLOBAL baseline UNION the project's LEARNED filler.
     Baseline is universal generic-English filler; learned filler is per-project so one project's
     classification never suppresses another's recall. With proj=None, baseline only. Lowercased frozenset."""
@@ -2672,7 +2772,7 @@ def load_filler_words(proj=None):
     return frozenset(words)
 
 
-def add_filler_words(words, proj):
+def add_filler_words(words: Iterable[str], proj: _StrPath | None) -> None:
     """Append classifier-confirmed filler to the PROJECT's learned blacklist (never the shipped baseline).
     Raises StateWriteError when the list cannot be read or written (see `_write_word_json`)."""
     new = {str(w).strip().lower() for w in words if str(w).strip()}
@@ -2682,12 +2782,12 @@ def add_filler_words(words, proj):
     _write_word_json(p, set(_load_words_for_update(p)) | new, key="filler")
 
 
-def load_topical_words(proj):
+def load_topical_words(proj: _StrPath | None) -> frozenset[str]:
     """The project's learned topical whitelist (genuine topics, not re-queued). Lowercased frozenset."""
     return frozenset(_read_word_json(_topical_words_path(proj)))
 
 
-def remove_filler_words(words, proj):
+def remove_filler_words(words: Iterable[str], proj: _StrPath | None) -> list[str]:
     """Un-classify learned filler for `proj`. Returns the words actually removed, sorted.
 
     The classification is a JUDGEMENT over ambiguous words, so it is sometimes wrong, and a word
@@ -2707,7 +2807,7 @@ def remove_filler_words(words, proj):
     return sorted(removed)
 
 
-def remove_topical_words(words, proj):
+def remove_topical_words(words: Iterable[str], proj: _StrPath | None) -> list[str]:
     """Un-classify learned topical words for `proj`. Returns the words actually removed, sorted.
     Raises StateWriteError when the list cannot be read or written."""
     drop = {str(w).strip().lower() for w in words if str(w).strip()}
@@ -2721,7 +2821,7 @@ def remove_topical_words(words, proj):
     return sorted(removed)
 
 
-def add_topical_words(words, proj):
+def add_topical_words(words: Iterable[str], proj: _StrPath | None) -> None:
     """Record classifier-confirmed topical words for THIS project so they are not re-queued.
 
     Calling this on a word currently classified as learned filler RECLASSIFIES it: the word is
@@ -2754,7 +2854,7 @@ _NUM_UNIT_RX = re.compile(
 )
 
 
-def _is_shape_junk(tok):
+def _is_shape_junk(tok: str) -> bool:
     """True for a machine-token shape that is never a real recall search term.
 
     A Claude Code background task id (the `task_id` field, shaped `b` plus 8 base36 chars), a hex
@@ -2777,7 +2877,7 @@ def _is_shape_junk(tok):
     return bool(_HEXFRAG_RX.match(tok) and any(c.isdigit() for c in tok))
 
 
-def note_unknown_keywords(words, proj):
+def note_unknown_keywords(words: Iterable[str], proj: _StrPath | None) -> None:
     """Per-prompt: queue this project's recall keywords that are NEITHER known filler NOR known-topical,
     for the dream classifier to judge. Deterministic, append-only, deduped; never calls a model.
     Leaked tool-use / hex identifiers are dropped (they are not real recall terms)."""
@@ -2797,7 +2897,7 @@ def note_unknown_keywords(words, proj):
         pass
 
 
-def load_pending_keywords(proj):
+def load_pending_keywords(proj: _StrPath | None) -> frozenset[str]:
     """The project's queued-but-unclassified recall keywords (for the dream classifier)."""
     try:
         lines = _recall_pending_path(proj).read_text(encoding="utf-8").splitlines()
@@ -2806,7 +2906,7 @@ def load_pending_keywords(proj):
     return frozenset(w for w in (tok.strip().lower() for tok in lines) if w and not _is_shape_junk(w))
 
 
-def clear_pending_keywords(proj):
+def clear_pending_keywords(proj: _StrPath | None) -> None:
     """Drain THIS project's queue after the dream classifier has processed it."""
     try:
         _recall_pending_path(proj).unlink()
@@ -2814,7 +2914,7 @@ def clear_pending_keywords(proj):
         pass
 
 
-def knowledge_store_empty(proj=None):
+def knowledge_store_empty(proj: _StrPath | None = None) -> bool:
     """True if there is nothing to seed a new project FROM. PER-TREE for the curated tier: only
     `proj`'s OWN tree top is consulted (an unrelated tree's facts are not this tree's seed corpus).
     The NATIVE tier scan stays MACHINE-GLOBAL by design - native memories are per-machine raw notes
@@ -2965,7 +3065,7 @@ _QUOTED_SPANS = re.compile(
     r"|(?<![\w'])'[^'\n]{1,400}'(?![\w'])")
 
 
-def unquoted(text):
+def unquoted(text: str | None) -> str:
     """`text` with every quoted span (see _QUOTED_SPANS) blanked to spaces, offsets preserved.
 
     For the ASSISTANT side of the Stop gate: a self-admission the assistant quotes as data is
@@ -2974,18 +3074,18 @@ def unquoted(text):
     return _QUOTED_SPANS.sub(lambda m: " " * len(m.group(0)), text or "")
 
 
-def strict_user_hit(text):
+def strict_user_hit(text: str) -> bool:
     """A strict learning signal in a USER message (correction/remember/endorsement)."""
     return bool(USER_PATTERN.search(text) or ENDORSE_PATTERN.search(text))
 
 
-def strict_asst_hit(text):
+def strict_asst_hit(text: str) -> bool:
     """A strict learning signal in an ASSISTANT message (admission/realization/endorsement)."""
     return bool(ASST_PATTERN.search(text) or REALIZATION_PATTERN.search(text)
                 or ENDORSE_PATTERN.search(text))
 
 
-def broad_matches(role, text):
+def broad_matches(role: str, text: str | None) -> list[str]:
     """Lower-cased, de-duplicated broad-recall matches for a message; [] if none.
 
     role is "user" or "assistant"; selects the matching broad pattern.
@@ -2994,7 +3094,7 @@ def broad_matches(role, text):
     return sorted({m.group(0).strip().lower() for m in rx.finditer(text or "")})
 
 
-def asst_signal_offset(text):
+def asst_signal_offset(text: str | None) -> int | None:
     """Offset in `text` of the EARLIEST assistant learning signal, strict or broad; None if none.
 
     The same four patterns `strict_asst_hit` and `broad_matches("assistant", ...)` consult, so a
@@ -3007,7 +3107,7 @@ def asst_signal_offset(text):
     return min(starts) if starts else None
 
 
-def collapsed_offset(text, offset):
+def collapsed_offset(text: str | None, offset: int | None) -> int | None:
     """`offset` into `text`, carried over to `" ".join(text.split())`; None stays None.
 
     Quoted spans are blanked on the RAW text, because a fenced block is only recognisable while
@@ -3029,7 +3129,7 @@ def collapsed_offset(text, offset):
     return kept + 1 if kept and prefix[-1].isspace() else kept
 
 
-def asst_said_offset(text):
+def asst_said_offset(text: str | None) -> int | None:
     """Offset in `" ".join(text.split())` of the earliest assistant signal OUTSIDE quoted spans,
     else of the earliest one anywhere; None if there is none.
 
@@ -3051,7 +3151,7 @@ def asst_said_offset(text):
     return collapsed_offset(text, found)
 
 
-def user_signal_offset(text):
+def user_signal_offset(text: str | None) -> int | None:
     """Offset in `text` of the EARLIEST user learning signal, strict or broad; None if none.
 
     The user-role counterpart of `asst_signal_offset`: the patterns `strict_user_hit` and
@@ -3079,7 +3179,7 @@ TOOL_SIGNAL_PATTERN = re.compile(
 )
 
 
-def tool_matches(text):
+def tool_matches(text: str | None) -> list[str]:
     """Lower-cased, de-duplicated TOOL-signal matches for tool output/commands; [] if none."""
     return sorted({m.group(0).strip().lower() for m in TOOL_SIGNAL_PATTERN.finditer(text or "")})
 
@@ -3145,12 +3245,12 @@ _DESIGNED_REFUSAL = re.compile(
 class _FixtureScan:
     """Walks one tool block line by line, deciding which lines sit inside test data."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.in_run = False
         self.in_test_diff = False
-        self.heredoc_end = None
+        self.heredoc_end: str | None = None
 
-    def is_data(self, line):
+    def is_data(self, line: str) -> bool:
         """True when this line is test data rather than live tool output.
 
         Ordered and deliberately short-circuiting: a heredoc body and a diff hunk are verbatim
@@ -3160,7 +3260,7 @@ class _FixtureScan:
                 or bool(_TEST_FILE_LINE.match(line)) or bool(_NUMBERED_LISTING.match(line))
                 or bool(_DESIGNED_REFUSAL.search(line)))
 
-    def _in_heredoc(self, line):
+    def _in_heredoc(self, line: str) -> bool:
         """A heredoc body, which is written text rather than a report; ends at the delimiter."""
         if self.heredoc_end is not None:
             if line.strip() == self.heredoc_end:
@@ -3172,14 +3272,14 @@ class _FixtureScan:
         self.heredoc_end = opener.group("quoted") or opener.group("bare")
         return True
 
-    def _in_test_diff(self, line):
+    def _in_test_diff(self, line: str) -> bool:
         """A diff section whose file header names a test file."""
         header = _DIFF_FILE_HEADER.match(line)
         if header is not None:
             self.in_test_diff = bool(_TEST_FILE_TOKEN.search(header.group(1)))
         return self.in_test_diff
 
-    def _in_run(self, line):
+    def _in_run(self, line: str) -> bool:
         """A pytest run, from its first marker up to and including its summary line."""
         if _RUN_CLOSES.search(line):
             self.in_run = False
@@ -3189,7 +3289,7 @@ class _FixtureScan:
         return self.in_run
 
 
-def tool_matches_outside_fixtures(block):
+def tool_matches_outside_fixtures(block: str | None) -> list[str]:
     """TOOL-signal matches in ONE tool block, discounting only what is test data.
 
     Judge one block at a time: a message carries several (parallel tool calls), and judging their
@@ -3200,7 +3300,7 @@ def tool_matches_outside_fixtures(block):
     return tool_matches("\n".join(live))
 
 
-def tool_signal_offset(block):
+def tool_signal_offset(block: str | None) -> int | None:
     """Offset of the first TOOL signal `tool_matches_outside_fixtures` counts in `block`, as an
     offset into the WHITESPACE-COLLAPSED block (what `inert_snippet` quotes); None if none.
 
@@ -3231,12 +3331,12 @@ def tool_signal_offset(block):
 _SKILL_BODY_MARKER = "base directory for this skill:"
 
 
-def is_injected_skill_body(text):
+def is_injected_skill_body(text: str | None) -> bool:
     """True when a "user" message is really an injected SKILL.md, not something the user wrote."""
     return (text or "").lstrip().lower().startswith(_SKILL_BODY_MARKER)
 
 
-def skills_invoked(transcript_text):
+def skills_invoked(transcript_text: str | None) -> dict[str, int]:
     """{skill_name: count} for every Skill tool call in a raw transcript.
 
     The skill-gap correlation (a bug that shipped DESPITE a skill) needs to know which skills
@@ -3259,20 +3359,20 @@ class SkillUsage(NamedTuple):
     loaded_since_compaction: frozenset[str]
 
 
-def skill_usage(lines):
+def skill_usage(lines: Iterable[str]) -> SkillUsage:
     """Both Skill-call views of a transcript, from ONE pass over `lines`.
 
     `lines` is any iterable of raw transcript lines; an open file streams it, so only the current
     line, the name tally and the name set are held and memory does not grow with the transcript.
     Unparsable lines are skipped, as a transcript being written can end mid-record.
     """
-    tally = {}
-    loaded = set()
+    tally: dict[str, int] = {}
+    loaded: set[str] = set()
     for obj in _json_records(lines):
         names = _skill_calls(obj)
         for name in names:
             tally[name] = tally.get(name, 0) + 1
-        if not isinstance(obj, dict) or obj.get("isSidechain") is True:
+        if not _is_record(obj) or obj.get("isSidechain") is True:
             continue
         if obj.get("type") == "system" and obj.get("subtype") == "compact_boundary":
             loaded.clear()
@@ -3281,7 +3381,7 @@ def skill_usage(lines):
     return SkillUsage(MappingProxyType(tally), frozenset(loaded))
 
 
-def _json_records(lines):
+def _json_records(lines: Iterable[str]) -> Iterator[object]:
     """Each non-blank line of `lines` that parses as JSON, decoded; the rest are skipped."""
     for raw in lines:
         line = raw.strip()
@@ -3293,29 +3393,29 @@ def _json_records(lines):
             continue
 
 
-def _skill_calls(obj):
+def _skill_calls(obj: object) -> list[str]:
     """The skill names an assistant transcript record invokes through the Skill tool, in order.
 
     A record that is not a JSON object (a stray array or number line) names none, rather than
     raising out of the caller's loop."""
-    if not isinstance(obj, dict) or obj.get("type") != "assistant":
+    if not _is_record(obj) or obj.get("type") != "assistant":
         return []
     message = obj.get("message")
-    content = message.get("content") if isinstance(message, dict) else None
-    if not isinstance(content, list):
+    content = message.get("content") if _is_record(message) else None
+    if not _is_list(content):
         return []
-    names = []
+    names: list[str] = []
     for b in content:
-        if not isinstance(b, dict) or b.get("type") != "tool_use" or b.get("name") != "Skill":
+        if not _is_record(b) or b.get("type") != "tool_use" or b.get("name") != "Skill":
             continue
         args = b.get("input")
-        name = args.get("skill") if isinstance(args, dict) else None
+        name = args.get("skill") if _is_record(args) else None
         if isinstance(name, str) and name:
             names.append(name)
     return names
 
 
-def skills_loaded_since_compaction(lines):
+def skills_loaded_since_compaction(lines: Iterable[str]) -> frozenset[str]:
     """Bare names of the skills invoked after the transcript's LAST compaction boundary.
 
     A skill invoked since the last compaction still has its whole body in the model's context, so
