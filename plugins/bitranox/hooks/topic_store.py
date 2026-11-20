@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from types import MappingProxyType
+from typing import TypeIs, cast
 
 import self_improve_signals as sig
 import topic_placement as tp
@@ -46,6 +47,9 @@ class Tagger(StrEnum):
 TAGGERS = tuple(t.value for t in Tagger)
 _KEYS = frozenset({"version", "tagger", "topics", "levels"})
 
+type _StrPath = str | os.PathLike[str]
+"""A directory as callers pass it: a string or a path object."""
+
 
 @dataclass(frozen=True)
 class TopicFile:
@@ -70,12 +74,12 @@ class TopicStoreError(ValueError):
     """The topic file cannot be used as it is, or a new list is not acceptable."""
 
 
-def store_path(anchor) -> Path:
+def store_path(anchor: _StrPath) -> Path:
     """`<anchor>/.claude-memory/topics.json`."""
     return Path(anchor) / us.STORE_DIRNAME / "topics.json"
 
 
-def level_key(anchor, level) -> str:
+def level_key(anchor: _StrPath, level: _StrPath) -> str:
     """A level as the file records it: its path below the anchor with `/` separators, and the
     empty string for the anchor itself. Computed LEXICALLY (absolute paths, symlinks not followed),
     as `resolve_anchor` finds the anchor: a level reached through a symlink to a directory outside
@@ -94,11 +98,11 @@ _REMEDY = ("repair it by hand, or delete it and write the list again with memory
            "topics-set-list (every level then reads as stale until its topics are chosen again)")
 
 
-def _unusable(anchor, why) -> TopicStoreError:
+def _unusable(anchor: _StrPath, why: str) -> TopicStoreError:
     return TopicStoreError("%s %s - %s" % (store_path(anchor), why, _REMEDY))
 
 
-def _meaning_problem(name, meaning) -> str | None:
+def _meaning_problem(name: str, meaning: object) -> str | None:
     """Why `meaning` cannot be the meaning of `name`, or None. One line, as given (a trailing
     line break is a second line), of 1 to MAX_MEANING characters once trimmed: the trimmed text
     is what is stored, so it is what is measured."""
@@ -108,7 +112,7 @@ def _meaning_problem(name, meaning) -> str | None:
     return None
 
 
-def _content_problem(topics) -> str | None:
+def _content_problem(topics: Mapping[str, object]) -> str | None:
     """Why a stored `topics` object is not a list `save_list` could have written, or None. Each
     tag is judged by topic_placement's own grammar and must be stored in the form it normalises
     to, so the file follows that grammar whatever it becomes."""
@@ -126,12 +130,18 @@ def _content_problem(topics) -> str | None:
     return None
 
 
-def _parse(anchor, data) -> TopicFile:
+def _is_json_object(value: object) -> TypeIs[dict[str, object]]:
+    """Whether `value`, a value `json.loads` decoded, is a JSON object: a JSON object's keys are
+    always strings, so a dict found here is a dict keyed by str."""
+    return isinstance(value, dict)
+
+
+def _parse(anchor: _StrPath, data: object) -> TopicFile:
     """The TopicFile a decoded JSON value holds, or TopicStoreError naming the first field that
     is not what `_write` puts there. Every key is judged: an unknown one, a `version` other than
     FORMAT_VERSION (a bool is no version), a `tagger` outside Tagger, or a `levels` value that is
     not a string would otherwise be carried through and written back by `record_level`."""
-    if not (isinstance(data, dict) and isinstance(data.get("topics"), dict)):
+    if not (_is_json_object(data) and _is_json_object(topics := data.get("topics"))):
         raise _unusable(anchor, "is not a topic file (no 'topics' object)")
     unknown = sorted(set(data) - _KEYS)
     if unknown:
@@ -145,19 +155,22 @@ def _parse(anchor, data) -> TopicFile:
     if not isinstance(tagger, str) or tagger not in TAGGERS:
         raise _unusable(anchor, "names the tagger %r, not one of %s" % (tagger, ", ".join(TAGGERS)))
     levels = data.get("levels", {})
-    if not isinstance(levels, dict):
+    if not _is_json_object(levels):
         raise _unusable(anchor, "holds a 'levels' value that is not an object")
     for key, digest in levels.items():
         if not isinstance(digest, str):
             raise _unusable(anchor, "records the level %r with a digest that is not a string" % (key,))
-    why = _content_problem(data["topics"])
+    why = _content_problem(topics)
     if why:
         raise _unusable(anchor, why)
-    return TopicFile(tagger=Tagger(tagger), topics=MappingProxyType(dict(data["topics"])),
-                     levels=MappingProxyType(dict(levels)), version=version)
+    # Both casts restate what the checks above proved one value at a time: every digest is a
+    # string (the loop), and every meaning is (`_content_problem` refuses any that is not).
+    return TopicFile(tagger=Tagger(tagger),
+                     topics=MappingProxyType(dict(cast("dict[str, str]", topics))),
+                     levels=MappingProxyType(dict(cast("dict[str, str]", levels))), version=version)
 
 
-def load(anchor) -> TopicFile | None:
+def load(anchor: _StrPath) -> TopicFile | None:
     """The topic file's content, or None when the tree has none. Raises TopicStoreError for a
     file that is there but empty, that is not the JSON object this module writes (any key, field
     or value `_parse` refuses), or whose list `save_list` would refuse (a tag outside
@@ -180,13 +193,13 @@ def load(anchor) -> TopicFile | None:
     return _parse(anchor, data)
 
 
-def _write(anchor, record: TopicFile) -> bool:
+def _write(anchor: _StrPath, record: TopicFile) -> bool:
     text = json.dumps(record.to_json(), indent=2, sort_keys=True, ensure_ascii=True) + "\n"
     json.loads(text)                                  # what is written must load again
     return us.write_if_changed(store_path(anchor), text)
 
 
-def save_list(anchor, topics: Mapping[str, str], tagger: str) -> bool:
+def save_list(anchor: _StrPath, topics: Mapping[str, str], tagger: object) -> bool:
     """Replace the tree's topic list, keeping what the file records per level. True if written.
 
     Raises TopicStoreError for a tagger outside TAGGERS, more than MAX_LIST topics, two names
@@ -198,7 +211,7 @@ def save_list(anchor, topics: Mapping[str, str], tagger: str) -> bool:
         raise TopicStoreError("unknown tagger %r - use one of %s" % (tagger, ", ".join(TAGGERS)))
     if len(topics) > MAX_LIST:
         raise TopicStoreError("%d topics, over the limit of %d" % (len(topics), MAX_LIST))
-    clean = {}
+    clean: dict[str, str] = {}
     for raw, meaning in topics.items():
         # One name at a time: normalise_topics caps a list at tp.MAX_TOPICS, the per-fact
         # limit, while a tree's list is capped by MAX_LIST above. It also trims, so the
@@ -216,7 +229,8 @@ def save_list(anchor, topics: Mapping[str, str], tagger: str) -> bool:
                                         levels=old.levels if old else {}))
 
 
-def record_level(anchor, level, digest: str, before: Callable[[], object] | None = None) -> bool:
+def record_level(anchor: _StrPath, level: _StrPath, digest: str,
+                 before: Callable[[], object] | None = None) -> bool:
     """Record the descriptor digest `level`'s topics were chosen from. True if written.
 
     Raises TopicStoreError when the tree has no list, the file cannot be used, or `level` is not

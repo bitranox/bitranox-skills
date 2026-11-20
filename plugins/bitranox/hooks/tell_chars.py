@@ -27,9 +27,11 @@ curly PAIR still reports on its closing half. Only a curly opener closed with an
 through, which is a shape neither a person nor a model tends to produce.
 """
 import re
+from collections.abc import Callable, Iterator, Sequence
+from typing import Final, Literal, overload
 
 # Inclusive codepoint ranges to flag (the canonical tell set).
-RANGES = [
+RANGES: list[tuple[int, int]] = [
     (0x0085, 0x0085), (0x00A0, 0x00A0), (0x00AD, 0x00AD),
     (0x061C, 0x061C), (0x180E, 0x180E), (0x2000, 0x200F),
     (0x2010, 0x2015), (0x2019, 0x2019), (0x201B, 0x201B), (0x201D, 0x201D),
@@ -42,7 +44,7 @@ RANGES = [
 ]
 
 
-def _char_class():
+def _char_class() -> str:
     return "".join(chr(a) if a == b else "%c-%c" % (a, b) for a, b in RANGES)
 
 
@@ -64,6 +66,10 @@ _TAB_WIDTH = 4
 # A list item marker and the whitespace after it; group(0) ends where the item's content starts.
 _LIST_ITEM = re.compile(r"[ \t]*(?:[-*+]|\d{1,9}[.)])(?:[ \t]+|$)")
 
+type _Fence = tuple[str, int, int]
+"""An open fenced block: its fence character, the opener's run length, and the content column of
+the block the opener sits in (see `_opens`)."""
+
 # A PDF or HTML extraction marks a WRAPPED line with U+2190 at the join. Two shapes are artifacts,
 # one is prose:
 #   " <-token"   the wrapped remainder of a token - the shape that splits a command or a path in
@@ -82,7 +88,7 @@ _CONTINUATION = re.compile("[ \t]\u2190(?=\\S)|^[ \t]*\u2190-?[ \t]*$")
 _LINE_BREAK = re.compile(r"\r\n|\r|\n")
 
 
-def split_lines(text, keepends=False):
+def split_lines(text: str | None, keepends: bool = False) -> list[str]:
     """Split `text` on REAL line breaks only - never on U+2028, U+2029 or U+0085.
 
     `str.splitlines()` breaks on all three, and all three are themselves in `RANGES`. That single
@@ -99,7 +105,8 @@ def split_lines(text, keepends=False):
     `str.splitlines()`.
     """
     src = text or ""
-    out, pos = [], 0
+    out: list[str] = []
+    pos = 0
     for m in _LINE_BREAK.finditer(src):
         out.append(src[pos:m.end()] if keepends else src[pos:m.start()])
         pos = m.end()
@@ -108,7 +115,7 @@ def split_lines(text, keepends=False):
     return out
 
 
-def fence_opener(line):
+def fence_opener(line: str) -> tuple[str, int] | None:
     """(char, width) when `line` would OPEN a fenced block, else None.
 
     CommonMark's rule for an opener: a BACKTICK fence's info string may hold no backtick. Without
@@ -120,12 +127,12 @@ def fence_opener(line):
     return m.group(1)[0], len(m.group(1))
 
 
-def _indent_columns(line):
+def _indent_columns(line: str) -> int:
     """How many columns of spaces and tabs `line` starts with, a tab advancing to the next stop."""
     return len(line[: len(line) - len(line.lstrip(" \t"))].expandtabs(_TAB_WIDTH))
 
 
-def _item_content_column(line):
+def _item_content_column(line: str) -> int | None:
     """The column where a list item's content starts when `line` opens one, else None."""
     item = _LIST_ITEM.match(line.rstrip("\r\n"))
     if item is None:
@@ -134,7 +141,7 @@ def _item_content_column(line):
     return columns if item.group(0).endswith((" ", "\t")) else columns + 1
 
 
-def _container_column(lines, index, floor):
+def _container_column(lines: Sequence[str], index: int, floor: int) -> int:
     """The content column of the block holding `lines[index]`: a list item's content column, or 0
     at top level. The walk goes back, no further than the last fence line `floor`, to the nearest
     less-indented line; a deeper paragraph inside an item is passed over on the way to it."""
@@ -151,7 +158,7 @@ def _container_column(lines, index, floor):
     return 0
 
 
-def _opens(lines, index, floor):
+def _opens(lines: Sequence[str], index: int, floor: int) -> _Fence | None:
     """(char, width, container) for the fence `lines[index]` opens, else None: a fence run with an
     allowed info string, indented less than four columns into the block it sits in."""
     run = fence_opener(lines[index])
@@ -163,7 +170,7 @@ def _opens(lines, index, floor):
     return run[0], run[1], container
 
 
-def _closes(line, fence):
+def _closes(line: str, fence: _Fence) -> bool:
     """Whether `line` closes the block `fence` = (char, width, container) opened: the same
     character, a run at least as long, nothing after it, and less than four columns into the
     block the opener sat in. A deeper fence line is an example inside the block."""
@@ -174,12 +181,13 @@ def _closes(line, fence):
 
 
 # What `line_kinds` says about one line.
-FENCE = "fence"  # a fence opener or closer
-CODE = "code"    # inside a fenced block
-TEXT = "text"    # prose
+type LineKind = Literal["fence", "code", "text"]
+FENCE: Final = "fence"  # a fence opener or closer
+CODE: Final = "code"    # inside a fenced block
+TEXT: Final = "text"    # prose
 
 
-def line_kinds(lines):
+def line_kinds(lines: Sequence[str]) -> list[LineKind]:
     """FENCE, CODE or TEXT for each line of `lines` (with or without their endings). An unclosed
     fence runs to the end.
 
@@ -189,7 +197,9 @@ def line_kinds(lines):
     rule, and a fence inside a list item was missed under a three-space rule. A fence closes only
     on a bare run of its OWN character at least as long as its opener, so a `~~~` inside a backtick
     block or a three-backtick example inside a four-backtick block is content."""
-    kinds, fence, floor = [], None, -1
+    kinds: list[LineKind] = []
+    fence: _Fence | None = None
+    floor = -1
     for index, line in enumerate(lines):
         if fence is None:
             fence = _opens(lines, index, floor)
@@ -204,19 +214,30 @@ def line_kinds(lines):
     return kinds
 
 
-def code_line_flags(lines):
+def code_line_flags(lines: Sequence[str]) -> list[bool]:
     """One bool per line of `lines`: True for a fence line and for every line inside a fenced
     block, as `line_kinds` decides it."""
     return [kind != TEXT for kind in line_kinds(lines)]
 
 
-def lines_with_code_state(text, keepends=False):
+def lines_with_code_state(text: str | None,
+                          keepends: bool = False) -> Iterator[tuple[str, bool]]:
     """Yield (line, is_code) for every line of `text`, is_code as `code_line_flags` decides it."""
     lines = split_lines(text, keepends=keepends)
     yield from zip(lines, code_line_flags(lines))
 
 
-def transform_outside_code(text, fn, edges=False):
+@overload
+def transform_outside_code(text: str | None, fn: Callable[[str], str],
+                           edges: Literal[False] = False) -> str: ...
+
+
+@overload
+def transform_outside_code(text: str | None, fn: Callable[[str, bool, bool], str],
+                           edges: Literal[True]) -> str: ...
+
+
+def transform_outside_code(text: str | None, fn: Callable[..., str], edges: bool = False) -> str:
     """Rebuild `text` with `fn` applied to every stretch that is NOT code, leaving inline-code
     spans and fenced blocks byte-identical.
 
@@ -229,8 +250,9 @@ def transform_outside_code(text, fn, edges=False):
     skipped code while a rewriter did not, so a file could pass the hook and still have the tell
     inside a deliberate example rewritten - which is how a curly-quote example in this repo was
     once flattened into two identical halves."""
-    call = fn if edges else (lambda stretch, _starts, _ends: fn(stretch))
-    out = []
+    call: Callable[[str, bool, bool], str] = (
+        fn if edges else (lambda stretch, _starts, _ends: fn(stretch)))
+    out: list[str] = []
     for line, is_code in lines_with_code_state(text, keepends=True):
         if is_code:
             out.append(line)
@@ -243,10 +265,11 @@ def transform_outside_code(text, fn, edges=False):
     return "".join(out)
 
 
-def split_inline(line):
+def split_inline(line: str) -> list[str]:
     """[prose, span, prose, span, ..., prose] for one line: the inline-code spans at the odd
     indices, verbatim, and the stretches around them (possibly empty) at the even ones."""
-    pos, parts = 0, []
+    pos = 0
+    parts: list[str] = []
     for m in _INLINE.finditer(line):
         parts.append(line[pos:m.start()])
         parts.append(m.group(0))
@@ -258,7 +281,7 @@ def split_inline(line):
 _PROSE_SUFFIXES = (".md", ".markdown", ".txt")
 
 
-def is_prose_path(path):
+def is_prose_path(path: str | None) -> bool:
     """True when `tell-sweep` sweeps this file: *.md, *.markdown, *.txt or a CLAUDE.md, any case.
 
     The one place that decides it, so `non-ascii-introduced` covers exactly the files tell-sweep
@@ -268,7 +291,7 @@ def is_prose_path(path):
     return low.endswith(_PROSE_SUFFIXES) or low.endswith("claude.md")
 
 
-def decode_utf8(raw, truncated=False):
+def decode_utf8(raw: bytes, truncated: bool = False) -> tuple[str, int | None]:
     """(text, bad_byte): `raw` decoded, and the offset of the first byte that is not valid UTF-8,
     or None when all of it decoded.
 
@@ -294,7 +317,7 @@ def decode_utf8(raw, truncated=False):
         return raw.decode("utf-8", errors="ignore"), exc.start
 
 
-def _scannable(text):
+def _scannable(text: str | None) -> Iterator[tuple[int, str, str]]:
     """Yield (lineno, line, scrubbed) for every line the tell scan is allowed to look at.
 
     `scrubbed` is the line with inline-code spans removed - the form to MATCH against; `line` is
@@ -305,13 +328,13 @@ def _scannable(text):
             yield n, line, _INLINE.sub("", line)
 
 
-def find_tell_lines(text):
+def find_tell_lines(text: str | None) -> list[str]:
     """Return ['<lineno>: <line>', ...] for lines carrying a tell OUTSIDE inline-code spans and
     fenced blocks. Empty list means clean."""
     return ["%d: %s" % (n, line) for n, line, scrubbed in _scannable(text) if _TELL.search(scrubbed)]
 
 
-def find_tell_codepoints(text):
+def find_tell_codepoints(text: str | None) -> list[str]:
     """Return ['<lineno>: U+XXXX U+YYYY', ...] - the same hits as `find_tell_lines`, naming the
     offending codepoints INSTEAD of quoting the line.
 
@@ -320,7 +343,7 @@ def find_tell_codepoints(text):
     still only a string somebody named; a line number and a codepoint locate the tell just as
     well and carry nothing the reader did not already have. Codepoints are deduplicated and
     sorted so the same line always reports the same way."""
-    hits = []
+    hits: list[str] = []
     for n, _line, scrubbed in _scannable(text):
         found = _TELL.findall(scrubbed)
         if found:
@@ -328,7 +351,7 @@ def find_tell_codepoints(text):
     return hits
 
 
-def find_continuation_lines(text):
+def find_continuation_lines(text: str | None) -> list[str]:
     """Return ['<lineno>: <line>', ...] for lines carrying an extraction line-continuation
     artifact, INCLUDING inside fenced code blocks. Empty list means clean.
 

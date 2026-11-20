@@ -31,10 +31,13 @@ import re
 import stat
 import tempfile
 import uuid as _uuid
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 
 import self_improve_signals as sig
+
+type _StrPath = str | os.PathLike[str]
+"""A file or directory as callers pass it: a string or a path object."""
 
 # Fixed namespace for bitranox uuid5 identities (a random-but-frozen v4 UUID; never regenerate it, or
 # every fact's identity would shift and every stored pointer would dangle).
@@ -54,7 +57,7 @@ project (`.venv-3.12`, `.venv-win`, `venv-<user>`, `venv_<project>` all occur on
 no set of exact names covers them. `venvnotes` or `myvenv` has no such prefix and stays a level."""
 
 
-def is_non_level_dirname(name):
+def is_non_level_dirname(name: str) -> bool:
     """True for a directory name no curated level or live store sits under: a name in
     NON_LEVEL_DIRNAMES, a virtualenv by VENV_DIR_PREFIXES, or any name starting with the store's
     name (the store itself, `.claude-memoryX`, `.claude-memory-<anything>`).
@@ -77,7 +80,7 @@ def is_non_level_dirname(name):
 TYPE_PREFIXES = ("project", "feedback", "reference", "user")
 
 
-def slugify(title, type_=None):
+def slugify(title: str | None, type_: str | None = None) -> str:
     """A stable, filesystem-safe slug from a title (+ optional type prefix), matching the native
     topic-file convention (e.g. 'feedback-no-em-dashes'). Lowercase, hyphen-separated, deduped.
     THE one slug algorithm (memory_engine aliases it; the pointer parser derives back-compat slugs
@@ -106,7 +109,7 @@ _SLUG_RX = re.compile(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?")
 _WINDOWS_DEVICE_RX = re.compile(r"con|prn|aux|nul|com[0-9]|lpt[0-9]")
 
 
-def is_valid_slug(slug):
+def is_valid_slug(slug: object) -> bool:
     """True when `slug` is a plain filename the store can own on every platform. THE slug check
     every write path that takes a caller-supplied slug applies before building a body path from it:
     without it `../..` reaches outside `facts/`, and the engine becomes an arbitrary `.md` writer."""
@@ -120,7 +123,7 @@ class InvalidSlug(ValueError):
     writes outside the tree altogether. Raised by the path builder itself, so no write path - however
     it came by the slug - can reach a file outside the store."""
 
-    def __init__(self, slug):
+    def __init__(self, slug: object) -> None:
         self.slug = slug
         super().__init__("%r is not a valid slug - use lowercase letters, digits, hyphens and dots, "
                          "starting and ending with a letter or digit (no path separators)" % (slug,))
@@ -139,13 +142,13 @@ class TopicRefusal(ValueError):
         super().__init__("; ".join(self.reasons) + more)
 
 
-def require_valid_slug(slug):
+def require_valid_slug(slug: object) -> None:
     """Raise `InvalidSlug` unless `slug` is a plain filename the store can own."""
     if not is_valid_slug(slug):
         raise InvalidSlug(slug)
 
 
-def is_valid_legacy_uuid(value):
+def is_valid_legacy_uuid(value: object) -> bool:
     """True when a pre-pivot pointer's target may build a body path. That target is normally
     `str(uuid5(...))`; its first two characters name a shard DIRECTORY and the whole names the file,
     so it must be a plain name by the same rule as a slug - a `..` or a path walks out of `facts/`."""
@@ -171,7 +174,7 @@ RECIPE_LINE = ("(fact bodies are NOT preloaded - to read a fact's full body: wal
 HOOK_SOFT_MAX = 350   # soft cap, chars, advisory only: 1-3 directive second-person sentences
 
 
-def hook_over_budget(hook):
+def hook_over_budget(hook: str | None) -> bool:
     """True when a hook exceeds the soft cap (advisory - callers warn, never fail)."""
     return len(hook or "") > HOOK_SOFT_MAX
 
@@ -184,7 +187,7 @@ HOOK_HARD_MAX = 500   # hard cap, chars. Every pointer line is ALWAYS loaded - a
                       # Detail past the cap belongs in the body, which is read on demand.
 
 
-def hook_over_hard_cap(hook):
+def hook_over_hard_cap(hook: str | None) -> bool:
     """True when a hook exceeds the hard cap. The write path REFUSES such a hook instead of
     truncating it: a silent word-boundary cut leaves an always-loaded line that still reads as a
     complete instruction while its tail is gone, which misleads a reader more than an omission
@@ -198,7 +201,7 @@ _TRIGGER_STARTERS = ("when", "whenever", "before", "after", "on ", "if ", "while
                      "during", "once ")
 
 
-def hook_missing_trigger(hook):
+def hook_missing_trigger(hook: str | None) -> bool:
     """True when a hook does NOT lead with a trigger phrase (When/Before/If/On/...). Advisory -
     callers warn so the author states WHEN the rule applies, never fail."""
     h = " ".join((hook or "").split()).lower()
@@ -224,7 +227,7 @@ _RECURRENCE_RX = (
 _ORDINAL_RX = re.compile(r"\b(%s)\s+occurrence" % "|".join(_ORDINAL_WORDS), re.I)
 
 
-def recurrence_count(body):
+def recurrence_count(body: str | None) -> int | None:
     """The highest repeat count a body explicitly records, or None.
 
     The count is the one durable signal that a lesson has already been written and did not hold,
@@ -255,7 +258,7 @@ _PTR_RX = re.compile(r"^- \[(?P<title>[^\]]*)\]\((?P<scheme>mem|uuid):(?P<target
 
 # ---- identity + sharded central paths -----------------------------------------------------------
 
-def fact_uuid(altitude_dir, slug):
+def fact_uuid(altitude_dir: _StrPath, slug: str | None) -> str:
     """Deterministic uuid5 identity for a fact at `altitude_dir` with `slug`. Idempotent (same inputs
     -> same uuid, so migration re-runs never duplicate) and collision-free across altitudes (keyed on
     the home altitude dir, not the anchor). `altitude_dir` is normalized so `/a/b`, `/a/b/`, and
@@ -264,17 +267,17 @@ def fact_uuid(altitude_dir, slug):
     return str(_uuid.uuid5(NAMESPACE, key))
 
 
-def shard(fact_uuid_str):
+def shard(fact_uuid_str: str) -> str:
     """The 2-hex-digit shard bucket for a uuid (its first two hex chars)."""
     return str(fact_uuid_str)[:2]
 
 
-def central_facts_dir(anchor_dir):
+def central_facts_dir(anchor_dir: _StrPath) -> Path:
     """The single central body-store for an anchor: `<anchor>/.claude-memory/facts`."""
     return Path(anchor_dir) / STORE_DIRNAME / "facts"
 
 
-def body_path(anchor_dir, slug):
+def body_path(anchor_dir: _StrPath, slug: str) -> Path:
     """Absolute path of a fact body in the central store: `.../facts/<slug>.md` (flat, slug-keyed).
     Raises `InvalidSlug` for a slug that is not a plain filename: every read and write of a body goes
     through here, so this is the one place that can guarantee none of them leaves `facts/`."""
@@ -282,7 +285,7 @@ def body_path(anchor_dir, slug):
     return central_facts_dir(anchor_dir) / (slug + ".md")
 
 
-def legacy_body_path(anchor_dir, fact_uuid_str):
+def legacy_body_path(anchor_dir: _StrPath, fact_uuid_str: str) -> Path:
     """Pre-pivot body location (`.../facts/<2-hex>/<uuid>.md`) - read-only during the transition;
     `migrate_to_slug_store.py` moves these to the slug-named path. Raises ValueError for a value that
     is not a plain name (the mover would otherwise archive whatever file a `uuid:..` target names)."""
@@ -291,7 +294,7 @@ def legacy_body_path(anchor_dir, fact_uuid_str):
     return central_facts_dir(anchor_dir) / shard(fact_uuid_str) / (fact_uuid_str + ".md")
 
 
-def free_archive_path(archive_dir, name):
+def free_archive_path(archive_dir: _StrPath, name: str) -> Path:
     """The first path in `archive_dir` that holds no file: `name`, else `<stem>~2<suffix>`,
     `<stem>~3<suffix>`, ... An archive is the only copy of a retired fact, so moving a second fact of
     the same slug onto the first would destroy it; `~` is not a slug character, so these names can
@@ -322,7 +325,8 @@ class Pointer:
 
     __slots__ = ("slug", "title", "hook", "pin", "uuid", "legacy")
 
-    def __init__(self, slug="", title="", hook="", pin=False, uuid="", legacy=False):
+    def __init__(self, slug: str | None = "", title: str | None = "", hook: str | None = "",
+                 pin: bool = False, uuid: str | None = "", legacy: bool = False) -> None:
         self.slug = slug or ""
         self.title = title or ""
         self.hook = hook or ""
@@ -330,7 +334,7 @@ class Pointer:
         self.uuid = str(uuid or "")
         self.legacy = bool(legacy)
 
-    def meta_comment(self):
+    def meta_comment(self) -> str:
         # `bx:src` provenance is NOT rendered. It was introduced when the entry line sat behind a
         # CLAUDE.md @import and cost nothing per session; the slug-store pivot then made the pointer
         # block inline always-loaded text and nobody re-priced it. Measured before removal: 8,022
@@ -338,21 +342,21 @@ class Pointer:
         # every touch of it in the engine was a set union or a re-emit, never a decision. `source`
         # is still PARSED (see `_parse_meta`) so an older line is read without error; it simply
         # stops being written back. Dropping it is deliberate and the old values are not kept.
-        parts = []
+        parts: list[str] = []
         if self.pin:
             parts.append("bx:pin")
         if self.legacy and self.slug:                # legacy lines keep their bx:slug token
             parts.append("bx:slug=%s" % self.slug)
         return (" <!-- %s -->" % " ".join(parts)) if parts else ""
 
-    def index_line(self):
+    def index_line(self) -> str:
         title, hook = _ptr_safe_title(self.title), _ptr_safe_hook(self.hook)
         if self.legacy:
             return "- [%s](uuid:%s) - %s%s" % (title, self.uuid, hook, self.meta_comment())
         return "- [%s](mem:%s) - %s%s" % (title, self.slug, hook, self.meta_comment())
 
 
-def _one_line(s):
+def _one_line(s: str | None) -> str:
     """`s` with every line boundary collapsed to one space; a string with none comes back unchanged.
 
     The parser reads one pointer per LINE, splitting exactly where `str.splitlines` does (`\\n`,
@@ -367,7 +371,7 @@ def _one_line(s):
     return " ".join(p.strip() for p in parts if p.strip())
 
 
-def _ptr_safe_title(s):
+def _ptr_safe_title(s: str | None) -> str:
     """Neutralize characters that break a pointer line's markdown link title `[Title](mem:slug)`:
     a `]` (or `[`) in the title makes the whole line unparseable, so it is silently dropped on the
     next block round-trip - orphaning the body. The body keeps the true title's information; the
@@ -375,20 +379,20 @@ def _ptr_safe_title(s):
     return _one_line(s).replace("[", "(").replace("]", ")")
 
 
-def _ptr_safe_hook(s):
+def _ptr_safe_hook(s: str | None) -> str:
     """The hook runs to the FIRST `<!--` (the meta comment); a literal `<!--`/`-->` inside a hook would
     truncate or corrupt the line, so neutralize it. Brackets in a hook are fine (the hook group is a
     tempered scan, not a `[^\\]]` class). A line break is collapsed (`_one_line`)."""
     return _one_line(s).replace("<!--", "< !--").replace("-->", "-- >")
 
 
-def _slug_from_title(title):
+def _slug_from_title(title: str) -> str:
     """A back-compat slug derived from a title: used only when a pointer line carries no `bx:slug=`
     token."""
     return slugify(title)
 
 
-def _parse_meta(meta):
+def _parse_meta(meta: str | None) -> tuple[bool, str]:
     """(pin, slug) from a meta comment. A `bx:src=` token is CONSUMED AND DISCARDED: provenance
     was removed in 5.300.0, and an older line must still parse without error until the next
     re-render of its level drops the token."""
@@ -401,7 +405,7 @@ def _parse_meta(meta):
     return pin, slug
 
 
-def render_pointer_index(scope, pointers):
+def render_pointer_index(scope: str | None, pointers: Sequence[Pointer]) -> str:
     """Render (scope descriptor, [Pointer]) to the canonical pointer-index text: scope block, the
     RETRIEVAL RECIPE line, then pinned lines under `## Iron rules` and the rest under
     `## Memory index`. Deterministic; ASCII separators only (the tell-sweep convention)."""
@@ -418,7 +422,7 @@ def render_pointer_index(scope, pointers):
     return "\n".join(out).rstrip("\n") + "\n"
 
 
-def parse_pointer_index(text):
+def parse_pointer_index(text: str | None) -> tuple[str, list[Pointer]]:
     """Parse pointer-index text (a whole `CLAUDE.local.md`, or just the block) -> (scope, [Pointer]).
     Accepts BOTH the current `mem:<slug>` lines and pre-pivot `uuid:<uuid>` lines (returned with
     `legacy=True`); trailing garbage after the first meta comment is ignored (dropped on the next
@@ -439,7 +443,8 @@ def parse_pointer_index(text):
     `invalid_pointer_lines` lists what was skipped, so the verbs that rewrite the block can say so."""
     text = text or ""
     scope = sig.read_scope_block(text) or ""
-    pointers, index = [], {}
+    pointers: list[Pointer] = []
+    index: dict[str, int] = {}
     for raw in _pointer_region(text).splitlines():
         p = _pointer_from_line(raw)
         if p is None:
@@ -454,7 +459,7 @@ def parse_pointer_index(text):
     return scope, pointers
 
 
-def invalid_pointer_lines(text):
+def invalid_pointer_lines(text: str | None) -> list[str]:
     """The pointer-shaped lines `parse_pointer_index` skips because their slug or legacy uuid would
     build a path outside `facts/`, in file order. A canonical re-render drops them, so a caller that
     rewrites the block reports these rather than letting them vanish unremarked."""
@@ -462,19 +467,19 @@ def invalid_pointer_lines(text):
             if _PTR_RX.match(raw) and _pointer_from_line(raw) is None]
 
 
-def _pointer_region(text):
+def _pointer_region(text: str) -> str:
     """The text pointers are read from: the managed block(s) when present, else the whole text."""
     spans = _managed_spans(text)
     return "\n".join(text[b:e] for b, e in spans) if spans else text
 
 
-def pointer_region(text):
+def pointer_region(text: str | None) -> str:
     """The text pointers are read from (see `_pointer_region`), for a caller outside this module
     that measures the always-loaded block exactly as the parser bounds it."""
     return _pointer_region(text or "")
 
 
-def _pointer_from_line(raw):
+def _pointer_from_line(raw: str) -> Pointer | None:
     """A Pointer for one pointer line, or None when the line is not a pointer or names a path that
     is not a plain store file."""
     m = _PTR_RX.match(raw)
@@ -493,15 +498,15 @@ def _pointer_from_line(raw):
     return p if is_valid_slug(p.slug) else None
 
 
-def _index_block(scope, pointers):
+def _index_block(scope: str | None, pointers: Sequence[Pointer]) -> str:
     return "%s\n%s%s" % (INDEX_BEGIN, render_pointer_index(scope, pointers), INDEX_END)
 
 
-def _managed_spans(text):
+def _managed_spans(text: str) -> list[tuple[int, int]]:
     """Every managed-block region in `text`, both fence generations, merged if overlapping. More
     than one span happens in the wild: an old-plugin session's heal can scaffold a second (legacy)
     block next to the migrated one - the canonical writer must collapse them, not skip them."""
-    spans = []
+    spans: list[tuple[int, int]] = []
     for begin, endm in ((INDEX_BEGIN, INDEX_END), (LEGACY_INDEX_BEGIN, LEGACY_INDEX_END)):
         pos = 0
         while True:
@@ -513,7 +518,7 @@ def _managed_spans(text):
             spans.append((b, e))
             pos = e
     spans.sort()
-    merged = []
+    merged: list[tuple[int, int]] = []
     for b, e in spans:
         if merged and b < merged[-1][1]:
             merged[-1] = (merged[-1][0], max(merged[-1][1], e))
@@ -522,14 +527,15 @@ def _managed_spans(text):
     return merged
 
 
-def upsert_pointer_block(text, scope, pointers):
+def upsert_pointer_block(text: str, scope: str | None, pointers: Sequence[Pointer]) -> str:
     """Splice ONE canonical managed pointer block into `text` (a `CLAUDE.local.md`), replacing
     EVERY existing managed block (either fence generation; a stray second block is collapsed) and
     preserving all surrounding text. Byte-safe outside the fences."""
     block = _index_block(scope, pointers)
     spans = _managed_spans(text)
     if spans:
-        pieces, prev = [], 0
+        pieces: list[str] = []
+        prev = 0
         for b, e in spans:
             pieces.append(text[prev:b])
             prev = e
@@ -552,12 +558,12 @@ class TreeWalkError(RuntimeError):
     to protect), and a file read as empty is a level with no facts. The memory_engine CLI maps it
     to exit 2; memory_engine re-exports this class, so both modules raise and catch the one type."""
 
-    def __init__(self, path, reason):
+    def __init__(self, path: _StrPath, reason: str) -> None:
         super().__init__("%s: %s" % (path, reason))
         self.path, self.reason = str(path), reason
 
 
-def read_store_text(path):
+def read_store_text(path: _StrPath) -> str:
     """The text of one store file, or "" when it does not exist.
 
     THE reader for a level file or a fact body, so every read of the store fails the same named
@@ -583,7 +589,7 @@ def read_store_text(path):
 
 # ---- mtime-neutral writers ----------------------------------------------------------------------
 
-def _current_text(path):
+def _current_text(path: Path) -> str | None:
     """The file's text for the "has it changed" test, None when there is nothing comparable.
 
     Absent, unreadable and undecodable all mean the same here: the file does not already hold
@@ -595,14 +601,14 @@ def _current_text(path):
         return None
 
 
-def _umask_mode():
+def _umask_mode() -> int:
     """The mode a plain `open(path, "w")` would give a new file under the current umask."""
     mask = os.umask(0)
     os.umask(mask)
     return 0o666 & ~mask
 
 
-def write_if_changed(path, text):
+def write_if_changed(path: _StrPath, text: str) -> bool:
     """Write only when content differs (mtime-neutral). True if written.
 
     The new text goes to a temp file beside the target and is renamed over it, so a write that
@@ -639,12 +645,13 @@ def write_if_changed(path, text):
     return True
 
 
-def put_body(anchor_dir, slug, body):
+def put_body(anchor_dir: _StrPath, slug: str, body: str | None) -> bool:
     """Write a fact body to `<anchor>/.claude-memory/facts/<slug>.md`, mtime-neutral. True if written."""
     return write_if_changed(body_path(anchor_dir, slug), (body or "").rstrip("\n") + "\n")
 
 
-def add_pointer(altitude_dir, slug, title, hook, pin=False, scope_default=""):
+def add_pointer(altitude_dir: _StrPath, slug: str, title: str, hook: str | None,
+                pin: bool = False, scope_default: str | None = "") -> str:
     """Upsert one pointer line (keyed by SLUG) into `<altitude_dir>/CLAUDE.local.md`'s managed block
     (merging pin on update), under a lock, mtime-neutral. Sets the scope
     descriptor if absent. Updating a LEGACY pointer flips it to the current format (the caller is
@@ -683,7 +690,7 @@ class Resolved:
 
     __slots__ = ("slug", "title", "hook", "body", "altitude")
 
-    def __init__(self, slug, title, hook, body, altitude):
+    def __init__(self, slug: str, title: str, hook: str, body: str, altitude: Path) -> None:
         self.slug = str(slug)
         self.title = title
         self.hook = hook
@@ -691,7 +698,7 @@ class Resolved:
         self.altitude = altitude
 
 
-def resolve(cwd):
+def resolve(cwd: _StrPath) -> list[Resolved]:
     """From `cwd`, collect every pointer from cwd up to the anchor and read each body from the
     anchor's central store (slug-named path; a LEGACY pointer's body is read from the old sharded
     path until migrated). Deduped by slug, narrowest (cwd) first. Returns [Resolved]; [] when there
@@ -704,7 +711,8 @@ def resolve(cwd):
         ladder = [here, *here.parents]
         highest = ladder.index(anchor) if anchor in ladder else 0
         levels = ladder[:highest + 1]                # cwd up to and including the anchor
-        out, seen = [], set()
+        out: list[Resolved] = []
+        seen: set[str] = set()
         for level in levels:
             try:
                 text = sig.claude_local_md_path(str(level)).read_text(encoding="utf-8")
