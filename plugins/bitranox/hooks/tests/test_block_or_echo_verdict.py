@@ -6,9 +6,11 @@ counts, a different pipeline's status, negation, and the shape quoted as data.
 """
 
 import json
+import math
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -123,14 +125,37 @@ def test_cli_never_wedges_on_garbage_input() -> None:
 
 
 def _best_refusal_seconds(command, rounds=3):
-    import time
-    best = None
+    best = math.inf
     for _ in range(rounds):
         start = time.perf_counter()
         mod.refused_shape(command)
-        spent = time.perf_counter() - start
-        best = spent if best is None else min(best, spent)
+        best = min(best, time.perf_counter() - start)
     return best
+
+
+_GROWTH = 8
+# Linear cost puts the ratio near 1 and quadratic cost near _GROWTH; the bound sits between them.
+_GROWTH_BOUND = 3
+
+
+def _growth_ratio(small, large, rounds=5):
+    """Best time of one call on `large` over the best time of _GROWTH calls on `small`.
+
+    `large` is _GROWTH times `small`, so when the cost is linear both windows do the same work.
+    That is what keeps the ratio honest on a busy machine: a window longer than a scheduler slice
+    is stretched by every process sharing the CPU, and one shorter than a slice is not, so timing
+    ONE small call against one large call let load alone push a linear ratio from 8 past 24 (47
+    of 100 runs on one CPU beside three busy loops). The windows alternate so that a burst of
+    load hits both.
+    """
+    best_small = best_large = math.inf
+    for _ in range(rounds):
+        start = time.perf_counter()
+        for _ in range(_GROWTH):
+            mod.refused_shape(small)
+        best_small = min(best_small, time.perf_counter() - start)
+        best_large = min(best_large, _best_refusal_seconds(large, rounds=1))
+    return best_large / best_small
 
 
 def _heredoc_command(lines):
@@ -140,9 +165,8 @@ def _heredoc_command(lines):
 def test_a_long_heredoc_costs_linear_time_not_quadratic():
     # Blanked heredoc lines are all whitespace, and a start anchor followed by \s* crossed every
     # newline after it, so each line rescanned the rest: 2000 lines took 2.4 s per Bash call.
-    small = _best_refusal_seconds(_heredoc_command(500))
-    large = _best_refusal_seconds(_heredoc_command(4000))
-    assert large / small < 24, (small, large)
+    ratio = _growth_ratio(_heredoc_command(500), _heredoc_command(500 * _GROWTH))
+    assert ratio < _GROWTH_BOUND, ratio
 
 
 def test_a_verdict_echo_on_an_indented_line_after_a_keyword_is_still_refused():
@@ -183,6 +207,5 @@ def test_redirections_in_a_failing_element_cost_linear_time_not_exponential():
     # fails here instead of hanging the run, as a growth test at a larger k would.
     assert _best_refusal_seconds("grep x 2>&1 " * 11 + " || true", rounds=1) < 0.25
     unit = "grep x 2>&1 "
-    small = _best_refusal_seconds(unit * 40 + " || true")
-    large = _best_refusal_seconds(unit * 320 + " || true")
-    assert large / small < 24, (small, large)
+    ratio = _growth_ratio(unit * 40 + " || true", unit * 40 * _GROWTH + " || true")
+    assert ratio < _GROWTH_BOUND, ratio
