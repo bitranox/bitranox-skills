@@ -447,7 +447,30 @@ def empty_state() -> FirewallState:
                          snort_running=False)
 
 
-_NAMES = ["", "nas", "Bob's box", "a\\b", 'quo"te', chr(0x00FC) + "mlaut", chr(0x65E5) + chr(0x672C), "x" * 63,
+def mixed_state() -> FirewallState:
+    """Case and padding everywhere a reader might normalise one and not the other: an uppercase
+    MAC, a padded host and domain, a padded subnet, a mixed-case override selected first."""
+    return FirewallState(
+        regdhcpstatic=True,
+        version=" 2.7.2-RELEASE \n",
+        interfaces=[{"name": "lan", "if": "em0", "descr": " Lan ", "ipaddr": "192.0.2.1", "subnet": "24"},
+                    {"name": "opt1", "if": "em1", "descr": "Pad", "ipaddr": "198.51.100.1", "subnet": " 24 "}],
+        packages=[{"name": " Padded ", "version": " 1 "}],
+        dhcpd={"lan": {"enable": True, "range": {"from": " 192.0.2.100", "to": "192.0.2.199 "},
+                       "staticmap": [{"mac": "aa:bb:cc:dd:ee:02", "ipaddr": " 192.0.2.11 ",
+                                      "hostname": "", "descr": "Only Descr"},
+                                     {"mac": "AA:BB:CC:DD:EE:01", "ipaddr": "192.0.2.10",
+                                      "hostname": " Spaced ", "descr": " d ", "arp": True}]}},
+        hosts=[{"host": "Mixed", "domain": "Example.COM", "ip": "192.0.2.10", "descr": " D "},
+               {"host": " pad ", "domain": " example.com ", "ip": " 192.0.2.11", "descr": ""},
+               {"host": "", "domain": "Bare.Example.Org", "ip": "2001:DB8::10", "descr": ""}],
+        arp_text="? (192.0.2.10) at aa:bb:cc:dd:ee:01 on em0 permanent [ethernet]\n",
+        resolv_conf="  nameserver 127.0.0.1\nnameserver 100.100.100.100\n",
+        tables={"snort2c": [" 198.51.100.77"]},
+    )
+
+
+_NAMES = [" pad ", "", "nas", "Bob's box", "a\\b", 'quo"te', chr(0x00FC) + "mlaut", chr(0x65E5) + chr(0x672C), "x" * 63,
           "emoji\U0001F600", "UPPER", "tab\there", "</descr>", "100%"]
 
 
@@ -497,7 +520,7 @@ def random_state(seed: int) -> FirewallState:
     )
 
 
-STATES = {"rich": rich_state, "clean": clean_state, "empty": empty_state,
+STATES = {"rich": rich_state, "clean": clean_state, "empty": empty_state, "mixed": mixed_state,
           **{f"random{seed}": (lambda seed=seed: random_state(seed)) for seed in (1, 2, 3)}}
 
 
@@ -521,8 +544,8 @@ def scenario_argvs(state: FirewallState, config_path: str) -> dict[str, list[str
         "arp": ["arp"],
         "arp-permanent": ["arp", "--permanent"],
         "snapshot": ["snapshot"],
-        "dhcp-add-dry": ["dhcp", "add", "--mac", "00:11:22:33:44:50", "--ip", "192.0.2.50", "--hostname", "printer"],
-        "dhcp-add-apply": [*mut, "dhcp", "add", "--mac", "00-11-22-33-44-50", "--ip", "192.0.2.50",
+        "dhcp-add-dry": ["dhcp", "add", "--mac", "00:11:22:33:44:5A", "--ip", "192.0.2.50", "--hostname", "printer"],
+        "dhcp-add-apply": [*mut, "dhcp", "add", "--mac", "00-11-22-33-44-AB", "--ip", "192.0.2.50",
                            "--hostname", "printer", "--descr", "Bob's \"new\" printer"],
         "dhcp-add-taken": [*mut, "dhcp", "add", "--mac", first_mac, "--ip", "192.0.2.51", "--hostname", "dup"],
         "dhcp-add-named-iface": [*mut, "dhcp", "add", "--mac", "00:11:22:33:44:52", "--ip", "198.51.100.52",
