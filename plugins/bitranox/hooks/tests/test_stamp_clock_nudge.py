@@ -107,6 +107,9 @@ def test_main_is_silent_on_junk_and_quiet_events():
 
 # ---- a Bash write is compared with the record it names, not the one in the cwd -----------------
 
+# A Bash command spells a path the way a user types it under Git Bash, C:/temp/...: unquoted, a
+# backslash is an escape there, so C:\temp\x reaches the shell as C:tempx, a different file.
+# An unquoted path below goes in through as_posix() for that reason.
 def _append(target, stamp="17:30"):
     return "cat >> %s <<'EOF'\n- (2026-11-09 %s) note\nEOF\n" % (target, stamp)
 
@@ -132,7 +135,7 @@ def test_an_append_to_another_dirs_record_reads_that_record(two_records, form):
     """The stamp is new in the record the command writes; the cwd's record already holding it
     made the nudge stay silent."""
     here, there = two_records
-    cmd = form.format(p=there / "OPEN-WORK.md") + "\n- (2026-11-09 17:30) note\nEOF\n"
+    cmd = form.format(p=(there / "OPEN-WORK.md").as_posix()) + "\n- (2026-11-09 17:30) note\nEOF\n"
     text = _bash(cmd, here)
     assert text is not None and "17:30" in text and "OPEN-WORK.md" in text
 
@@ -140,7 +143,7 @@ def test_an_append_to_another_dirs_record_reads_that_record(two_records, form):
 def test_a_stamp_already_in_the_named_record_is_not_new_whatever_the_cwd(two_records):
     """The other direction: the named record holds the stamp, the cwd's does not."""
     here, there = two_records
-    assert _bash(_append(here / "OPEN-WORK.md"), there) is None
+    assert _bash(_append((here / "OPEN-WORK.md").as_posix()), there) is None
 
 
 def test_a_quoted_record_path_with_a_space_is_read_whole(tmp_path):
@@ -166,6 +169,8 @@ def test_a_git_bash_drive_path_is_read_as_that_drive_on_a_windows_host(tmp_path,
 
 def test_a_git_bash_mount_is_read_as_no_record_on_a_windows_host(two_records):
     """`/tmp/...` under Git Bash lands where only its mount table says; it is never read from
-    this host's /tmp."""
+    this host's /tmp. The drive is cut off on a Windows host, so the path is rooted but names no
+    drive there either: the record exists on this host and must still go unread."""
     here, _there = two_records
-    assert "17:30" in _bash(_append(str(here / "OPEN-WORK.md")), here, os_name="nt")
+    rooted = (here / "OPEN-WORK.md").as_posix()[len(here.drive):]
+    assert "17:30" in _bash(_append(rooted), here, os_name="nt")
