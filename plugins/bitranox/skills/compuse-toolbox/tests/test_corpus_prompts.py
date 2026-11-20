@@ -36,10 +36,12 @@ def test_a_typed_prompt_is_extracted_with_the_context_a_replay_needs():
     got = cp.extract_prompts(lines(rec()), source="/t/a.jsonl")
     assert len(got) == 1
     p = got[0]
-    assert p["prompt"] == "fix the CRLF handling"
-    assert p["cwd"] == "/repo" and p["session_id"] == "s1" and p["uuid"] == "u1"
-    assert p["source"] == "/t/a.jsonl" and p["line"] == 1
-    assert p["git_branch"] == "master"
+    assert type(p) is cp.Prompt
+    assert p.prompt == "fix the CRLF handling"
+    assert p.cwd == "/repo" and p.session_id == "s1" and p.uuid == "u1"
+    assert p.source == "/t/a.jsonl" and p.line == 1
+    assert p.git_branch == "master"
+    assert p.recorded_state is None and "recorded_state" not in p.to_data()
 
 
 def test_a_tool_result_record_is_not_a_prompt():
@@ -69,14 +71,14 @@ def test_a_headless_sdk_prompt_is_not_a_person_at_a_terminal():
 def test_list_of_text_content_is_joined_rather_than_dropped():
     blocks = rec(message={"role": "user", "content": [{"type": "text", "text": "first"},
                                                       {"type": "text", "text": "second"}]})
-    assert cp.extract_prompts(lines(blocks))[0]["prompt"] == "first\nsecond"
+    assert cp.extract_prompts(lines(blocks))[0].prompt == "first\nsecond"
 
 
 def test_a_malformed_line_is_skipped_rather_than_fatal():
     # A transcript being written while it is read routinely ends mid-line; aborting there would
     # truncate the corpus silently.
     text = lines(rec()) + "\n{not json\n" + json.dumps(rec(uuid="u3"))
-    assert [p["uuid"] for p in cp.extract_prompts(text)] == ["u1", "u3"]
+    assert [p.uuid for p in cp.extract_prompts(text)] == ["u1", "u3"]
 
 
 def test_the_same_prompt_in_a_resumed_session_is_counted_once(tmp_path):
@@ -84,9 +86,10 @@ def test_the_same_prompt_in_a_resumed_session_is_counted_once(tmp_path):
     (tmp_path / "a.jsonl").write_text(lines(rec()), encoding="utf-8")
     (tmp_path / "b.jsonl").write_text(lines(rec(), rec(uuid="u9")), encoding="utf-8")
     got = cp.collect_prompts(str(tmp_path))
-    assert sorted(p["uuid"] for p in got["prompts"]) == ["u1", "u9"]
-    assert got["duplicates_skipped"] == 1
-    assert got["files_read"] == 2
+    assert type(got) is cp.PromptCorpus
+    assert sorted(p.uuid for p in got.prompts) == ["u1", "u9"]
+    assert got.duplicates_skipped == 1
+    assert got.files_read == 2
 
 
 def test_a_subagent_transcript_two_levels_down_is_still_walked(tmp_path):
@@ -95,26 +98,27 @@ def test_a_subagent_transcript_two_levels_down_is_still_walked(tmp_path):
     deep = tmp_path / "proj" / "sess" / "subagents"
     deep.mkdir(parents=True)
     (deep / "agent-1.jsonl").write_text(lines(rec()), encoding="utf-8")
-    assert len(cp.collect_prompts(str(tmp_path))["prompts"]) == 1
+    assert len(cp.collect_prompts(str(tmp_path)).prompts) == 1
 
 
 def test_reading_nothing_is_reported_rather_than_returned_as_a_clean_empty(tmp_path):
     got = cp.collect_prompts(str(tmp_path / "does-not-exist"))
-    assert got["files_read"] == 0 and got["prompts"] == []
+    assert got.files_read == 0 and got.prompts == []
 
 
 def test_two_predicates_are_compared_by_their_firing_SETS_not_their_counts():
     # Equal counts can cover different prompts. A count diff of zero is the shape that hides a
     # change, so the report carries the sets.
-    prompts = [{"uuid": "a", "prompt": "run the gate"}, {"uuid": "b", "prompt": "write a note"}]
+    prompts = [cp.Prompt("run the gate", uuid="a"), cp.Prompt("write a note", uuid="b")]
     report = cp.diff_predicates(prompts, lambda p: "gate" in p, lambda p: "note" in p)
-    assert report["a_only"] == ["a"] and report["b_only"] == ["b"]
-    assert report["both"] == [] and report["a_fired"] == 1 and report["b_fired"] == 1
+    assert type(report) is cp.PredicateDiff
+    assert report.a_only == ["a"] and report.b_only == ["b"]
+    assert report.both == [] and report.a_fired == 1 and report.b_fired == 1
 
 
 def test_a_predicate_that_never_fires_is_reported_as_such():
-    report = cp.diff_predicates([{"uuid": "a", "prompt": "x"}], lambda p: False, lambda p: True)
-    assert report["a_fired"] == 0 and report["b_only"] == ["a"]
+    report = cp.diff_predicates([cp.Prompt("x", uuid="a")], lambda p: False, lambda p: True)
+    assert report.a_fired == 0 and report.b_only == ["a"]
 
 
 # --- records are split the way a JSONL writer wrote them ------------------------------------------
@@ -127,14 +131,14 @@ def test_a_raw_line_separator_inside_a_prompt_neither_drops_it_nor_shifts_line_n
         rec(uuid="u3"),
     ))
     got = cp.extract_prompts(text)
-    assert [(p["uuid"], p["line"]) for p in got] == [("u1", 1), ("u2", 2), ("u3", 3)]
-    assert got[1]["prompt"] == "first\u2028second"
+    assert [(p.uuid, p.line) for p in got] == [("u1", 1), ("u2", 2), ("u3", 3)]
+    assert got[1].prompt == "first\u2028second"
 
 
 def test_a_utf8_bom_does_not_lose_the_first_record(tmp_path):
     (tmp_path / "a.jsonl").write_bytes(b"\xef\xbb\xbf" + lines(rec(), rec(uuid="u2")).encode())
     got = cp.collect_prompts(str(tmp_path))
-    assert [p["uuid"] for p in got["prompts"]] == ["u1", "u2"]
+    assert [p.uuid for p in got.prompts] == ["u1", "u2"]
 
 
 def test_a_tool_result_block_without_a_tool_use_result_field_is_not_a_prompt():
@@ -148,19 +152,19 @@ def test_a_tool_result_block_without_a_tool_use_result_field_is_not_a_prompt():
 # --- a diff of prompts without a uuid must not collapse them ------------------------------------
 
 def test_prompts_without_a_uuid_are_keyed_by_where_they_came_from():
-    prompts = [{"uuid": None, "prompt": "gate one", "source": "/t/a.jsonl", "line": 1},
-               {"uuid": None, "prompt": "gate two", "source": "/t/a.jsonl", "line": 2},
-               {"uuid": None, "prompt": "note", "source": "/t/a.jsonl", "line": 3}]
+    prompts = [cp.Prompt("gate one", source="/t/a.jsonl", line=1),
+               cp.Prompt("gate two", source="/t/a.jsonl", line=2),
+               cp.Prompt("note", source="/t/a.jsonl", line=3)]
     report = cp.diff_predicates(prompts, lambda p: "gate" in p, lambda p: "note" in p)
-    assert report["both"] == []
-    assert report["a_only"] == ["/t/a.jsonl:1", "/t/a.jsonl:2"]
-    assert report["b_only"] == ["/t/a.jsonl:3"]
+    assert report.both == []
+    assert report.a_only == ["/t/a.jsonl:1", "/t/a.jsonl:2"]
+    assert report.b_only == ["/t/a.jsonl:3"]
 
 
 def test_prompts_with_neither_uuid_nor_source_are_keyed_by_position():
-    prompts = [{"prompt": "gate one"}, {"prompt": "gate two"}]
+    prompts = [cp.Prompt("gate one"), cp.Prompt("gate two")]
     report = cp.diff_predicates(prompts, lambda p: "gate" in p, lambda p: False)
-    assert len(report["a_only"]) == 2
+    assert len(report.a_only) == 2
 
 
 # --- the CLI: exit codes 0 found / 1 no prompt / 2 usage or IO error -----------------------------
@@ -395,7 +399,7 @@ def test_collect_prompts_peak_memory_does_not_grow_with_the_transcript(tmp_path)
     _bulky_transcript(large, 4000)
     peak_small = _peak_bytes(lambda: cp.collect_prompts(str(small)))
     peak_large = _peak_bytes(lambda: cp.collect_prompts(str(large)))
-    assert cp.collect_prompts(str(large))["prompts"][0]["line"] == 1
+    assert cp.collect_prompts(str(large)).prompts[0].line == 1
     assert peak_large < 2 * peak_small, (peak_small, peak_large)
 
 
@@ -410,6 +414,25 @@ def test_collect_prompts_numbers_lines_as_transcript_lines_does(tmp_path):
     path = tmp_path / "odd.jsonl"
     path.write_bytes(raw)
     want = cp.extract_prompts(cp.read_transcript(path), source=str(path))
-    got = cp.collect_prompts(str(path))["prompts"]
-    assert [(p["line"], p["prompt"]) for p in got] == [(p["line"], p["prompt"]) for p in want]
-    assert [p["line"] for p in got] == [1, 5]
+    got = cp.collect_prompts(str(path)).prompts
+    assert [(p.line, p.prompt) for p in got] == [(p.line, p.prompt) for p in want]
+    assert [p.line for p in got] == [1, 5]
+
+
+def test_the_json_report_keeps_its_wire_shape(tmp_path, capsys):
+    """--json prints PromptCorpus.to_data(): every prompt row carries all nine keys in this
+    order (an absent record field is null, recorded_state never appears), and `diff` is present
+    only when predicates were compared."""
+    root, pred = _corpus(tmp_path)
+    assert cp.main(["--root", str(root), "--sample", "1", "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)["data"]
+    assert list(data) == ["prompts", "files_read", "duplicates_skipped", "skipped", "root"]
+    assert list(data["prompts"][0]) == ["uuid", "prompt", "cwd", "session_id", "git_branch",
+                                        "timestamp", "source", "line", "sidechain"]
+    assert data["prompts"][0]["timestamp"] is None
+    assert cp.main(["--root", str(root), "--module", str(pred), "--func", "b", "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)["data"]
+    assert data["diff"] == {"a_fired": 1, "b_fired": 0, "total": 4, "both": [],
+                            "a_only": ["u3"], "b_only": []}
+    pinned = cp.Prompt("p", uuid="x", recorded_state={"user_prompt": "p"})
+    assert pinned.to_data()["recorded_state"] == {"user_prompt": "p"}

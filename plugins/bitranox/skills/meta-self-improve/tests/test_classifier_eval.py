@@ -937,11 +937,11 @@ def test_a_failing_control_names_the_state_it_was_posed_with():
 
 
 def test_the_sample_is_stratified_over_short_and_long_prompts():
-    prompts = [{"uuid": "s%d" % i, "prompt": "go"} for i in range(10)]
-    prompts += [{"uuid": "l%d" % i, "prompt": "please rewrite the parser for me now"}
+    prompts = [corpus_prompts.Prompt("go", uuid="s%d" % i) for i in range(10)]
+    prompts += [corpus_prompts.Prompt("please rewrite the parser for me now", uuid="l%d" % i)
                 for i in range(10)]
     picked = ce.stratified_prompts(prompts, per_class=3, seed=1)
-    kinds = [p["uuid"][0] for p in picked]
+    kinds = [p.uuid[0] for p in picked]
     assert kinds.count("s") == 3 and kinds.count("l") == 3
 
 
@@ -1030,19 +1030,20 @@ def test_a_pinned_replay_reads_the_exact_prompts_of_an_earlier_run(tmp_path):
     log.write_text("%s\n\n%s\n" % (_log_row("a", "reformat the table", 7, project="p"),
                                    _log_row("b", "go ahead", 12)), encoding="utf-8")
     picked = ce.prompts_from_log(log)
-    assert [p["prompt"] for p in picked] == ["reformat the table", "go ahead"]
-    assert [p["uuid"] for p in picked] == ["a", "b"]
+    assert all(type(p) is corpus_prompts.Prompt for p in picked)
+    assert [p.prompt for p in picked] == ["reformat the table", "go ahead"]
+    assert [p.uuid for p in picked] == ["a", "b"]
     # The recorded state rides along and is what a pinned run re-sends: an adjudication labels a
     # prompt IN A STATE, so rebuilding a different one would not answer the judged question.
-    assert picked[0]["recorded_state"]["project"] == "p"
-    assert picked[0]["recorded_state"]["user_prompt"] == "reformat the table"
+    assert picked[0].recorded_state["project"] == "p"
+    assert picked[0].recorded_state["user_prompt"] == "reformat the table"
 
 
 def test_a_row_carrying_no_user_prompt_is_skipped_rather_than_replayed_as_empty(tmp_path):
     log = tmp_path / "run.jsonl"
     log.write_text("%s\n%s\n" % (json.dumps({"uuid": "x", "state": {}}),
                                  _log_row("b", "real prompt", 3)), encoding="utf-8")
-    assert [p["prompt"] for p in ce.prompts_from_log(log)] == ["real prompt"]
+    assert [p.prompt for p in ce.prompts_from_log(log)] == ["real prompt"]
 
 
 def test_state_drift_is_silent_when_the_rebuilt_state_matches_what_was_recorded(tmp_path):
@@ -1056,9 +1057,10 @@ def test_state_drift_names_a_field_the_rebuild_lost():
     # The real failure this guards: a source transcript that has been moved or swept rebuilds a
     # SHORTER state in silence, and the arms then answer a different question than the judges
     # were shown - which would read as an arm changing its mind rather than as a broken replay.
-    picked = [{"uuid": "a", "prompt": "reformat the table",
-               "recorded_state": {"user_prompt": "reformat the table", "project": "p",
-                                  "previous_assistant_message": "CI is green"}}]
+    picked = [corpus_prompts.Prompt(
+        "reformat the table", uuid="a",
+        recorded_state={"user_prompt": "reformat the table", "project": "p",
+                        "previous_assistant_message": "CI is green"})]
     drift = ce.state_drift(picked, [{"user_prompt": "reformat the table", "project": "p"}])
     assert len(drift) == 1
     assert drift[0]["fields"] == ["previous_assistant_message"]
@@ -1068,8 +1070,8 @@ def test_state_drift_names_a_field_the_rebuild_lost():
 def test_state_drift_treats_an_absent_field_and_an_empty_one_as_the_same():
     # `_router_fields` omits a field that is empty, so "absent" and "empty string" are the same
     # state; reporting them as drift would make every pinned run look broken.
-    picked = [{"uuid": "a", "prompt": "p",
-               "recorded_state": {"user_prompt": "p", "recent_activity": ""}}]
+    picked = [corpus_prompts.Prompt("p", uuid="a",
+                                    recorded_state={"user_prompt": "p", "recent_activity": ""})]
     assert ce.state_drift(picked, [{"user_prompt": "p"}]) == []
 
 
@@ -1090,7 +1092,7 @@ def test_an_installed_roster_is_the_listing_of_the_prompts_own_session(tmp_path)
     # ITS session had, not whatever this machine has installed today.
     src = _listing_transcript(tmp_path, [("bitranox:compuse-bash", "shell"),
                                          ("typesafe:typesafe-ai", "TypeSafe")])
-    skills, source = ce.roster_for({"source": src}, SKILLS, "installed")
+    skills, source = ce.roster_for(corpus_prompts.Prompt("p", source=src), SKILLS, "installed")
     assert source == "transcript"
     assert skills == {"compuse-bash": "shell", "typesafe:typesafe-ai": "TypeSafe"}
 
@@ -1107,20 +1109,22 @@ def test_an_installed_roster_offers_a_trimmed_project_skill_from_the_prompts_cwd
         "content": "- bitranox:compuse-bash: shell\n- sample-build"}}
     src = tmp_path / "source.jsonl"
     src.write_text(json.dumps(rec) + "\n", encoding="utf-8")
-    skills, source = ce.roster_for({"source": str(src), "cwd": str(tmp_path / "proj")}, SKILLS,
-                                   "installed")
+    prompt = corpus_prompts.Prompt("p", source=str(src), cwd=str(tmp_path / "proj"))
+    skills, source = ce.roster_for(prompt, SKILLS, "installed")
     assert source == "transcript"
     assert skills == {"compuse-bash": "shell", "sample-build": "Build sample."}
 
 
 def test_an_installed_roster_falls_back_to_the_shipped_one_when_the_source_has_none(tmp_path):
     missing = str(tmp_path / "swept.jsonl")
-    assert ce.roster_for({"source": missing}, SKILLS, "installed") == (SKILLS, "shipped")
+    prompt = corpus_prompts.Prompt("p", source=missing)
+    assert ce.roster_for(prompt, SKILLS, "installed") == (SKILLS, "shipped")
 
 
 def test_the_default_roster_is_the_shipped_one_so_earlier_runs_stay_comparable(tmp_path):
     src = _listing_transcript(tmp_path, [("typesafe:typesafe-ai", "TypeSafe")])
-    assert ce.roster_for({"source": src}, SKILLS, "shipped") == (SKILLS, "shipped")
+    prompt = corpus_prompts.Prompt("p", source=src)
+    assert ce.roster_for(prompt, SKILLS, "shipped") == (SKILLS, "shipped")
 
 
 def test_a_description_override_replaces_the_listed_text_by_bare_name():
@@ -1169,7 +1173,8 @@ def test_a_replay_row_offers_the_overridden_text_and_records_that_it_did():
     ask = FakeAsk([{}])
     args = ce._parser().parse_args(["replay", "--arm", "choice_full"])
     args.description = [("coding-python-uv", "Use when READING A HANDOVER")]
-    prompt = {"prompt": "read the handover", "recorded_state": {"user_prompt": "read the handover"}}
+    prompt = corpus_prompts.Prompt("read the handover",
+                                   recorded_state={"user_prompt": "read the handover"})
     row = ce._replay_one(prompt, ask, SKILLS, {}, _NoKeywords, {}, args)
     assert row["description_overrides"] == ["coding-python-uv"]
     assert ask.asked[0]["questions"][1].criteria["coding-python-uv"] == \
@@ -1178,7 +1183,7 @@ def test_a_replay_row_offers_the_overridden_text_and_records_that_it_did():
 
 def test_a_replay_row_without_overrides_keeps_its_earlier_shape():
     args = ce._parser().parse_args(["replay", "--arm", "choice_full"])
-    prompt = {"prompt": "go", "recorded_state": {"user_prompt": "go"}}
+    prompt = corpus_prompts.Prompt("go", recorded_state={"user_prompt": "go"})
     row = ce._replay_one(prompt, FakeAsk([{}]), SKILLS, {}, _NoKeywords, {}, args)
     assert "description_overrides" not in row
 
@@ -1476,7 +1481,7 @@ def test_a_pinned_prompt_carrying_a_line_separator_is_read_whole(tmp_path):
     log = tmp_path / "run.jsonl"
     row = {"uuid": "a", "state": {"user_prompt": "first\u2028second"}, "arms": {}}
     log.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
-    assert [p["prompt"] for p in ce.prompts_from_log(log)] == ["first\u2028second"]
+    assert [p.prompt for p in ce.prompts_from_log(log)] == ["first\u2028second"]
 
 
 # ---- Asker: a rate limit is retried, any other failure is not ----------------------------------
@@ -1541,7 +1546,7 @@ _AWKWARD = [
 
 
 def _prefix_of(tmp_path, prompt):
-    out_dir = tmp_path / ("out-%s" % prompt["uuid"])
+    out_dir = tmp_path / ("out-%s" % prompt.uuid)
     out_dir.mkdir()
     return pathlib.Path(ce._prefix_transcript(prompt, out_dir)).read_bytes().decode("utf-8")
 
@@ -1554,14 +1559,14 @@ def test_the_replay_prefix_and_corpus_prompts_count_the_same_lines(tmp_path, eol
     corpus.mkdir()
     text = eol.join(_AWKWARD) + eol
     (corpus / "t.jsonl").write_bytes(text.encode("utf-8"))
-    prompts = corpus_prompts.collect_prompts(str(corpus))["prompts"]
-    assert [(p["uuid"], p["line"]) for p in prompts] == [("u1", 3), ("u2", 5)]
+    prompts = corpus_prompts.collect_prompts(str(corpus)).prompts
+    assert [(p.uuid, p.line) for p in prompts] == [("u1", 3), ("u2", 5)]
     records = text.split("\n")
     for prompt in prompts:
         prefix = _prefix_of(tmp_path, prompt)
-        assert prefix == "\n".join(records[:prompt["line"] - 1])
-        assert prefix.split("\n") == records[:prompt["line"] - 1]
-        assert prompt["uuid"] not in prefix
+        assert prefix == "\n".join(records[:prompt.line - 1])
+        assert prefix.split("\n") == records[:prompt.line - 1]
+        assert prompt.uuid not in prefix
 
 
 def test_the_replay_prefix_of_the_first_line_is_empty(tmp_path):
@@ -1569,7 +1574,7 @@ def test_the_replay_prefix_of_the_first_line_is_empty(tmp_path):
     corpus.mkdir()
     (corpus / "t.jsonl").write_text(_cli_record("u1", "hi") + "\n", encoding="utf-8")
 
-    (prompt,) = corpus_prompts.collect_prompts(str(corpus))["prompts"]
+    (prompt,) = corpus_prompts.collect_prompts(str(corpus)).prompts
     assert _prefix_of(tmp_path, prompt) == ""
 
 
@@ -1580,7 +1585,8 @@ def test_an_unreadable_source_transcript_refuses_the_prefix_rather_than_writing_
     """An EMPTY prefix is also what the first prompt of a session legitimately has, so writing
     one for a transcript that could not be read made the arms judge the prompt on a state it
     never had, with nothing in the row to say so."""
-    prompt = {"uuid": "gone", "source": str(tmp_path / "missing.jsonl"), "line": 3}
+    prompt = corpus_prompts.Prompt("p", uuid="gone", source=str(tmp_path / "missing.jsonl"),
+                                   line=3)
     with pytest.raises(ce.PrefixUnavailable, match="missing.jsonl"):
         ce._prefix_transcript(prompt, tmp_path)
     assert not (tmp_path / "prefix.jsonl").exists()

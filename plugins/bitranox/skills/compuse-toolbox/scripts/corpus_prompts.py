@@ -55,15 +55,17 @@ printed on every exit, 2 included; `ok` is false exactly on exit 2.
 import json
 import os
 import sys
+from collections.abc import Callable, Iterable, Iterator, Sequence
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from _claude_config import projects_dir
 from _cli_envelope import EnvelopeArgumentParser, emit, wants_json
 
 __all__ = [
-    "TYPED_ENTRYPOINTS", "UsageError", "collect_prompts", "diff_predicates",
-    "extract_prompts", "iter_transcript_lines", "main", "prompt_key", "prompt_text_of",
-    "read_transcript", "transcript_lines", "transcript_prefix",
+    "TYPED_ENTRYPOINTS", "PredicateDiff", "Prompt", "PromptCorpus", "UsageError",
+    "collect_prompts", "diff_predicates", "extract_prompts", "iter_transcript_lines", "main",
+    "prompt_key", "prompt_text_of", "read_transcript", "transcript_lines", "transcript_prefix",
 ]
 
 # `entrypoint` separates a person typing from a headless node being driven. Both are `type: user`,
@@ -85,6 +87,79 @@ except ImportError:                                      # a hook env provisions
 
 class UsageError(Exception):
     """Bad arguments or an unreadable path - reported, never a traceback."""
+
+
+@dataclass(frozen=True, slots=True)
+class Prompt:
+    """One typed prompt and the context a replay needs to rebuild the state it arrived in.
+
+    The fields a transcript record may lack (`uuid`, `cwd`, `session_id`, `git_branch`,
+    `timestamp`) are None when it lacks them, and print as null. `source` and `line` say where
+    the prompt sits, so `transcript_prefix` can cut the transcript just before it; a pinned
+    replay that read the prompt from an earlier run's log may know neither. `recorded_state` is
+    set only by such a replay (classifier_eval) - the state its run sent - and None for every
+    prompt this tool reads, so it never appears in this tool's output.
+    """
+
+    prompt: str
+    uuid: str | None = None
+    cwd: str | None = None
+    session_id: str | None = None
+    git_branch: str | None = None
+    timestamp: str | None = None
+    source: str | None = None
+    line: int | None = None
+    sidechain: bool = False
+    recorded_state: dict[str, object] | None = None
+
+    def to_data(self) -> dict[str, object]:
+        """The JSON row --json prints: every field but `recorded_state`, which rides along only
+        when a replay set it."""
+        data: dict[str, object] = {
+            "uuid": self.uuid, "prompt": self.prompt, "cwd": self.cwd,
+            "session_id": self.session_id, "git_branch": self.git_branch,
+            "timestamp": self.timestamp, "source": self.source, "line": self.line,
+            "sidechain": self.sidechain}
+        if self.recorded_state is not None:
+            data["recorded_state"] = self.recorded_state
+        return data
+
+
+@dataclass(frozen=True, slots=True)
+class PredicateDiff:
+    """Which prompts each of two predicates fired on, as sets of `prompt_key` names."""
+
+    a_fired: int
+    b_fired: int
+    total: int
+    both: list[str]
+    a_only: list[str]
+    b_only: list[str]
+
+
+@dataclass
+class PromptCorpus:
+    """What `collect_prompts` read: the distinct prompts, how many files were read, how many
+    duplicate prompts were dropped, what could not be read, and the root walked. `diff` is set
+    only when the CLI compared predicates over the prompts."""
+
+    prompts: list[Prompt] = field(default_factory=list[Prompt])
+    files_read: int = 0
+    duplicates_skipped: int = 0
+    skipped: list[str] = field(default_factory=list[str])
+    root: str = ""
+    diff: PredicateDiff | None = None
+
+    def to_data(self, prompts: Sequence[Prompt]) -> dict[str, object]:
+        """The report under the --json envelope's `data`, carrying `prompts` (the sample)
+        instead of every prompt read; `diff` is present only when it was computed."""
+        data: dict[str, object] = {
+            "prompts": [p.to_data() for p in prompts], "files_read": self.files_read,
+            "duplicates_skipped": self.duplicates_skipped, "skipped": self.skipped,
+            "root": self.root}
+        if self.diff is not None:
+            data["diff"] = asdict(self.diff)
+        return data
 
 
 def prompt_text_of(message):
@@ -156,7 +231,7 @@ def transcript_prefix(text, line):
     return "\n".join(transcript_lines(text)[:max(0, line - 1)])
 
 
-def extract_prompts(text, source="", sidechain=False):
+def extract_prompts(text: str, source: str = "", sidechain: bool = False) -> list[Prompt]:
     """Every typed prompt in one transcript, with the context a replay needs to rebuild its state.
 
     Each carries `source` and the 1-based `line` it came from, so a caller can reconstruct the
@@ -166,7 +241,8 @@ def extract_prompts(text, source="", sidechain=False):
     return list(_prompts_of(enumerate(transcript_lines(text), start=1), source, sidechain))
 
 
-def _prompts_of(numbered_lines, source, sidechain):
+def _prompts_of(numbered_lines: Iterable[tuple[int, str]], source: str,
+                sidechain: bool) -> Iterator[Prompt]:
     """The typed prompts among `(number, line)` pairs, yielded one at a time."""
     for number, line in numbered_lines:
         if not line.strip():
@@ -186,10 +262,10 @@ def _prompts_of(numbered_lines, source, sidechain):
         body = prompt_text_of(rec.get("message"))
         if not body:
             continue
-        yield {"uuid": rec.get("uuid"), "prompt": body, "cwd": rec.get("cwd"),
-               "session_id": rec.get("sessionId"), "git_branch": rec.get("gitBranch"),
-               "timestamp": rec.get("timestamp"), "source": source, "line": number,
-               "sidechain": bool(rec.get("isSidechain"))}
+        yield Prompt(prompt=body, uuid=rec.get("uuid"), cwd=rec.get("cwd"),
+                     session_id=rec.get("sessionId"), git_branch=rec.get("gitBranch"),
+                     timestamp=rec.get("timestamp"), source=source, line=number,
+                     sidechain=bool(rec.get("isSidechain")))
 
 
 def _transcripts(base, skipped):
@@ -207,7 +283,7 @@ def _transcripts(base, skipped):
     return sorted(found)
 
 
-def collect_prompts(root, sidechain=False):
+def collect_prompts(root: str | os.PathLike[str], sidechain: bool = False) -> PromptCorpus:
     """Every DISTINCT typed prompt below `root`, deduped by record uuid.
 
     Resuming or forking a session copies the earlier transcript into a new file, so one real
@@ -217,9 +293,10 @@ def collect_prompts(root, sidechain=False):
     and a directory it cannot open lands in `skipped` rather than silently shrinking the corpus.
     """
     base = Path(root).expanduser()
-    skipped = []
+    skipped: list[str] = []
     files = _transcripts(base, skipped) if base.is_dir() else ([base] if base.is_file() else [])
-    prompts, files_read, seen, duplicates = [], 0, set(), 0
+    report = PromptCorpus(skipped=skipped, root=str(base))
+    seen: set[str] = set()
     for path in files:
         try:
             # Streamed, never read whole (see iter_transcript_lines). Listed inside the try, so a
@@ -228,33 +305,33 @@ def collect_prompts(root, sidechain=False):
         except OSError as exc:
             skipped.append("%s: %s" % (path, exc))
             continue
-        files_read += 1
+        report.files_read += 1
         for prompt in found:
-            uuid = prompt["uuid"]
+            uuid = prompt.uuid
             if uuid is not None:
                 if uuid in seen:
-                    duplicates += 1
+                    report.duplicates_skipped += 1
                     continue
                 seen.add(uuid)
-            prompts.append(prompt)
-    return {"prompts": prompts, "files_read": files_read, "duplicates_skipped": duplicates,
-            "skipped": skipped, "root": str(base)}
+            report.prompts.append(prompt)
+    return report
 
 
-def prompt_key(prompt, index):
+def prompt_key(prompt: Prompt, index: int) -> str:
     """The name a prompt goes by in a diff: its uuid, else `source:line`, else `#index`.
 
     A record with no uuid is never the same value twice, so keying on the raw uuid made every
     uuid-less prompt one `None` and a diff over them reported a single shared firing.
     """
-    if prompt.get("uuid") is not None:
-        return prompt["uuid"]
-    if prompt.get("source") or prompt.get("line") is not None:
-        return "%s:%s" % (prompt.get("source", ""), prompt.get("line"))
+    if prompt.uuid is not None:
+        return prompt.uuid
+    if prompt.source or prompt.line is not None:
+        return "%s:%s" % (prompt.source, prompt.line)
     return "#%d" % index
 
 
-def diff_predicates(prompts, a, b):
+def diff_predicates(prompts: Sequence[Prompt], a: Callable[[str], object],
+                    b: Callable[[str], object]) -> PredicateDiff:
     """Which prompts each predicate fires on, as SETS.
 
     A count says two rules are equally noisy; it cannot say they are noisy about the same
@@ -263,16 +340,16 @@ def diff_predicates(prompts, a, b):
     """
     a_ids, b_ids = [], []
     for index, prompt in enumerate(prompts):
-        text = prompt.get("prompt") or ""
+        text = prompt.prompt or ""
         if a(text):
             a_ids.append(prompt_key(prompt, index))
         if b(text):
             b_ids.append(prompt_key(prompt, index))
     a_set, b_set = set(a_ids), set(b_ids)
-    return {"a_fired": len(a_ids), "b_fired": len(b_ids), "total": len(prompts),
-            "both": sorted(a_set & b_set, key=str),
-            "a_only": sorted(a_set - b_set, key=str),
-            "b_only": sorted(b_set - a_set, key=str)}
+    return PredicateDiff(a_fired=len(a_ids), b_fired=len(b_ids), total=len(prompts),
+                         both=sorted(a_set & b_set, key=str),
+                         a_only=sorted(a_set - b_set, key=str),
+                         b_only=sorted(b_set - a_set, key=str))
 
 
 def _load(module, func):
@@ -319,23 +396,23 @@ def _check_root(root):
         raise UsageError("--root %s does not exist" % base)
 
 
-def _firings(prompts, diff):
+def _firings(prompts: Sequence[Prompt], diff: PredicateDiff) -> list[Prompt]:
     """The prompts either predicate fired on, in corpus order: what --sample is for."""
-    fired = set(diff["both"]) | set(diff["a_only"]) | set(diff["b_only"])
+    fired = set(diff.both) | set(diff.a_only) | set(diff.b_only)
     return [p for i, p in enumerate(prompts) if prompt_key(p, i) in fired]
 
 
-def _render(report, sample):
-    out = ["root: %s" % report["root"],
+def _render(report: PromptCorpus, sample: Sequence[Prompt]) -> str:
+    out = ["root: %s" % report.root,
            "files read: %d   prompts: %d   duplicates skipped: %d"
-           % (report["files_read"], len(report["prompts"]), report["duplicates_skipped"])]
-    diff = report.get("diff")
+           % (report.files_read, len(report.prompts), report.duplicates_skipped)]
+    diff = report.diff
     if diff:
         out.append("a fired: %d   b fired: %d   both: %d   a only: %d   b only: %d"
-                   % (diff["a_fired"], diff["b_fired"], len(diff["both"]), len(diff["a_only"]),
-                      len(diff["b_only"])))
+                   % (diff.a_fired, diff.b_fired, len(diff.both), len(diff.a_only),
+                      len(diff.b_only)))
     for prompt in sample:
-        out.append("  %s | %s" % (prompt["uuid"], " ".join(prompt["prompt"].split())[:120]))
+        out.append("  %s | %s" % (prompt.uuid, " ".join(prompt.prompt.split())[:120]))
     return "\n".join(out)
 
 
@@ -358,23 +435,23 @@ def _run(args):
     _check_predicate_options(args)
     _check_root(args.root)
     report = collect_prompts(args.root, sidechain=args.sidechain)
-    sample = report["prompts"]
+    sample = report.prompts
     if args.module:
         first = _load(args.module, args.func or DEFAULT_FUNC)
         second = (_load(args.module_b, args.func_b or DEFAULT_FUNC) if args.module_b
                   else (lambda _t: False))
-        report["diff"] = diff_predicates(report["prompts"], first, second)
-        sample = _firings(report["prompts"], report["diff"])
+        report.diff = diff_predicates(report.prompts, first, second)
+        sample = _firings(report.prompts, report.diff)
     sample = sample[:args.sample] if args.sample > 0 else []
     # A partial corpus is an IO error, not a count.
-    code = 2 if report["skipped"] else (0 if report["prompts"] else 1)
+    code = 2 if report.skipped else (0 if report.prompts else 1)
     if args.as_json:
-        emit(code, "corpus_prompts", dict(report, prompts=sample), skipped=report["skipped"],
-             error=("%d transcript(s) or directory(ies) could not be read" % len(report["skipped"])
+        emit(code, "corpus_prompts", report.to_data(sample), skipped=report.skipped,
+             error=("%d transcript(s) or directory(ies) could not be read" % len(report.skipped)
                     if code == 2 else None))
     else:
         print(_render(report, sample))
-    for line in report["skipped"]:
+    for line in report.skipped:
         print("corpus_prompts: skipped: %s" % line, file=sys.stderr)
     return code
 

@@ -74,6 +74,8 @@ for _d in (str(_HOOKS), str(_JIGS)):
 
 import claude_paths  # noqa: E402 - the sys.path setup above makes the hooks dir importable
 import classifier as cl  # noqa: E402 - the sys.path above is what makes this importable
+import corpus_prompts  # noqa: E402 - compuse-toolbox/scripts, on sys.path from the setup above
+from corpus_prompts import Prompt  # noqa: E402 - same sys.path
 import judge_panel as jp  # noqa: E402 - a sibling module; imported after the sys.path setup
 import skill_roster  # noqa: E402 - same sys.path
 import transcript_turns  # noqa: E402 - same sys.path
@@ -958,11 +960,11 @@ def check_controls(arm, ask, skills, *, threshold, **kwargs):
                    "a pick" if row["expect_pick"] else "no pick", row["picks"], row["gate"]))
 
 
-def _is_continuation(prompt):
+def _is_continuation(prompt: str | None) -> bool:
     return len((prompt or "").split()) <= CONTINUATION_WORDS
 
 
-def prompts_from_log(path):
+def prompts_from_log(path: str | os.PathLike[str]) -> list[Prompt]:
     """The exact prompts a previous replay ran on, in their original order.
 
     `stratified_prompts` samples the transcript corpus, which GROWS between runs, so the same
@@ -983,7 +985,7 @@ def prompts_from_log(path):
     different state is not answering the judged question. Holding the state fixed is also what
     makes this an A/B at all - the arm is the only thing that may differ between runs.
     """
-    picked = []
+    picked: list[Prompt] = []
     # split("\n"), not splitlines(): the log is written with ensure_ascii=False, so a prompt may
     # carry a raw U+2028, and splitlines() cut that row in two and failed the whole replay.
     for line in Path(path).read_text(encoding="utf-8-sig").split("\n"):
@@ -994,12 +996,13 @@ def prompts_from_log(path):
         text = state.get("user_prompt")
         if not text:
             continue
-        picked.append({"prompt": text, "uuid": row.get("uuid"), "source": row.get("source"),
-                       "line": row.get("line"), "recorded_state": state})
+        picked.append(Prompt(prompt=text, uuid=row.get("uuid"), source=row.get("source"),
+                             line=row.get("line"), recorded_state=state))
     return picked
 
 
-def state_drift(picked, rebuilt):
+def state_drift(picked: list[Prompt],
+                rebuilt: list[dict[str, object]]) -> list[dict[str, object]]:
     """Which state fields a pinned replay rebuilt differently from the run that recorded them.
 
     A pinned run is only comparable to an earlier adjudication if the arms are asked the same
@@ -1009,24 +1012,24 @@ def state_drift(picked, rebuilt):
     """
     out = []
     for want, got in zip(picked, rebuilt):
-        before = want.get("recorded_state") or {}
+        before = want.recorded_state or {}
         fields = sorted(set(before) | set(got or {}))
         differing = [f for f in fields if (before.get(f) or "") != ((got or {}).get(f) or "")]
         if differing:
-            out.append({"uuid": want.get("uuid"), "prompt": (want.get("prompt") or "")[:60],
+            out.append({"uuid": want.uuid, "prompt": (want.prompt or "")[:60],
                         "fields": differing})
     return out
 
 
-def stratified_prompts(prompts, per_class, seed=0):
+def stratified_prompts(prompts: list[Prompt], per_class: int, seed: int = 0) -> list[Prompt]:
     """`per_class` continuations and `per_class` substantial prompts.
 
     Both classes are needed and for opposite reasons: only a continuation can show the gate
     suppressing, and only a real request can show a pick being right.
     """
     rng = random.Random(seed)
-    short = [p for p in prompts if _is_continuation(p.get("prompt"))]
-    long_ = [p for p in prompts if not _is_continuation(p.get("prompt"))]
+    short = [p for p in prompts if _is_continuation(p.prompt)]
+    long_ = [p for p in prompts if not _is_continuation(p.prompt)]
     picked = []
     for group in (short, long_):
         picked += rng.sample(group, min(per_class, len(group)))
@@ -1120,7 +1123,7 @@ class PrefixUnavailable(OSError):
     """A prompt's source transcript could not be read, so the state it arrived in is unknown."""
 
 
-def _prefix_transcript(prompt, tmp_dir):
+def _prefix_transcript(prompt: Prompt, tmp_dir):
     """The transcript as it stood the moment this prompt arrived, written to a temp file.
 
     The arms must be judged on the state the live hook would have built, and the only way to be
@@ -1135,9 +1138,7 @@ def _prefix_transcript(prompt, tmp_dir):
     FIRST prompt legitimately has, so writing one here made the arms judge the prompt on a state
     it never arrived in, and nothing in the row could tell the two apart.
     """
-    import corpus_prompts  # noqa: PLC0415 - only the live path builds a prefix
-
-    source, line = prompt.get("source"), int(prompt.get("line") or 1)
+    source, line = prompt.source, int(prompt.line or 1)
     try:
         text = corpus_prompts.read_transcript(source)
     except OSError as exc:
@@ -1184,7 +1185,7 @@ class Asker:
 ROSTERS = ("shipped", "installed")
 
 
-def roster_for(prompt, shipped, mode):
+def roster_for(prompt: Prompt, shipped, mode):
     """(skills, source) a replay offers this prompt.
 
     `shipped` is this plugin's own skills, which every run before `--roster` offered, so it stays
@@ -1195,8 +1196,8 @@ def roster_for(prompt, shipped, mode):
     project skill looked up from the prompt's `cwd`, exactly as the live router resolves it.
     """
     if mode == "installed":
-        listing = skill_roster.listing_from_transcript(prompt.get("source") or "",
-                                                       prompt.get("cwd") or None)
+        listing = skill_roster.listing_from_transcript(prompt.source or "",
+                                                       prompt.cwd or None)
         if listing:
             return listing, skill_roster.SOURCE_TRANSCRIPT
     return shipped, skill_roster.SOURCE_SHIPPED
@@ -1240,7 +1241,7 @@ def selected_arms(arm):
     return [arm] if arm else list(ARMS)
 
 
-def _replay_one(prompt, ask, skills, bodies, router, triggers, args, router_text=None):
+def _replay_one(prompt: Prompt, ask, skills, bodies, router, triggers, args, router_text=None):
     """The chosen arms' verdicts on one prompt, beside the keyword arm's, as one log row.
 
     Raises PrefixUnavailable, before any arm is asked, when the prompt carries no recorded state
@@ -1249,19 +1250,19 @@ def _replay_one(prompt, ask, skills, bodies, router, triggers, args, router_text
 
     # A pinned prompt carries the state its own run recorded, and it is re-sent verbatim: see
     # `prompts_from_log` for why rebuilding it cannot be made faithful after the fact.
-    fields = prompt.get("recorded_state")
+    fields = prompt.recorded_state
     if not fields:
         with tempfile.TemporaryDirectory() as tmp:
             fields = router._router_fields(  # noqa: SLF001 - the seam under test IS the hook's
-                prompt["prompt"], prompt.get("cwd") or "", prompt.get("session_id") or "replay",
+                prompt.prompt, prompt.cwd or "", prompt.session_id or "replay",
                 _prefix_transcript(prompt, tmp))
-    ranked = router.match(prompt["prompt"], triggers, max_skills=len(triggers) or 1)
+    ranked = router.match(prompt.prompt, triggers, max_skills=len(triggers) or 1)
     offered, source = roster_for(prompt, skills, getattr(args, "roster", "shipped"))
     overrides = dict(getattr(args, "description", None) or [])
     offered, applied = with_descriptions(offered, overrides)
-    row = {"uuid": prompt.get("uuid"), "source": prompt.get("source"), "line": prompt.get("line"),
-           "continuation": _is_continuation(prompt.get("prompt")),
-           "lang": cl.detect_language(prompt.get("prompt") or ""),
+    row = {"uuid": prompt.uuid, "source": prompt.source, "line": prompt.line,
+           "continuation": _is_continuation(prompt.prompt),
+           "lang": cl.detect_language(prompt.prompt or ""),
            "keyword_picks": [s for s, _n in ranked[:args.top]], "state": fields,
            "roster": source, "roster_size": len(offered), "arms": {}}
     if overrides:
@@ -1315,7 +1316,7 @@ class InstalledRosterVetting:
         self.ask, self.args, self.bodies, self.router_text = ask, args, bodies, router_text
         self.verdicts = {}
 
-    def failure_for(self, prompt, shipped):
+    def failure_for(self, prompt: Prompt, shipped):
         """None when this prompt's roster may be replayed, else why not."""
         if getattr(self.args, "roster", "shipped") != "installed":
             return None
@@ -1350,8 +1351,6 @@ def _run_replay(args, clf=None, skills=None):
     `clf` and `skills` are the two external edges - the paid classifier and the installed skill
     set - injectable so a test can drive this whole function with a fake transport. None means
     the real ones."""
-    import corpus_prompts  # noqa: PLC0415 - only the CLI walks a corpus
-
     router = _load_hook("skill-router")
     skills = cl.load_skill_descriptions() if skills is None else skills
     if not skills:
@@ -1378,16 +1377,16 @@ def _run_replay(args, clf=None, skills=None):
              "failures": dict(ask.reasons)}, \
             None if all(r["ok"] for r in rows) else "a planted control answered the wrong way"
     if getattr(args, "prompts", None):
-        picked, found, typed = prompts_from_log(args.prompts), {"files_read": 0}, []
+        picked, found, typed = prompts_from_log(args.prompts), corpus_prompts.PromptCorpus(), []
         if not picked:
             return 1, None, "no prompts in %s" % args.prompts
     else:
         found = corpus_prompts.collect_prompts(args.root)
         # A transcript or directory the walk could not open is a smaller corpus that reads like
         # a whole one unless it is said, here and in the report.
-        for why in found.get("skipped", []):
+        for why in found.skipped:
             print("classifier_eval: could not read corpus path - %s" % why, file=sys.stderr)
-        typed = [p for p in found["prompts"] if router.prompt_text.typed_by_a_person(p["prompt"])]
+        typed = [p for p in found.prompts if router.prompt_text.typed_by_a_person(p.prompt)]
         picked = stratified_prompts(typed, args.limit, seed=args.seed)
         if not picked:
             return 1, None, "no typed prompts under %s" % args.root
@@ -1412,8 +1411,8 @@ def _run_replay(args, clf=None, skills=None):
             if failure:
                 # Skipped before any arm is asked: a row bought on a roster the planted controls
                 # reject measures the roster's defect, not the arm.
-                skipped.append({"uuid": prompt.get("uuid"), "source": prompt.get("source"),
-                                "line": prompt.get("line"), "reason": failure})
+                skipped.append({"uuid": prompt.uuid, "source": prompt.source,
+                                "line": prompt.line, "reason": failure})
                 print("classifier_eval: skipped a prompt - %s" % failure, file=sys.stderr)
                 continue
             try:
@@ -1422,16 +1421,16 @@ def _run_replay(args, clf=None, skills=None):
             except PrefixUnavailable as exc:
                 # Skipped, not scored and not logged: the log is what a later run pins to and
                 # what a report scores, and a row judged on an invented state poisons both.
-                skipped.append({"uuid": prompt.get("uuid"), "source": prompt.get("source"),
-                                "line": prompt.get("line"), "reason": str(exc)})
+                skipped.append({"uuid": prompt.uuid, "source": prompt.source,
+                                "line": prompt.line, "reason": str(exc)})
                 print("classifier_eval: skipped a prompt - %s" % exc, file=sys.stderr)
                 continue
             rows.append(row)
             replayed.append(prompt)
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
             fh.flush()
-    report = {"corpus": {"files_read": found["files_read"], "typed_prompts": len(typed),
-                         "unreadable": list(found.get("skipped", []))},
+    report = {"corpus": {"files_read": found.files_read, "typed_prompts": len(typed),
+                         "unreadable": list(found.skipped)},
               "sampled": len(rows), "skipped_prompts": skipped,
               "input_tokens": ask.tokens, "requests": ask.calls,
               "failures": dict(ask.reasons), "log": str(args.out),
