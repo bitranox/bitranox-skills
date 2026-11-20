@@ -19,7 +19,6 @@ and a transcript built from the record shapes it writes; no internals are patche
 import datetime
 import json
 import os
-import random
 import subprocess
 import sys
 import time
@@ -28,7 +27,6 @@ from pathlib import Path
 
 import pytest
 
-import compact_resume
 import context_watcher as W
 
 HOOKS_DIR = Path(__file__).resolve().parent.parent
@@ -242,25 +240,6 @@ def test_a_checkpoint_write_that_cannot_be_read_back_still_gets_the_request(tmp_
     _append(transcript, _assistant(ASKED, "t1", "Write", write_input), _result("t1"))
     assert _run(WATCHER, _post_tool(session, transcript, proj, "Write", write_input),
                 env) is not None
-
-
-_NAMES = ["handover.md", "release-handover.md", "handover-latch.md", "-handover.md", "handover-.md",
-          "handover.txt", "handovers.md", "HANDOVER.md", "notes.md", "handover-x.md.bak",
-          "a-handover.md.md", "handover-a-handover.md", "", "handover"]
-
-
-@pytest.mark.parametrize("name", _NAMES)
-def test_the_checkpoint_names_agree_with_the_resume(name):
-    """The watcher must answer exactly the writes compact-resume will hand back."""
-    assert W.is_checkpoint_name(name) is compact_resume.is_checkpoint_name(name)
-
-
-def test_a_random_name_sweep_agrees_with_the_resume():
-    rng = random.Random(100)
-    parts = ["handover", "-", ".md", "x", "handover-", "-handover.md", ".", "md"]
-    for _ in range(3000):
-        name = "".join(rng.choice(parts) for _ in range(rng.randint(0, 4)))
-        assert W.is_checkpoint_name(name) is compact_resume.is_checkpoint_name(name), name
 
 
 @pytest.mark.parametrize(("event", "plan_mode", "expected"), [

@@ -54,7 +54,9 @@ transcripts, 2026-11-08), and a session kept its checkpoint in the scratchpad as
 `handover-<topic>.md` across five compactions; an exact-name rule never hands those back. The
 heading keeps out other files that share the suffix: the one such file in that corpus was a skill
 checklist without it. `handover.prev.md`, the backup of an earlier checkpoint, matches neither form
-and so never counts, heading or not.
+and so never counts, heading or not. The name rule lives in `checkpoint_names.py`, which
+context-watcher.py imports too, so a write the watcher counts as the checkpoint is one this hook
+hands back.
 
 WHAT ELSE IT SAYS. Two cases used to read as "no checkpoint was saved" and were not. A session that
 finished the work after its checkpoint retires it itself - a `# STALE` first line, by Edit or by
@@ -83,6 +85,7 @@ import time
 from pathlib import Path
 from typing import NamedTuple, cast
 
+import checkpoint_names
 import open_work
 import self_improve_signals as sig
 import shell_text
@@ -90,10 +93,6 @@ import shell_text
 #: Below the harness's 10,000-character inline limit, with room for the framing around the body.
 MAX_CONTEXT_CHARS = 9000
 _STALE_PREFIX = "# STALE"
-_CHECKPOINT_NAME = "handover.md"
-_IMPROVISED_SUFFIX = "-handover.md"
-_IMPROVISED_PREFIX = "handover-"
-_MD = ".md"
 #: One shell statement (or a heredoc script) that can change a file it names: an in-place editor, a
 #: redirect onto a checkpoint-like name, tee, a Python write, a copy, move or removal. A statement
 #: that only reads (`head -1 handover.md`) does not match, so it never vouches for a change.
@@ -217,20 +216,9 @@ def fresh_checkpoint(path, asked_at):
         return None
     if not text.strip() or text.lstrip().startswith(_STALE_PREFIX):
         return None
-    if Path(path).name != _CHECKPOINT_NAME and not has_checkpoint_heading(text):
+    if Path(path).name != checkpoint_names.CHECKPOINT_NAME and not has_checkpoint_heading(text):
         return None
     return text
-
-
-def is_checkpoint_name(name: str) -> bool:
-    """True for `handover.md` and an improvised `<anything>-handover.md` or `handover-<topic>.md`.
-    PURE."""
-    if name == _CHECKPOINT_NAME:
-        return True
-    if name.endswith(_IMPROVISED_SUFFIX) and len(name) > len(_IMPROVISED_SUFFIX):
-        return True
-    return (name.startswith(_IMPROVISED_PREFIX) and name.endswith(_MD)
-            and len(name) > len(_IMPROVISED_PREFIX) + len(_MD))
 
 
 def has_checkpoint_heading(text) -> bool:
@@ -324,11 +312,11 @@ def retired_checkpoint(record: TranscriptRecord) -> str | None:
 def candidates(cwd, touched, writes):
     """Every path that may hold a checkpoint: the cwd's repo root, then this session's records. PURE
     apart from the git lookup of the cwd's top level."""
-    paths = [repo_root(cwd) / _CHECKPOINT_NAME]
+    paths = [repo_root(cwd) / checkpoint_names.CHECKPOINT_NAME]
     seen = {_norm(paths[0])}
     for recorded in [*touched, *(writes or ())]:
         p = Path(recorded)
-        if is_checkpoint_name(p.name) and _norm(p) not in seen:
+        if checkpoint_names.is_checkpoint_name(p.name) and _norm(p) not in seen:
             seen.add(_norm(p))
             paths.append(p)
     return paths
@@ -494,7 +482,7 @@ def _note_tool_use(block: _Json, cwd: str | None, record: TranscriptRecord) -> N
     checkpoint file. Mutates `record`."""
     tid = str(block.get("id"))
     target = _write_target(block)
-    if target and is_checkpoint_name(Path(target).name):
+    if target and checkpoint_names.is_checkpoint_name(Path(target).name):
         record.pending[tid] = _Pending("write", {target: False})
     elif target and target in record.plan_paths:
         record.pending[tid] = _Pending("plan", {target: False})
@@ -630,7 +618,7 @@ def _collect_targets(text: str, base: str | None, out: dict[str, bool], *, shell
             if reached is None:
                 continue                 # a Git Bash mount: only the shell knows which file it is
             token = reached
-        if "$" in token or not is_checkpoint_name(os.path.basename(token)):
+        if "$" in token or not checkpoint_names.is_checkpoint_name(os.path.basename(token)):
             continue
         token = os.path.expanduser(token)
         if not shell_text.is_rooted(token):

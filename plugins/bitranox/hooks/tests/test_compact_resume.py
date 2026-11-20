@@ -316,15 +316,6 @@ def test_handover_md_itself_needs_no_heading(tmp_path, monkeypatch, capsys):
     assert "PLAIN-23" in ctx
 
 
-@pytest.mark.parametrize("name, expected", [
-    ("handover.md", True), ("wt-x-handover.md", True), ("-handover.md", False),
-    ("handover.prev.md", False), ("x-handover.md.bak", False), ("xhandover.md", False),
-    ("myhandover.md", False),
-])
-def test_is_checkpoint_name(name, expected):
-    assert H.is_checkpoint_name(name) is expected
-
-
 def test_another_sessions_touched_handover_is_not_this_sessions_checkpoint(tmp_path, monkeypatch,
                                                                             capsys):
     repo = _repo(tmp_path)
@@ -787,14 +778,6 @@ def test_a_prefix_name_without_the_heading_is_not_a_checkpoint(tmp_path, monkeyp
     tr = _session_transcript(tmp_path, [("write", cp, now - 100, True)], repo)
     ctx = _context(_run(monkeypatch, capsys, _event(repo, transcript=str(tr))))
     assert "PREFIX-NOTES-45" not in ctx
-
-
-@pytest.mark.parametrize("name, expected", [
-    ("handover-crud-design.md", True), ("handover-.md", False), ("handover-x.md.bak", False),
-    ("handover-x.txt", False),
-])
-def test_is_checkpoint_name_prefix_form(name, expected):
-    assert H.is_checkpoint_name(name) is expected
 
 
 # ---- a checkpoint the session retired itself before the compaction ------------------------------

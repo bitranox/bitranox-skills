@@ -107,6 +107,7 @@ import sys
 from enum import StrEnum
 from types import MappingProxyType
 
+import checkpoint_names
 import self_improve_signals as sig
 
 # Enough tail to reach a recent assistant record even when the last turn wrote a large tool result,
@@ -643,29 +644,14 @@ def decide(event, cfg):
                            wrote=checkpoint_write(event, plan_mode=plan_mode))
 
 
-# The names compact-resume hands back (its is_checkpoint_name, pinned equal by a test), kept here
-# rather than imported because that module is a hyphenated hook script, not a library.
-_CHECKPOINT_NAME = "handover.md"
-_IMPROVISED_SUFFIX = "-handover.md"
-_IMPROVISED_PREFIX = "handover-"
 _WRITE_TOOLS = frozenset({"Write", "Edit", "MultiEdit"})
-
-
-def is_checkpoint_name(name) -> bool:
-    """True for `handover.md`, `<anything>-handover.md` and `handover-<topic>.md`. PURE."""
-    name = str(name)
-    if name == _CHECKPOINT_NAME:
-        return True
-    if name.endswith(_IMPROVISED_SUFFIX) and len(name) > len(_IMPROVISED_SUFFIX):
-        return True
-    return (name.startswith(_IMPROVISED_PREFIX) and name.endswith(".md")
-            and len(name) > len(_IMPROVISED_PREFIX) + len(".md"))
 
 
 def checkpoint_write(event, *, plan_mode: bool = False):
     """The checkpoint file the tool call behind this PostToolUse wrote, or None. PURE.
 
-    A Write, Edit or MultiEdit of a checkpoint-named file; in plan mode any of them, because the
+    A Write, Edit or MultiEdit of a checkpoint-named file (the rule compact-resume hands back by,
+    from `checkpoint_names`); in plan mode any of them, because the
     plan file is the only file such a session may write and the request sends the checkpoint there.
     PostToolUse fires only for a call that succeeded.
     """
@@ -675,7 +661,7 @@ def checkpoint_write(event, *, plan_mode: bool = False):
     path = tool_input.get("file_path") if isinstance(tool_input, dict) else None
     if not isinstance(path, str) or not path:
         return None
-    if plan_mode or is_checkpoint_name(pathlib.PurePath(path).name):
+    if plan_mode or checkpoint_names.is_checkpoint_name(pathlib.PurePath(path).name):
         return path
     return None
 
