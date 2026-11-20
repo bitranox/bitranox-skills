@@ -337,6 +337,73 @@ class Override:
         return out
 
 
+@dataclass(frozen=True)
+class Interface:
+    """One assigned interface: pfSense name (lan, opt1), device (`if` on the wire), static address."""
+
+    name: str
+    device: str
+    descr: str
+    ipaddr: str
+    subnet: str
+
+    @classmethod
+    def from_json(cls, value: object) -> "Interface":
+        what = "an interface"
+        obj = _object(value, what)
+        return cls(name=_text(obj, "name", what), device=_text(obj, "if", what),
+                   descr=_text(obj, "descr", what), ipaddr=_text(obj, "ipaddr", what),
+                   subnet=_text(obj, "subnet", what))
+
+    def to_json(self) -> dict:
+        return {"name": self.name, "if": self.device, "descr": self.descr, "ipaddr": self.ipaddr,
+                "subnet": self.subnet}
+
+
+@dataclass(frozen=True)
+class Package:
+    """One installed pfSense package."""
+
+    name: str
+    version: str
+
+    @classmethod
+    def from_json(cls, value: object) -> "Package":
+        what = "a package"
+        obj = _object(value, what)
+        return cls(name=_text(obj, "name", what), version=_text(obj, "version", what))
+
+    def to_json(self) -> dict:
+        return {"name": self.name, "version": self.version}
+
+
+@dataclass(frozen=True)
+class FirewallInfo:
+    """The `info` reply: version, DHCP backend, resolver, interfaces and packages."""
+
+    version: str
+    dhcp_backend: str
+    resolver: str
+    interfaces: tuple[Interface, ...]
+    packages: tuple[Package, ...]
+
+    @classmethod
+    def from_json(cls, value: object) -> "FirewallInfo":
+        what = "the firewall info"
+        obj = _object(value, what)
+        interfaces = _array(obj.get("interfaces"), "the firewall info's interface list")
+        packages = _array(obj.get("packages"), "the firewall info's package list")
+        return cls(version=_text(obj, "version", what), dhcp_backend=_text(obj, "dhcp_backend", what),
+                   resolver=_text(obj, "resolver", what),
+                   interfaces=tuple(Interface.from_json(item) for item in interfaces),
+                   packages=tuple(Package.from_json(item) for item in packages))
+
+    def to_json(self) -> dict:
+        return {"version": self.version, "dhcp_backend": self.dhcp_backend, "resolver": self.resolver,
+                "interfaces": [i.to_json() for i in self.interfaces],
+                "packages": [p.to_json() for p in self.packages]}
+
+
 def _json_value(value: object) -> object:
     """The reply as decoded, for a shape that has no record yet."""
     return value
@@ -1453,18 +1520,18 @@ def _write_private(path: Path, text: str) -> None:
 # ---- commands -----------------------------------------------------------------------------------
 def cmd_info(args) -> int:
     target = _target_from_args(args)
-    data = run_php(target, php_info(), parse=_json_value, run=args.run)
+    info = run_php(target, php_info(), parse=FirewallInfo.from_json, run=args.run)
     lines = [
-        f"  version:      {data['version']}",
-        f"  dhcp backend: {data['dhcp_backend']}",
-        f"  resolver:     {data['resolver']}",
+        f"  version:      {info.version}",
+        f"  dhcp backend: {info.dhcp_backend}",
+        f"  resolver:     {info.resolver}",
         "  interfaces:",
     ]
-    for iface in data["interfaces"]:
-        lines.append(f"    {iface['name']:<8} {iface['if']:<12} {iface['ipaddr']}/{iface['subnet']}  {iface['descr']}")
-    pkgs = ", ".join(p["name"] for p in data["packages"]) or "none"
+    for iface in info.interfaces:
+        lines.append(f"    {iface.name:<8} {iface.device:<12} {iface.ipaddr}/{iface.subnet}  {iface.descr}")
+    pkgs = ", ".join(p.name for p in info.packages) or "none"
     lines.append(f"  packages:     {pkgs}")
-    _emit(envelope(command="info", data=data, ok=True), args.json, "\n".join(lines))
+    _emit(envelope(command="info", data=info.to_json(), ok=True), args.json, "\n".join(lines))
     return 0
 
 
@@ -1502,17 +1569,17 @@ def valid_hostname(name: str) -> str:
     return name
 
 
-def interface_for_ip(interfaces: list[dict], ip: str) -> str:
+def interface_for_ip(interfaces: Sequence[Interface], ip: str) -> str:
     """The interface whose static subnet holds `ip`, or a refusal when none or several do."""
     address = ipaddress.ip_address(ip)
     hits = []
     for iface in interfaces:
         try:
-            network = ipaddress.ip_interface(f"{iface.get('ipaddr', '')}/{iface.get('subnet', '')}").network
+            network = ipaddress.ip_interface(f"{iface.ipaddr}/{iface.subnet}").network
         except ValueError:
             continue                     # dhcp, track6, none: no static subnet to hold anything
         if address in network:
-            hits.append(iface["name"])
+            hits.append(iface.name)
     if len(hits) != 1:
         found = "no interface" if not hits else f"{len(hits)} interfaces ({', '.join(hits)})"
         raise PfsenseError(f"{found} has a static subnet holding {ip}; pass --interface")
@@ -1529,11 +1596,11 @@ def cmd_dhcp_add(args) -> int:
     if taken:
         raise PfsenseError(f"already reserved: {taken[0].ip} {taken[0].mac} "
                            f"({taken[0].hostname or taken[0].descr}) - rename or rm it instead")
-    interfaces = run_php(target, php_info(), parse=_json_value, run=args.run)["interfaces"]
+    interfaces = run_php(target, php_info(), parse=FirewallInfo.from_json, run=args.run).interfaces
     if args.interface:
         # A named interface must still hold the address: the GUI checks this, and this tool
         # bypasses the GUI, so a reservation outside the subnet would be stored and never served.
-        interfaces = [i for i in interfaces if i.get("name") == args.interface]
+        interfaces = tuple(i for i in interfaces if i.name == args.interface)
     interface = interface_for_ip(interfaces, args.ip)
     entry = {"interface": interface, "mac": mac, "ip": args.ip, "hostname": hostname}
     if not args.apply:

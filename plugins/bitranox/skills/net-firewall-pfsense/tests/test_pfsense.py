@@ -152,6 +152,19 @@ def test_an_override_reply_of_another_shape_is_refused_naming_the_box(reply, cap
     assert "php on 192.0.2.1 returned an unexpected reply: a host override has no text field" in out.err
 
 
+@pytest.mark.parametrize("reply", [
+    '{"version":"2.8.0","dhcp_backend":"isc","resolver":"unbound","packages":[]}',  # no interfaces
+    '{"version":"2.8.0","dhcp_backend":"isc","resolver":"unbound","packages":[],'
+    '"interfaces":[{"name":"lan","descr":"","ipaddr":"192.0.2.1","subnet":"24"}]}',  # no if
+    '{"version":"2.8.0","dhcp_backend":"isc","resolver":"unbound","interfaces":[],'
+    '"packages":[{"name":"snort","version":4}]}',                                      # a number for text
+])
+def test_an_info_reply_of_another_shape_is_refused_naming_the_box(reply, capsys):
+    fake = FakeRun([('"dhcp_backend"', (0, reply, ""))])
+    assert P.main(["--host", "192.0.2.1", "info"], run=fake) == 2
+    assert "php on 192.0.2.1 returned an unexpected reply: " in capsys.readouterr().err
+
+
 def test_a_pool_reply_of_another_shape_is_refused_before_the_audit(capsys):
     fake = FakeRun([('$pools = array()', (0, '[{"interface":"lan","from":"192.0.2.100"}]', "")),
                     ('config_get_path("dhcpd"', (0, RESERVATIONS_JSON, "")),
@@ -1462,7 +1475,7 @@ def _writes(fake):
 
 
 def test_the_interface_for_an_address_is_the_one_whose_subnet_holds_it():
-    interfaces = json.loads(INFO_JSON)["interfaces"]
+    interfaces = P.FirewallInfo.from_json(json.loads(INFO_JSON)).interfaces
     assert P.interface_for_ip(interfaces, "192.0.2.50") == "lan"
     assert P.interface_for_ip(interfaces, "198.51.100.9") == "opt1"
     with pytest.raises(P.PfsenseError, match="no interface"):
