@@ -754,7 +754,22 @@ def _fact_data(fact: Fact, verdict: Verdict, rules: EngineRules) -> dict:
 BODY_MARKER = "---- body ----"
 _SHOW_HEADER_RX = re.compile(r"\Aslug {2,}\S")
 _LEADING_BLANK_LINES_RX = re.compile(r"\A(?:[ \t]*\r?\n)+")
-_TRAILING_BLANK_LINES_RX = re.compile(r"(?:\r?\n[ \t]*)+\Z")
+# A CR that no LF follows is not a line break, so a trailing cut never starts before one.
+_LONE_CR_RX = re.compile(r"\r(?!\n)")
+
+
+def _strip_trailing_blank_lines(text: str) -> str:
+    """`text` without its trailing blank lines and the line break that opens them. PURE.
+
+    The cut starts at the first line break of the trailing blank run that only blank lines (blanks,
+    tabs, LF or CRLF breaks) follow, so the last content line keeps its own trailing blanks. Found
+    in one pass from the end: an end-anchored `(?:\\r?\\n[ \\t]*)+\\Z` search for the same cut
+    retries from every line break of the run and walks it to its end, quadratic in its length.
+    """
+    tail = len(text.rstrip(" \t\r\n"))
+    start = max((lone.end() for lone in _LONE_CR_RX.finditer(text, tail)), default=tail)
+    breaks = [i for i in (text.find("\r", start), text.find("\n", start)) if i >= 0]
+    return text[:min(breaks)] if breaks else text
 
 
 def clean_body(text: str) -> str:
@@ -769,7 +784,7 @@ def clean_body(text: str) -> str:
                        "leading 'slug ...' line), which would be stored as the fact's prose; "
                        "write the file from `show --body` stdout alone, or cut the header out")
     trimmed = _LEADING_BLANK_LINES_RX.sub("", text)
-    trimmed = _TRAILING_BLANK_LINES_RX.sub("", trimmed)
+    trimmed = _strip_trailing_blank_lines(trimmed)
     return trimmed + "\n" if trimmed else ""
 
 
