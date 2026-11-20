@@ -4,11 +4,13 @@ All content is ASCII.
 """
 
 import importlib.util
+import inspect
 import sys
 import json
 import os
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -1569,11 +1571,11 @@ def test_a_permission_error_is_transient_only_on_windows():
     assert not S.is_transient_sharing_error(FileNotFoundError(2, "gone"), windows=True)
 
 
-def _clashing(times):
+def _clashing(times: int) -> tuple[Callable[[str], str], list[str]]:
     """An op that fails like a Windows sharing clash `times` times, then succeeds."""
-    calls = []
+    calls: list[str] = []
 
-    def op(value):
+    def op(value: str) -> str:
         calls.append(value)
         if len(calls) <= times:
             raise PermissionError(13, "The process cannot access the file")
@@ -1600,6 +1602,25 @@ def test_retry_while_shared_gives_up_once_the_timeout_passes():
     with pytest.raises(PermissionError):
         S.retry_while_shared(op, "ok", windows=True, timeout=0.05, poll=0.005)
     assert len(calls) > 1
+
+
+def _unannotated(fn: Callable[..., object]) -> list[str]:
+    """The parameters of `fn` (unwrapped past a decorator) with no annotation, plus "return"."""
+    sig = inspect.signature(inspect.unwrap(fn))
+    missing = [n for n, p in sig.parameters.items() if p.annotation is inspect.Parameter.empty]
+    if sig.return_annotation is inspect.Signature.empty:
+        missing.append("return")
+    return missing
+
+
+# The lock and its helpers are called from modules that type-check strictly; an unannotated
+# signature here reaches each of them as "partially unknown", so no caller can be clean.
+_LOCK_API = ["memory_lock", "retry_while_shared", "is_transient_sharing_error"]
+
+
+@pytest.mark.parametrize("name", _LOCK_API)
+def test_the_lock_api_is_fully_annotated(name: str) -> None:
+    assert _unannotated(getattr(S, name)) == []
 
 
 def _deny_first_create(monkeypatch, lock_name):

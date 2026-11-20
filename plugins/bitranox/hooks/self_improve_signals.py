@@ -24,7 +24,7 @@ import re
 import subprocess
 import tempfile
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Iterator, Mapping
 from enum import StrEnum
 from pathlib import Path
 from types import MappingProxyType
@@ -33,6 +33,9 @@ from typing import NamedTuple
 import claude_paths
 import process_liveness
 import shell_text
+
+# A filesystem path as callers hand it in: a str from hook stdin or argv, or a Path built here.
+type _StrPath = str | os.PathLike[str]
 
 # ---- Audit-file location (shared by self-improve-audit.py writer + session-start reader) --
 
@@ -386,13 +389,14 @@ _LOCK_STALE_S = 120.0
 _WINDOWS = os.name == "nt"
 
 
-def is_transient_sharing_error(exc, windows=_WINDOWS):
+def is_transient_sharing_error(exc: BaseException, windows: bool = _WINDOWS) -> bool:
     """True when `exc` is Windows saying another open handle holds the name, which clears on its
     own; False on POSIX, where the same exception is a lasting permission problem."""
     return bool(windows) and isinstance(exc, PermissionError)
 
 
-def retry_while_shared(op, *args, timeout=1.0, poll=0.01, windows=_WINDOWS):
+def retry_while_shared[*Ts, T](op: Callable[[*Ts], T], *args: *Ts, timeout: float = 1.0,
+                               poll: float = 0.01, windows: bool = _WINDOWS) -> T:
     """Return `op(*args)`, retrying while Windows reports the file held by another handle.
 
     Re-raises the PermissionError once `timeout` passes, and at once on POSIX or for any other
@@ -409,7 +413,7 @@ def retry_while_shared(op, *args, timeout=1.0, poll=0.01, windows=_WINDOWS):
         time.sleep(poll)
 
 
-def _reclaim_stale_lock(lock, clock):
+def _reclaim_stale_lock(lock: Path, clock: Callable[[], float]) -> bool:
     """Delete a lock whose holder crashed; True when it was stale and is now gone."""
     try:
         if clock() - lock.stat().st_mtime > _LOCK_STALE_S:
@@ -421,7 +425,8 @@ def _reclaim_stale_lock(lock, clock):
 
 
 @contextlib.contextmanager
-def memory_lock(target_path, timeout=5.0, poll=0.05, now=None):
+def memory_lock(target_path: _StrPath, timeout: float = 5.0, poll: float = 0.05,
+                now: Callable[[], float] | None = None) -> Iterator[None]:
     """Advisory exclusive lock around a memory read-modify-write, via an atomic `<target>.lock`
     O_EXCL create (cross-platform, no fcntl/msvcrt). Raises TimeoutError on contention past `timeout`;
     reclaims a lock older than `_LOCK_STALE_S` (holder crashed). `now` injectable for tests.
@@ -436,7 +441,7 @@ def memory_lock(target_path, timeout=5.0, poll=0.05, now=None):
     except OSError:
         pass
     deadline = clock() + timeout
-    fd = None
+    fd: int | None = None
     while fd is None:
         try:
             fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
