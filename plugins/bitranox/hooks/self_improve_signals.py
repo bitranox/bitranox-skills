@@ -1694,7 +1694,8 @@ def unsatisfiable_nap_owed(proj: _StrPath | None,
 # Every habit-dependent decision is recorded here and applied automatically (asked once, never
 # re-nagged). The `meta-memory-settings` skill views / sets / resets it.
 
-def _config_path() -> Path:
+def config_path() -> Path:
+    """The machine-local memory settings file every knob is read from and written to."""
     return claude_paths.config_dir() / ".bitranox-memory.json"
 
 
@@ -1739,12 +1740,12 @@ class ConfigUnreadable(OSError):
     """The config file exists but is not a readable JSON object, so it cannot be safely rewritten."""
 
 
-def _read_config_file() -> tuple[dict[str, object] | None, str | None]:
+def read_config_file() -> tuple[dict[str, object] | None, str | None]:
     """(settings, problem) for the config file: ({}, None) when there is none, (object, None)
     when it holds a JSON object, and (None, why) when it exists but cannot be used - unreadable,
     not UTF-8, not JSON, or JSON that is not an object. THE one reader, so `load_config` and
     `save_config` agree on what "unusable" means."""
-    p = _config_path()
+    p = config_path()
     try:
         # utf-8-sig: a file saved by a Windows editor carries a BOM, which json.loads refuses, so
         # every knob the user set there silently read as its default.
@@ -1771,7 +1772,7 @@ def load_config() -> dict[str, object]:
     Each value is whatever the file holds for a known key, which a hand edit can make any JSON
     type, so it is typed `object` and every reader checks the value it uses."""
     cfg = dict(DEFAULT_CONFIG)
-    raw, _problem = _read_config_file()
+    raw, _problem = read_config_file()
     known = raw or {}
     cfg.update({k: known[k] for k in known if k in DEFAULT_CONFIG})
     return cfg
@@ -1789,7 +1790,7 @@ def save_config(updates: Mapping[str, object], strict: bool = False) -> dict[str
     written, for every caller: `load_config` answers the defaults for it, so a save would replace
     every knob the file still holds with its default. Strict raises `ConfigUnreadable` (an
     OSError) naming why; best-effort returns the merged dict unsaved."""
-    raw, problem = _read_config_file()
+    raw, problem = read_config_file()
     cfg = dict(DEFAULT_CONFIG)
     known = raw or {}
     cfg.update({k: known[k] for k in known if k in DEFAULT_CONFIG})
@@ -1797,7 +1798,7 @@ def save_config(updates: Mapping[str, object], strict: bool = False) -> dict[str
     try:
         if problem:
             raise ConfigUnreadable(problem)
-        p = _config_path()
+        p = config_path()
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps(cfg, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     except OSError:

@@ -19,6 +19,7 @@ Pure standard library.
 
 import importlib.util
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 # self_improve_signals lives in the plugin's hooks dir: skills/meta-memory-settings -> skills -> bitranox -> hooks
@@ -155,19 +156,19 @@ def _print_config(cfg):
         print("%s = %s" % (k, cfg[k]))
 
 
-def _config_problem():
+def _config_problem(read: Callable[[], tuple[dict[str, object] | None, str | None]] | None = None) -> str | None:
     """Why the existing config file cannot be used, or None when it is absent or a JSON object.
 
     `load_config` falls back to the defaults on a corrupt file, which is right for a hook but
     wrong here: `view` then showed defaults the user never chose, and the next `set` wrote those
     defaults over every choice the damaged file still held.
 
-    Delegates the read/decode/parse/classify work to `sig._read_config_file` - THE one reader
+    Delegates the read/decode/parse/classify work to `sig.read_config_file` - THE one reader
     `load_config` and `save_config` already agree on - so this CLI's refusal and the hooks'
     fallback-to-defaults can never silently diverge on what "unusable" means; only the richer,
-    CLI-facing guidance text is built here."""
-    p = sig._config_path()
-    _raw, problem = sig._read_config_file()
+    CLI-facing guidance text is built here. `read` stands in for that reader (tests)."""
+    p = sig.config_path()
+    _raw, problem = (read or sig.read_config_file)()
     if problem is None:
         return None
     if problem.startswith("cannot read "):

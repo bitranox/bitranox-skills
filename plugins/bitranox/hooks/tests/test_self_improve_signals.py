@@ -357,7 +357,7 @@ def test_save_config_roundtrip_and_ignores_unknown(home):
 
 
 def test_load_config_corrupt_file_returns_defaults(home):
-    S._config_path().write_text("{not json", encoding="utf-8")
+    S.config_path().write_text("{not json", encoding="utf-8")
     assert S.load_config()["dream_mode"] == "propose"
 
 
@@ -366,7 +366,7 @@ def test_load_config_corrupt_file_returns_defaults(home):
 def test_save_config_never_overwrites_a_config_it_could_not_read(home):
     """load_config answers the DEFAULTS for an unreadable file, which is right for a reader; the
     save built on it then replaced every knob the user had set with its default."""
-    p = S._config_path()
+    p = S.config_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps({"dream_mode": "off", "promotion": "eager"}), encoding="utf-8")
     p.chmod(0o200)                                          # writable, not readable
@@ -392,7 +392,7 @@ def test_save_config_never_writes_over_a_config_it_could_not_parse(home, raw):
     """load_config answers the defaults for a config it can read but not parse, so a save built
     on that answer wrote the defaults over every choice the file still held. Only the settings
     CLI guarded against it; any other caller - a hook - would have clobbered the file."""
-    p = S._config_path()
+    p = S.config_path()
     p.write_bytes(raw)
     assert S.save_config({"privacy": "walled"})["privacy"] == "walled"   # best-effort: no raise
     with pytest.raises(OSError):
@@ -402,7 +402,7 @@ def test_save_config_never_writes_over_a_config_it_could_not_parse(home, raw):
 
 def test_save_config_still_writes_over_a_parseable_config(home):
     """Control: a BOM-prefixed UTF-8 object is a readable config and is updated in place."""
-    p = S._config_path()
+    p = S.config_path()
     p.write_bytes(b'\xef\xbb\xbf{"dream_mode": "off"}')
     S.save_config({"privacy": "walled"}, strict=True)
     got = json.loads(p.read_text(encoding="utf-8"))

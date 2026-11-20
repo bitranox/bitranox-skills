@@ -50,7 +50,7 @@ _DEFS = sorted(_defs(ast.parse(inspect.getsource(S))), key=lambda item: item[0])
 def test_the_scan_reaches_public_private_nested_and_method_definitions() -> None:
     names = {name for name, _node in _DEFS}
     expected = {"proj_key", "load_config", "save_config", "add_contribution", "inert_snippet",
-                "skill_usage", "_read_config_file", "resolve_transcript._mtime",
+                "skill_usage", "_reclaim_stale_lock", "resolve_transcript._mtime",
                 "_FixtureScan.__init__", "_FixtureScan.is_data", "ClaimHeld.__init__", "memory_lock"}
     assert expected <= names, sorted(expected - names)
     assert len(names) > 190

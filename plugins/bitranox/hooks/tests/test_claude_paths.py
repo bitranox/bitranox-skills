@@ -72,7 +72,7 @@ def test_the_shared_audit_dir_follows_the_variable(homes, monkeypatch):
 def test_the_memory_settings_file_and_auto_memory_follow_the_variable(homes, monkeypatch):
     _, arm = homes
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(arm))
-    assert sig._config_path() == arm / ".bitranox-memory.json"
+    assert sig.config_path() == arm / ".bitranox-memory.json"
     assert sig.memory_dir("/proj/x") == arm / "projects" / "-proj-x" / "memory"
 
 
