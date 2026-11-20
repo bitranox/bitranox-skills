@@ -275,6 +275,30 @@ def test_the_declared_window_gives_glm_the_real_threshold():
     assert W.compact_verdict(164_614, declared_window, 70, 400_000, 0)[0] == "quiet"
 
 
+def test_the_declared_window_is_read_from_the_real_process_environment(monkeypatch):
+    """decide() hands over os.environ itself, which is a Mapping but not a dict. Every test above
+    passes a plain dict, so a dict-only check passed them all while the hook never saw the
+    launcher's declaration and measured a 1M gateway session against 200K."""
+    monkeypatch.setenv("CLAUDE_CODE_MAX_CONTEXT_TOKENS", "1000000")
+    assert W.resolve_window({}, "glm-5.3", os.environ) == (1_000_000, "declared")
+    assert W.window_for_model("glm-5.3", os.environ) == 1_000_000
+    assert W.harness_window(os.environ) == int(ALIGNED)
+
+
+def test_decide_honours_the_launchers_declared_window(tmp_path, session, monkeypatch):
+    """End to end in-process: 300K on glm-5.3 under a declared 1M window and no harness window is
+    under the 327K save point, so quiet; 350K is past it and asks. Against the 200K default the
+    same 300K reads as a misconfigured window instead."""
+    monkeypatch.setenv("CLAUDE_CODE_MAX_CONTEXT_TOKENS", "1000000")
+    monkeypatch.delenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW")
+    cfg = {"nudges": True, "context_handover_pct": 70, "context_handover_cap": 400_000}
+    quiet = _transcript(tmp_path, _usage_line(cache_read=300_000, model="glm-5.3"))
+    assert W.decide(_event(session, quiet, tmp_path), cfg) is None
+    asks = _transcript(tmp_path, _usage_line(cache_read=350_000, model="glm-5.3"))
+    reason = W.decide(_event(session, asks, tmp_path), cfg)
+    assert reason is not None and "carrying 350,000 tokens" in reason
+
+
 def test_an_explicit_window_overrides_the_family():
     assert W.resolve_window({"context_window": 500_000}, "claude-opus-5") == (500_000, "configured")
 

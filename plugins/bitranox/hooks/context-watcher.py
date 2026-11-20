@@ -136,6 +136,11 @@ def _is_path_arg(value: object) -> TypeIs[_PathArg]:
     return isinstance(value, (str, bytes, int, os.PathLike))
 
 
+def _is_environment(value: object) -> TypeIs[Mapping[str, object]]:
+    """True for an environment mapping: os.environ itself (a Mapping, not a dict) or a plain dict."""
+    return isinstance(value, Mapping)
+
+
 def _is_str_path(value: object) -> TypeIs[str | os.PathLike[str]]:
     """True for a str or path object, the shapes a project directory arrives in."""
     return isinstance(value, (str, os.PathLike))
@@ -205,9 +210,10 @@ def window_for_model(model_id: object, environ: Mapping[str, object] | None = No
 def _env_max_context(environ: object) -> int:
     """The window a launcher declared for a custom model, or 0 when it declared none. PURE.
 
-    `None` (no environment passed at all) counts as no declaration, not an error.
+    `None` (no environment passed at all) counts as no declaration, not an error. Any mapping is
+    read, os.environ included: decide() passes that one, and a dict-only check never saw it.
     """
-    if not _is_record(environ):
+    if not _is_environment(environ):
         return 0
     try:
         value = _coerce_int(environ.get(_ENV_MAX_CONTEXT) or 0)
@@ -347,7 +353,7 @@ def threshold(window: object, pct: object, cap: object) -> int | None:
 
 def harness_window(environ: object) -> int:
     """The auto-compact window the harness was given, or 0 when none is visible. PURE."""
-    if not _is_record(environ):
+    if not _is_environment(environ):
         return 0
     try:
         value = _coerce_int(environ.get(_ENV_COMPACT_WINDOW) or 0)
