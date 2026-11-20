@@ -1768,3 +1768,88 @@ def test_a_second_run_on_a_file_a_live_run_is_mutating_is_refused(tmp_path):
     assert second.returncode == 2, (second.stdout, second.stderr)
     assert "another mutation_arm run" in second.stderr, second.stderr
     assert (p / "src.py").read_text(encoding="utf-8") == SOURCE
+
+
+# --------------------------------------------------------------------------
+# A kill on an error is not a kill on an assertion
+# --------------------------------------------------------------------------
+
+
+def _summary(*lines):
+    return ("=========================== short test summary info ============================\n"
+            + "".join(line + "\n" for line in lines))
+
+
+@pytest.mark.parametrize("lines,expected", [
+    (["FAILED t.py::test_a - AssertionError: assert 'ZERO' == 'zero'"], "assertion"),
+    (["FAILED t.py::test_a - assert 1 == 2"], "assertion"),
+    (["FAILED t.py::test_a - Failed: DID NOT RAISE <class 'KernelError'>"], "assertion"),
+    (["FAILED t.py::test_a - PermissionError: [Errno 1] Operation not permitted: '/'"], "error"),
+    (["FAILED t.py::test_a - KeyError: 'x'"], "error"),
+    (["FAILED t.py::test_a - pkg.mod.CustomException: boom"], "error"),
+    (["ERROR t.py::test_a - AssertionError: in a fixture"], "error"),
+    (["ERROR t.py - ModuleNotFoundError: No module named 'nope'"], "error"),
+    (["FAILED t.py::test_a - PermissionError: x", "FAILED t.py::test_b - assert 0"], "assertion"),
+    (["FAILED t.py::test_a - something pytest printed"], "unknown"),
+    ([], None),
+])
+def test_killed_by_tells_an_assertion_from_an_error(lines, expected):
+    assert M.killed_by(_summary(*lines) if lines else "2 passed\n") == expected
+
+
+def test_a_mutation_that_only_raises_is_marked_killed_by_error(tmp_path):
+    """The kill stands (exit 0), but the reader must see the test never reached its assertion."""
+    p = make_project(tmp_path)
+    (p / "old.txt").write_text('return "zero"', encoding="utf-8")
+    (p / "new.txt").write_text('raise PermissionError("denied")', encoding="utf-8")
+    proc = run(p, "--mutate", "src.py", "old.txt", "new.txt", "--test", "test_src.py::test_zero",
+               "--json")
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    data = json.loads(proc.stdout)["data"]
+    assert data["verdict"] == "killed" and data["killed_by"] == "error"
+    text = run(p, "--mutate", "src.py", "old.txt", "new.txt", "--test", "test_src.py::test_zero")
+    assert text.stdout.startswith("KILLED BY ERROR: "), text.stdout
+    assert "not an assertion" in text.stdout
+    assert (p / "src.py").read_text(encoding="utf-8") == SOURCE
+
+
+def test_a_mutation_caught_by_an_assertion_is_marked_so(tmp_path):
+    p = make_project(tmp_path)
+    (p / "old.txt").write_text('return "zero"', encoding="utf-8")
+    (p / "new.txt").write_text('return "ZERO"', encoding="utf-8")
+    proc = run(p, "--mutate", "src.py", "old.txt", "new.txt", "--test", "test_src.py::test_zero")
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    assert proc.stdout.startswith("KILLED: "), proc.stdout
+    assert "not an assertion" not in proc.stdout
+
+
+def test_a_battery_marks_an_arm_killed_by_error(tmp_path):
+    p = make_project(tmp_path)
+    spec = _battery(p, [
+        {"label": "raises", "file": "src.py", "old": 'return "zero"',
+         "new": 'raise PermissionError("denied")'},
+        {"label": "asserts", "file": "src.py", "old": 'return "negative"', "new": 'return "NEG"'},
+    ])
+    proc = run(p, "--battery", str(spec))
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    lines = {line.split()[-1] if "caught by" not in line else line.split("caught by")[0].split()[-1]:
+             line for line in proc.stdout.splitlines() if line[:1].isupper()}
+    assert lines["raises"].startswith("KILLED BY ERROR"), proc.stdout
+    assert lines["asserts"].startswith("KILLED ") and "BY ERROR" not in lines["asserts"]
+    data = json.loads(run(p, "--battery", str(spec), "--json").stdout)["data"]
+    by_label = {arm["label"]: arm for arm in data["arms"]}
+    assert by_label["raises"]["killed_by"] == "error"
+    assert by_label["asserts"]["killed_by"] == "assertion"
+
+
+def test_a_battery_arm_written_like_the_mutate_flag_is_refused_with_the_shape(tmp_path):
+    """--mutate takes FILES for old/new; a spec copying that form must learn the inline shape."""
+    p = make_project(tmp_path)
+    spec = p / "battery.json"
+    spec.write_text(json.dumps({"tests": ["test_src.py::test_zero"], "arms": [
+        {"label": "x", "mutate": [["src.py", "old.txt", "new.txt"]]}]}), encoding="utf-8")
+    proc = run(p, "--battery", str(spec))
+    assert proc.returncode == 2, (proc.stdout, proc.stderr)
+    assert '"file"' in proc.stderr and '"mutations"' in proc.stderr
+    assert "inline" in proc.stderr
+    assert "'mutate'" in proc.stderr

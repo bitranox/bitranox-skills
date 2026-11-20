@@ -13,6 +13,10 @@ goes wrong, and it went wrong the same three ways often enough to be worth a too
 * **The arm failed somewhere else.** A test can fail on a boot precondition, a fixture, or an
   earlier assertion, which looks exactly as red as the assertion you meant to test. The reported
   reason is the summary line, so you can see WHICH assertion failed rather than only that one did.
+  A kill whose every failing test died on a raised exception or an ERROR line (setup, teardown,
+  collection) and on no assertion prints `KILLED BY ERROR` (`"killed_by": "error"` in the JSON;
+  `"assertion"` or `"unknown"` otherwise): the mutation broke something, but the test never
+  reached the check it exists for, so narrow the mutation until an assertion fails.
 * **One mutation was not enough.** Layered validation absorbs a single-layer break: a short field
   zero-fills and a later check catches it anyway, so the arm stays green and reads as a weak test.
   `--mutate` repeats, and every mutation is applied together as ONE arm.
@@ -132,6 +136,19 @@ sibling anchor_edit.py that cannot be imported, or an internal error - never Pyt
 exit 1, which would read as SURVIVED. A stop signal exits 128 + its number (143 for SIGTERM, 130
 for Ctrl-C) once the sources are restored, and 2 is also a refusal to touch a file a killed run's
 journal still holds.
+
+Decisions:
+- A kill on an error stays KILLED (exit 0) and is MARKED, not turned INCONCLUSIVE: a mutation that
+  makes code raise is often a real kill (a None reaching an attribute access), and exit 2 would
+  turn every such battery red. The marker carries the doubt; the reader narrows the mutation.
+  Pinned by test_a_mutation_that_only_raises_is_marked_killed_by_error.
+- Any failing test that failed on an assertion makes the arm an "assertion" kill: one test that
+  reached its check is the evidence the arm owes. Pinned by
+  test_killed_by_tells_an_assertion_from_an_error.
+- A refused battery arm prints the expected spec shape and the keys it does not read: a spec
+  copying --mutate's FILE form (`"mutate": [[file, old, new]]`) otherwise learned only "lacks
+  file, old, new". Pinned by
+  test_a_battery_arm_written_like_the_mutate_flag_is_refused_with_the_shape.
 """
 from __future__ import annotations
 
@@ -377,6 +394,61 @@ def failure_reason(output: str) -> str | None:
         rest = line.split(" ", 1)[1]
         return _reason_after_nodeid(rest) or line.strip()
     return None
+
+
+#: A summary reason that is an exception name (`KeyError: 'x'`, `pkg.CustomException: boom`),
+#: rather than an assertion pytest reports.
+_EXCEPTION_REASON = re.compile(
+    r"[A-Za-z_][\w.]*(?:Error|Exception|Exit|Interrupt|Iteration|Group)\b")
+#: The reasons pytest gives a failed check: a bare `assert`, an AssertionError, `pytest.fail` and
+#: `pytest.raises` that saw nothing (`Failed: DID NOT RAISE`).
+_ASSERTION_REASONS = ("assert ", "AssertionError", "Failed:")
+
+
+def killed_by(output: str) -> str | None:
+    """How the arm's tests failed: "assertion", "error", "unknown", or None when none failed. PURE.
+
+    "assertion" when any FAILED summary line names a check that failed, "error" when every one
+    names a raised exception or is an ERROR line (setup, teardown, collection), "unknown" when a
+    reason fits neither. A kill on an error proves the mutation broke SOMETHING, not that the test
+    reached the assertion it is meant to pin: a mutation that made a setup step raise
+    PermissionError read as a kill while the mode assertion never ran.
+    """
+    lines = [line.rstrip("\r") for line in output.split("\n")]
+    start = next((i for i, line in enumerate(lines) if _SUMMARY_HEADER in line), None)
+    if start is None:
+        return None
+    kinds = []
+    for line in lines[start + 1:]:
+        if not line.startswith(("FAILED ", "ERROR ")):
+            continue
+        reason = _reason_after_nodeid(line.split(" ", 1)[1])
+        if line.startswith("ERROR "):
+            kinds.append("error")
+        elif reason.startswith(_ASSERTION_REASONS):
+            kinds.append("assertion")
+        elif _EXCEPTION_REASON.match(reason):
+            kinds.append("error")
+        else:
+            kinds.append("unknown")
+    if not kinds:
+        return None
+    for kind in ("assertion", "unknown"):
+        if kind in kinds:
+            return kind
+    return "error"
+
+
+def _verdict_label(report) -> str:
+    """The verdict as printed: a kill on an error alone reads KILLED BY ERROR."""
+    label = report["verdict"].upper()
+    if report["verdict"] == Verdict.KILLED and report.get("killed_by") == "error":
+        label += " BY ERROR"
+    return label
+
+
+_BY_ERROR_NOTE = ("every caught test failed on an error, not an assertion - narrow the mutation "
+                  "until the assertion the test exists for fails")
 
 
 def failed_nodeids(output: str) -> list[str]:
@@ -865,6 +937,8 @@ def run_arm(planned, nodeid, *, runner=None, timeout=None, command=False, log_pa
         "verdict": verdict,
         "failure": reason,
         "caught_by": [] if error or command else failed_nodeids(output),
+        "killed_by": (killed_by(output or "") if verdict == Verdict.KILLED and not command
+                      else None),
         "output_tail": output_tail(output or ""),
         "log": _write_log(log_path, output or ""),
         "restored": restored,
@@ -1088,9 +1162,11 @@ def _main_single(args, runner, source, recovery: Recovery | None = None) -> int:
     else:
         for item in reverts:
             print(f"reverted {item['path']} to {item['rev']} ({item['sha']})")
-        print(f"{report['verdict'].upper()}: {shown}")
+        print(f"{_verdict_label(report)}: {shown}")
         if report["failure"]:
             print(f"  reason: {report['failure']}")
+        if report.get("killed_by") == "error":
+            print(f"  note: {_BY_ERROR_NOTE}")
         if report["log"]:
             print(f"  log: {report['log']}")
         _print_output_tail(report)
@@ -1200,6 +1276,18 @@ def _str_list(value, what: str) -> list[str]:
         raise BatteryError(str(exc)) from None
 
 
+#: Printed with a refused arm: the spec form differs from --mutate, whose OLD and NEW are FILES.
+_ARM_SHAPE = (' - write each mutation as {"file": PATH, "old": TEXT, "new": TEXT} with the old and '
+              'new text inline (not paths to anchor files, unlike --mutate), on the arm beside '
+              '"label" or as a list in "mutations": [{"file": ..., "old": ..., "new": ...}]')
+_ARM_KEYS = {"label", "file", "old", "new", "mutations", "tests"}
+
+
+def _unknown_arm_keys(arm: dict) -> str:
+    unknown = sorted(key for key in arm if key not in _ARM_KEYS)
+    return f" (keys this arm has that a spec does not read: {unknown})" if unknown else ""
+
+
 def _arm_mutations(arm: dict, label: str) -> list[tuple[str, str, str]]:
     raw = arm.get("mutations")
     if raw is None:
@@ -1213,7 +1301,8 @@ def _arm_mutations(arm: dict, label: str) -> list[tuple[str, str, str]]:
         missing = [key for key in ("file", "old", "new")
                    if not isinstance(mutation.get(key), str)]
         if missing:
-            raise BatteryError(f"arm {label!r}: a mutation lacks {', '.join(missing)}")
+            raise BatteryError(f"arm {label!r}: a mutation lacks {', '.join(missing)}"
+                               + _ARM_SHAPE + _unknown_arm_keys(arm))
         out.append((mutation["file"], mutation["old"], mutation["new"]))
     return out
 
@@ -1295,7 +1384,8 @@ def run_battery(arms, tests, *, runner, timeout=None, command=False, log_dir=Non
                              command=command, log_path=_arm_log_path(log_dir, index, label))
         except (AnchorError, OSError) as exc:
             report = {"verdict": Verdict.ERROR, "failure": f"refused before mutating - {exc}",
-                      "caught_by": [], "restored": True, "bytecode_left": []}
+                      "caught_by": [], "killed_by": None, "restored": True,
+                      "bytecode_left": []}
         result["arms"].append({"label": label, **report})
         if not report["restored"]:
             break
@@ -1366,12 +1456,14 @@ def _main_battery(args, runner, source, recovery: Recovery | None = None) -> int
 def _print_battery(result) -> None:
     print(f"baseline: {'GREEN' if result['baseline']['green'] else 'RED'}")
     for arm in result["arms"]:
-        line = f"{arm['verdict'].upper():<12} {arm['label']}"
+        line = f"{_verdict_label(arm):<12} {arm['label']}"
         if arm["caught_by"]:
             line += "  caught by: " + ", ".join(arm["caught_by"])
         elif arm["verdict"] != Verdict.SURVIVED and arm.get("failure"):
             line += f"  ({arm['failure']})"
         print(line)
+        if arm.get("killed_by") == "error":
+            print(f"    note: {_BY_ERROR_NOTE}")
         _print_output_tail(arm, indent="    ")
     if result["final_baseline"] is not None:
         print(f"final baseline: {'GREEN' if result['final_baseline']['green'] else 'RED'}")
