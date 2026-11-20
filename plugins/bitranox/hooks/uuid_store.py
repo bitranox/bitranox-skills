@@ -31,6 +31,7 @@ import re
 import stat
 import tempfile
 import uuid as _uuid
+from collections.abc import Iterable
 from pathlib import Path
 
 import self_improve_signals as sig
@@ -131,9 +132,9 @@ class TopicRefusal(ValueError):
     refuses a TOPICS line too, so that refusal and the engine's TOPICS gate are one exception type
     that every caller catching the engine's refusals already handles."""
 
-    def __init__(self, reasons, total=None):
-        self.reasons = list(reasons)
-        self.total = len(self.reasons) if total is None else total
+    def __init__(self, reasons: Iterable[str], total: int | None = None) -> None:
+        self.reasons: list[str] = list(reasons)
+        self.total: int = len(self.reasons) if total is None else total
         more = "" if self.total <= len(self.reasons) else " (and %d more)" % (self.total - len(self.reasons))
         super().__init__("; ".join(self.reasons) + more)
 

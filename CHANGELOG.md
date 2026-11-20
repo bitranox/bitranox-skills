@@ -30,6 +30,17 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.15.1]
+
+### Changed
+
+- `memory_engine.py` type-checks clean under pyright strict (3269 errors before). Every function and method is annotated, and calls into the unannotated sibling modules go through typed Protocol views of those modules, so a test that monkeypatches a module still reaches the engine. Behaviour and CLI output are unchanged: 75 CLI calls over every verb gave byte-identical output and trees before and after.
+- `uuid_store.TopicRefusal` annotates its constructor.
+
+### Added
+
+- A test that every function `memory_engine.py` defines is fully annotated (249 functions and methods).
+
 ## [11.15.0]
 
 ### Added

@@ -3241,7 +3241,7 @@ class RenderBlockTooLarge(TopicRefusal):
         self.need = kept + added - MAX_RENDER_BLOCK_BYTES
         if stale and self.need <= 0:
             # remove the ignore once uuid_store.TopicRefusal.__init__ is annotated
-            super().__init__([(  # pyright: ignore[reportUnknownMemberType]
+            super().__init__([(
                 "%d bytes of lines placed by topic at another level stay at %s beside %d bytes "
                 "of pinned, legacy or unplaced lines, and %d bytes of lines placed there are to "
                 "be added: %d bytes over the %d bytes one level's block may hold. A chain render "
@@ -3307,7 +3307,7 @@ class RenderBlockTooLarge(TopicRefusal):
                     % (added, level, stays, self.over, MAX_RENDER_BLOCK_BYTES, bound_to,
                        self.need, level))
         # remove the ignore once uuid_store.TopicRefusal.__init__ is annotated
-        super().__init__([text + "." + grows if grows else text])  # pyright: ignore[reportUnknownMemberType]
+        super().__init__([text + "." + grows if grows else text])
 
 
 class CollapseTooLarge(TopicRefusal):
@@ -3372,7 +3372,7 @@ class CollapseTooLarge(TopicRefusal):
                     % (self.movable, placed, self.need, self._move_text(self.movable, "move"),
                        self._rebind_text(self.need - self.movable)))
         # remove the ignore once uuid_store.TopicRefusal.__init__ is annotated
-        super().__init__([head + parts + tail])  # pyright: ignore[reportUnknownMemberType]
+        super().__init__([head + parts + tail])
 
     def _later(self) -> str:
         return ("" if not self.stale else
@@ -3462,7 +3462,7 @@ class LineGrowsPastCap(TopicRefusal):
 
     def __init__(self, text: str) -> None:
         # remove the ignore once uuid_store.TopicRefusal.__init__ is annotated
-        super().__init__([text])  # pyright: ignore[reportUnknownMemberType]
+        super().__init__([text])
 
 
 def _line_growth_refusal(verb: str, changes: Iterable[tuple[_StrPath, str, us.Pointer]], retry: Callable[[int, int, int], str]) -> str | None:
