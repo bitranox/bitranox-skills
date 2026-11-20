@@ -30,6 +30,40 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.17.0]
+
+### Added
+
+- `dream_state.py should-promote` takes `--source inferred|user` (default `inferred`), so a user-stated concrete rule gets `promote` from the verb itself instead of a `hold` the dream skills had to work around.
+
+### Fixed
+
+- `memory_engine` move, relocate and rename no longer write back a copy of a fact read before another session's `add` landed (old hook, title, pin and prose kept while the new prose went to the archive). Each re-reads under the locks of every level it writes, taken together in one global order, and refuses, writing nothing, a fact whose line left in the meantime.
+- A rename's citation rewrite no longer puts an older hook back on a citing fact, and no longer rewrites a citing body without a lock.
+- `add` no longer writes an empty body file for a dangling pointer at its level, and no longer writes another fact's body back from its own earlier read.
+- context-watcher: an API error reply no longer reads as a 0-token context. The harness logs it as a `<synthetic>` assistant record with every usage field 0; the watcher took it for a compaction, re-armed the checkpoint request, asked again on the checkpoint's own write and stamped the request after the file, so the resume said no checkpoint was saved. A record that measured no request (an API error, a `<synthetic>` record, or a 0 total) is now skipped and no longer names the context window through its model.
+- context-watcher: a checkpoint request that falls due on the checkpoint's own Write, Edit or MultiEdit (any write in plan mode) is answered by that write, stamped just before the file and left unsaid, instead of being stamped after it, which also made the resume report no checkpoint.
+- On Windows, a rooted Git Bash path that is not a drive (`/tmp/x`, `/repo`, `/`) reads as unknown in every `cd`, `-C` and path reader instead of as the current drive's root, which Git Bash never means; guards that judge a repository or file now stop on it instead of judging the wrong one. POSIX and the PowerShell tool are unchanged.
+- tooling-detour-nudge and ci-watch-nudge read a Git Bash drive path (`/c/...`) in a redirect target, write operand or `git -C` value as that drive, where pathlib had joined it onto the cwd.
+- The repo-gate fallback note tells a Windows user to spell the target with its drive, since the `/path/to/repo` form it suggested is a mount there.
+- meta-dream-tree (dream-core, step 5) and meta-dream-crosstree say how a promotion is reported in propose mode: a promotion to a tree top that passed the gate (`should-promote` printed `promote`, asked with `--source user` for a user-stated concrete rule) and a lift below a top are applied in every mode and listed as applied with their cost, never as a proposal; a candidate the gate holds is listed as held, by slug, with no cost. The two-project-key check before acting on `promote` applies only to a model-inferred fact.
+- meta-dream-crosstree step 4 no longer says the promotion counter keys on the raw project string with no normalisation: the path is made absolute against the cwd first.
+- meta-skill-ab-test: the suite's fake `claude` writes its transcript and makes its commit before it replays the stream, as a real session does, so an arm the harness voids on a synthetic notice no longer keeps or loses its transcript and commit depending on scheduling.
+- net-firewall-pfsense: `doctor` no longer fetches the DNS host overrides it never checked, so a failed or malformed override read no longer makes the audit exit 2, and the live audit makes one ssh round trip fewer.
+- `reconcile_memory_index.py --repair-appended-type` leaves alone a body that another writer repaired after the scan, instead of failing on it.
+
+### Changed
+
+- `shell_text`: new `is_msys_mount`, and an `unknown_mounts` keyword on `resolve_path`, `directory_change` and `git_segment_dir`; `msys_drive_path_for_tool` can return None.
+- meta-skill-ab-test: abprofile, abstream, abtrace, abarm, abguard and _ablib type the JSON and TOML they read (`JsonValue`/`JsonObject` now live in `_ablib`); no `Any` is left in the skill's scripts and all eight pass pyright strict. Every output is unchanged.
+- net-firewall-pfsense: the arp, snapshot, table test/del and snort check/unblock/verify/fixsteps answers and the `--json` envelope are typed records rather than dicts read by string key. Every human and `--json` output is byte-identical.
+- `self_improve_signals`: every function carries a full type signature (pyright strict 1326 -> 2 errors), so the hooks and skill scripts importing it can be checked strictly; behaviour is unchanged, and a new test keeps every function annotated.
+- `uuid_store`, `topic_store` and `tell_chars` carry full type annotations and pass pyright strict; a new test keeps every function in the three modules annotated.
+- `uuid_store.render_pointer_index` and `upsert_pointer_block` are typed to take a sequence of pointers: they iterate it twice, so a generator would silently lose every unpinned line.
+- `topic_placement.normalise_topics` takes any iterable and refuses each element that is not a tag, so parsed data needs no cast.
+- `reconcile_memory_index.py`: its reports are typed records with output unchanged.
+- `shell_text.is_work_tree_root` is annotated, `self_improve_signals.memory_lock` returns `Generator[None]`, and `reconcile_memory_index` drops a cast the new annotations made unnecessary.
+
 ## [11.16.0]
 
 ### Added

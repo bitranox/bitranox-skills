@@ -157,8 +157,8 @@ class TreeReport(TypedDict):
 
 
 def _walk_error_reason(exc: ME.TreeWalkError) -> str:
-    """The reason a TreeWalkError carries; uuid_store sets it from a str and is not annotated."""
-    return cast("str", exc.reason)
+    """The reason a TreeWalkError carries."""
+    return exc.reason
 
 _FRONTMATTER_KEY_RE = re.compile(r"^([A-Za-z0-9_-]+):\s*(.*)$")
 _SLUG_SEP_RE = re.compile(r"[_-]")

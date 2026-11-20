@@ -24,7 +24,7 @@ import re
 import subprocess
 import tempfile
 import time
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Generator, Iterable, Iterator, Mapping, Sequence
 from enum import StrEnum
 from pathlib import Path
 from types import MappingProxyType
@@ -455,7 +455,7 @@ def _reclaim_stale_lock(lock: Path, clock: Callable[[], float]) -> bool:
 
 @contextlib.contextmanager
 def memory_lock(target_path: _StrPath, timeout: float = 5.0, poll: float = 0.05,
-                now: Callable[[], float] | None = None) -> Iterator[None]:
+                now: Callable[[], float] | None = None) -> Generator[None]:
     """Advisory exclusive lock around a memory read-modify-write, via an atomic `<target>.lock`
     O_EXCL create (cross-platform, no fcntl/msvcrt). Raises TimeoutError on contention past `timeout`;
     reclaims a lock older than `_LOCK_STALE_S` (holder crashed). `now` injectable for tests.

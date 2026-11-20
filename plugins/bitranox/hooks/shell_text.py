@@ -687,7 +687,7 @@ def msys_drive_path_for_tool(path, tool_name="Bash", os_name=os.name):
     return None if is_msys_mount(path, windows) else msys_drive_path(path, windows)
 
 
-def is_work_tree_root(directory):
+def is_work_tree_root(directory: str | os.PathLike[str]) -> bool:
     """True when `directory` holds a `.git` that git itself would accept as a repository marker.
 
     git takes a `.git` DIRECTORY only when it holds HEAD, and a `.git` FILE (a linked worktree, a
