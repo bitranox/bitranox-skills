@@ -87,18 +87,23 @@ _BLANK = r"[^\S\n]"
 
 # Launchers that leave the next word the real program. A leading `NAME=value` is an assignment
 # prefix for the same reason.
+# Joined with `+`, not an f-string: the perf-review regex finder folds constant concatenation and
+# checks the result for quadratic starts, while an f-string is a pattern built at run time to it.
+_OPTION = _BLANK + r"+-" + _WORD + r"+"
 _LAUNCHER = (
     r"(?:(?:sudo|nice|command|nohup"
-    rf"|stdbuf(?:{_BLANK}+-{_WORD}+)+"
-    rf"|timeout(?:{_BLANK}+-{_WORD}+)*{_BLANK}+{_WORD}+"
-    rf"|env(?:{_BLANK}+-u{_BLANK}+{_WORD}+|{_BLANK}+-{_WORD}+|{_BLANK}+[A-Za-z_]\w*={_WORD}*)*"
-    rf"|[A-Za-z_]\w*={_WORD}*){_BLANK}+)*"
+    r"|stdbuf(?:" + _OPTION + r")+"
+    r"|timeout(?:" + _OPTION + r")*" + _BLANK + r"+" + _WORD + r"+"
+    r"|env(?:" + _BLANK + r"+-u" + _BLANK + r"+" + _WORD + r"+|" + _OPTION
+    + r"|" + _BLANK + r"+[A-Za-z_]\w*=" + _WORD + r"*)*"
+    r"|[A-Za-z_]\w*=" + _WORD + r"*)" + _BLANK + r"+)*"
 )
 
 _PROGRAM = (
-    rf"(?P<prog>(?:{_WORD}*/)?(?:[efz]?grep|rg|diff|cmp)"
-    rf"|git(?:{_BLANK}+-C{_BLANK}+{_WORD}+|{_BLANK}+-c{_BLANK}+{_WORD}+|{_BLANK}+--no-pager)*"
-    rf"{_BLANK}+(?:grep|diff))(?=[\s)]|$)"
+    r"(?P<prog>(?:" + _WORD + r"*/)?(?:[efz]?grep|rg|diff|cmp)"
+    r"|git(?:" + _BLANK + r"+-C" + _BLANK + r"+" + _WORD + r"+|" + _BLANK + r"+-c" + _BLANK + r"+"
+    + _WORD + r"+|" + _BLANK + r"+--no-pager)*"
+    + _BLANK + r"+(?:grep|diff))(?=[\s)]|$)"
 )
 
 # One pipeline element's worth of text: no list separator, no pipe, no newline. `2>&1`, `>&2`
