@@ -394,6 +394,13 @@ rows alone, and at commit time stage path-scoped (never a bare `git add -A`, whi
 in-flight files into your commit) and `git restore --staged` anything a live peer is still writing.
 At nap commit, a fold target whose pre-nap backup already differs from `git show HEAD:facts/<slug>.md`
 was dirtied by a peer before you touched it - leave it out of your commit.
+An applier subagent can keep writing after it reports, and its last handoff can arrive after
+your store commit. Before calling the store committed, run `git status --porcelain` on
+`facts/<slug>.md` for every slug named in any handoff received since that commit, and commit
+what changed in a follow-up commit (measured: three late edits landed after a crosstree dream's
+store commit and needed a second one). A fold brief also diffs every verbatim user quote in a
+folded body against its source line: the quote is kept byte for byte, typos included
+(`bitranox:meta-dream-nap`, step 1 rule (d)).
 `reconcile_memory_index.py --check <chain narrow->broad>` must end `TOTAL problems: 0`. For a
 TREE-WIDE run (meta-dream-tree and the crosstree variants) ALSO run
 `reconcile_memory_index.py --check-tree <anchor>` and require `TOTAL tree problems: 0` - the

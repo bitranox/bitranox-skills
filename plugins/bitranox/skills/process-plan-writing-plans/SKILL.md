@@ -32,6 +32,14 @@ When the work spans more than a day, do not write one detailed plan: a plan writ
 3. **Write three plans top-down:** HIGH (milestones, MVP slice, what is cut, risks), then MID (components, interfaces, verification per milestone), then DETAILED (tasks, files, tests, in the format below). Check each lower plan against the one above it, never the reverse.
 4. **Detail only to the next decision checkpoint** in the high plan, and say in the file that later milestones get their tasks once that checkpoint is decided: task-level code written for a choice not yet made is a stale brief waiting to be dispatched.
 
+**Decide what is yours; ask only what is not.** When the plan is for a library or another
+component with outside consumers, settle its internal design yourself and log each choice as an
+autonomous decision. Put to the user only choices that cross repos or that the user owns, and
+never frame a library question through one consumer's feature. Measured: a library plan stalled
+on a question about the library's buttons framed through one consumer's label mask, and the user
+rejected the question: the session was working on the library, so the detail was its own to
+decide.
+
 ## File Structure
 
 Before defining tasks, map out which files will be created or modified and what each one is responsible for. This is where decomposition decisions get locked in.
@@ -245,11 +253,35 @@ omitted, which only the full gate's test collection shows; RED claims that held 
 prose where code was due; a "strict" claim that was false for float fields), and with them folded
 in, the next four tasks came back with zero or one false premise each.
 
+One drafter's work can stand in for that dispatch: a drafter that BUILT every task in a scratch
+clone (one commit per task, the gate run at each task's state), regenerated the plan's code blocks
+from those commits, and replayed the plan text onto the base (Create = write the block, Change =
+`git apply`), proving the tree after each task equals that task's commit, with a planted
+one-character change that makes the replay report a difference. Re-run its replay check and the
+planted control yourself before relying on it, and log the substitution as a decision. Measured:
+six tasks executed from such a plan surfaced no plan-text defect, only review-level findings.
+
+A plan step that runs a file from ANOTHER repo (a battery spec, a fixture, a script) names it by
+absolute path, or by a path relative to a root the step states. Plans are executed in nested
+worktrees (`<repo>/.claude/worktrees/<name>`), where a relative path written from the main
+checkout resolves somewhere else, so run this item from such a worktree, not only from a plain
+clone. Measured: two implementers in a nested worktree could not find battery specs the plan gave
+as `../../apps/...`; the scratch-clone run could not see it.
+
 **10. Platforms:** Read the repo's CI OS matrix (the workflow file, or the config it is generated from) and make every platform claim in Global Constraints agree with it: each prescribed test passes on every OS there or skips with a stated reason. A test that isolates `HOME` also sets `USERPROFILE`, which `Path.home()` reads on Windows. Measured: a plan said "Linux only" while CI ran Windows and macOS, and a test that set only `HOME` passed locally and failed on Windows after the release.
 
 **11. Code against the design text:** In a three-altitude plan, check each DETAILED step's code against every behavioural sentence the MID plan states for the same function (what happens at a limit, the order things are cut in, which fields a record carries). Implementers follow the brief's code, so a mismatch ships as the plan's intent, and only a reviewer who reads both documents catches it.
 
 **12. Tests that can show what they claim:** A test for an ORDER or STATE constraint (arms interleaved, a resource held open during a step) makes that order observable: a fake clock with distinct increasing deltas (arm A gets d1, d3, d5 and arm B d2, d4, d6) or a wrapper recording state at each call; counts and lengths under a uniform clock assert nothing about it. A RED step that runs two test files at once stops at a collection error in one, so the other's RED never shows: give each file its own RED command or add `--continue-on-collection-errors`, and say which failure each shows. A test that a CLI option rejects a bad value asserts the option's own name in stderr (`argument --max-rows`), never only exit code 2: argparse also exits 2 on an option it does not know yet, so that RED passes before any code exists.
+
+A RED that fails only at import or collection (the new name does not exist yet) proves the test
+needs the new code, not that any assertion tells right from wrong. For each task's key behaviours
+require a RED at assertion level: run the test against the previous task's code with the new
+names stubbed, or mutate the guarded line (bitranox:compuse-toolbox `mutation_arm`), and record
+which assertion fails. Two traps: inputs that cancel out (a delete plus an insert before
+navigating, so offset and keyset paging agree), and a path tested only through the branch that
+rebuilds state (leaving via the next record, never via the list). Measured: a plan whose RED was
+import-level for nearly every task let two mutants survive and two real defects through.
 
 **13. Text replaced by a pointer:** When a task replaces a passage with a pointer to another file or skill, diff the removed text against the pointed-to text and keep or move every rule, remedy and threshold the target does not carry.
 

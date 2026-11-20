@@ -204,6 +204,12 @@ the checkout before the first Bash call (at once, if Bash already ran, then chec
 for tables it already realigned), and after the first dispatch check `git status` for markdown
 nobody meant to change.
 
+**Never resume a FINISHED writer while another writer works in the same worktree.** Send a late
+item to the writer that is running, or to the next one. And tell every fixer to undo only the
+gate's own hunks, after reading `git diff`, never `git checkout -- <file>` on a whole file.
+Measured: a resumed fixer ran `git checkout -- pyproject.toml uv.lock` to undo the gate's version
+bump, wiped the other writer's uncommitted step, and that writer's gate then ran on a changed file.
+
 ## When No Human Can Answer
 
 Every rule here that sends a decision to your human partner assumes someone will answer. A run
@@ -384,7 +390,25 @@ the file its gate line came from, and that time must be later than the BASE comm
 (`git log -1 --format=%ci BASE`). An older file is an earlier task's gate, and it reads exactly
 like a fresh pass: re-run the gate yourself, or send the task back, before the review.
 
+**A proven draft can be applied instead of transcribed.** When the plan's code already exists as
+proven per-task commits (the drafter built every task in a scratch clone, and each code block was
+checked equal to its commit), you may apply each commit yourself in place of a transcribing
+implementer: `git cherry-pick --no-commit <draft commit>`, commit with a written message, and
+assert `git rev-parse HEAD^{tree}` equals the draft commit's tree. The task review, its fix rounds
+and the final review stay; tell the reviewer the code came from the draft, and label the draft's
+evidence in the report file as the drafter's claim. Measured: five tasks applied this way still
+drew three Important findings in their reviews, so the review loop, not the transcription, is
+what adds the value.
+
 **DONE_WITH_CONCERNS:** The implementer completed the work but flagged doubts. Read the concerns before proceeding. If the concerns are about correctness or scope, address them before review. If they're observations (e.g., "this file is getting large"), note them and proceed to review.
+
+**A STOP check the implementer could not run is BLOCKED, not a concern.** When it reports a
+STOP-condition check as unverifiable because the file it had to compare against was "not within
+reach", look the file up yourself at the ref the brief pins (`git ls-tree -r <sha> --name-only`,
+`git show <sha>:<path>`) before accepting the status, and hand the exact path and ref to the task
+reviewer as an explicit extra check. Name both in the brief next time. Measured: an implementer
+searched seven directory levels and missed a file one `git ls-tree` found; the reviewer comparing
+against it found a real defect.
 
 **NEEDS_CONTEXT:** The implementer needs information that wasn't provided. Provide the missing context and re-dispatch.
 
@@ -400,6 +424,12 @@ like a fresh pass: re-run the gate yourself, or send the task back, before the r
 item to a background implementer or fixer that has reported, check for its commit before waiting
 on it: an agent that went idle can leave a queued item unacted on. No commit and no activity means
 re-send the item in full.
+
+**A controller running as a background subagent asks for its reports BY NAME.** Tell every
+implementer, reviewer and fixer it dispatches to SendMessage its report to the controller by name
+(and to main as a fallback), and do not rely on the tool-result hand-back alone: a reviewer's
+hand-back failed three times ("the caller is no longer running") while its controller was still
+running, and the verdict reached the controller only because main relayed it.
 
 **An action refused for a subagent is not yours to run for it.** When a subagent reports that a
 permission check (auto mode's classifier, a hook) refused an edit, a command or a history rewrite
@@ -516,6 +546,14 @@ final whole-branch review. When you fill a reviewer template:
   fixer started from) as its BASE and named risks on the code the round ADDED (a refactor, a new helper, a new
   test that must go RED), not only the question whether the listed findings
   are fixed: the next round's defects sit in the last round's new code.
+  Two named risks belong in every such re-review. A fix that closes a race or conflict by
+  DROPPING an outcome (a new base record, a result, a write): was the dropped value the store's
+  truth? Dropping it leaves state on a stale base; the right shape applies the authoritative value
+  first, then re-applies the user's later edits. A fix that ADDS a public method, setter or
+  browser-side limit is new API: does it check its input's kind before mutating, and does a limit
+  set at the field's own maximum turn a visible error into silent truncation (set it one past)?
+  Measured in one run: a dropped new base reverted saved values, a new setter accepted a bool for
+  a number field and wedged the form, and `maxlength` at the maximum truncated pastes silently.
 - When the plan requires each commit of a task to stand alone (it may be cut
   upstream by itself), verify per commit: cherry-pick ONLY that commit onto
   the task's parent in a throwaway worktree and run the repo's lint and suite
@@ -588,6 +626,13 @@ the plan's own model of each system, so a defect at an edge the plan never named
 them. Every reviewer reports DEFECTS; give the PLAN CHANGES part of instruction 2, the Minor
 triage of instruction 3 and the decision check of instruction 4 to one of them only. Merge their
 DEFECTS into one list before the confirmation step below.
+
+When the plan changes a user interface, the final review also includes a real-browser pass of the
+finished page: a screenshot of each state (opened, success, confirmation, refusal, warning,
+keyboard focus), each read back and judged. Code review and test-harness UI tests cannot see
+layout, focus rings or colours. Measured: a final review said ready to merge, and a separate
+screenshot pass then found four visual defects (no focus ring, a layout jump on a field error, a
+boxed form on a white page, reversed header colours), which cost a library release.
 
 Its instructions, in the dispatch:
 

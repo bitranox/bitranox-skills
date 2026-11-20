@@ -593,9 +593,9 @@ than the cooldown" below).
 ### Exempting your own packages from a cooldown
 
 These traps were measured on uv 0.13.0 with `[tool.uv] exclude-newer = "14 days"` in a project
-depending on several of your own libraries that depend on each other. Two of them are SILENT:
-`uv lock` succeeds with an older release of your own package and prints nothing, which reads as
-fine while consumers never get the release you just shipped.
+depending on several of your own libraries that depend on each other. Three of them are SILENT:
+`uv lock` (or `uv pip install`) succeeds with an older release of your own package and prints
+nothing, which reads as fine while consumers never get the release you just shipped.
 
 - **Exempt the transitive closure of your own packages, not only the direct dependencies.** If
   own package A's newest release requires own package B at a version still inside the cooldown,
@@ -603,6 +603,12 @@ fine while consumers never get the release you just shipped.
   force A with `==` (the `hint:` above). Walk your own packages' requirements from the index,
   following your own names only, and exempt every one reached
   (`exclude-newer-package = { <own-pkg> = false }`).
+- **Exempt the project ITSELF too, not only its own dependencies.** `uv pip install <project>` run
+  inside the project's directory (a CI job installing the released package to run a notebook or a
+  smoke test there) obeys that `pyproject.toml`'s `[tool.uv]`, so with the dependencies exempt
+  but the project not, it installs a release of the project OLDER than the cooldown beside
+  dependencies at their newest, exits 0, and can crash on the mismatch. List the project's own
+  name in `exclude-newer-package` as well.
 - **An exempt own library is still held back by its THIRD-PARTY floors.** If its newest release
   raised a third-party floor to a release younger than the cooldown, every cooldown consumer
   silently locks the previous release of your library. Keep the third-party floors of your own

@@ -47,6 +47,36 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   `node_modules`, `site-packages`, `.claude/worktrees/`, linked git worktrees; `--no-prune` opts
   out), takes `--levels 1-3` to split at more than `## `, counts and names files with no section
   at the chosen levels, and treats a table re-padded by a formatter as the same body.
+- `infra-windows-servicing`: a restart Windows holds while `TiWorker` finishes a staged package
+  is not a hang (time the wait from `TiWorker` CPU progress, with the commands to sample it);
+  service stops and starts in a servicing script are bounded and log each phase; ceilings are
+  sized per guest class, and a KB offered again after the reboot is read by its result codes.
+- `compuse-git`: `git merge --ff-only` refusing over a dirty file that already holds the incoming
+  bytes; splitting a change into commits without zero-context hunks; a repo that stores CRLF
+  blobs on purpose (store exact bytes with `hash-object --no-filters`).
+- `coding-python-uv`: exempt the project itself from a cooldown, since `uv pip install` in its
+  directory obeys its `[tool.uv]`.
+- `process-test-design`: a conftest `COVERAGE_FILE` under pytest-xdist sends the workers' data
+  elsewhere and the report reads "No data to report".
+- `coding-python-performance-review`: an "output byte-identical" claim is checked with each of the
+  output object's caller-visible settings flipped (Rich `Console` `highlight`, `color_system`,
+  width).
+- `compuse-bash`: end only the tmux sessions you named; never `kill-server`.
+- `infra-modulejail`: `8021q` needs `garp` and `mrp`; test fixtures on a jailed host use a `veth`
+  pair and a raw `AF_PACKET` peer instead of loosening the jail.
+- `meta-dream-nap` and `meta-dream-tree`: fold briefs keep verbatim user quotes byte for byte, and
+  late applier handoffs after the store commit get a follow-up commit.
+- `process-agents-subagent-driven-development`: applying a drafter's proven commits instead of
+  transcribing them, an unrunnable STOP check counts as BLOCKED, a background controller asks for
+  reports by name, two named risks in every re-review, a real-browser pass in the final review of
+  a UI plan, and never resuming a finished writer beside a running one.
+- `process-plan-writing-plans`: decide a library's internals yourself; a drafter's checked replay
+  can stand in for the item 9 run; cross-repo paths are absolute; RED at assertion level.
+- `coding-data-architecture`: group findings by shape before partitioning fixers; the
+  error-surface diff without a release tag.
+- `process-test-design`: UI tests look at overlays per theme and probe every async entry path.
+- `compuse-toolbox` `gate`: a wrapper that prints no test counts (bmk `make test` in JSON mode)
+  is judged on exit status alone.
 
 ## [11.13.7]
 

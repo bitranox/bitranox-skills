@@ -388,6 +388,13 @@ INITIALIZATION:
        import from it). Measured: three agents editing one checkout in parallel produced a
        transient test failure from a half-written sibling edit, and one agent had to re-read
        files before every write to avoid clobbering another's work.
+     - Before partitioning, GROUP the findings by SHAPE across files: the same value-or-problems
+       tuple (`tuple[X | None, tuple[str, ...]]`) returned in four modules is one shape. Give each
+       repeated shape ONE shared record type and ONE owning fixer, who creates the shared module
+       and adds it to the import-linter contracts and the module reference; the other fixers
+       import it. Per-file analysers report the shape once per file, so parallel fixers left alone
+       invent a different record type each. Measured: four modules reported the same tuple shape,
+       and only a coordinator merging them by hand kept three fixers from three record types.
      - Launch subagents (Task tool, subagent_type="general-purpose", model="opus") in PARALLEL,
        one per file SET (per-file refactor is bounded judgment, an `opus` job; pin the tier)
      - Each subagent prompt MUST include:
@@ -488,7 +495,9 @@ STEP C - RUN TESTS:
      b. Run ONE malformed value at a time through the real entry point of a baseline and of the
         working tree, and diff exception type / exit code / last error line per input. Use TWO
         baselines, HEAD and the LAST RELEASE tag: a change committed earlier in the same refactor
-        is invisible against HEAD. Get each baseline's source without touching the checkout
+        is invisible against HEAD. A repo with no release tag uses the state file's `base` (the
+        commit the refactor started from) in its place, and the report says no release was
+        compared. Get each baseline's source without touching the checkout
         (`git archive <HEAD or tag> | tar -x -C <tmpdir>`), and prove each arm runs its OWN code
         before comparing (the language skill says how; an arm that silently imports the working
         tree reads "same" for every input). Feed wrong-TYPE values beside out-of-range ones (a

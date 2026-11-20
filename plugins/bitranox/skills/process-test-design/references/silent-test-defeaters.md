@@ -481,9 +481,12 @@ still exits 0. Check the report has a `Stmts` count before quoting any range. `-
 
 pytest-cov builds its Coverage object, and resolves the data file, in its own `tryfirst`
 `pytest_load_initial_conftests` hook, before any conftest is imported. A conftest that sets
-`COVERAGE_FILE` (at import or in `pytest_configure`) therefore redirects nothing: the run writes
-to the configured `data_file` (`.coverage` by default), and a docstring claiming the hook "runs
-before pytest-cov sets up" is wrong. To isolate a run's coverage, set `COVERAGE_FILE` in the
+`COVERAGE_FILE` (at import or in `pytest_configure`) therefore does not redirect the serial run:
+it writes to the configured `data_file` (`.coverage` by default), and a docstring claiming the
+hook "runs before pytest-cov sets up" is wrong. Under pytest-xdist it is worse, not harmless: the
+workers start AFTER the conftest ran and inherit the variable, so their data lands at the
+redirected path while the controller reads `.coverage`, and the report says "No data to report"
+(0%) with every test passing. To isolate a run's coverage, set `COVERAGE_FILE` in the
 environment of the process that starts pytest or `coverage run`. To see where a run really
 writes, point the variable the hook uses (a `TMPDIR`, a session path) at an empty scratch
 directory and look for the file there.

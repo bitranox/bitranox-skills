@@ -328,6 +328,19 @@ your SSH, and - if WiFi is the post-move uplink - its driver plus `cfg80211`/`ma
 modules your firewall uses. On a KVM host keep `kvm`, `kvm_intel`/`kvm_amd`, `vhost_net`,
 `tun`, `vfio*`.
 
+`8021q` needs `garp` and `mrp`. Kept by name, the closure in step 1 pulls them in; left out of
+KEEP, all three are blocked, and `ip link add ... type vlan` then fails with
+`Error: Unknown device type`, which reads as a missing tool rather than the jail.
+
+**A test fixture on a jailed host does not justify loosening the jail.** For a fake NIC use a
+`veth` pair, which a container host keeps anyway, rather than `dummy`, which a jail usually
+blocks: a veth reports carrier only while both ends are up, so the test can stage an outage AND a
+recovery. For a tagged (VLAN or QinQ) peer where `8021q` is blocked, send and read raw frames on a
+veth with an `AF_PACKET` socket instead of creating a VLAN device: the veth moves a received
+outer tag out of band, so read it from `PACKET_AUXDATA`, and set the veth MTU to 1600, since a
+raw send counts the tags against it. Before proposing a whitelist
+addition, look for a module already allowed that does the job.
+
 ## The closure misses runtime-loaded modules - discover those by EXERCISING
 
 `modprobe --show-depends` reports only the STATIC dependencies recorded in `modules.dep`. A

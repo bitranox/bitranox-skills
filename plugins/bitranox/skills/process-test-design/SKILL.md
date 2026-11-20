@@ -545,6 +545,23 @@ check the fixture's pairing before suspecting it.
   (marked, opt-in), not the unit suite. The unit suite runs offline and identically every time.
 - A flaky test is a bug in the test or the code, never "just re-run it" - fix the determinism.
 
+### UI tests: look at what the user sees, and probe every async entry path
+
+- **A browser test that only COUNTS or FINDS an overlay never looks at it.** For every new
+  overlay (dialog, menu, tooltip), assert what the user sees, per theme, after its opening
+  animation has finished: a computed background that is not `rgba(0, 0, 0, 0)`, a size checked
+  against the viewport, text-to-background contrast of at least 4.5:1, and not clipped by its
+  container. Read one screenshot per state back yourself. Measured: two question dialogs were
+  transparent and stretched to the window height in all four themes while 20 browser tests that
+  counted the dialogs passed.
+- **Async UI state needs a delay probe per ENTRY PATH.** For each handler that awaits a read or a
+  write (open a record, next/previous, save, delete, search, page turn, a leave question), slow
+  the store with an injected delay and fire a second action while the first is in flight. Require
+  the screen to end on the record the user sees and no write to land on another record. A suite
+  with instant fakes cannot order these at all. Measured: every review round that ran such probes
+  found async defects the previous green gate missed (a save during a slow open wrote the old
+  form's values onto the new record; a navigation asked before a save landed after it).
+
 ## Wait on whatever lands LAST
 
 When a test waits for A and then asserts on B, read the PRODUCER's order. If B is written after

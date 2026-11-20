@@ -87,7 +87,7 @@ violation.
    facts but not which ones mattered: start from the learnings the handover names, and read the
    last turns before the handover closely, since a lesson formed at the end was never captured by
    the session that formed it. Deferral is cheaper, never better.
-   **Fanned out to subagents**, every brief states three rules. (a) A delta to an EXISTING fact is
+   **Fanned out to subagents**, every brief states four rules. (a) A delta to an EXISTING fact is
    folded with `python3 <plugin>/skills/meta-dream-tree/factedit.py apply --slug <slug>
    --body-file <f> [--hook-file <f>] [--type <kind>]` (read it first with
    `factedit.py show --body --slug <slug>`), never with a hand-rolled fold script. Both walk UP
@@ -104,6 +104,11 @@ violation.
    flag is the human's call, not a subagent's. Run the same `apply` with `--dry-run` instead and
    hand back the delta it prints, so the user decides it in the report. A batch holding a pinned
    fact is refused whole, so leave it out of the batch and dry-run it on its own.
+   (d) A verbatim user quote in a fact is copied byte for byte, typos included: it records what
+   the user said, so a corrected spelling is a changed quote. After the agent reports, diff every
+   quote in each folded body against its source line (the pre-fold body, or the transcript
+   message it came from) and restore any that changed with `factedit.py apply` (measured: an
+   applier turned `usoally` into `usually` inside a quoted user rule).
    `show --body --slug <slug> > f` writes the stored body, its `---` frontmatter frame included
    (the header goes to stderr), so edit the prose in `f` and pass it straight back as
    `--body-file`: the engine stores a framed body once, never framing it again, and re-syncs the

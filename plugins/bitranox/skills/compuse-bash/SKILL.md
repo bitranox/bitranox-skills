@@ -89,6 +89,12 @@ instead. To ask whether the session is alive, use `has-session`; to see what it 
 `list-panes -F '#{pane_current_command}'`. Never `pgrep -f`, which matches the shell running your
 own check (see the process row above).
 
+**Kill only the sessions you created.** Name every session you start (`-s <name>`) and end it with
+`tmux kill-session -t <name>`; never `tmux kill-server` and never another session's name. One tmux
+server (socket `/tmp/tmux-<uid>/default`) serves every process of your user on the host, so
+`kill-server` also ends other Claude sessions' tmux sessions and the user's own. Confirm it is
+gone with `tmux has-session -t <name>`, which exits 1 once it is.
+
 ## Hooks
 
 `block-pgrep-self-match` (PreToolUse on Bash and PowerShell) blocks the `pgrep`/`pkill -f` echo-label self-match. It does not replace preferring pidfile/port/unit signals over a name grep.

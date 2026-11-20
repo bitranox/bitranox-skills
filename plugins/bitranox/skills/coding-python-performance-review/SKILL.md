@@ -97,6 +97,12 @@ discovery steps and use the two checker tools directly:
   stash still holds all of them, and the rest is restored by hand.
   Pass the repo's own invocation after `--` (`compare_performance.py -- -m "not local_only"`):
   without it the script times `pytest tests/ -v`, which drops `src` doctests and runs every marker.
+- **An "output byte-identical" claim is proven only across the output object's caller-visible
+  settings.** List the parameters a caller can pass to it and hash the old and new output with
+  each one flipped from its default (the full cross product when there are only a few); for a
+  Rich `Console` that is `highlight` on and off, `color_system` none/standard/truecolor and
+  several widths. Measured: a batched renderer hashed identical over six renders, all built with
+  `Console(highlight=False)`, and dropped a line's style under a caller's `Console(highlight=True)`.
 
 Before trusting an AFTER figure, follow the method in `bitranox:coding-performance-review`:
 reproduce the recorded BEFORE figure with the same probe, interleave the arms and pin the core.

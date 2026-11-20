@@ -41,6 +41,8 @@ do not tell you.
 | Repair upgrade finished cleanly                 | the machine is as it was          | **activation can be lost silently** - read `LicenseStatus` and `PartialProductKey` before and after         |
 | Setup log: `KB<n>` changed to `Staged`          | that CU is installed, or pending  | **Staged is neither**, and the KB can be the servicing stack update - read its CBS identity                 |
 | `DISM /Add-Package` hit the driver's ceiling    | the install failed                | **a slow guest class** - VBS+HVCI took 2.8x as long; read the exit code file and `UBR` first                |
+| Guest still up 10 min after `shutdown /r`       | the reboot hung, stop the guest   | **the restart is HELD** while TiWorker finishes a staged package - time out from its CPU, not the request   |
+| Remote cleanup script times out with no output  | the script crashed                | **an unbounded `Start-Service`** - BITS sat in StartPending 20 min after a CU; bound it, log each phase     |
 
 ## A clean health check does not mean an update will install
 
@@ -921,6 +923,49 @@ inventory step reports a machine with no disks. Capture `2>&1` and check the exi
 parsing; better, do not call it at all - use `fsutil fsinfo drives` (cmd-native), or
 `Get-Volume` / `Get-Partition` / `Get-Disk`.
 
+### Bound every service stop and start in a servicing script
+
+`Stop-Service` and `Start-Service` wait with NO time limit. Clearing
+`SoftwareDistribution\Download` needs `wuauserv` and `BITS` stopped and started again, and right
+after a cumulative update `BITS` sat in `StartPending` for 20.5 minutes (Win11 25H2 VBS guest,
+the console printing "Warten auf Start des Diensts bits" the whole time). A cleanup run over ssh,
+whose output was collected only at the end, hit its 30-minute limit with no output at all, and
+finding the phase took a second instrumented run. Bound each transition and log each phase to a
+file on the guest, so a caller's timeout still leaves the phase it stopped in:
+
+```powershell
+$progress = 'C:\ProgramData\cleanup-progress.log'
+function Set-ServiceState($name, $want) {
+    $svc = Get-Service $name
+    if ($svc.Status -eq $want) { return $true }  # .Stop() on a stopped service throws
+    try {
+        if ($want -eq 'Stopped') { $svc.Stop() } else { $svc.Start() }
+        $svc.WaitForStatus($want, [TimeSpan]::FromSeconds(120))
+        return $true
+    } catch {
+        "$(Get-Date -f s) $name not $want, status $((Get-Service $name).Status)" |
+            Add-Content $progress
+        return $false
+    }
+}
+"$(Get-Date -f s) phase: stop services" | Add-Content $progress
+$wu = Set-ServiceState wuauserv 'Stopped'
+$bits = Set-ServiceState bits 'Stopped'
+if ($wu -and $bits) {
+    "$(Get-Date -f s) phase: delete" | Add-Content $progress
+    # delete SoftwareDistribution\Download here; a service that did not stop still holds it
+}
+"$(Get-Date -f s) phase: start services" | Add-Content $progress
+$null = Set-ServiceState wuauserv 'Running'   # start both whether or not the delete ran
+$null = Set-ServiceState bits 'Running'
+"$(Get-Date -f s) phase: done" | Add-Content $progress
+```
+
+The 120 s bound is not a verdict on the service. A start that runs past it keeps starting on its
+own, as the 20-minute `BITS` start did; the log records it and the script finishes instead of
+holding the caller. A stop that runs past it means the folder is still in use, so the delete is
+skipped, never forced.
+
 ### After the apply reboot: inventory only a settled box
 
 The first boot after an in-place upgrade is not a settled system, and an inventory run against it
@@ -981,6 +1026,29 @@ DISM has ended, and an empty one is the broken redirect described under the cumu
 install; read the `UBR` and `dism.log` instead. Delete the file before each run, so a leftover from
 an earlier one is never read as this run's result.
 
+**Size every ceiling per guest class, the restart included.** A .NET cumulative update (Win11 25H2)
+on two VBS+HVCI guests took 3 h 45 min and 3 h 53 min for its first install round (CBS deployment
+items at about 4 per minute, past item 1090): a 2 h ceiling would have failed both, and 4 h fit
+with 6 to 15 minutes to spare. The restart after it was held for about another 1.5 h. Windows
+holds a requested restart while `TiWorker` finishes a staged package: `shutdown /r` logs event
+1074 and the guest stays up, with `TiWorker` on a full core and CBS `RebootPending` true (measured:
+still up 11 minutes after the request, and a fixed 600 s wait for ssh to drop called the working
+guest dead and stopped a 17-guest sweep). Time a reboot wait out from the last `TiWorker` CPU
+progress, never from the restart request. Sample both every minute and restart the timer whenever
+the CPU figure grew:
+
+```powershell
+(Get-Process TiWorker -ErrorAction SilentlyContinue).CPU     # seconds of CPU, $null when gone
+Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending'
+```
+
+The key says a restart is still owed; the CPU figure says whether servicing is still working toward
+it. Only when `TiWorker` is gone or flat for the whole window is the restart no longer held, and
+only then is a guest that did not go down a finding. After that reboot Windows Update offered the SAME KB
+again, and both rounds reported result code 2 (succeeded): a second package of the update, not a
+failed first install. Read each round's result code before calling the first one failed; a .NET
+update does not move the OS `UBR`, so the `UBR` cannot answer this one.
+
 ## Red flags - stop and re-diagnose
 
 - A permission command reported success and the operation still fails
@@ -1026,6 +1094,10 @@ an earlier one is never read as this run's result.
   its package identity
 - A driver's ceiling cut off its wait on `DISM /Add-Package` and you called the install failed
   without reading the exit code file and the `UBR`
+- A reboot wait times out from the `shutdown /r` request rather than from the last `TiWorker`
+  CPU progress
+- A remote servicing script stops or starts a service with no time limit, or reports its phases
+  only at the end
 
 ## Common mistakes
 
