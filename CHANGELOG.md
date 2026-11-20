@@ -30,6 +30,12 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.17.3]
+
+### Fixed
+
+- `compuse-vnc`: the Commands section said every command needs `--port`; it now says the commands in its table do, and that the CLI's other commands (`info`, `config`, the email commands) run without it.
+
 ## [11.17.2]
 
 ### Fixed

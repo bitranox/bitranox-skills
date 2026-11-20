@@ -44,7 +44,8 @@ fetches it each run); tesseract is still required. Then drive the target with th
 
 ## Commands
 
-Every command needs `--port`; `--host` defaults to `127.0.0.1`.
+Every command in this table needs `--port`; `--host` defaults to `127.0.0.1`. The CLI's other
+commands (`info`, `config`, the email commands) run without it.
 
 | Command                                       | Does                                                                                            |
 |-----------------------------------------------|-------------------------------------------------------------------------------------------------|
