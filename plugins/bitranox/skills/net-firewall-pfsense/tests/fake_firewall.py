@@ -321,7 +321,7 @@ class FakeFirewall:
 
     def _table_show(self, table: str):
         if table not in self.state.tables:
-            return 1, "", f"pfctl: Table does not exist.\n"
+            return 1, "", "pfctl: Table does not exist.\n"
         return 0, "".join(f"   {ip}\n" for ip in self.state.tables[table]), ""
 
     def _table_del(self, table: str, ip: str):
