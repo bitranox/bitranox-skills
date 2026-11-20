@@ -81,8 +81,10 @@ Read the mode first (`dream_state.py mode`; knobs in `~/.claude/.bitranox-memory
   re-home to the tree top (the anchor), which it PROPOSES: the report lists the fact and its cost
   (the bytes it adds to the top block: the UTF-8 length of its pointer line plus the newline) for
   the user's approval, and the fact stays where it is. Re-homes to every level below the top are
-  applied, and so is a corroborated promotion to the top (`should-promote` printed `promote`), whose
-  cost the report prints for information. Apply CLAUDE.md consolidation under the reachability
+  applied, and so is a corroborated promotion to the top, one the gate lets through:
+  `should-promote` printed `promote`, or the fact is a user-stated concrete rule, which promotes
+  eagerly whatever that verb prints (it counts projects only). The report prints its cost for
+  information and never lists it as a proposal. Apply CLAUDE.md consolidation under the reachability
   invariant (see Boundaries) and REPORT every file touched; route skill changes to a self-PR.
   Mention the `dream_mode` knob (`bitranox:meta-memory-settings`) at the end.
 - **`auto`**: no per-change prompts - CLAUDE.md edits as above, plus ship skill changes directly;
@@ -439,9 +441,10 @@ Name every slug that arrived at the tree top (verify's `--json` lists them in `d
 Every misplacement re-home to the tree top is listed beside them with its cost: as a proposal
 awaiting the user's approval in propose mode and under `off`, as applied in auto mode. A tagged
 fact whose line would land at the tree top is listed the same way, with the topics no level has. A
-corroborated promotion to the top is listed as applied, with its cost. A promotion to a common
-ancestor below the top (a duplicate merged at its levels' common parent, a crosstree lift to the
-lowest common ancestor) is listed as applied too, by slug, with the level it landed at and its
+corroborated promotion to the top is listed as applied, with its cost, in every mode; a candidate
+the gate holds stays where it is and is listed as held, by slug, with no cost. A promotion to a
+common ancestor below the top (a duplicate merged at its levels' common parent, a crosstree lift to
+the lowest common ancestor) is listed as applied too, by slug, with the level it landed at and its
 cost there: the UTF-8 length of its pointer line plus the newline, the bytes it adds to a block
 every session under that level loads. When the run covered what the
 nudge asked for, run `dream_state.py done --kind nap` (a nap) or
