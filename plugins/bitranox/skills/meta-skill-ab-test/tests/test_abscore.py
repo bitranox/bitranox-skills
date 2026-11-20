@@ -62,36 +62,36 @@ def test_floor_runs_gate_then_suite_and_logs(tmp_path, scratch_repo, skills_repo
     prof = _profile(tmp_path, scratch_repo, skills_repo, suite=True)
     (scratch_repo / "check.sh").write_text("echo suite ok\n", encoding="utf-8")
     res = S.run_floor(scratch_repo, prof, tmp_path / "logs")
-    assert res["passed"] is True and [s["name"] for s in res["steps"]] == ["gate", "suite"]
-    assert "suite ok" in Path(res["steps"][1]["log"]).read_text(encoding="utf-8")
+    assert res.passed is True and [s.name for s in res.steps] == ["gate", "suite"]
+    assert "suite ok" in Path(res.steps[1].log).read_text(encoding="utf-8")
 
 
 def test_floor_fails_on_the_gate_and_skips_the_suite(tmp_path, scratch_repo, skills_repo):
     prof = _profile(tmp_path, scratch_repo, skills_repo, suite=True)
     (scratch_repo / "BROKEN").write_text("", encoding="utf-8")
     res = S.run_floor(scratch_repo, prof, tmp_path / "logs")
-    assert res["passed"] is False and [s["name"] for s in res["steps"]] == ["gate"] and res["steps"][0]["rc"] == 1
+    assert res.passed is False and [s.name for s in res.steps] == ["gate"] and res.steps[0].rc == 1
 
 
 def test_floor_records_a_gate_that_cannot_start_as_a_failed_step(tmp_path):
     prof = _pure_profile(tmp_path, gate=[str(tmp_path / "no-such-gate")])
     res = S.run_floor(tmp_path, prof, tmp_path / "logs")
-    assert res["passed"] is False and res["steps"][0]["rc"] == S.RC_NOT_STARTED
-    assert "could not start" in Path(res["steps"][0]["log"]).read_text(encoding="utf-8")
+    assert res.passed is False and res.steps[0].rc == S.RC_NOT_STARTED
+    assert "could not start" in Path(res.steps[0].log).read_text(encoding="utf-8")
 
 
 def test_floor_records_a_timed_out_gate_as_a_failed_step(tmp_path):
     prof = _pure_profile(tmp_path, gate=[sys.executable, "-c", "import time; time.sleep(10)"], timeout_s=1)
     res = S.run_floor(tmp_path, prof, tmp_path / "logs")
-    assert res["passed"] is False and res["steps"][0]["rc"] == S.RC_TIMEOUT
-    assert "timed out after 1 s" in Path(res["steps"][0]["log"]).read_text(encoding="utf-8")
+    assert res.passed is False and res.steps[0].rc == S.RC_TIMEOUT
+    assert "timed out after 1 s" in Path(res.steps[0].log).read_text(encoding="utf-8")
 
 
 def test_floor_suite_does_not_run_after_a_gate_that_cannot_start(tmp_path):
     prof = _pure_profile(tmp_path, gate=[str(tmp_path / "no-such-gate")])
     prof = dataclasses.replace(prof, floor=dataclasses.replace(prof.floor, suite="s.py", suite_cmd=("x", "{suite}")))
     res = S.run_floor(tmp_path, prof, tmp_path / "logs")
-    assert [s["name"] for s in res["steps"]] == ["gate"]
+    assert [s.name for s in res.steps] == ["gate"]
 
 
 def _result(**over):
@@ -104,11 +104,20 @@ def _result(**over):
     return base
 
 
+def _peers(peers):
+    return [S.RecordedResult.from_json(p) for p in peers]
+
+
+def _score_at(arm, profile, peers):
+    """score_arm's answer in the form scores.json holds it."""
+    return S.score_arm(arm, profile, peers=_peers(peers)).to_json()
+
+
 def _score(tmp_path, res, peers, name="r1-C", **profile_over):
     arm = tmp_path / "arms" / name
     arm.mkdir(parents=True)
     (arm / "result.json").write_text(json.dumps(res), encoding="utf-8")
-    return S.score_arm(arm, _pure_profile(tmp_path, **profile_over), peers=peers)
+    return _score_at(arm, _pure_profile(tmp_path, **profile_over), peers)
 
 
 TWO_PEERS = [_result(first_cache_read=11000), _result(first_cache_read=11200)]
@@ -118,7 +127,7 @@ def test_score_of_a_clean_arm(tmp_path):
     arm = tmp_path / "arms" / "r1-C"
     arm.mkdir(parents=True)
     (arm / "result.json").write_text(json.dumps(_result()), encoding="utf-8")
-    s = S.score_arm(arm, _pure_profile(tmp_path), peers=[_result(first_cache_read=11500)])
+    s = _score_at(arm, _pure_profile(tmp_path), [_result(first_cache_read=11500)])
     assert s["void"] == [] and s["cost_usd"] == 0.25 and s["floor_passed"] is True
     assert json.loads((arm / "scores.json").read_text(encoding="utf-8")) == s
 
@@ -148,7 +157,7 @@ def test_score_reads_subagents_ideas_and_the_suite_from_the_arm_dir(tmp_path):
     floor = {"passed": False, "steps": [{"name": "gate", "rc": 0, "error": None},
                                         {"name": "suite", "rc": 101, "error": None}]}
     (arm / "result.json").write_text(json.dumps(_result(floor=floor)), encoding="utf-8")
-    s = S.score_arm(arm, _pure_profile(tmp_path), peers=TWO_PEERS)
+    s = _score_at(arm, _pure_profile(tmp_path), TWO_PEERS)
     assert s["subagents"] == {"transcripts": 3, "max_concurrent": 3, "untimed": 0}
     assert s["idea_markers"] == {"writes": 1, "ideas": {"2": {"count": 1, "first": "[abx] idea=2 split the plan"}}}
     assert s["floor_suite"]["outcome"] == "does_not_compile" and "run_sandboxed" in s["floor_suite"]["missing"]
@@ -169,7 +178,7 @@ def test_a_gate_that_cannot_find_protoc_reads_as_a_missing_prerequisite(tmp_path
                                         encoding="utf-8")
     floor = {"passed": False, "steps": [{"name": "gate", "rc": 101, "error": None}]}
     (arm / "result.json").write_text(json.dumps(_result(floor=floor)), encoding="utf-8")
-    s = S.score_arm(arm, _pure_profile(tmp_path), peers=TWO_PEERS)
+    s = _score_at(arm, _pure_profile(tmp_path), TWO_PEERS)
     assert (s["floor_gate"]["outcome"], s["floor_gate"]["prerequisite"]) == ("build_prerequisite_missing", "protoc")
     assert s["floor_suite"] is None and s["floor_passed"] is False and s["void"] == []
     assert s["floor_steps"] == [{"name": "gate", "rc": 101}], "existing keys unchanged"
@@ -181,8 +190,8 @@ def test_the_suite_log_run_floor_writes_is_the_one_the_score_reads(tmp_path):
     prof = dataclasses.replace(prof, floor=dataclasses.replace(prof.floor, suite="s.py", suite_cmd=tuple(suite)))
     arm = tmp_path / "arms" / "r1-C"
     floor = S.run_floor(tmp_path, prof, arm)
-    (arm / "result.json").write_text(json.dumps(_result(floor=floor)), encoding="utf-8")
-    out = S.score_arm(arm, prof, peers=TWO_PEERS)["floor_suite"]
+    (arm / "result.json").write_text(json.dumps(_result(floor=floor.to_json())), encoding="utf-8")
+    out = _score_at(arm, prof, TWO_PEERS)["floor_suite"]
     assert (out["outcome"], out["rc"], out["tests_failed"], out["tests_total"]) == ("tests_failed", 101, 3, 4)
 
 
@@ -272,9 +281,9 @@ def test_warmth_needs_two_peers_and_uses_the_tolerance(tmp_path):
     arm.mkdir(parents=True)
     (arm / "result.json").write_text(json.dumps(_result(first_cache_read=20000)), encoding="utf-8")
     prof = _pure_profile(tmp_path)
-    assert S.score_arm(arm, prof, peers=[_result(first_cache_read=11000)])["void"] == [], "one peer: no median yet"
-    assert S.score_arm(arm, prof, peers=[_result(first_cache_read=16100), _result(first_cache_read=16100)])["void"] == []
-    assert S.score_arm(arm, prof, peers=[_result(first_cache_read=15000), _result(first_cache_read=15000)])["void"] != []
+    assert _score_at(arm, prof, [_result(first_cache_read=11000)])["void"] == [], "one peer: no median yet"
+    assert _score_at(arm, prof, [_result(first_cache_read=16100), _result(first_cache_read=16100)])["void"] == []
+    assert _score_at(arm, prof, [_result(first_cache_read=15000), _result(first_cache_read=15000)])["void"] != []
 
 
 def test_warmth_reads_the_profile_tolerance(tmp_path):
@@ -369,7 +378,7 @@ def test_a_timed_out_floor_step_leaves_no_process_behind(tmp_path, on_term):
     res, elapsed = _timed_floor(tmp_path, prof)
     pid = _pid_in(pidfile)
     try:
-        assert res["steps"][0]["rc"] == S.RC_TIMEOUT
+        assert res.steps[0].rc == S.RC_TIMEOUT
         assert pid is not None and gone_within(pid), f"grandchild {pid} survived the floor's timeout"
         assert elapsed < _grace_bound(1), elapsed
     finally:
@@ -384,7 +393,7 @@ def test_a_clean_step_leaves_no_background_process_behind(tmp_path):
     res = S.run_floor(tmp_path, prof, tmp_path / "logs", kill_grace_s=GRACE_S)
     pid = _pid_in(pidfile)
     try:
-        assert res["passed"] is True and res["steps"][0]["error"] is None
+        assert res.passed is True and res.steps[0].error is None
         assert pid is not None and gone_within(pid, 2.0), f"daemon {pid} outlived its floor step"
     finally:
         kill_if_alive(pid)
@@ -412,12 +421,12 @@ def test_a_step_whose_output_is_held_open_past_the_timeout_keeps_its_rc_and_fail
     res, elapsed = _timed_floor(tmp_path, prof)
     pid = _pid_in(pidfile)
     try:
-        (step,) = res["steps"]
-        assert (step["rc"], step["error"]) == (0, S.ERROR_HELD_OPEN)
+        (step,) = res.steps
+        assert (step.rc, step.error) == (0, S.ERROR_HELD_OPEN)
         assert elapsed < _grace_bound(1), elapsed
-        assert res["passed"] is False, "a step that hits the timeout is not a pass"
-        assert "gate ok" in Path(step["log"]).read_text(encoding="utf-8")
-        assert _score(tmp_path, _result(floor=res), TWO_PEERS)["floor_error"] == (
+        assert res.passed is False, "a step that hits the timeout is not a pass"
+        assert "gate ok" in Path(step.log).read_text(encoding="utf-8")
+        assert _score(tmp_path, _result(floor=res.to_json()), TWO_PEERS)["floor_error"] == (
             "gate: output held open past the timeout by a process the step started (rc 0)")
         assert pid is not None and gone_within(pid), f"holder {pid} survived the floor step"
     finally:
@@ -453,8 +462,8 @@ def test_the_floor_runs_without_the_launcher_venv_and_the_git_redirects(tmp_path
     # The gate prints the variable NAMES and PATH only, never another value.
     gate = [sys.executable, "-c", "import json, os; print(json.dumps([sorted(os.environ), os.environ['PATH']]))"]
     res = S.run_floor(tmp_path, _pure_profile(tmp_path, gate=gate), tmp_path / "logs")
-    log = Path(res["steps"][0]["log"]).read_text(encoding="utf-8")
-    assert res["passed"] is True, log
+    log = Path(res.steps[0].log).read_text(encoding="utf-8")
+    assert res.passed is True, log
     names, seen_path = json.loads(log)
     assert set(names).isdisjoint(_LEAKS), sorted(set(names) & set(_LEAKS))
     assert set(_KEPT) <= set(names)
@@ -466,7 +475,7 @@ def test_the_floor_runs_without_the_launcher_venv_and_the_git_redirects(tmp_path
 def _scored_floor(tmp_path, gate, timeout_s=30):
     floor = S.run_floor(tmp_path, _pure_profile(tmp_path, gate=gate, timeout_s=timeout_s), tmp_path / "logs",
                         kill_grace_s=GRACE_S)
-    return _score(tmp_path, _result(floor=floor), TWO_PEERS)
+    return _score(tmp_path, _result(floor=floor.to_json()), TWO_PEERS)
 
 
 def test_floor_error_names_a_step_that_could_not_start(tmp_path):
@@ -554,15 +563,15 @@ def test_the_floor_runs_the_sealed_suite_over_the_arms_own(tmp_path, scratch_rep
     prof = _profile(tmp_path, scratch_repo, skills_repo, suite=True)
     (scratch_repo / "check.sh").write_text("echo the arm's suite\nexit 0\n", encoding="utf-8")
     res = S.run_floor(scratch_repo, prof, tmp_path / "logs", sealed_suite=_sealed(tmp_path, "echo sealed\nexit 3\n"))
-    assert res["passed"] is False and res["steps"][1]["rc"] == 3 and res["steps"][1]["error"] is None
-    assert "sealed" in Path(res["steps"][1]["log"]).read_text(encoding="utf-8")
+    assert res.passed is False and res.steps[1].rc == 3 and res.steps[1].error is None
+    assert "sealed" in Path(res.steps[1].log).read_text(encoding="utf-8")
 
 
 def test_the_floor_places_a_suite_the_tree_does_not_have(tmp_path, scratch_repo, skills_repo):
     prof = _profile(tmp_path, scratch_repo, skills_repo, suite=True)
     assert not (scratch_repo / "check.sh").exists()
     res = S.run_floor(scratch_repo, prof, tmp_path / "logs", sealed_suite=_sealed(tmp_path, "exit 0\n"))
-    assert res["passed"] is True and [s["rc"] for s in res["steps"]] == [0, 0]
+    assert res.passed is True and [s.rc for s in res.steps] == [0, 0]
 
 
 def _symlinked_parent(tmp_path, scratch_repo):
@@ -590,8 +599,9 @@ def test_a_suite_that_cannot_be_placed_as_sealed_fails_without_running(tmp_path,
     else:
         outside = _symlinked_parent(tmp_path, scratch_repo)
     res = S.run_floor(scratch_repo, prof, tmp_path / "logs", sealed_suite=sealed)
-    suite = res["steps"][1]
-    assert res["passed"] is False and suite["rc"] == S.RC_NOT_STARTED and suite["error"].startswith(error)
+    suite = res.steps[1]
+    assert res.passed is False and suite.rc == S.RC_NOT_STARTED and suite.error is not None
+    assert suite.error.startswith(error)
     assert outside is None or list(outside.iterdir()) == [], "nothing was written outside the tree"
 
 
@@ -616,7 +626,7 @@ def test_score_flags_an_arm_whose_last_words_are_a_question(tmp_path, records, e
     arm.mkdir(parents=True)
     (arm / "stream.jsonl").write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
     (arm / "result.json").write_text(json.dumps(_result()), encoding="utf-8")
-    s = S.score_arm(arm, _pure_profile(tmp_path), peers=TWO_PEERS)
+    s = _score_at(arm, _pure_profile(tmp_path), TWO_PEERS)
     assert s["ended_with_question"] is expected
     assert s["void"] == [], "a question flags the arm, it never voids it"
 
@@ -626,5 +636,43 @@ def test_a_bad_byte_in_the_stream_costs_its_line_not_the_last_words(tmp_path):
     arm.mkdir(parents=True)
     (arm / "stream.jsonl").write_bytes(b'{"type": "assistant", "message": {"content": "ok?"}}\n\xff\xfe\n')
     (arm / "result.json").write_text(json.dumps(_result()), encoding="utf-8")
-    s = S.score_arm(arm, _pure_profile(tmp_path), peers=TWO_PEERS)
+    s = _score_at(arm, _pure_profile(tmp_path), TWO_PEERS)
     assert (s["last_text"], s["ended_with_question"]) == ("ok?", True)
+
+
+# --- the typed records: what an absent key means stays a value of its own --------------------------
+
+def test_a_recorded_result_keeps_an_absent_key_apart_from_an_empty_one():
+    """No guard_changes key is an after-check that never ran, not one that found nothing."""
+    absent = S.RecordedResult.from_json({"arm": "r1-C"})
+    empty = S.RecordedResult.from_json({"arm": "r1-C", "guard_changes": [], "context_files": {}, "round": 0})
+    assert (absent.guard_changes, empty.guard_changes) == (None, ())
+    assert (absent.context_files, empty.context_files) == (None, {})
+    assert (absent.round, empty.round) == (None, 0)
+    assert (absent.floor.passed, absent.floor.steps, absent.bundle_commits) == (False, (), 0)
+
+
+def test_a_cache_read_is_repeated_as_written_and_read_as_a_count_only_when_it_is_one():
+    reads = {11000: 11000, 11000.0: 11000, 11000.5: None, True: None, None: None}
+    for written, count in reads.items():
+        rec = S.RecordedResult.from_json({"first_cache_read": written})
+        assert (rec.first_cache_read, rec.cache_read) == (written, count), written
+        assert type(rec.first_cache_read) is type(written), "written back unchanged: 11000.0 stays a float"
+
+
+def test_score_arm_returns_a_typed_score_whose_json_is_scores_json(tmp_path):
+    arm = tmp_path / "arms" / "r1-C"
+    arm.mkdir(parents=True)
+    (arm / "result.json").write_text(json.dumps(_result(guard=TAKEN)), encoding="utf-8")
+    score = S.score_arm(arm, _pure_profile(tmp_path), peers=_peers(TWO_PEERS))
+    assert isinstance(score, S.ArmScore) and score.void == () and score.store_guard is S.StoreGuard.CLEAN
+    assert score.last_words == S.LastWords(last_text=None, ended_with_question=None)
+    assert json.loads((arm / "scores.json").read_text(encoding="utf-8")) == score.to_json()
+
+
+def test_run_floor_returns_typed_steps_whose_json_is_what_result_json_records(tmp_path):
+    floor = S.run_floor(tmp_path, _pure_profile(tmp_path, gate=[sys.executable, "-c", "pass"]), tmp_path / "logs")
+    (step,) = floor.steps
+    assert isinstance(floor, S.FloorResult) and step.passed and step.argv == (sys.executable, "-c", "pass")
+    assert list(floor.to_json()) == ["passed", "steps"]
+    assert list(floor.to_json()["steps"][0]) == ["name", "argv", "rc", "error", "wall_s", "log"]

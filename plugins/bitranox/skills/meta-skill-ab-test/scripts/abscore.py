@@ -23,9 +23,10 @@ import signal
 import subprocess
 import sys
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
-from typing import Any
 
 from _ablib import clear_group, median, sha256_file, signal_group
 from abprofile import Profile
@@ -49,10 +50,26 @@ __all__ = [
     "STREAM_VOID_STOP_REASON",
     "SUITE_LOG",
     "WARMTH_MIN_PEERS",
+    "ArmScore",
+    "FloorResult",
+    "FloorStep",
+    "JsonObject",
+    "JsonValue",
+    "LastWords",
+    "RecordedFloor",
+    "RecordedResult",
+    "RecordedStep",
     "SealedSuite",
+    "StepRc",
+    "StoreGuard",
+    "read_result",
     "run_floor",
     "score_arm",
 ]
+
+# A value as json.loads gives it: what a result.json written by any harness version may hold.
+type JsonValue = None | bool | int | float | str | list[JsonValue] | dict[str, JsonValue]
+type JsonObject = dict[str, JsonValue]
 
 # A median of one reading is that reading: the check needs two other arms before it means anything.
 WARMTH_MIN_PEERS = 2
@@ -68,12 +85,24 @@ STREAM_VOID_STOP_REASON = "void"
 # Written when result.json carries no stop reason: abarm records one for every way an arm ENDS,
 # so its absence means the run never reached that point.
 MISSING_STOP_REASON = "no stop reason recorded (the arm did not end normally: interrupted or crashed)"
-# What the store guard saw, as scores.json's store_guard: a snapshot taken and verified with no
-# change, one or more changes, or no verified snapshot (none taken, or the arm ended before the
-# after-check), where "no change" cannot be claimed.
-STORE_GUARD_CLEAN = "clean"
-STORE_GUARD_CHANGED = "changed"
-STORE_GUARD_SKIPPED = "skipped"
+
+
+class StoreGuard(StrEnum):
+    """What the store guard saw, as scores.json's store_guard.
+
+    CLEAN: a snapshot taken and verified with no change. CHANGED: one or more changes. SKIPPED: no
+    verified snapshot (none taken, or the arm ended before the after-check), where "no change"
+    cannot be claimed.
+    """
+
+    CLEAN = "clean"
+    CHANGED = "changed"
+    SKIPPED = "skipped"
+
+
+STORE_GUARD_CLEAN = StoreGuard.CLEAN
+STORE_GUARD_CHANGED = StoreGuard.CHANGED
+STORE_GUARD_SKIPPED = StoreGuard.SKIPPED
 # How long a step's leftover process group gets between SIGTERM and SIGKILL: long enough for a
 # test runner to flush and remove its temp files, short against any floor timeout.
 KILL_GRACE_S = 5.0
@@ -128,6 +157,43 @@ class _Limits:
     timeout_s: int
     kill_grace_s: float
 
+
+@dataclass(frozen=True)
+class FloorStep:
+    """One floor step as run_floor ran it.
+
+    error is None for a step that ran to its end, whatever its exit code; otherwise it names why
+    the step did not (could not start, timed out, output held open, the sealed suite not placed).
+    """
+
+    name: str
+    argv: tuple[str, ...]
+    rc: int
+    error: str | None
+    wall_s: float
+    log: str
+
+    @property
+    def passed(self) -> bool:
+        """The step exited 0 and ran to its end."""
+        return self.rc == 0 and self.error is None
+
+    def to_json(self) -> JsonObject:
+        """The step as result.json records it."""
+        return {"name": self.name, "argv": list(self.argv), "rc": self.rc, "error": self.error,
+                "wall_s": self.wall_s, "log": self.log}
+
+
+@dataclass(frozen=True)
+class FloorResult:
+    """run_floor's answer: every step it attempted, in order, and whether all of them passed."""
+
+    passed: bool
+    steps: tuple[FloorStep, ...]
+
+    def to_json(self) -> JsonObject:
+        """The floor as result.json records it."""
+        return {"passed": self.passed, "steps": [step.to_json() for step in self.steps]}
 
 def _partial_output(exc: subprocess.TimeoutExpired) -> str:
     """Whatever the command printed before it was killed; bytes when the platform gives bytes."""
@@ -232,12 +298,12 @@ def _execute(argv: list[str], tree: Path, limits: _Limits) -> tuple[int, str, st
             clear_group(proc.pid, limits.kill_grace_s)
 
 
-def _step(name: str, argv: list[str], tree: Path, *, limits: _Limits, log: Path) -> dict[str, Any]:
+def _step(name: str, argv: list[str], tree: Path, *, limits: _Limits, log: Path) -> FloorStep:
     t0 = time.monotonic()
     rc, out, error = _execute(argv, tree, limits)
     log.write_text(out, encoding="utf-8")
-    return {"name": name, "argv": argv, "rc": rc, "error": error, "wall_s": round(time.monotonic() - t0, 1),
-            "log": str(log)}
+    return FloorStep(name=name, argv=tuple(argv), rc=rc, error=error, wall_s=round(time.monotonic() - t0, 1),
+                     log=str(log))
 
 
 def _inside(tree: Path, path: Path) -> bool:
@@ -272,13 +338,13 @@ def _place_suite(tree: Path, rel: str, sealed: SealedSuite) -> str | None:
     return None
 
 
-def _not_run(name: str, argv: list[str], error: str, log: Path) -> dict[str, Any]:
+def _not_run(name: str, argv: list[str], error: str, log: Path) -> FloorStep:
     log.write_text(error + "\n", encoding="utf-8")
-    return {"name": name, "argv": argv, "rc": RC_NOT_STARTED, "error": error, "wall_s": 0.0, "log": str(log)}
+    return FloorStep(name=name, argv=tuple(argv), rc=RC_NOT_STARTED, error=error, wall_s=0.0, log=str(log))
 
 
 def _suite_step(suite: list[str], tree: Path, profile: Profile, sealed: SealedSuite | None, *, limits: _Limits,
-                log: Path) -> dict[str, Any]:
+                log: Path) -> FloorStep:
     """The suite step, after the sealed copy (when there is one) is put in place and verified."""
     if sealed is not None and profile.floor.suite is not None:
         error = _place_suite(tree, profile.floor.suite, sealed)
@@ -287,12 +353,8 @@ def _suite_step(suite: list[str], tree: Path, profile: Profile, sealed: SealedSu
     return _step("suite", suite, tree, limits=limits, log=log)
 
 
-def _step_passed(step: dict[str, Any]) -> bool:
-    return step["rc"] == 0 and step["error"] is None
-
-
 def run_floor(tree: Path, profile: Profile, log_dir: Path, *, kill_grace_s: float = KILL_GRACE_S,
-              sealed_suite: SealedSuite | None = None) -> dict[str, Any]:
+              sealed_suite: SealedSuite | None = None) -> FloorResult:
     """Run the gate, then the suite (when set); the suite is skipped once the gate failed.
 
     Args:
@@ -306,8 +368,8 @@ def run_floor(tree: Path, profile: Profile, log_dir: Path, *, kill_grace_s: floa
             ERROR_SUITE_HASH, rc RC_NOT_STARTED) and the suite does not run.
 
     Returns:
-        {"passed": every step exited 0 and ran to its end, "steps": [{"name", "argv", "rc", "error",
-        "wall_s", "log"}]}. A step that could not start exits RC_NOT_STARTED with error "could not
+        The FloorResult: passed when every step exited 0 and ran to its end, and each step attempted
+        (a FloorStep: name, argv, rc, error, wall_s, log). A step that could not start exits RC_NOT_STARTED with error "could not
         start"; one that timed out exits RC_TIMEOUT with error "timed out after N s". A step whose
         leader exited before the timeout while a process it started held its output open past it
         keeps the leader's exit code, with error ERROR_HELD_OPEN, and fails. error is None for a
@@ -321,22 +383,252 @@ def run_floor(tree: Path, profile: Profile, log_dir: Path, *, kill_grace_s: floa
     limits = _Limits(timeout_s=profile.floor.timeout_s, kill_grace_s=kill_grace_s)
     steps = [_step("gate", list(profile.floor.gate), tree, limits=limits, log=log_dir / GATE_LOG)]
     suite = profile.suite_argv()
-    if suite is not None and _step_passed(steps[0]):
+    if suite is not None and steps[0].passed:
         steps.append(_suite_step(suite, tree, profile, sealed_suite, limits=limits, log=log_dir / SUITE_LOG))
-    return {"passed": all(_step_passed(s) for s in steps), "steps": steps}
+    return FloorResult(passed=all(step.passed for step in steps), steps=tuple(steps))
 
 
-def _result_reason(res: dict[str, Any]) -> list[str]:
-    if res.get("has_result"):
+# --- result.json, read back ----------------------------------------------------------------------
+# A result.json may come from any harness version, so every key may be absent. A value of another
+# type than the harness writes reads as absent (the harness never writes one).
+
+
+def _as_str(value: JsonValue) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _as_int(value: JsonValue) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _as_number(value: JsonValue) -> int | float | None:
+    """A JSON number as written: never coerced, so 11000 and 11000.0 serialise back unchanged."""
+    if isinstance(value, bool):
+        return None
+    return value if isinstance(value, int | float) else None
+
+
+def _as_reading(value: JsonValue) -> int | float | None:
+    """first_cache_read as written, a bool included: the score repeats it, cache_read discards it."""
+    return value if isinstance(value, int | float) else None
+
+
+def _as_object(value: JsonValue) -> JsonObject:
+    return value if isinstance(value, dict) else {}
+
+
+def _as_list(value: JsonValue) -> list[JsonValue]:
+    return value if isinstance(value, list) else []
+
+
+@dataclass(frozen=True)
+class RecordedStep:
+    """A floor step as result.json recorded it; recorded is that JSON, which abtrace reads.
+
+    error is None both for a step that ran to its end and for one an older harness recorded
+    without the key: neither is a step that failed to run.
+    """
+
+    name: str | None
+    rc: int | None
+    error: str | None
+    recorded: JsonObject
+
+    @classmethod
+    def from_json(cls, obj: JsonObject) -> RecordedStep:
+        error = obj.get("error")
+        return cls(name=_as_str(obj.get("name")), rc=_as_int(obj.get("rc")),
+                   error=error if isinstance(error, str) and error else None, recorded=obj)
+
+
+@dataclass(frozen=True)
+class RecordedFloor:
+    """The floor as result.json recorded it: no floor key reads as not passed and no steps."""
+
+    passed: bool
+    steps: tuple[RecordedStep, ...]
+
+    @classmethod
+    def from_json(cls, value: JsonValue) -> RecordedFloor:
+        floor = _as_object(value)
+        steps = tuple(RecordedStep.from_json(s) for s in _as_list(floor.get("steps")) if isinstance(s, dict))
+        return cls(passed=bool(floor.get("passed")), steps=steps)
+
+    def named(self, name: str) -> RecordedStep | None:
+        """The first step called name, or None when the floor never attempted it."""
+        return next((s for s in self.steps if s.name == name), None)
+
+    def error(self) -> str | None:
+        """'<step>: <why> (rc N)' for the first step that did not run to its end, else None."""
+        for step in self.steps:
+            if step.error:
+                return f"{step.name}: {step.error} (rc {step.rc})"
+        return None
+
+
+@dataclass(frozen=True)
+class RecordedResult:
+    """What the scorer and abtest read from an arm's result.json.
+
+    Absent keys keep their meaning as values: guard_changes None means the after-check never ran
+    (an arm that ended before it), which is not the empty tuple of a check that found no change;
+    arm, round and name None mean the key is absent, and the reader picks its own fallback;
+    context_files None means the arm recorded none (an older harness), which is not {}.
+    """
+
+    arm: str | None
+    round: int | None
+    name: str | None
+    dry_run: bool
+    has_result: bool
+    skipped_lines: int
+    stop_reason: str | None
+    void_reasons: tuple[str, ...]
+    first_cache_read: int | float | None
+    total_cost_usd: int | float | None
+    per_model: JsonObject
+    main_new_tokens: int | None
+    wall_s: int | float | None
+    guard_taken: bool
+    guard_changes: tuple[str, ...] | None
+    floor: RecordedFloor
+    bundle_commits: int
+    result_subtype: str | None
+    sandbox: str | None
+    task_file: str | None
+    task_sha256: str | None
+    context_files: dict[str, str] | None
+
+    @classmethod
+    def from_json(cls, obj: JsonObject) -> RecordedResult:
+        guard = obj.get("guard")
+        context = obj.get("context_files")
+        return cls(
+            arm=_as_str(obj.get("arm")), round=_as_int(obj.get("round")), name=_as_str(obj.get("name")),
+            dry_run=bool(obj.get("dry_run")), has_result=bool(obj.get("has_result")),
+            skipped_lines=_as_int(obj.get("skipped_lines")) or 0, stop_reason=_as_str(obj.get("stop_reason")),
+            void_reasons=tuple(str(r) for r in _as_list(obj.get("void_reasons"))),
+            first_cache_read=_as_reading(obj.get("first_cache_read")),
+            total_cost_usd=_as_number(obj.get("total_cost_usd")), per_model=_as_object(obj.get("per_model")),
+            main_new_tokens=_as_int(obj.get("main_new_tokens")), wall_s=_as_number(obj.get("wall_s")),
+            guard_taken=isinstance(guard, dict) and guard.get("taken") is True,
+            guard_changes=(tuple(str(g) for g in _as_list(obj["guard_changes"])) if "guard_changes" in obj
+                           else None),
+            floor=RecordedFloor.from_json(obj.get("floor")), bundle_commits=_as_int(obj.get("bundle_commits")) or 0,
+            result_subtype=_as_str(obj.get("result_subtype")), sandbox=_as_str(obj.get("sandbox")),
+            task_file=_as_str(obj.get("task_file")), task_sha256=_as_str(obj.get("task_sha256")),
+            context_files=({k: v for k, v in context.items() if isinstance(v, str)} if isinstance(context, dict)
+                           else None))
+
+    @property
+    def cache_read(self) -> int | None:
+        """The first-message cache read as a token count; an integral float (11000.0) counts too."""
+        value = self.first_cache_read
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, float):
+            return int(value) if value.is_integer() else None
+        return value
+
+
+def read_result(arm_dir: Path) -> RecordedResult:
+    """arm_dir/result.json as a RecordedResult.
+
+    Raises:
+        FileNotFoundError: arm_dir has no result.json.
+        json.JSONDecodeError: result.json is not JSON.
+        TypeError: result.json holds JSON that is not an object.
+    """
+    obj = json.loads((arm_dir / "result.json").read_text(encoding="utf-8"))
+    if not isinstance(obj, dict):
+        raise TypeError(f"{arm_dir / 'result.json'} holds a JSON {type(obj).__name__}, not an object")
+    return RecordedResult.from_json(obj)
+
+
+# --- the score -----------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class StepRc:
+    """One floor step in a score: its name and exit code, as recorded."""
+
+    name: str | None
+    rc: int | None
+
+    def to_json(self) -> JsonObject:
+        return {"name": self.name, "rc": self.rc}
+
+
+@dataclass(frozen=True)
+class LastWords:
+    """The session's last model text on one line, and whether it ends with a question mark.
+
+    Both are None when the stream holds no text or cannot be read: no text is not a statement.
+    """
+
+    last_text: str | None
+    ended_with_question: bool | None
+
+
+@dataclass(frozen=True)
+class ArmScore:
+    """One arm's score, as scores.json records it (to_json keeps the field order of that file).
+
+    void empty means the arm counts. The readings of the arm dir's kept files (subagents,
+    idea_markers, floor_suite, floor_gate, last_words) are informational and never void; each is
+    None when its file or step is absent.
+    """
+
+    arm: str
+    cost_usd: int | float | None
+    per_model: JsonObject
+    main_new_tokens: int | None
+    first_cache_read: int | float | None
+    floor_passed: bool
+    floor_error: str | None
+    floor_steps: tuple[StepRc, ...]
+    bundle_commits: int
+    wall_s: int | float | None
+    warmth_checked: bool
+    result_subtype: str | None
+    store_changes: tuple[str, ...]
+    store_guard: StoreGuard
+    sandbox: str | None
+    task_file: str | None
+    task_sha256: str | None
+    void: tuple[str, ...]
+    subagents: dict[str, int] | None
+    idea_markers: JsonObject | None
+    floor_suite: JsonObject | None
+    floor_gate: JsonObject | None
+    last_words: LastWords
+
+    def to_json(self) -> JsonObject:
+        """The score as scores.json and `abtest score --json` print it."""
+        subagents: JsonObject | None = None if self.subagents is None else dict(self.subagents)
+        return {"arm": self.arm, "cost_usd": self.cost_usd, "per_model": self.per_model,
+                "main_new_tokens": self.main_new_tokens, "first_cache_read": self.first_cache_read,
+                "floor_passed": self.floor_passed, "floor_error": self.floor_error,
+                "floor_steps": [s.to_json() for s in self.floor_steps], "bundle_commits": self.bundle_commits,
+                "wall_s": self.wall_s, "warmth_checked": self.warmth_checked, "result_subtype": self.result_subtype,
+                "store_changes": list(self.store_changes), "store_guard": self.store_guard, "sandbox": self.sandbox,
+                "task_file": self.task_file, "task_sha256": self.task_sha256, "void": list(self.void),
+                "subagents": subagents, "idea_markers": self.idea_markers, "floor_suite": self.floor_suite,
+                "floor_gate": self.floor_gate, "last_text": self.last_words.last_text,
+                "ended_with_question": self.last_words.ended_with_question}
+
+
+def _result_reason(res: RecordedResult) -> list[str]:
+    if res.has_result:
         # Unparsable lines beside a result record lost nothing the score reads: not a void.
         return []
-    skipped = int(res.get("skipped_lines") or 0)
+    skipped = res.skipped_lines
     torn = f" ({skipped} unparsable stream line(s): the session was likely cut off mid-write)" if skipped else ""
     return ["no result record in the stream" + torn]
 
 
-def _stop_reason(res: dict[str, Any], stream_reasons: list[str]) -> list[str]:
-    stop = res.get("stop_reason")
+def _stop_reason(res: RecordedResult, stream_reasons: tuple[str, ...]) -> list[str]:
+    stop = res.stop_reason
     if stop == CLEAN_STOP_REASON:
         return []
     if stop is None:
@@ -348,20 +640,10 @@ def _stop_reason(res: dict[str, Any], stream_reasons: list[str]) -> list[str]:
     return [f"stop reason {stop!r} is not one an arm ends with (finished, void, deadline, token_cap)"]
 
 
-def _cache_read(record: dict[str, Any]) -> int | None:
-    """The token count, from an int or an integral float (a JSON writer may emit 11000.0)."""
-    value = record.get("first_cache_read")
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value
-    return int(value) if isinstance(value, float) and value.is_integer() else None
-
-
-def _warmth(res: dict[str, Any], tolerance: float, peers: list[dict[str, Any]]) -> tuple[bool, list[str]]:
+def _warmth(res: RecordedResult, tolerance: float, peers: Sequence[RecordedResult]) -> tuple[bool, list[str]]:
     """(whether the check ran, its void reason if any)."""
-    mine = _cache_read(res)
-    reads = [r for r in (_cache_read(p) for p in peers) if r is not None]
+    mine = res.cache_read
+    reads = [r for r in (p.cache_read for p in peers) if r is not None]
     if mine is None or len(reads) < WARMTH_MIN_PEERS:
         return False, []
     m = median([float(r) for r in reads])
@@ -372,51 +654,24 @@ def _warmth(res: dict[str, Any], tolerance: float, peers: list[dict[str, Any]]) 
     return True, [f"first-message cache read {mine} is off the peers' median {m:.0f} by more than {tolerance}"]
 
 
-def _void_reasons(res: dict[str, Any], warmth_reasons: list[str]) -> list[str]:
-    stream_reasons = [str(r) for r in res.get("void_reasons") or []]
-    return stream_reasons + _result_reason(res) + _stop_reason(res, stream_reasons) + warmth_reasons
+def _void_reasons(res: RecordedResult, warmth_reasons: list[str]) -> tuple[str, ...]:
+    stream_reasons = res.void_reasons
+    return (*stream_reasons, *_result_reason(res), *_stop_reason(res, stream_reasons), *warmth_reasons)
 
 
-def _store_changes(res: dict[str, Any]) -> list[str]:
-    return [str(g) for g in res.get("guard_changes") or []]
+def _store_guard(res: RecordedResult) -> StoreGuard:
+    """CLEAN only for a snapshot that was taken AND verified; a missing after-check is not clean."""
+    if res.guard_changes:
+        return StoreGuard.CHANGED
+    return StoreGuard.CLEAN if res.guard_taken and res.guard_changes is not None else StoreGuard.SKIPPED
 
 
-def _store_guard(res: dict[str, Any], changes: list[str]) -> str:
-    """clean only for a snapshot that was taken AND verified; a missing after-check is not clean."""
-    if changes:
-        return STORE_GUARD_CHANGED
-    guard = res.get("guard")
-    taken = isinstance(guard, dict) and guard.get("taken") is True
-    return STORE_GUARD_CLEAN if taken and "guard_changes" in res else STORE_GUARD_SKIPPED
+def _recorded(step: RecordedStep | None) -> JsonObject | None:
+    return None if step is None else step.recorded
 
 
-def _floor_steps(floor: dict[str, Any]) -> list[dict[str, Any]]:
-    return [s for s in floor.get("steps") or [] if isinstance(s, dict)]
-
-
-def _floor_error(steps: list[dict[str, Any]]) -> str | None:
-    """'<step>: <why> (rc N)' for the first step that did not run to its end, else None."""
-    for step in steps:
-        if step.get("error"):
-            return f"{step.get('name')}: {step['error']} (rc {step.get('rc')})"
-    return None
-
-
-def _step_named(steps: list[dict[str, Any]], name: str) -> dict[str, Any] | None:
-    return next((s for s in steps if s.get("name") == name), None)
-
-
-def _trace_fields(arm_dir: Path, steps: list[dict[str, Any]]) -> dict[str, Any]:
-    """What the arm's kept files show: subagent overlap, idea markers, the suite's and the gate's outcome."""
-    return {"subagents": subagent_overlap(arm_dir / TRANSCRIPTS_DIR),
-            "idea_markers": idea_markers(arm_dir / STREAM_FILE, arm_dir / TRANSCRIPTS_DIR),
-            "floor_suite": suite_outcome(_step_named(steps, "suite"), arm_dir / SUITE_LOG),
-            "floor_gate": step_outcome(_step_named(steps, "gate"), arm_dir / GATE_LOG),
-            **_last_words(arm_dir / STREAM_FILE)}
-
-
-def _last_words(stream: Path) -> dict[str, Any]:
-    """last_text (the session's last text, one line) and ended_with_question; both None without any.
+def _last_words(stream: Path) -> LastWords:
+    """The session's last text, read from the kept stream.
 
     An arm told nothing about the absent human often ends its turn by asking one, which reads
     like a finished run in every other field. Read from the kept stream, so an arm recorded
@@ -431,65 +686,67 @@ def _last_words(stream: Path) -> dict[str, Any]:
     except OSError:
         pass  # informational only: a stream that cannot be read leaves both fields None
     text = acct.last_text
-    return {"last_text": text, "ended_with_question": None if text is None else text.endswith("?")}
+    return LastWords(last_text=text, ended_with_question=None if text is None else text.endswith("?"))
 
 
-def _score_record(res: dict[str, Any], arm_dir: Path, profile: Profile,
-                  peers: list[dict[str, Any]]) -> dict[str, Any]:
-    floor = res.get("floor") or {}
-    steps = _floor_steps(floor)
+def _score_record(res: RecordedResult, arm_dir: Path, profile: Profile,
+                  peers: Sequence[RecordedResult]) -> ArmScore:
+    floor = res.floor
     checked, warmth_reasons = _warmth(res, profile.run.warmth_tolerance, peers)
-    changes = _store_changes(res)
-    return {"arm": res.get("arm", arm_dir.name), "cost_usd": res.get("total_cost_usd"),
-            "per_model": res.get("per_model") or {}, "main_new_tokens": res.get("main_new_tokens"),
-            "first_cache_read": res.get("first_cache_read"), "floor_passed": bool(floor.get("passed")),
-            "floor_error": _floor_error(steps),
-            "floor_steps": [{"name": s.get("name"), "rc": s.get("rc")} for s in steps],
-            "bundle_commits": int(res.get("bundle_commits") or 0), "wall_s": res.get("wall_s"),
-            "warmth_checked": checked, "result_subtype": res.get("result_subtype"),
-            "store_changes": changes, "store_guard": _store_guard(res, changes),
-            "sandbox": res.get("sandbox"), "task_file": res.get("task_file"), "task_sha256": res.get("task_sha256"),
-            "void": _void_reasons(res, warmth_reasons), **_trace_fields(arm_dir, steps)}
+    return ArmScore(
+        arm=res.arm if res.arm is not None else arm_dir.name, cost_usd=res.total_cost_usd, per_model=res.per_model,
+        main_new_tokens=res.main_new_tokens, first_cache_read=res.first_cache_read, floor_passed=floor.passed,
+        floor_error=floor.error(), floor_steps=tuple(StepRc(name=s.name, rc=s.rc) for s in floor.steps),
+        bundle_commits=res.bundle_commits, wall_s=res.wall_s, warmth_checked=checked,
+        result_subtype=res.result_subtype, store_changes=res.guard_changes or (), store_guard=_store_guard(res),
+        sandbox=res.sandbox, task_file=res.task_file, task_sha256=res.task_sha256,
+        void=_void_reasons(res, warmth_reasons),
+        subagents=subagent_overlap(arm_dir / TRANSCRIPTS_DIR),
+        idea_markers=idea_markers(arm_dir / STREAM_FILE, arm_dir / TRANSCRIPTS_DIR),
+        floor_suite=suite_outcome(_recorded(floor.named("suite")), arm_dir / SUITE_LOG),
+        floor_gate=step_outcome(_recorded(floor.named("gate")), arm_dir / GATE_LOG),
+        last_words=_last_words(arm_dir / STREAM_FILE))
 
 
-def score_arm(arm_dir: Path, profile: Profile, peers: list[dict[str, Any]]) -> dict[str, Any]:
-    """Read arm_dir/result.json, apply the void rules against peers, write and return scores.json.
+def score_arm(arm_dir: Path, profile: Profile, peers: Sequence[RecordedResult]) -> ArmScore:
+    """Read arm_dir/result.json, apply the void rules against peers, write scores.json and return the score.
 
     Args:
         arm_dir: the arm's directory holding result.json (dispatch summary, guard_changes, floor,
             bundle_commits).
         profile: the sealed profile (its run.warmth_tolerance).
-        peers: the OTHER finished arms' result.json dicts; fewer than WARMTH_MIN_PEERS with a
-            first-message cache read skip the warmth check.
+        peers: the OTHER finished arms' results; fewer than WARMTH_MIN_PEERS with a first-message
+            cache read skip the warmth check.
 
     Returns:
-        The score: arm, cost_usd, per_model, main_new_tokens (every model's new input),
-        first_cache_read, floor_passed, floor_error (None when every floor step ran to its end, else
-        "<step>: could not start (rc 127)", "<step>: timed out after N s (rc 124)" or "<step>:
-        output held open past the timeout by a process the step started (rc <the leader's>)" for
-        the first such step), floor_steps ([{"name", "rc"}] per step attempted, in order), bundle_commits, wall_s,
-        warmth_checked (False when the arm or fewer than WARMTH_MIN_PEERS peers had a reading),
-        result_subtype (the result record's subtype, informational: it never voids), store_changes
-        (the guard's change lines, [] when none) and store_guard (STORE_GUARD_CLEAN, _CHANGED or
-        _SKIPPED; recorded for adjudication, it never voids), sandbox (the profile's [run] sandbox the
-        arm ran under, "bwrap", "bwrap-host-proc" or "none"; None for an arm run before the key existed),
-        task_file and task_sha256 (the prompt the arm was given, relative to the run dir; None for an
-        arm run before per-arm prompts existed), void (every reason, the stream
-        account's own ones first and unchanged; empty means the arm counts), and six readings
-        of the arm dir's kept files, informational and never voiding: subagents
-        (abtrace.subagent_overlap of transcripts/), idea_markers (abtrace.idea_markers of
-        stream.jsonl and the subagent transcripts), floor_suite (abtrace.suite_outcome of the suite step and
-        floor-suite.log) and floor_gate (abtrace.step_outcome of the gate step and floor-gate.log,
-        which tells a build prerequisite the worktree lacks from the arm's own failure),
-        last_text (the session's last model text in stream.jsonl, on one line) and
-        ended_with_question (that text ends with a question mark: the arm stopped to ask); each is
-        None when its file or step is absent, the last two also when the stream holds no text.
+        The ArmScore, whose to_json() is what scores.json holds: arm, cost_usd, per_model,
+        main_new_tokens (every model's new input), first_cache_read, floor_passed, floor_error
+        (None when every floor step ran to its end, else "<step>: could not start (rc 127)",
+        "<step>: timed out after N s (rc 124)" or "<step>: output held open past the timeout by a
+        process the step started (rc <the leader's>)" for the first such step), floor_steps
+        ([{"name", "rc"}] per step attempted, in order), bundle_commits, wall_s, warmth_checked
+        (False when the arm or fewer than WARMTH_MIN_PEERS peers had a reading), result_subtype
+        (the result record's subtype, informational: it never voids), store_changes (the guard's
+        change lines, [] when none) and store_guard (StoreGuard CLEAN, CHANGED or SKIPPED; recorded
+        for adjudication, it never voids), sandbox (the profile's [run] sandbox the arm ran under,
+        "bwrap", "bwrap-host-proc" or "none"; None for an arm run before the key existed),
+        task_file and task_sha256 (the prompt the arm was given, relative to the run dir; None for
+        an arm run before per-arm prompts existed), void (every reason, the stream account's own
+        ones first and unchanged; empty means the arm counts), and six readings of the arm dir's
+        kept files, informational and never voiding: subagents (abtrace.subagent_overlap of
+        transcripts/), idea_markers (abtrace.idea_markers of stream.jsonl and the subagent
+        transcripts), floor_suite (abtrace.suite_outcome of the suite step and floor-suite.log)
+        and floor_gate (abtrace.step_outcome of the gate step and floor-gate.log, which tells a
+        build prerequisite the worktree lacks from the arm's own failure), last_text (the
+        session's last model text in stream.jsonl, on one line) and ended_with_question (that text
+        ends with a question mark: the arm stopped to ask); each is None when its file or step is
+        absent, the last two also when the stream holds no text.
 
     Raises:
         FileNotFoundError: arm_dir has no result.json.
         json.JSONDecodeError: result.json is not JSON.
+        TypeError: result.json holds JSON that is not an object.
     """
-    res = json.loads((arm_dir / "result.json").read_text(encoding="utf-8"))
-    score = _score_record(res, arm_dir, profile, peers)
-    (arm_dir / "scores.json").write_text(json.dumps(score, indent=1, sort_keys=True), encoding="utf-8")
+    score = _score_record(read_result(arm_dir), arm_dir, profile, peers)
+    (arm_dir / "scores.json").write_text(json.dumps(score.to_json(), indent=1, sort_keys=True), encoding="utf-8")
     return score

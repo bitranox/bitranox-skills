@@ -602,7 +602,7 @@ def _arm_steps(ctx: RunContext, result: dict[str, Any], frozen: abarm.Frozen, la
     if result["uncommitted"].get("error"):
         _warn(f"{label}: {result['uncommitted']['error']}")
     _guard_after(result, arm_dir / "guard")
-    result["floor"] = abscore.run_floor(ws, p, arm_dir, sealed_suite=ctx.sealed_suite)
+    result["floor"] = abscore.run_floor(ws, p, arm_dir, sealed_suite=ctx.sealed_suite).to_json()
     result["bundle_commits"] = abarm.bundle(ws, p.workpiece.base, arm_dir / "bundle.git")
 
 
@@ -1142,20 +1142,21 @@ def _run_locked(args: argparse.Namespace, run_dir: Path) -> int:
 
 # --- score and prune-run -------------------------------------------------------------------------
 
-def _finished(run_dir: Path) -> dict[str, dict[str, Any]]:
+def _finished(run_dir: Path) -> dict[str, abscore.RecordedResult]:
     """{label: result.json} of every arm the journal says ran or dry-ran, in journal order."""
-    out: dict[str, dict[str, Any]] = {}
+    out: dict[str, abscore.RecordedResult] = {}
     for row in load_journal(run_dir):
         if row.get("step") != "arm" or row.get("status") not in DONE_DRY:
             continue
         label = f"r{row.get('round')}-{row.get('arm')}"
-        path = run_dir / "arms" / label / "result.json"
-        if path.is_file():
-            out[label] = json.loads(path.read_text(encoding="utf-8"))
+        arm_dir = run_dir / "arms" / label
+        if (arm_dir / "result.json").is_file():
+            out[label] = abscore.read_result(arm_dir)
     return out
 
 
-def _score_all(run_dir: Path, profile: Profile, results: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+def _score_all(run_dir: Path, profile: Profile,
+               results: dict[str, abscore.RecordedResult]) -> dict[str, abscore.ArmScore]:
     """Score twice: first without warmth, then with the OTHER live arms that pass every other rule as peers.
 
     A void arm never sets the warmth median (controller decision 2026-11-04): its first-message
@@ -1163,85 +1164,110 @@ def _score_all(run_dir: Path, profile: Profile, results: dict[str, dict[str, Any
     """
     first = {label: abscore.score_arm(run_dir / "arms" / label, profile, []) for label in results}
     eligible = {label: res for label, res in results.items()
-                if not res.get("dry_run") and res.get("has_result") and not first[label]["void"]}
+                if not res.dry_run and res.has_result and not first[label].void}
     return {label: abscore.score_arm(run_dir / "arms" / label, profile,
                                      [r for other, r in eligible.items() if other != label]) for label in results}
 
 
-def _store_flag(label: str, score: dict[str, Any]) -> str | None:
+@dataclass(frozen=True)
+class ScoredArm:
+    """An arm's score plus how its session's CLAUDE*.md files compare with the reference arm's.
+
+    context_reference is the first arm in journal order that recorded its context files (None
+    when no arm did). context_drift lists the files whose hash differs or that exist on one side
+    only, () when none does, and None for an arm that recorded nothing (an arm from an older
+    harness): no record is not a match.
+    """
+
+    score: abscore.ArmScore
+    context_reference: str | None
+    context_drift: tuple[str, ...] | None
+
+    def to_json(self) -> abscore.JsonObject:
+        """The score's JSON with context_reference and context_drift after it."""
+        drift: abscore.JsonValue = None if self.context_drift is None else list(self.context_drift)
+        return {**self.score.to_json(), "context_reference": self.context_reference, "context_drift": drift}
+
+
+def _add_context_drift(results: dict[str, abscore.RecordedResult],
+                       scores: dict[str, abscore.ArmScore]) -> dict[str, ScoredArm]:
+    """Each score with the CLAUDE*.md files that differ from the first recording arm's (see ScoredArm)."""
+    recorded = {label: res.context_files for label, res in results.items() if res.context_files is not None}
+    reference = next(iter(recorded), None)
+    out: dict[str, ScoredArm] = {}
+    for label, score in scores.items():
+        files = recorded.get(label)
+        if files is None or reference is None:
+            out[label] = ScoredArm(score=score, context_reference=reference, context_drift=None)
+            continue
+        base = recorded[reference]
+        drift = tuple(sorted(k for k in base.keys() | files.keys() if base.get(k) != files.get(k)))
+        out[label] = ScoredArm(score=score, context_reference=reference, context_drift=drift)
+    return out
+
+
+def _store_flag(label: str, scored: ScoredArm) -> str | None:
     """The line that makes a store change impossible to miss; it flags the arm, it never voids it.
 
     The guard records rather than voids (user decision 2026-11-04): another session may have
     changed the shared store, so the change is checked against what the arm's transcripts show.
     """
-    changes = score.get("store_changes") or []
+    changes = scored.score.store_changes
     if not changes:
         return None
     return f"store changed: {len(changes)} entries, adjudicate against arms/{label}/{TRANSCRIPTS}/"
 
 
-def _add_context_drift(results: dict[str, dict[str, Any]], scores: dict[str, dict[str, Any]]) -> None:
-    """Set context_reference and context_drift on each score: the CLAUDE*.md files that differ from the first arm's.
-
-    The reference is the first arm in journal order that recorded its context files. context_drift
-    lists the files whose hash differs or that exist on one side only, [] when none does, and None
-    for an arm that recorded nothing (an arm from an older harness): no record is not a match.
-    """
-    recorded = {label: res["context_files"] for label, res in results.items()
-                if isinstance(res.get("context_files"), dict)}
-    reference = next(iter(recorded), None)
-    for label, score in scores.items():
-        files = recorded.get(label)
-        score["context_reference"] = reference
-        if files is None or reference is None:
-            score["context_drift"] = None
-            continue
-        base = recorded[reference]
-        score["context_drift"] = sorted(k for k in base.keys() | files.keys() if base.get(k) != files.get(k))
-
-
-def _context_flag(score: dict[str, Any]) -> str | None:
+def _context_flag(scored: ScoredArm) -> str | None:
     """The line that names an arm whose session started on other CLAUDE*.md text; a flag, never a void.
 
     A peer session can place a memory fact between two arms, and the store guard compares only
     each arm's own start and end, so this is where such a difference shows.
     """
-    drift = score.get("context_drift") or []
+    drift = scored.context_drift or ()
     if not drift:
         return None
     shown = ", ".join(drift[:CONTEXT_SHOWN]) + (", ..." if len(drift) > CONTEXT_SHOWN else "")
     noun = "file" if len(drift) == 1 else "files"
-    return f"context differs from {score.get('context_reference')}: {len(drift)} {noun} ({shown})"
+    return f"context differs from {scored.context_reference}: {len(drift)} {noun} ({shown})"
 
 
-def _question_flag(score: dict[str, Any]) -> str | None:
+def _question_flag(scored: ScoredArm) -> str | None:
     """The line that names an arm whose session ended by asking (nobody answers); a flag, never a void."""
-    if score.get("ended_with_question") is not True:
+    words = scored.score.last_words
+    if words.ended_with_question is not True:
         return None
-    text = str(score.get("last_text") or "")
+    text = words.last_text or ""
     return f"ended with a question: {text if len(text) <= QUESTION_SHOWN else '...' + text[-QUESTION_SHOWN:]}"
 
 
-def _arm_flag(label: str, score: dict[str, Any]) -> str | None:
+def _arm_flag(label: str, scored: ScoredArm) -> str | None:
     """Every flag of the arm on one line, "; "-joined; None when it has none."""
-    flags = [f for f in (_store_flag(label, score), _context_flag(score), _question_flag(score)) if f is not None]
+    flags = [f for f in (_store_flag(label, scored), _context_flag(scored), _question_flag(scored)) if f is not None]
     return "; ".join(flags) or None
 
 
-def _score_line(label: str, score: dict[str, Any]) -> str:
-    line = (f"{label}: cost={score['cost_usd']} floor={score['floor_passed']} void={score['void'] or '-'} "
-            f"sandbox={score.get('sandbox') or '-'} task={score.get('task_file') or '-'}"
-            f"@{(score.get('task_sha256') or '-')[:12]}"
-            f" subagents={abtrace.describe_subagents(score.get('subagents'))}"
-            f" ideas={abtrace.describe_ideas(score.get('idea_markers'))}"
-            f" suite={abtrace.describe_suite(score.get('floor_suite'))}"
-            f" gate={abtrace.describe_suite(score.get('floor_gate'))}"
-            f" commits={score.get('bundle_commits', 0)}")
-    flag = _arm_flag(label, score)
+def _idea_lines(label: str, markers: abscore.JsonObject | None) -> list[str]:
+    """One line per idea under its arm: the first marker line the arm wrote for it."""
+    ideas = (markers or {}).get("ideas")
+    if not isinstance(ideas, dict):
+        return []
+    return [f"  {label} idea {n}: {v['first'] if isinstance(v, dict) else None}" for n, v in ideas.items()]
+
+
+def _score_line(label: str, scored: ScoredArm) -> str:
+    s = scored.score
+    line = (f"{label}: cost={s.cost_usd} floor={s.floor_passed} void={list(s.void) or '-'} "
+            f"sandbox={s.sandbox or '-'} task={s.task_file or '-'}"
+            f"@{(s.task_sha256 or '-')[:12]}"
+            f" subagents={abtrace.describe_subagents(s.subagents)}"
+            f" ideas={abtrace.describe_ideas(s.idea_markers)}"
+            f" suite={abtrace.describe_suite(s.floor_suite)}"
+            f" gate={abtrace.describe_suite(s.floor_gate)}"
+            f" commits={s.bundle_commits}")
+    flag = _arm_flag(label, scored)
     line = line if flag is None else f"{line} FLAG {flag}"
-    # One line per idea under its arm: the first marker line the arm wrote for it.
-    ideas = (score.get("idea_markers") or {}).get("ideas") or {}
-    return "\n".join([line, *(f"  {label} idea {n}: {v['first']}" for n, v in ideas.items())])
+    return "\n".join([line, *_idea_lines(label, s.idea_markers)])
 
 
 def cmd_score(args: argparse.Namespace) -> int:
@@ -1252,13 +1278,13 @@ def cmd_score(args: argparse.Namespace) -> int:
     if not results:
         _emit(args.json, "score", {"arms": {}, "flags": {}}, False, "no finished arm to score")
         return EXIT_NO
-    scores = _score_all(run_dir, profile, results)
-    _add_context_drift(results, scores)
+    scored = _add_context_drift(results, _score_all(run_dir, profile, results))
     for res in results.values():
-        record(run_dir, step="score", round=res.get("round", 0), arm=res.get("name", ""), status="scored")
-    flags = {label: flag for label, score in scores.items() if (flag := _arm_flag(label, score)) is not None}
-    _emit(args.json, "score", {"arms": scores, "flags": flags}, True,
-          "\n".join([*(_score_line(k, v) for k, v in scores.items()), SUITE_LEGEND]))
+        record(run_dir, step="score", round=0 if res.round is None else res.round,
+               arm="" if res.name is None else res.name, status="scored")
+    flags = {label: flag for label, arm in scored.items() if (flag := _arm_flag(label, arm)) is not None}
+    _emit(args.json, "score", {"arms": {label: arm.to_json() for label, arm in scored.items()}, "flags": flags},
+          True, "\n".join([*(_score_line(k, v) for k, v in scored.items()), SUITE_LEGEND]))
     return EXIT_YES
 
 
