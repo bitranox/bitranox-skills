@@ -69,6 +69,7 @@ _HOOK_MODULES = {
     "subagent-model-gate": "subagent_model_gate",
     "subagent-probe-capability-gate": "subagent_probe_capability_gate",
     "subagent-backstop-nudge": "subagent_backstop_nudge",
+    "withheld-report-nudge": "withheld_report_nudge",
     "forgotten-backstop-nudge": "forgotten_backstop_nudge",
     "subagent-brief-pyright-nudge": "subagent_brief_pyright_nudge",
     "subagent-brief-must-not-nudge": "subagent_brief_must_not_nudge",

@@ -19,6 +19,14 @@ scan is run, and FOLDS IN crosstree's promotion gate and misplacement audit as i
 3b - so those two are already done when you reach step 5, and running them again is the one
 duplication to avoid. Everything else, do not duplicate: follow crosstree.
 
+## Mode
+
+The mode is meta-dream-crosstree's (its Mode section, after `bitranox:meta-dream-tree` ->
+references/dream-core.md). Under `off` a run of this skill is a manual one too, and it consolidates
+PRIVATE memory only: no `CLAUDE.md` is edited, a step 3b relocate is proposed as propose mode does,
+the step 4b harness audit reports its findings and changes no file, and the step 4 org-chart
+proposals stay proposals, as they do in every mode.
+
 ## What changes vs meta-dream-crosstree
 
 1. **Back up first** with `store_manifest.py backup --scope tree`, once per tree you will write,
@@ -27,7 +35,8 @@ duplication to avoid. Everything else, do not duplicate: follow crosstree.
 2. **Always run the semantic fan-out - no convergence shortcut, no asking.** FAN OUT one **`opus`**
    subagent per project store, OR (for many stores) one per thematic batch, in parallel. Each reads its
    stores and returns ONLY cross-project-generalizable candidates (general dev/tooling/test/security/
-   workflow practice), pre-filtered against the existing global rules and shipped skills. A subagent
+   workflow practice), pre-filtered against the rules already at each tree's top and the shipped
+   skills. A subagent
    flags a DUPLICATE/MERGE only from the BODIES (not a title/topic match), and every such finding is a
    CANDIDATE the main agent VERIFIES before merging - a summary+detail pair, a valid cross-link, or a
    cited-across-a-subtree fact is not a duplicate (see "Dedup semantics" in references/dream-core.md). Keep the
@@ -40,7 +49,8 @@ duplication to avoid. Everything else, do not duplicate: follow crosstree.
    dedup it against that tree's existing top store, the shipped skills, AND every `CLAUDE.md` in the tree
    (project roots + ancestors + the workspace), not just the memory stores. During the conversion phase
    many rules still live in `CLAUDE.md`; promoting one already there would DUPLICATE it. Classify:
-   already-global/skill -> skip; already in a `CLAUDE.md` -> ROUTE through the reconciliation model
+   already at the tree top or in a skill -> skip; already in a `CLAUDE.md` -> ROUTE through the
+   reconciliation model
    (delete the lower copy if a broader tier covers it / lift it up + leave the delta / keep if local),
    and CONSOLIDATE a rule duplicated across many sibling `CLAUDE.md` UP to their common ancestor (the
    biggest cross-tree context saving); new + corroborated (>= 2 distinct projects, or user-stated) +
@@ -56,7 +66,8 @@ duplication to avoid. Everything else, do not duplicate: follow crosstree.
    (`reconcile_memory_index.py --check-misplaced <anchor>`) over EVERY tree, not just the ones this
    run touched: a wrong-tree fact is invisible from inside its own tree, so it survives every
    routine dream until a full sweep finds it. Judge each candidate (a cited neighbour path is not a
-   misfile) and `relocate` only the confirmed ones. Report the candidates rejected as well as the
+   misfile) and `relocate` only the confirmed ones, under crosstree 4b's mode rule (proposed in
+   `propose` and under `off`, applied in `auto`). Report the candidates rejected as well as the
    ones moved - a rejected candidate is a result, not a non-event.
    A fact placed by topic is listed once per level that holds a line of it and is ONE
    candidate; `relocate` refuses it (`! refused: '<slug>' is placed by topic`) until it is

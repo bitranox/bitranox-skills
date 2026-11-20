@@ -715,8 +715,12 @@ def test_lint_tree_reports_over_cap_triggerless_and_unlabelled(tmp_path, capsys)
     # different thing and must not share the word, or the frontmatter's measured lift gets
     # attributed to two labels nobody measured.
     rep = E.lint_tree(proj)
-    assert "unframed" not in rep
-    assert sorted(slug for _, slug in rep["unlabelled"]) == ["bad", "huge"]
+    assert type(rep) is E.LintReport
+    assert not hasattr(rep, "unframed")
+    assert sorted(slug for _, slug in rep.unlabelled) == ["bad", "huge"]
+    assert [(type(hit), hit.slug, hit.length) for hit in rep.over_cap] == [
+        (E.OverCapHook, "huge", len("When " + ("x" * 600) + " do z"))]
+    assert all(type(hit) is E.LevelSlug for hit in rep.no_trigger + rep.unlabelled)
 
 
 def test_lint_tree_clean_store_reports_zeros(tmp_path, capsys):

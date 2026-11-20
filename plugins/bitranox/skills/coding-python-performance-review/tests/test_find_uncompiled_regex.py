@@ -1,10 +1,16 @@
 """find_uncompiled_regex: which call sites are flagged, source decoding, the quadratic-start
 shapes, and the CLI contract."""
+import functools
+import mmap
+import os
 import re
 import sys
 import time
 
 import pytest
+
+if sys.platform != "win32":
+    import resource
 
 import find_uncompiled_regex as fur
 
@@ -162,34 +168,96 @@ CLASS_RUN_FIXED = r"(?<![\w./-])[\w./-]+\.(?:py|sh)\b"
 NEWLINE_START = r"(?<=[;&|\n])\s*grep"
 NEWLINE_START_FIXED = r"(?<=[;&|\n])[^\S\n]*grep"
 
-# CPU time, not wall time: on a machine running other suites, wall time charges this process for
-# time it spent waiting for a core (measured: ratios of 18x for a 64x pattern at a load of 30 on
-# 16 cores). Windows reports process CPU time in 15.6 ms ticks, too coarse for the small arm, so
-# it keeps the wall clock; its CI runners are not shared.
-_CLOCK = time.perf_counter if sys.platform == "win32" else time.process_time
+
+# USER CPU time (process-test-design, growth-ratio rule 1). Wall time charges this process for
+# time it waited for a core on a loaded machine (measured: 18x for a 64x pattern at a load of 30
+# on 16 cores), and process_time adds kernel time, which the large arm's fresh pages inflate.
+# getrusage counts every thread of the process, and no other thread runs during a window.
+# Windows has no getrusage; there every CPU-time clock steps 15.625 ms, so _min_window() makes
+# each window many steps long instead of falling back to the wall clock.
+if sys.platform == "win32":
+    def _user_cpu():
+        return os.times().user
+else:
+    def _user_cpu():
+        return resource.getrusage(resource.RUSAGE_SELF).ru_utime
+
+
+_STEP_SAMPLES = 3
+_BUSY_CHUNK = 2000  # loop iterations between two clock reads: user work, not kernel work
+
+
+def _clock_step(clock):
+    """The smallest advance *clock* reports over a busy loop, best of a few.
+
+    A loop of bare clock reads is mostly kernel time, which a user-time clock barely sees; busy
+    arithmetic between reads advances it the way a timed scan does."""
+    steps = []
+    for _ in range(_STEP_SAMPLES):
+        start = now = clock()
+        spin = 0
+        while now == start:
+            for _ in range(_BUSY_CHUNK):
+                spin += 1
+            now = clock()
+        steps.append(now - start)
+    return min(steps)
+
+
+# 10 steps keep one window within 10% of its length; on Windows that is a 156 ms window,
+# where a 2 ms arm read 0.0 in 9 of 10 runs (measured on the Windows dev box).
+_STEPS_PER_WINDOW = 10
+_MIN_WINDOW_FLOOR = 0.02  # seconds, where the clock is fine-grained
+
+
+@functools.cache
+def _min_window():
+    """Seconds each timed window must last on this machine's clock."""
+    return max(_MIN_WINDOW_FLOOR, _STEPS_PER_WINDOW * _clock_step(_user_cpu))
 
 
 # A pattern can do constant work on the test text (r"^\s+x" fails at the first character), and
-# then both arms finish below the clock's resolution: macOS process_time read 0.0 for the small
-# arm and the ratio divided by zero, and on Linux the ratio of two sub-microsecond readings is
-# noise. A large arm under this bound cannot be quadratic - a quadratic match over the large
-# arm's 8 * 50000 units runs for minutes - so such a pattern counts as linear without a ratio.
-TOO_FAST_TO_BE_QUADRATIC = 0.005  # seconds
+# then both arms finish below the clock's resolution: macOS read 0.0 for the small arm and the
+# ratio divided by zero, and on Linux the ratio of two sub-microsecond readings is noise. A large
+# arm under this bound cannot be quadratic - a quadratic match over the large arm's 8 * 50000
+# units runs for minutes - so such a pattern counts as linear without a ratio.
+TOO_FAST_TO_BE_QUADRATIC = 0.005  # seconds per scan
+
+_GROWTH = 8        # the large arm's input is this many times the small arm's
+_MAX_REPS = 1 << 16
+_ROUNDS = 3
 
 
-def _arm_times(pattern, unit, n, tail=""):
-    """finditer time over unit * n + tail and over unit * 8n + tail, each the best of 3 runs."""
+def _finditer(pattern):
     compiled = re.compile(pattern)
+    return lambda text: list(compiled.finditer(text))
 
-    def best(text):
-        times = []
-        for _ in range(3):
-            start = _CLOCK()
-            list(compiled.finditer(text))
-            times.append(_CLOCK() - start)
-        return min(times)
 
-    return best(unit * n + tail), best(unit * 8 * n + tail)
+def _arm_times(pattern, unit, n, tail="", *, scan=None, clock=_user_cpu, min_window=None):
+    """Seconds per finditer scan over unit * n + tail and over unit * 8n + tail.
+
+    The two arms get EQUAL windows (growth-ratio rule 2): the small arm is timed as 8 scans back
+    to back, so a fast moment of the machine cannot fall wholly inside it, and both windows are
+    repeated until they last _min_window(). Each is the best of 3 rounds. *scan* and *clock* are
+    the seams a virtual-clock test drives.
+    """
+    run_scan = scan if scan is not None else _finditer(pattern)
+    floor = _min_window() if min_window is None else min_window
+    small, big = unit * n + tail, unit * _GROWTH * n + tail
+
+    def window(text, scans):
+        start = clock()
+        for _ in range(scans):
+            run_scan(text)
+        return clock() - start
+
+    reps = 1
+    while window(small, _GROWTH * reps) < floor and reps < _MAX_REPS:
+        reps *= 2
+    small_scans = _GROWTH * reps
+    small_time = min(window(small, small_scans) for _ in range(_ROUNDS)) / small_scans
+    big_time = min(window(big, reps) for _ in range(_ROUNDS)) / reps
+    return small_time, big_time
 
 
 def _is_quadratic(pattern, unit, n, tail=""):
@@ -304,3 +372,162 @@ def test_cli_prints_the_quadratic_section(tmp_path, run_script):
     assert r.returncode == 0, r.stderr
     assert b"Found 4 patterns whose search can rescan one run from every start" in r.stdout
     assert b"m.py:5 - re.compile('[\\\\w./-]+\\\\.py', ...) [class-run-before-suffix]" in r.stdout
+
+
+# --- quadratic starts the leading-class rule cannot see -----------------------------------------
+# A repeated GROUP before a suffix, and a repeat reached past an optional prefix. The positives
+# are real hook patterns that measured 54x to 65x for 8x the input; the negatives are their fixes.
+
+SCRIPT_PATH_OLD = r"(?:[\w.-]+/)+[\w.-]+\.(?:py|sh)\b"
+SCRIPT_PATH_FIXED = r"[\w.-]/[\w.-]+\.(?:py|sh)\b"         # one character before the last slash
+SCRIPT_PATH_ANCHORED = r"(?<![\w./-])(?:[\w.-]+/)+[\w.-]+\.(?:py|sh)\b"  # the shape's own fix
+
+PUSHCHECK_OLD = (r"(?m)(?:^|[;&|])\s*"
+                 r"(?:(?:if|then|elif|else|do|while|until|!)\s+|[({]\s*)*"
+                 r"(?:(?:[A-Za-z_]\w*=\S*|env(?:\s+-u\s+\w+)*)\s+)*"
+                 r"git(?:\s+-[Cc]\s+(?:[^\s'\"]|'[^']*'|\"[^\"]*\")+)*\s+push\b"
+                 r"|\bmake\s+push\b|\bgh\s+pr\s+create\b")
+PUSHCHECK_FIXED = (r"(?m)(?:^|[;&|])[^\S\n]*"
+                   r"(?:(?:if|then|elif|else|do|while|until|!)[^\S\n]+|[({][^\S\n]*)*"
+                   r"(?:(?:[A-Za-z_]\w*=\S*|env(?:\s+-u\s+\w+)*)[^\S\n]+)*"
+                   r"git(?:\s+-[Cc]\s+(?:[^\s'\"]|'[^']*'|\"[^\"]*\")+)*\s+push\b"
+                   r"|\bmake\s+push\b|\bgh\s+pr\s+create\b")
+KEYWORD_PREFIX = r"(?m)^[^\S\n]*(?:then\s+)*git"
+KEYWORD_PREFIX_FIXED = r"(?m)^[^\S\n]*(?:then[^\S\n]+)*git"
+
+
+def test_repeated_group_before_suffix_is_flagged_and_is_quadratic():
+    verdict = fur.quadratic_verdict(SCRIPT_PATH_OLD)
+    assert verdict is not None and verdict.shape == "group-run-before-suffix"
+    assert {"'a/' * N (end of text)", "'a' * N (end of text)"} <= set(verdict.witnesses)
+    assert _is_quadratic(SCRIPT_PATH_OLD, "a/", 500)
+
+
+@pytest.mark.parametrize("pattern", [SCRIPT_PATH_FIXED, SCRIPT_PATH_ANCHORED])
+def test_repeated_group_fixes_are_not_flagged_and_are_linear(pattern):
+    assert fur.quadratic_verdict(pattern) is None
+    assert _is_linear(pattern, "a/", 25000)
+
+
+def test_repeat_after_optional_prefix_is_flagged_and_is_quadratic():
+    verdict = fur.quadratic_verdict(KEYWORD_PREFIX)
+    assert verdict is not None and verdict.shape == "repeat-after-optional-prefix"
+    assert "'then\\n' * N (end of text)" in verdict.witnesses
+    assert _is_quadratic(KEYWORD_PREFIX, "then\n", 400)
+
+
+def test_repeat_after_optional_prefix_fix_is_not_flagged_and_is_linear():
+    assert fur.quadratic_verdict(KEYWORD_PREFIX_FIXED) is None
+    assert _is_linear(KEYWORD_PREFIX_FIXED, "then \n", 10000)
+
+
+def test_old_push_check_names_every_prefix_run():
+    verdict = fur.quadratic_verdict(PUSHCHECK_OLD)
+    assert verdict is not None and verdict.shape == "newline-start-then-blanks"
+    assert {"'\\n' * N (end of text)", "'if\\n' * N (end of text)", "'(\\n' * N (end of text)",
+            "'a=\\n' * N (end of text)", "'env\\n' * N (end of text)"} <= set(verdict.witnesses)
+    assert _is_quadratic(PUSHCHECK_OLD, "a=\n", 400)
+
+
+def test_fixed_push_check_is_not_flagged_and_is_linear():
+    assert fur.quadratic_verdict(PUSHCHECK_FIXED) is None
+    assert _is_linear(PUSHCHECK_FIXED, "then\n", 10000)
+
+
+def test_optional_prefix_before_a_class_run_is_flagged():
+    verdict = fur.quadratic_verdict(r"v?\d+\.\d+")
+    assert verdict is not None and verdict.shape == "class-run-before-suffix"
+    assert "'0' * N (end of text)" in verdict.witnesses
+    assert _is_quadratic(r"v?\d+\.\d+", "0", 2000)
+    assert fur.quadratic_verdict(r"(?<!\d)v?\d+\.\d+") is None
+
+
+def test_repeated_body_that_matches_its_whole_run_is_not_flagged():
+    # nothing after the repeat, so a match takes the whole run from its first start
+    assert fur.quadratic_verdict(r"(?:ab)+") is None
+    assert fur.quadratic_verdict(r"(?:\w+)+") is None
+
+
+# --- how much a scan examined ---------------------------------------------------------------
+
+def test_cli_reports_how_many_call_sites_it_examined(tmp_path, run_script):
+    p = tmp_path / "m.py"
+    p.write_text(QUADRATIC_MODULE + "def g(s, pat):\n    return re.search(pat, s)\n",
+                 encoding="utf-8")
+    r = run_script(SCRIPT, str(p))
+    assert r.returncode == 0, r.stderr
+    # lines 3-7 compile, 10 fullmatch, 11 findall, plus g's search; line 9 is a method call
+    assert (b"Examined 8 regex call sites in 1 file: 5 checked for quadratic starts, "
+            b"0 in a shape not modelled, 1 built at run time") in r.stdout
+
+
+def test_cli_zero_call_sites_exits_2(tmp_path, run_script):
+    p = tmp_path / "plain.py"
+    p.write_text("def f(s):\n    return s.strip()\n", encoding="utf-8")
+    r = run_script(SCRIPT, str(p))
+    assert r.returncode == 2
+    assert b"examined 0 regex call sites" in r.stderr
+    assert b"Examined 0 regex call sites in 1 file" in r.stdout
+
+
+# --- the timing helper itself (process-test-design, growth-ratio rules 1 and 2) -----------------
+
+class _VirtualCPU:
+    """A user-time clock that advances with work done: 1 us per character a scan reads, and ten
+    times faster over a stretch of *fast_chars* characters starting *fast_from* characters in."""
+
+    def __init__(self, fast_from, fast_chars):
+        self.now = 0.0
+        self.work = 0
+        self.fast_from = fast_from
+        self.fast_to = fast_from + fast_chars
+
+    def clock(self):
+        return self.now
+
+    def scan(self, text):
+        lo, hi = self.work, self.work + len(text)
+        fast = max(0, min(hi, self.fast_to) - max(lo, self.fast_from))
+        self.now += (len(text) - fast) * 1e-6 + fast * 1e-7
+        self.work = hi
+
+
+@pytest.mark.parametrize("offset", range(0, 120))
+def test_a_fast_moment_does_not_make_a_linear_scan_read_superlinear(offset):
+    # A fast stretch one small scan long, placed at every small-scan boundary of the whole run:
+    # timing the small arm as one short pass lets it fall wholly inside that pass (ratio 80x).
+    n = 2000
+    cpu = _VirtualCPU(fast_from=offset * n, fast_chars=n)
+    small, big = _arm_times("", "a", n, scan=cpu.scan, clock=cpu.clock, min_window=0.02)
+    assert big < LINEAR_CEILING * small
+
+
+def test_clock_step_reads_a_ticking_clock_as_one_tick():
+    tick = 0.015625
+    calls = [0]
+
+    def ticking():
+        calls[0] += 1
+        return (calls[0] // 16) * tick
+
+    assert _clock_step(ticking) == tick
+
+
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="Windows user time over page faults measured 0.23 to 0.74 of process_time "
+                           "over 512 MiB: no stable split to assert")
+def test_user_cpu_leaves_out_the_kernel_time_of_page_faults():
+    # Touching fresh anonymous pages is kernel work (page faults); process_time counts it, user
+    # time does not (measured on Linux: user time 5% to 23% of process_time).
+    size = 128 << 20
+    ratios = []
+    for _ in range(3):
+        region = mmap.mmap(-1, size)
+        try:
+            user0, process0 = _user_cpu(), time.process_time()
+            for offset in range(0, size, mmap.PAGESIZE):
+                region[offset] = 1
+            ratios.append((_user_cpu() - user0) / max(time.process_time() - process0, 1e-9))
+        finally:
+            region.close()
+    assert min(ratios) < 0.5

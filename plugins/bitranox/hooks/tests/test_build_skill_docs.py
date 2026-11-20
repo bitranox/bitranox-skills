@@ -185,7 +185,7 @@ def test_package_description_states_no_skill_or_hook_count():
     pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     description = pyproject["project"]["description"]
     assert description, "pyproject.toml has no [project].description to check"
-    assert re.findall(r"\d+\s+(?:skills?|hooks?)\b", description, re.IGNORECASE) == []
+    assert re.findall(r"(?<!\d)\d+\s+(?:skills?|hooks?)\b", description, re.IGNORECASE) == []
 
 
 def test_reference_doc_documents_every_config_knob():

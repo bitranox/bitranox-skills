@@ -181,6 +181,16 @@ Each agent gets:
   session or is retried until the probe gives up. When such a report reaches you, forward it with
   SendMessage to the agent that dispatched that probe, by the name you gave it; it still needs
   the result.
+  Waiting does not save an agent dispatched with `name`: its own dispatches' hand-backs are
+  refused while it waits, with the same message (on Claude Code 2.1.329, the first hand-back of
+  all 116 agents a named agent dispatched, against 0 of 4,319 dispatched by the main session or
+  an unnamed subagent). Its Agent result then says the subagent "ended without delivering a
+  report", and a SendMessage only makes the probe fail again. The report is not lost: it is the
+  `message` input of the probe's last `SubagentHandback` call in its transcript,
+  `<session>/subagents/agent-<agentId>.jsonl`, named probe or not, where `<session>` is the main
+  session's transcript path without `.jsonl` even when a subagent dispatched the probe. The
+  `withheld-report-nudge` hook quotes it beside the Agent result; where no quote appears (a plugin
+  older than the hook), read that file yourself. Do not re-dispatch the probe for it.
 - **A per-item progress record, when an agent works a list.** Have it write one line per finished
   item (to its notes file, or as one commit per item) as it goes. Agents in a fan-out share one
   usage limit and can all stop at once mid-batch; with the record, a resumed agent, or you, skips

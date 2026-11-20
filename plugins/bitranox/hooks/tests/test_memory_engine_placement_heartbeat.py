@@ -120,7 +120,7 @@ def test_a_set_topics_batch_refreshes_the_lock_at_every_row(tmp_path):
     # write starts a row, so only it must find the lock fresh
     port = _AgingPort(L[""], lambda path: str(path) == top)
     rep = E.set_fact_topics(L[""], {"feedback-py1": None, "feedback-py2": None}, write=port)
-    assert sorted(rep["collapsed"]) == ["feedback-py1", "feedback-py2"]
+    assert sorted(rep.collapsed) == ["feedback-py1", "feedback-py2"]
     at_top = [fresh for path, fresh in port.seen if path == top]
     assert len(at_top) == 2 and at_top[1] is True, port.seen
 

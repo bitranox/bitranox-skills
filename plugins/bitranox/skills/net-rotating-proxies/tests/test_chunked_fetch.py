@@ -334,20 +334,20 @@ def test_a_proxy_answering_another_range_cannot_plant_the_size(stand, tmp_path):
 
 
 class _InOrder(pp.ProxyPool):
-    """The real pool, but acquire() hands proxies out in a fixed order (skipping evicted ones),
-    so a test can make a lying proxy answer the probe FIRST instead of hoping the random pick
-    does."""
+    """The real pool, but acquire() hands proxies out in a fixed order (skipping evicted and
+    excluded ones), so a test can make a lying proxy answer the probe FIRST instead of hoping the
+    random pick does."""
 
     def __init__(self, store, order):
         super().__init__(store, None, cooldown=0)
         self._order, self._turn = list(order), 0
 
-    def acquire(self, n):
+    def acquire(self, n, *, exclude=frozenset()):
         active = self.active()
         for _ in range(len(self._order)):
             proxy = self._order[self._turn % len(self._order)]
             self._turn += 1
-            if proxy in active:
+            if proxy in active and proxy not in exclude:
                 return [proxy]
         return []
 
@@ -387,6 +387,24 @@ def test_on_a_tie_a_ranged_answer_still_beats_a_whole_file_one(stand, tmp_path):
     # Two proxies answered, but the winning view has one voter: it is warned as not cross-checked.
     assert warnings == [("probe: proxies disagreed; took the ranged view of one proxy, not "
                          "cross-checked - pass --sha256 to verify the result")]
+
+
+def test_the_probe_asks_every_proxy_before_it_asks_one_again(stand, tmp_path):
+    # A probe that re-asks a proxy which already answered learns nothing new and spends an
+    # attempt another proxy needed. Picked with replacement, the probe left one of the two honest
+    # proxies of the mixed-pool download unasked in about 1 of 1300 runs, and that download then
+    # ended on a tie. Here one honest proxy hides among seven that answer without a view: with
+    # as many attempts as proxies, only asking each once is sure to reach it.
+    origin = stand.origin(SIZE)
+    honest = stand.proxy()
+    proxies = [honest] + [stand.proxy("429") for _ in range(7)]
+    _, pool = _pool(tmp_path, proxies)
+    warnings = []
+    info = cfetch.probe(origin.url, pool, PROBE_BUDGET, len(proxies), warn=warnings.append)
+    asked = {proxy: stand.proxies[proxy].log.count("bytes=0-0") for proxy in proxies}
+    assert sorted(asked.values()) == [1] * len(proxies), asked
+    assert info.ranged and info.total == SIZE and info.identity["etag"] == '"v1"'
+    assert len(warnings) == 1 and warnings[0].startswith("probe: only one proxy answered")
 
 
 def test_a_single_answering_proxy_decides_with_a_warning(stand, tmp_path):
@@ -969,9 +987,11 @@ def test_a_redirect_loop_is_bounded_and_bans_nobody(stand, tmp_path):
     loop = stand.origin(10)
     loop.redirect_to = loop.url
     store, pool = _pool(tmp_path, [stand.proxy(), stand.proxy()], fail_ratio=1.0)
-    result = _fetch(loop, tmp_path / "f.bin", pool, max_attempts=3)
+    result = _fetch(loop, tmp_path / "f.bin", pool, max_attempts=5)
     assert not result.ok and _bad(store) == set()
-    assert len(loop.log) == 3 * (cfetch.MAX_REDIRECTS + 1)
+    # Each proxy is asked once: the redirect loop is its answer, so the probe stops with attempts
+    # to spare, and each of the two followed at most MAX_REDIRECTS redirects.
+    assert len(loop.log) == 2 * (cfetch.MAX_REDIRECTS + 1)
 
 
 # ---- the attempt budget is wall time, whatever the proxy trickles ------------------------------

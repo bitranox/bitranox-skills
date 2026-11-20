@@ -52,6 +52,31 @@ def test_a_leading_cd_into_the_bmk_repo_fires(bmk_repo, tmp_path):
     assert nudge.notice(f"cd {bmk_repo.as_posix()} && make test", str(tmp_path)) is not None
 
 
+def _git_bash_spelling(path):
+    """`C:\\x\\y` as Git Bash prints it, `/c/x/y`."""
+    return "/" + path.drive[0].lower() + path.as_posix()[len(path.drive):]
+
+
+# Only a Windows host has a drive for Git Bash to mount at `/c`; elsewhere `/c` is a directory.
+_GIT_BASH_DRIVES = pytest.mark.skipif(os.name != "nt", reason="Git Bash drive paths exist on Windows only")
+
+
+@_GIT_BASH_DRIVES
+@pytest.mark.parametrize("template", ["make -C {} test", "make --directory={} test", "cd {} && make test"])
+def test_a_git_bash_drive_path_into_a_bmk_repo_fires(bmk_repo, tmp_path, template):
+    """`make -C /c/...` is drive C to Git Bash; read at the current drive's root it was C:\\c\\...,
+    which holds no Makefile, so the gate went unnamed."""
+    command = template.format(_git_bash_spelling(bmk_repo))
+    assert nudge.notice(command, str(tmp_path), "Bash") is not None
+
+
+@_GIT_BASH_DRIVES
+def test_the_powershell_tool_keeps_a_slash_drive_path_at_the_current_drive_root(bmk_repo, tmp_path):
+    """PowerShell passes `/c/...` on unchanged: it is not the drive there, so nothing fires."""
+    command = f"make -C {_git_bash_spelling(bmk_repo)} test"
+    assert nudge.notice(command, str(tmp_path), "PowerShell") is None
+
+
 @pytest.mark.parametrize("command", ["bmk test", "uvx bmk@latest install", "uvx bmk deps --update"])
 def test_running_bmk_itself_fires_anywhere(plain_repo, command):
     assert nudge.notice(command, str(plain_repo)) is not None

@@ -38,8 +38,8 @@ Run (from the plugin root, via the launcher that forces UTF-8):
   `bash hooks/run-python.sh skills/meta-dream-tree/store_manifest.py verify --out <dir>`
 
 `--out` must be outside the knowledge TREE (not under the anchor), and either new, empty, or an
-earlier backup (it holds a `manifest.json`): a re-backup clears the old copies first, so any other
-existing dir is refused. Inside the tree, the copied `CLAUDE.local.md` files would read as real
+earlier backup OF THE SAME TREE (it holds a `manifest.json` naming this anchor): a re-backup clears
+the old copies first, so any other existing dir is refused, another tree's backup included. Inside the tree, the copied `CLAUDE.local.md` files would read as real
 levels to the engine, recall and `reconcile --check-tree`.
 
 Exit codes: 0 = backed up / verified identical, 1 = the tree differs from the manifest,
@@ -209,19 +209,23 @@ def levels_under(anchor: Path, exclude: tuple[Path, ...] = (),
             entries = list_dir(d)
         except (FileNotFoundError, NotADirectoryError):
             continue
-        except OSError:
+        except OSError as exc:
             if unreadable is not None:
-                unreadable.append(str(d))
+                unreadable.append(f"{d} ({type(exc).__name__})")
             continue
         for e in entries:
             if e.is_dir() and not e.is_symlink() and not is_pruned_dir(e.name):
-                resolved = e.resolve()
-                if any(resolved == s or s in resolved.parents for s in skip):
+                if skip and _under_any(e.resolve(), skip):
                     continue
                 stack.append(e)
             elif e.is_file() and e.name == LEVEL_FILE:
                 found.append(d)
     return sorted(found)
+
+
+def _under_any(path: Path, roots: tuple[Path, ...]) -> bool:
+    """Whether `path` is one of `roots` or lies below one. PURE."""
+    return any(path == r or r in path.parents for r in roots)
 
 
 def levels_on_chain(start: Path, anchor: Path) -> list[Path]:
@@ -296,6 +300,15 @@ def derive(root: Path, *, scope: str = "tree", start: Path | None = None,
     error, or bytes that are not UTF-8): a partial manifest would verify as if the missing levels
     had never existed.
     """
+    return _derive_walk(root, scope=scope, start=start, exclude=exclude)[0]
+
+
+def _derive_walk(root: Path, *, scope: str, start: Path | None,
+                 exclude: tuple[Path, ...]) -> tuple[list[Entry], list[Path]]:
+    """derive's entries plus the level dirs that one walk found. backup copies exactly these
+    levels: a second walk could miss a level the first one read (a directory that became
+    unreadable between the two drops out of a walk that keeps no `unreadable` list), and the
+    manifest would then hold its entries while the cost report reads it as never there."""
     anchor = anchor_dir(root)
     begin = Path(start) if start is not None else Path(root)
     unreadable: list[str] = []
@@ -313,7 +326,7 @@ def derive(root: Path, *, scope: str = "tree", start: Path | None = None,
             entries.append(replace(e, body_sha=bodies[e.slug]))
     if unreadable:
         raise Unreadable(sorted(unreadable))
-    return sorted(entries)
+    return sorted(entries), levels
 
 
 def manifest_key(entries: list[Entry]) -> tuple:
@@ -450,6 +463,29 @@ def _check_out(out: Path, store: Path, anchor: Path | None = None) -> None:
         raise StoreManifestError(f"--out {target} exists, is not empty and holds no "
                                  "manifest.json, so it is not an earlier backup; a re-backup "
                                  "clears its store/ and levels/ first - use a new dir")
+    if anchor is not None and (target / "manifest.json").is_file():
+        _check_same_tree(target, anchor)
+
+
+def _check_same_tree(out: Path, anchor: Path) -> None:
+    """Refuse an --out holding the backup of ANOTHER tree, or one whose tree cannot be told.
+
+    A re-backup clears `store/` and `levels/` first, so writing a second tree's backup into the
+    first tree's dir destroys that tree's only restore source, with exit 0 on both runs. A
+    manifest that cannot be read is refused too: it may still front the only copy of a tree.
+    """
+    try:
+        earlier = load_manifest(out)
+    except StoreManifestError as exc:
+        raise StoreManifestError(f"--out {out} holds a manifest.json that cannot be read as a "
+                                 f"store manifest ({exc}), so which tree it backs up is unknown "
+                                 "and a re-backup could destroy another tree's only restore "
+                                 "source - use a new dir") from exc
+    if Path(earlier["anchor"]).resolve() != anchor:
+        raise StoreManifestError(f"--out {out} holds the backup of another tree "
+                                 f"({earlier['anchor']}); a re-backup clears it first, which "
+                                 "would destroy that tree's only restore source - use a new dir "
+                                 f"for {anchor}")
 
 
 def backup(*, root: Path, scope: str, start: Path, out: Path) -> tuple[list[Entry], Path]:
@@ -457,10 +493,13 @@ def backup(*, root: Path, scope: str, start: Path, out: Path) -> tuple[list[Entr
     anchor = anchor_dir(root)
     store_src = anchor / STORE_DIR
     _check_out(out, store_src.resolve(), Path(anchor).resolve())
-    entries = derive(root, scope=scope, start=start, exclude=(Path(out).expanduser(),))
+    entries, levels = _derive_walk(root, scope=scope, start=start,
+                                   exclude=(Path(out).expanduser(),))
     if not entries:
         raise EmptyScope(f"no pointers found in scope {scope!r} under {anchor} - a manifest of "
-                         "nothing verifies clean against anything, so this is a refusal")
+                         "nothing verifies clean against anything, so this is a refusal. The "
+                         "scope holds no fact a run could lose: go on without this backup and "
+                         "report its verify as skipped (no pointers before the run)")
     out.mkdir(parents=True, exist_ok=True)
     for stale in (out / "store", out / "levels"):
         # A level deleted since the last backup into this dir would otherwise survive in it.
@@ -470,8 +509,7 @@ def backup(*, root: Path, scope: str, start: Path, out: Path) -> tuple[list[Entr
     # EVERY in-scope level, not only those holding a pointer: a level whose block is empty now
     # can gain pointers in the run, and the cost report needs its bytes before. Every in-scope
     # level sits under the anchor (the tree walk starts there, the chain walk stops there), so
-    # relative_to cannot fail.
-    levels = scope_levels(anchor, scope=scope, start=start, exclude=(Path(out).expanduser(),))
+    # relative_to cannot fail. The levels are the ones derive's own walk found (_derive_walk).
     for lvl in levels:
         dst = out / "levels" / lvl.relative_to(anchor)
         dst.mkdir(parents=True, exist_ok=True)

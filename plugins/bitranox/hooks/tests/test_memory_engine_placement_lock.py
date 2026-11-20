@@ -384,9 +384,10 @@ def test_remove_keeps_the_last_line_of_a_fact_and_reports_it(tmp_path, capsys):
 
     rep = E.render_topics(anchor, write=write)
     assert _where(anchor, "feedback-py") == [levels["a/py"], levels["b/py"]]
-    kept = {level: row.get("kept", 0) for level, row in rep["levels"].items()}
+    kept = {level: row.kept for level, row in rep.levels.items()}
     assert kept[levels["a/py"]] == kept[levels["b/py"]] == 1
-    assert rep["levels"][levels["a/py"]]["examples"]["kept"] == ["feedback-py"]
+    assert rep.levels[levels["a/py"]].examples[E.RenderKind.KEPT] == ["feedback-py"]
+    assert rep.levels[levels["a/py"]].to_data()["kept"] == 1     # the JSON row carries it
     E._print_render(rep, as_json=False)
     out = capsys.readouterr().out
     assert "kept 2 line(s)" in out and "feedback-py" in out and "render-topics" in out

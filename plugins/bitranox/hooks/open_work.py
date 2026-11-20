@@ -20,6 +20,7 @@ import os
 import re
 import subprocess
 import unicodedata
+from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -62,7 +63,6 @@ HEADER = (
 )
 
 _ITEM_RX = re.compile(r"-\s*\[([ xX])\]\s*\(([^)]*)\)\s*\[(\d+)\]\s*(.*)$")
-_CHECKBOX_RX = re.compile(r"-\s*\[([ xX])\]\s*(.*)$")
 _ORIGIN_RX = re.compile(r"(USER|FOUND):\s*(.*)$")
 _FIELD_RX = re.compile(r"(?<!\s)\s+\|\s+(size|open|next|closed):\s*")
 _FENCE_RX = re.compile(r" {0,3}(`{3,}|~{3,})")
@@ -93,6 +93,39 @@ class Item:
         return {"rank": self.rank, "raised": self.raised, "state": self.state.value,
                 "origin": None if self.origin is None else self.origin.value, "what": self.what,
                 "size": self.size, "open": self.open, "next": self.next, "closed": self.closed}
+
+
+@dataclass(frozen=True, slots=True)
+class Added:
+    """What add_item wrote: the new item's rank and its line exactly as written."""
+
+    rank: int
+    line: str
+
+    def to_data(self) -> dict[str, object]:
+        """The report as the backlog_add JSON carries it, keys in this order."""
+        return {"rank": self.rank, "line": self.line}
+
+
+@dataclass(frozen=True, slots=True)
+class Closed:
+    """What close_item deleted: the line as it stood, and the caller's reason for closing it.
+
+    `reason` is for the caller to record where it lasts (the commit message that ships the
+    change), since the file keeps no trace of it."""
+
+    rank: int
+    line: str
+    reason: str
+
+    def to_data(self) -> dict[str, object]:
+        """The report as the backlog_close JSON carries it; `deleted` is always true, because a
+        close that deletes nothing raises instead of returning."""
+        return {"rank": self.rank, "line": self.line, "reason": self.reason, "deleted": True}
+
+
+#: a path argument the backlog functions accept
+PathArg = str | os.PathLike[str]
 
 
 class BacklogError(ValueError):
@@ -157,7 +190,7 @@ def parse_line(line: str) -> Item | None:
                 closed=fields.get("closed"))
 
 
-def item_text(line):
+def item_text(line: str) -> str:
     """Everything after an item line's `[rank]`, as written (origin and fields included), or ""
     for a line that is not an item. A listing shows this rather than a rebuilt line, so it quotes
     the backlog in the author's own field order and wording."""
@@ -165,9 +198,9 @@ def item_text(line):
     return m.group(4).strip() if m else ""
 
 
-def _outside_fences(lines):
+def _outside_fences(lines: list[str]) -> Iterator[tuple[int, str]]:
     """(index, line) for every line outside a fenced code block."""
-    fence = None
+    fence: str | None = None
     for i, line in enumerate(lines):
         if fence is not None:
             bare = line.strip()
@@ -182,7 +215,7 @@ def _outside_fences(lines):
         yield i, line
 
 
-def iter_items(lines):
+def iter_items(lines: list[str]) -> Iterator[tuple[int, Item]]:
     """(index, item) for every item line outside a fenced code block."""
     for i, line in _outside_fences(lines):
         item = parse_line(line)
@@ -190,18 +223,18 @@ def iter_items(lines):
             yield i, item
 
 
-def list_items(path, state="open") -> list[Item]:
+def list_items(path: PathArg, state: str = "open") -> list[Item]:
     """The items of the backlog at `path` in file order; [] when the file does not exist."""
     if state not in STATES:
         raise MalformedField("state must be one of %s, got %r" % (", ".join(STATES), state))
-    path = Path(path)
-    if not path.is_file():
+    backlog = Path(path)
+    if not backlog.is_file():
         return []
-    lines = path.read_text(encoding="utf-8").split("\n")
+    lines = backlog.read_text(encoding="utf-8").split("\n")
     return [it for _, it in iter_items(lines) if state == "all" or it.state == state]
 
 
-def unranked_lines(path, state="open"):
+def unranked_lines(path: PathArg, state: str = "open") -> list[str]:
     """Checkbox lines of the backlog at `path` that are NOT items because they carry no `[rank]`.
 
     A backlog in an older shape ("- [ ] (date) ORIGIN: ...") parses to no items at all, and an empty
@@ -209,12 +242,12 @@ def unranked_lines(path, state="open"):
     format template (its literal `[rank]`) is not a line of work and is left out."""
     if state not in STATES:
         raise MalformedField("state must be one of %s, got %r" % (", ".join(STATES), state))
-    path = Path(path)
-    if not path.is_file():
+    backlog = Path(path)
+    if not backlog.is_file():
         return []
     wanted = {"open": " ", "closed": "xX", "all": " xX"}[state]
-    lines = path.read_text(encoding="utf-8").split("\n")
-    found = []
+    lines = backlog.read_text(encoding="utf-8").split("\n")
+    found: list[str] = []
     for _, line in _outside_fences(lines):
         bare = line.strip()
         m = _CHECKBOX_RX.match(bare)
@@ -223,7 +256,7 @@ def unranked_lines(path, state="open"):
     return found
 
 
-def enclosing_backlog(toplevel):
+def enclosing_backlog(toplevel: PathArg) -> Path | None:
     """The nearest OPEN-WORK.md in a directory above `toplevel`, or None."""
     for parent in Path(toplevel).parents:
         candidate = parent / FILENAME
@@ -232,7 +265,7 @@ def enclosing_backlog(toplevel):
     return None
 
 
-def backlog_path(cwd):
+def backlog_path(cwd: PathArg) -> Path:
     """OPEN-WORK.md at the git top level of `cwd`.
 
     Every GIT_ variable is dropped first: git reads GIT_DIR before the cwd, and a push from a
@@ -246,7 +279,7 @@ def backlog_path(cwd):
     return Path(r.stdout.strip()) / FILENAME
 
 
-def main_checkout_of(cwd):
+def main_checkout_of(cwd: PathArg) -> Path | None:
     """The main checkout when `cwd` is inside a LINKED worktree, else None.
 
     A linked worktree carries its own OPEN-WORK.md, and a line written there is not in the main
@@ -270,7 +303,7 @@ def main_checkout_of(cwd):
 _RAISED_RX = re.compile(r"(\d{4})-(\d{2})-(\d{2})\??", re.ASCII)
 
 
-def require_one_line(value, name):
+def require_one_line(value: object, name: str) -> str:
     """`value` unchanged when it is one non-empty line of text a UTF-8 file can hold, else
     MalformedField naming the field.
 
@@ -289,28 +322,28 @@ def require_one_line(value, name):
     return value
 
 
-def require_line(value, name):
+def require_line(value: object, name: str) -> str:
     """`value` as one non-empty backlog field, stripped, or MalformedField naming the field."""
-    require_one_line(value, name)
-    if _FIELD_RX.search(" " + value + " "):
+    text = require_one_line(value, name)
+    if _FIELD_RX.search(" " + text + " "):
         raise MalformedField("%s contains a ' | <label>: ' separator, which would split the "
                              "line into the wrong fields" % name)
-    return value.strip()
+    return text.strip()
 
 
-def _require_rank(rank):
+def _require_rank(rank: object) -> int:
     # bool is an int subclass: True would otherwise be accepted as rank 1
     if isinstance(rank, bool) or not isinstance(rank, int) or not 1 <= rank <= MAX_RANK:
         raise MalformedField("rank must be a positive integer up to %d, got %r" % (MAX_RANK, rank))
     return rank
 
 
-def _require_raised(raised, today):
+def _require_raised(raised: object, today: datetime.date | None) -> str:
     if raised is None:
         # never an inferred date: an admitted unknown is today's date with a question mark
         return (today or datetime.date.today()).isoformat() + "?"
     if raised == "unknown":
-        return raised
+        return "unknown"
     m = _RAISED_RX.fullmatch(raised) if isinstance(raised, str) else None
     if not m:
         raise MalformedField("raised must be YYYY-MM-DD, YYYY-MM-DD? or unknown, got %r" % (raised,))
@@ -318,21 +351,21 @@ def _require_raised(raised, today):
         datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
     except ValueError:
         raise MalformedField("raised is not a calendar date: %r" % raised) from None
-    return raised
+    return m.group(0)
 
 
-def _free_tens_near(rank, taken):
+def _free_tens_near(rank: int, taken: set[int]) -> list[int]:
     base = rank - rank % 10
     below = next((r for r in range(base, 0, -10) if r not in taken and r != rank), None)
     above = next(r for r in range(base + 10, base + 10 ** 6, 10) if r not in taken)
     return [r for r in (below, above) if r is not None]
 
 
-def _free_ten_after(rank, taken):
+def _free_ten_after(rank: int, taken: set[int]) -> int:
     return next(r for r in range(rank - rank % 10 + 10, MAX_RANK + 10 ** 6, 10) if r not in taken)
 
 
-def _read(path):
+def _read(path: Path) -> tuple[str, str]:
     """(text with LF line ends, the file's line end) of the backlog at `path`.
 
     The line end is kept so a rewrite does not turn a CRLF checkout (Windows, core.autocrlf) into
@@ -342,7 +375,7 @@ def _read(path):
     return raw.replace("\r\n", "\n"), eol
 
 
-def _write(path, lines, eol="\n"):
+def _write(path: Path, lines: list[str], eol: str = "\n") -> None:
     tmp = path.with_name("%s.tmp-%d" % (path.name, os.getpid()))
     try:
         with open(tmp, "w", encoding="utf-8", newline=eol) as fh:
@@ -360,36 +393,41 @@ def _write(path, lines, eol="\n"):
         raise
 
 
-def add_item(path, rank, origin, what, size, open_, next_, raised=None, today=None):
-    """Insert one open item; returns {"rank", "line"}. Refuses before writing anything."""
-    rank = _require_rank(rank)
+def add_item(path: PathArg, rank: object, origin: object, what: object, size: object,
+             open_: object, next_: object, raised: object = None,
+             today: datetime.date | None = None) -> Added:
+    """Insert one open item and report what was written. Refuses before writing anything.
+
+    The fields are `object` because they arrive from a tool call's JSON unchecked: each is
+    validated here, which is the boundary."""
+    number = _require_rank(rank)
     if not isinstance(origin, str) or origin not in ORIGINS:
         raise MalformedField("origin must be USER or FOUND, got %r" % (origin,))
-    origin = Origin(origin)
+    who = Origin(origin)
     fields = [require_line(v, n) for v, n in ((what, "what"), (size, "size"),
                                               (open_, "open"), (next_, "next"))]
     line = "- [ ] (%s) [%d] %s: %s | size: %s | open: %s | next: %s" % (
-        (_require_raised(raised, today), rank, origin) + tuple(fields))
-    path = Path(path)
-    with sig.memory_lock(path):
-        text, eol = _read(path) if path.is_file() else ("", "\n")
+        (_require_raised(raised, today), number, who) + tuple(fields))
+    backlog = Path(path)
+    with sig.memory_lock(backlog):
+        text, eol = _read(backlog) if backlog.is_file() else ("", "\n")
         if not text.strip():
             text = HEADER                       # a missing or empty file starts from the header
         lines = text.split("\n")
         items = list(iter_items(lines))
         # a cited number is taken too: the citing line would otherwise point at the new item
         taken = {it.rank for _, it in items} | {int(n) for ln in lines for n in _CITED_RX.findall(ln)}
-        if rank in taken:
+        if number in taken:
             raise RankTaken("rank %d is already held or cited by a line (closed lines count); free "
                             "tens nearby: %s"
-                            % (rank, ", ".join(map(str, _free_tens_near(rank, taken)))))
+                            % (number, ", ".join(map(str, _free_tens_near(number, taken)))))
         users = [it.rank for _, it in items
                  if it.state == ItemState.OPEN and it.origin == Origin.USER]
-        if origin == Origin.FOUND and users and rank < max(users):
+        if who == Origin.FOUND and users and number < max(users):
             raise RankOrder("rank %d would put a FOUND item above open USER item %d; a USER item "
                             "outranks every FOUND one. Next free ten below it: %d"
-                            % (rank, max(users), _free_ten_after(max(users), taken)))
-        smaller = [(it.rank, i) for i, it in items if it.rank < rank]
+                            % (number, max(users), _free_ten_after(max(users), taken)))
+        smaller = [(it.rank, i) for i, it in items if it.rank < number]
         if smaller:
             at = max(smaller)[1] + 1
         elif items:
@@ -400,35 +438,33 @@ def add_item(path, rank, origin, what, size, open_, next_, raised=None, today=No
         new = lines[:at] + [line] + lines[at:]
         if new[-1] != "":
             new.append("")
-        _write(path, new, eol)
-    return {"rank": rank, "line": line}
+        _write(backlog, new, eol)
+    return Added(rank=number, line=line)
 
 
-def close_item(path, rank, reason):
-    """Delete one open item's line: the item is solved.
+def close_item(path: PathArg, rank: object, reason: object) -> Closed:
+    """Delete one open item's line: the item is solved. Nothing else in the file changes.
 
-    Returns {"rank", "line", "reason", "deleted"}: `line` is the deleted text and `reason` is for
-    the caller to record where it lasts (the commit message that ships the change), since the file
-    keeps no trace of it. Nothing else in the file changes.
+    Returns the deleted line and the reason (see Closed); a rank that names no open line raises.
     """
-    rank = _require_rank(rank)
-    reason = require_line(reason, "reason")
-    path = Path(path)
-    with sig.memory_lock(path):
-        if not path.is_file():
-            raise UnknownRank("no %s here, so there is no rank %d" % (FILENAME, rank))
-        text, eol = _read(path)
+    number = _require_rank(rank)
+    why = require_line(reason, "reason")
+    backlog = Path(path)
+    with sig.memory_lock(backlog):
+        if not backlog.is_file():
+            raise UnknownRank("no %s here, so there is no rank %d" % (FILENAME, number))
+        text, eol = _read(backlog)
         lines = text.split("\n")
-        hits = [(i, it) for i, it in iter_items(lines) if it.rank == rank]
+        hits = [(i, it) for i, it in iter_items(lines) if it.rank == number]
         if not hits:
-            raise UnknownRank("no line holds rank %d" % rank)
+            raise UnknownRank("no line holds rank %d" % number)
         open_hits = [(i, it) for i, it in hits if it.state == ItemState.OPEN]
         if not open_hits:
-            raise AlreadyClosed("rank %d is already closed" % rank)
+            raise AlreadyClosed("rank %d is already closed" % number)
         if len(open_hits) > 1:
             raise AmbiguousRank("rank %d labels %d open lines; give one a free number before "
-                                "closing either" % (rank, len(open_hits)))
+                                "closing either" % (number, len(open_hits)))
         i = open_hits[0][0]
         removed = lines[i]
-        _write(path, lines[:i] + lines[i + 1:], eol)
-    return {"rank": rank, "line": removed, "reason": reason, "deleted": True}
+        _write(backlog, lines[:i] + lines[i + 1:], eol)
+    return Closed(rank=number, line=removed, reason=why)

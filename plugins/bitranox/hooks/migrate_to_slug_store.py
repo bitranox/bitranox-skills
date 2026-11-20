@@ -32,12 +32,16 @@ import os
 import shutil
 import sys
 import time
+from collections.abc import Iterable
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import NamedTuple
 
 import self_improve_signals as sig
 import uuid_store as us
 
-__all__ = ["BACKUP_PREFIX", "backup_rel", "find_pointer_files", "main", "migrate", "plan_level"]
+__all__ = ["BACKUP_PREFIX", "MigrateItem", "MigrateReport", "backup_rel", "find_pointer_files",
+           "main", "migrate", "plan_level"]
 
 BACKUP_PREFIX = ".claude-memory-migration-backup-"
 
@@ -219,7 +223,37 @@ def _backup(plans, stamp):
     return dirs
 
 
-def _apply(plans, report):
+class MigrateItem(NamedTuple):
+    """One legacy pointer line the run planned: where it sits, its slug, the slug it migrates to
+    (another one on a collision), and whether its old body is missing (the line then stays)."""
+
+    level: str
+    slug: str
+    final_slug: str
+    collided: bool
+    missing: bool
+
+
+@dataclass
+class MigrateReport:
+    """What `migrate` found and did. The counts cover every readable pointer file; `moved` counts
+    the bodies an apply moved. `backup_failed` and `apply_failed` hold the error text when that
+    step failed, else None; `refused_trees` and `backups` stay empty on a dry run."""
+
+    files: int = 0
+    legacy_lines: int = 0
+    moved: int = 0
+    collisions: int = 0
+    missing: int = 0
+    backups: list[str] = field(default_factory=list[str])
+    items: list[MigrateItem] = field(default_factory=list[MigrateItem])
+    unreadable: list[str] = field(default_factory=list[str])
+    backup_failed: str | None = None
+    refused_trees: list[str] = field(default_factory=list[str])
+    apply_failed: str | None = None
+
+
+def _apply(plans, report: MigrateReport) -> None:
     for plan in plans:
         if not plan["actions"]:
             continue
@@ -232,7 +266,7 @@ def _apply(plans, report):
                     shutil.move(str(a["old_body"]), str(a["new_body"]))
                 p = a["pointer"]
                 p.slug, p.legacy, p.uuid = a["final_slug"], False, ""
-                report["moved"] += 1
+                report.moved += 1
             new_text = us.upsert_pointer_block(plan["text"], plan["scope"], plan["pointers"])
             us.write_if_changed(plan["local"], new_text)
 
@@ -253,51 +287,49 @@ def _poisoned_anchors(unreadable):
     return out
 
 
-def migrate(roots, apply=False):
-    """Migrate every tree under `roots`. Returns a report dict; `backup_failed` is set (and nothing
-    was written) when --apply could not back up first. `refused_trees` lists every tree --apply
+def migrate(roots: Iterable[str | os.PathLike[str]], apply: bool = False) -> MigrateReport:
+    """Migrate every tree under `roots`. Returns a MigrateReport; `backup_failed` is set (and
+    nothing was written) when --apply could not back up first. `refused_trees` lists every tree --apply
     skipped because one of its pointer files could not be read (nothing is written for it).
     `apply_failed` is set when a write failed AFTER the backup: the run stops there, and the
     backups already taken are in `backups`."""
-    report = {"files": 0, "legacy_lines": 0, "moved": 0, "collisions": 0, "missing": 0,
-              "backups": [], "items": [], "unreadable": [], "backup_failed": None,
-              "refused_trees": [], "apply_failed": None}
+    report = MigrateReport()
     levels = []
     for root in roots:
-        for local in find_pointer_files(root, report["unreadable"]):
+        for local in find_pointer_files(root, report.unreadable):
             try:
                 levels.append(_read_level(local))
             except (OSError, UnicodeDecodeError):
-                report["unreadable"].append(str(local))
+                report.unreadable.append(str(local))
     taken = _seed_taken(_tree_wide_levels(levels))
     seen_bodies = {}
     for level in levels:
         plan_level(level, taken, seen_bodies)
-        report["files"] += 1
+        report.files += 1
         for a in level["actions"]:
-            report["legacy_lines"] += 1
-            report["collisions"] += 1 if a["collided"] else 0
-            report["missing"] += 1 if a["missing"] else 0
-            report["items"].append((str(level["level"]), a["slug"], a["final_slug"],
-                                    a["collided"], a["missing"]))
+            report.legacy_lines += 1
+            report.collisions += 1 if a["collided"] else 0
+            report.missing += 1 if a["missing"] else 0
+            report.items.append(MigrateItem(str(level["level"]), a["slug"], a["final_slug"],
+                                            a["collided"], a["missing"]))
     if not apply:
         return report
-    poisoned = _poisoned_anchors(report["unreadable"])
-    report["refused_trees"] = sorted(poisoned)
+    poisoned = _poisoned_anchors(report.unreadable)
+    report.refused_trees = sorted(poisoned)
     apply_levels = [lv for lv in levels if str(lv["anchor"]) not in poisoned]
     try:
-        report["backups"] = _backup(apply_levels, time.strftime("%Y%m%d-%H%M%S"))
+        report.backups = _backup(apply_levels, time.strftime("%Y%m%d-%H%M%S"))
     except OSError as exc:
-        report["backup_failed"] = str(exc)
+        report.backup_failed = str(exc)
         return report
     try:
         _apply(apply_levels, report)
     except OSError as exc:                 # TimeoutError from a held level lock is one
-        report["apply_failed"] = str(exc)
+        report.apply_failed = str(exc)
     return report
 
 
-def main(argv=None):
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Migrate uuid-sharded stores to the slug store.")
     ap.add_argument("--root", action="append", required=True, dest="roots",
                     help="tree root(s) to scan (repeatable)")
@@ -316,30 +348,30 @@ def main(argv=None):
             print("! error: no such directory: %s" % r, file=sys.stderr)
         return 2
     rep = migrate(args.roots, apply=args.apply)
-    if rep["backup_failed"]:
-        print("ABORTED: backup failed, nothing was moved or rewritten: %s" % rep["backup_failed"],
+    if rep.backup_failed:
+        print("ABORTED: backup failed, nothing was moved or rewritten: %s" % rep.backup_failed,
               file=sys.stderr)
         return 2
     tag = "APPLIED" if args.apply else "DRY-RUN"
     print("%s: %d pointer file(s); %d legacy line(s); %d body move(s); %d collision(s); %d missing;"
           " %d unreadable"
-          % (tag, rep["files"], rep["legacy_lines"], rep["moved"], rep["collisions"], rep["missing"],
-             len(rep["unreadable"])))
-    for level, slug, final, collided, missing in rep["items"]:
+          % (tag, rep.files, rep.legacy_lines, rep.moved, rep.collisions, rep.missing,
+             len(rep.unreadable)))
+    for level, slug, final, collided, missing in rep.items:
         flag = " COLLISION->%s" % final if collided else (" MISSING-BODY" if missing else "")
         print("    %s [%s]%s" % (slug, level, flag))
-    for path in rep["unreadable"]:
+    for path in rep.unreadable:
         print("    UNREADABLE (not scanned): %s" % path)
-    for tree in rep["refused_trees"]:
+    for tree in rep.refused_trees:
         print("    REFUSED (unreadable pointer file in this tree, nothing applied): %s" % tree)
-    for b in rep["backups"]:
+    for b in rep.backups:
         print("    backup: %s" % b)
-    if rep["apply_failed"]:
+    if rep.apply_failed:
         print("! error: the apply stopped part-way (%s) - restore from the backup listed above"
-              % rep["apply_failed"], file=sys.stderr)
+              % rep.apply_failed, file=sys.stderr)
         return 2
     # an unread file or a refused tree is part of the job this run could not do
-    return 2 if rep["unreadable"] or rep["refused_trees"] else 0
+    return 2 if rep.unreadable or rep.refused_trees else 0
 
 
 if __name__ == "__main__":

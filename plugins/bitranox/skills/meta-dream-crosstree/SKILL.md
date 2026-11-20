@@ -24,7 +24,12 @@ cross-tree reference** (a sideways pointer dangles when the other tree is delete
 ## Mode
 
 Read the mode per `bitranox:meta-dream-tree` -> references/dream-core.md (propose / auto /
-off - the knob semantics live ONLY there); `off` skips this skill entirely.
+off - the knob semantics live ONLY there). This skill has no nudge, so every run is a manual one,
+and under `off` a manual run consolidates PRIVATE memory only, as the core says for the whole
+family: it edits no `CLAUDE.md` (a candidate already in one, or a rule duplicated across
+siblings, is left where it is and named in the report, not routed), leaves skill contributions
+queued (step 7), and proposes every step 4b relocate, whatever its target level, as step 4b
+does in `propose`.
 
 ## When to run
 
@@ -63,13 +68,18 @@ Create one todo per step.
 
    `<key>` is `crosstree-<name of that tree's anchor dir>`, one per tree (add a number when two
    anchors share a name), and `<ts>` the time that backup starts, as `YYYYMMDD-HHMM`. A second tree
-   never reuses a backup dir: a backup into a dir that already holds one replaces it, and that was
-   the first tree's only restore source. The `--out` dir lies outside every tree, so a backup is
-   never re-discovered as live memory. It copies the tree's store and every in-scope
-   `CLAUDE.local.md` and records the manifest step 8 verifies against; never hand-roll the
-   snapshot (meta-dream-tree step 2 says why). A native `memory/` dir you will write is not
-   covered: copy it beside the backup by hand. Curated writes go through the engine, not a
-   hand-edit. The one-time whole-store backup is the safety net; this is the per-run one.
+   never reuses a backup dir: a backup into a dir holding the same tree's backup replaces it, and
+   one into a dir holding another tree's backup, or a `manifest.json` it cannot read, is refused
+   (exit 2) - pick a new dir. The `--out` dir lies outside every tree, so a backup is never
+   re-discovered as live memory. A tree with no pointer yet is refused too (exit 2,
+   `no pointers found in scope`): it holds no fact this run could lose, so go on without its
+   backup, write `verify skipped (no pointers before the run)` for it in step 8, and list each
+   pointer the run adds at its top with its cost, as step 8 does for a promotion. It copies the
+   tree's store and every in-scope `CLAUDE.local.md` and records the manifest step 8 verifies
+   against; never hand-roll the snapshot (meta-dream-tree step 2 says why). A native `memory/`
+   dir you will write is not covered: copy it beside the backup by hand. Curated writes go
+   through the engine, not a hand-edit. The one-time whole-store backup is the safety net; this
+   is the per-run one.
 2. **Inbound gather (delegate).** For each project that should be enriched, run
    `bitranox:meta-collect-knowledge` (the grep -> inspect -> gather funnel): pull knowledge from OTHER
    trees relevant to that project and bring it in by **lifting broadly-useful hits to a common ancestor**
@@ -83,11 +93,13 @@ Create one todo per step.
    list (`bitranox:meta-dream-tree` step 5).
 3. **Cheap convergence pre-check, THEN ask before the deep scan.** The cross-project semantic read (the
    fan-out below) is the expensive part - dozens of subagents. Do NOT run it unconditionally. First the
-   cheap, deterministic pass: which stores changed since the last global dream, `reconcile_memory_index.py
-   --check` over the altitude chains (the LEVEL dirs; orphans / downward; index size is an advisory warning),
+   cheap, deterministic pass: which stores changed since the last crosstree dream,
+   `reconcile_memory_index.py --check` over the altitude chains (the LEVEL dirs; orphans /
+   downward; index size is an advisory warning),
    `model_review_due()`, any pending
-   filler queue. If nothing material changed since the last run, report convergence and STOP - a global
-   dream that writes nothing is the correct outcome. Only if there is genuinely new cross-project material
+   filler queue. If nothing material changed since the last run, report convergence and STOP - a
+   crosstree dream that writes nothing is the correct outcome. Only if there is genuinely new
+   cross-project material
    (or the user wants a fresh deep read), **ASK the user before launching the fan-out**. For an
    always-run deep semantic scan with no asking, that is its own skill: `bitranox:meta-dream-crosstree-deep`.
    - **Deep scan (on confirmation): FAN OUT** one **`opus`** subagent per project store (or per thematic
@@ -107,11 +119,13 @@ Create one todo per step.
    generalization promotes once seen in **>= 2 DISTINCT PROJECTS** - the same bar meta-dream-tree uses,
    from the same dwell store, which is idempotent per project, so no number of dreams over one project
    ever corroborates; a USER-stated concrete rule promotes eagerly. **Before promoting, dedup the
-   candidate against the existing global layer, the shipped skills, AND every `CLAUDE.md` in the tree**
+   candidate against the rules already at each tree's top, the shipped skills, AND every
+   `CLAUDE.md` in the tree**
    (project roots + ancestors + the workspace), not only the memory stores - during the conversion phase
    many rules still live in `CLAUDE.md`, and promoting one that is already there would DUPLICATE it.
-   Classify each candidate: already-global/skill -> skip; already in a `CLAUDE.md` -> do NOT just
-   duplicate-avoid, ROUTE it through the CLAUDE.md reconciliation model (delete the lower copy if a
+   Classify each candidate: already at the tree top or in a skill -> skip; already in a
+   `CLAUDE.md` -> do NOT just duplicate-avoid, ROUTE it through the CLAUDE.md reconciliation
+   model (delete the lower copy if a
    broader tier covers it / lift it up and leave only the delta / keep it if it is genuinely local),
    and across trees CONSOLIDATE the same rule duplicated in many sibling `CLAUDE.md` UP to their common
    ancestor - the highest-leverage context saving; new + corroborated + nowhere-else -> promote. (The
@@ -145,11 +159,12 @@ Create one todo per step.
    paths, plus the exact `relocate` command. A path mention is EVIDENCE, not proof - a fact may
    legitimately cite a neighbour - so JUDGE each candidate against its body before acting; expect
    to reject some. For a confirmed misfile use the engine's `relocate` verb (NOT a copy: a copy
-   leaves the stale original, which is the bug). Propose-first in `propose`; apply in `auto`.
+   leaves the stale original, which is the bug). Propose-first in `propose` and under `off`;
+   apply in `auto`.
    A relocate whose target level is that tree's TOP is a misplacement re-home to the tree top
    (dream-core.md, Mode): list it in the report with its cost (the bytes it adds to the top block:
-   the UTF-8 length of its pointer line plus the newline), PROPOSED in `propose`, applied in
-   `auto`.
+   the UTF-8 length of its pointer line plus the newline), PROPOSED in `propose` and under `off`,
+   applied in `auto`.
    **A fact placed by topic in its source tree** has a line at each level that has one of its
    topics, so the audit lists it once per such level and counts each in `TOTAL misplaced`:
    judge and report it as ONE fact. `relocate` refuses it
@@ -192,7 +207,8 @@ Create one todo per step.
    direct self-contained copy into one specific other project is the rare exception (marked so a later
    dream does not re-promote it; scrubbed; never a cross-tree ref).
 6. **Re-dedup after promotion (the required final sweep), then reconcile.** Promotion is what CREATES
-   the duplication: every rule lifted to a common ancestor or global now overlaps the note it came from
+   the duplication: every rule lifted to a common ancestor or a tree top now overlaps the note it
+   came from
    AND any sibling note across the stores that holds the same lesson. So after promoting, sweep ALL
    affected stores and normalize each overlapping lower entry to `references [[general]]` + its delta -
    the general lives ONCE at its altitude, UPWARD-only. This is not optional and not covered by any
@@ -239,7 +255,11 @@ Create one todo per step.
    arrived at each tree top from `data.levels[]` under `--json` (dream-core.md, report contract);
    a promotion shows there as an arrival at its ancestor, which lies within its tree (step 5), so
    that tree's verify reports it.
-   Counts: stores scanned, items gathered (lift vs local copy), promotions to global,
+   Verify prints bytes per level, not per fact, so list each promotion to a tree top by slug, as
+   applied, with its cost: the bytes its pointer line adds to that top's block (the UTF-8 length
+   of the line plus the newline), which `grep -F '(mem:<slug>)' <top>/CLAUDE.local.md | wc -c`
+   prints once the line is there.
+   Counts: stores scanned, items gathered (lift vs local copy), promotions to a tree top,
    cross-pollinations, normalizations, any skill change,
    toolbox proposals (contribute / new tool), and any contribution still queued (only those blocked
    on user input or `off`-mode - deliverable ones are shipped THIS run, not left pending), and
@@ -256,8 +276,9 @@ Create one todo per step.
 
 ## Convergence
 
-A second global dream on an already-converged set of stores must write nothing: corroboration / gather
-counters live OUT of the dreamed stores; an item already present up the ancestor chain is caught by the
+A second crosstree dream on an already-converged set of stores must write nothing: corroboration /
+gather counters live OUT of the dreamed stores; an item already present up the ancestor chain is
+caught by the
 ancestor-overlap check, not by any content-hash (none exists - a duplicate is always a CANDIDATE the
 dream adjudicates, per dream-core.md's "Dedup semantics"); re-gather is debounced by
 `gather_scan.py`'s own `gathered-topics.tsv`, kept OUT of the store. If a run keeps

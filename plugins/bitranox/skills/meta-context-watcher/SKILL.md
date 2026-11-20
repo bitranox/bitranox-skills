@@ -523,16 +523,26 @@ classification, not an afterthought to it:
    that last segment as the item's state, never the opening lines or a compaction summary's
    paraphrase of them, and live-check any external state it names (`gh pr view`, the release).
 3. **Check the line is not already done.** Before listing an item as workable, search the history
-   since its first-raised date for its distinctive text:
-   `git log --oneline --since=<raised date> -S '<a phrase or symbol unique to the item>'`, plus
-   `git log --oneline --since=<raised date> -- <the paths it names>`. A hit means the work may
-   have shipped; read the commit before offering the item, and re-run any measurement the line's
-   premise rests on (a tool version, a reported failure) rather than repeating its claim. A commit
-   that only touched `OPEN-WORK.md` is the line's own history, not the work. Where
+   since its first-raised date for its distinctive text (with `00:00`: git reads a bare date as
+   that day at the current time of day, so it drops the day's earlier commits):
+   `git log --oneline --since='<raised date> 00:00' -S '<a phrase or symbol unique to the item>'`,
+   plus `git log --oneline --since='<raised date> 00:00' -- <the paths it names>`. A hit means
+   the work may have shipped; read the commit before offering the item, and re-run any
+   measurement the line's premise rests on (a tool version, a reported failure) rather than
+   repeating its claim. A commit that only touched `OPEN-WORK.md` is the line's own history, not
+   the work. Where
    the item names an evidence or output directory, check that directory's mtime too, since an
-   audit can be finished with no commit naming it. Run this for EVERY item you recommend as next,
-   and put its result beside the recommendation in your reply: the commits it hit, or `no hit
-   since <date>`.
+   audit can be finished with no commit naming it. This repo's history shows only work that
+   landed HERE. For an item whose fix lands in other repos (a sweep across member repos, a trim
+   or edit a template distributes), take the target repos from point 4 and run the check in each
+   of them: `git fetch`, then the same `git log` against `origin/<default branch>`, or grep that
+   ref for the state the item would produce, such as the heading it removes:
+   `git grep -c '<heading>' origin/<default branch> -- <file>`. No output with exit 1 means the
+   heading is gone only when `git cat-file -e origin/<default branch>:<file>` exits 0: an
+   untracked or deleted file answers the same way. Another session can finish such a sweep with
+   no commit here, so `no hit` in this repo alone is no answer for it. Run this for EVERY item you
+   recommend as next, and put its result beside the recommendation in your reply: the commits it
+   hit, per repo checked, or `no hit since <date>`.
 4. **Check which repo each line's fix lands in, for EVERY line you list.** A line whose fix lands
    elsewhere is other-repo (see "Before working an item" below). When a line you keep names
    another repo (carried over from a sibling's backlog, moved from a template), say in the listing

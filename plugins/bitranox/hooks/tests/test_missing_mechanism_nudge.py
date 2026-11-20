@@ -150,6 +150,18 @@ def test_an_absolute_hook_file_is_read_whatever_the_cwd(tmp_path):
     assert N.notice(_hook_file_command(shlex.quote(str(hook))), cwd="/") is not None
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Git Bash drive paths exist on Windows only")
+def test_a_git_bash_drive_path_hook_file_is_read_as_that_drive(tmp_path):
+    """Git Bash hands `/c/...` to the engine as drive C; read at the current drive's root it was
+    C:\\c\\..., a file that does not exist, so the claim in it went unchecked. The PowerShell tool
+    passes the text on unchanged, so there it is not the drive."""
+    hook = tmp_path / "h.txt"
+    hook.write_text("the opt-in defaults off\n", encoding="utf-8")
+    spelled = "/" + hook.drive[0].lower() + hook.as_posix()[len(hook.drive):]
+    assert N.notice(_hook_file_command(spelled), "Bash", cwd=str(tmp_path)) is not None
+    assert N.notice(_hook_file_command(spelled), "PowerShell", cwd=str(tmp_path)) is None
+
+
 def test_a_hook_file_that_does_not_exist_yet_is_silent(tmp_path):
     """PreToolUse runs before the command, so a file the same command writes is not there yet."""
     assert N.notice(_hook_file_command("h.txt"), cwd=str(tmp_path)) is None

@@ -47,9 +47,9 @@ from self_improve_signals import session_state_path
 from shell_text import (
     argv_for_match,
     basename_for_tool,
-    is_rooted,
     is_shell_tool,
     iter_segments,
+    resolve_path,
     strip_heredoc_bodies,
 )
 
@@ -122,10 +122,13 @@ def _memory_add_args(argv, tool_name):
     return None
 
 
-def _read_hook_file(path, cwd):
-    """The text of a hook file that already exists and is small, else None."""
-    if not is_rooted(path) and cwd:
-        path = os.path.join(cwd, path)
+def _read_hook_file(path, cwd, tool_name="Bash"):
+    """The text of a hook file that already exists and is small, else None.
+
+    The path is read as the shell hands it to the engine: a Git Bash drive path (`/c/temp/h.txt`)
+    is drive C on a Windows host, and a relative path with no cwd stays relative.
+    """
+    path = resolve_path(path, cwd, tool_name) or path
     try:
         if not os.path.isfile(path) or os.path.getsize(path) > _HOOK_FILE_CAP:
             return None
@@ -135,7 +138,7 @@ def _read_hook_file(path, cwd):
         return None
 
 
-def _hook_texts(args, cwd):
+def _hook_texts(args, cwd, tool_name="Bash"):
     """Every hook text one memory add carries, from `--hook` and `--hook-file` in both spellings."""
     texts = []
     for at, arg in enumerate(args):
@@ -148,7 +151,7 @@ def _hook_texts(args, cwd):
             value = args[at + 1]
         else:
             continue
-        text = value if name == "--hook" else _read_hook_file(value, cwd)
+        text = value if name == "--hook" else _read_hook_file(value, cwd, tool_name)
         if text:
             texts.append(text)
     return texts
@@ -174,7 +177,7 @@ def notice(command, tool_name="Bash", cwd=None):
         args = _memory_add_args(argv_for_match(segment, tool_name), tool_name)
         if args is None:
             continue
-        for text in _hook_texts(args, cwd):
+        for text in _hook_texts(args, cwd, tool_name):
             if _CLAIM.search(text) and not _EVIDENCE.search(text):
                 return _NOTICE
     return None

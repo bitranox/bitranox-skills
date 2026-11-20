@@ -2242,15 +2242,27 @@ def heal(proj):
     return report
 
 
-def backfill_titles(proj):
+@dataclass
+class BackfillReport:
+    """What `backfill_titles` did, slug by slug. `kept` counts bodies that already had a title;
+    each list names the slugs in the order the walk met them."""
+
+    filled: list[str] = field(default_factory=list[str])
+    kept: int = 0
+    unframed: list[str] = field(default_factory=list[str])
+    untitled: list[str] = field(default_factory=list[str])
+    missing: list[str] = field(default_factory=list[str])
+    legacy: list[str] = field(default_factory=list[str])
+
+
+def backfill_titles(proj: str | os.PathLike[str]) -> BackfillReport:
     """Copy each pointer's title into its body's frontmatter where the body has none, across the
     WHOLE tree of `proj`'s anchor. A body that already has a `title:` is never rewritten, an
     unframed body is left alone and counted, and a missing body is counted, never fabricated.
 
     Separate from `heal`, which SessionStart runs on every start and which never opens a body: a
     back-fill reads every body of the tree and writes most of them once, a one-off for stores
-    written before titles were kept as data. Returns {'filled': [slugs], 'kept': n, 'unframed':
-    [slugs], 'untitled': [slugs], 'missing': [slugs], 'legacy': [slugs]}; `untitled` is a framed
+    written before titles were kept as data. Returns a BackfillReport; `untitled` is a framed
     body whose pointer has an empty link text, so there is no title to copy (kept apart from
     `unframed`, which would report a frame that is there as absent). A slug pointed at from two
     levels is filled from the first level the walk meets, and each body is read and written under the lock of that first
@@ -2263,36 +2275,36 @@ def backfill_titles(proj):
     tree holding unmigrated facts never reads as fully back-filled."""
     sig.refuse_if_memory_writes_off()
     anchor = _anchor(proj)
-    rep = {"filled": [], "kept": 0, "unframed": [], "untitled": [], "missing": [], "legacy": []}
-    seen = set()
+    rep = BackfillReport()
+    seen: set[str] = set()
     for level in curated_levels_under(anchor):
         with sig.memory_lock(sig.claude_local_md_path(level)):
             text = read_store_text(sig.claude_local_md_path(level))
             for ptr in us.parse_pointer_index(text)[1]:
                 if ptr.legacy:                       # not added to `seen`: a slug's legacy line
-                    if ptr.slug not in rep["legacy"]:    # at one level never hides its migrated
-                        rep["legacy"].append(ptr.slug)   # line at another from the back-fill
+                    if ptr.slug not in rep.legacy:       # at one level never hides its migrated
+                        rep.legacy.append(ptr.slug)      # line at another from the back-fill
                     continue
                 if ptr.slug in seen:
                     continue
                 seen.add(ptr.slug)
                 raw = read_store_text(us.body_path(anchor, ptr.slug))   # "" only when absent
                 if raw == "":
-                    rep["missing"].append(ptr.slug)
+                    rep.missing.append(ptr.slug)
                     continue
                 body = raw.rstrip("\n")
                 if _body_title(body):
-                    rep["kept"] += 1
+                    rep.kept += 1
                     continue
                 if _frontmatter(body)[1] is None:
-                    rep["unframed"].append(ptr.slug)
+                    rep.unframed.append(ptr.slug)
                     continue
                 filled = _with_title(body, ptr.title)
                 if filled == body:
-                    rep["untitled"].append(ptr.slug)
+                    rep.untitled.append(ptr.slug)
                     continue
                 us.put_body(str(anchor), ptr.slug, filled)
-                rep["filled"].append(ptr.slug)
+                rep.filled.append(ptr.slug)
     return rep
 
 
@@ -2951,30 +2963,53 @@ def _body_unlabelled(body):
     return "**Why:**" not in (body or "") or "**How to apply:**" not in (body or "")
 
 
-def lint_tree(anchor):
+class OverCapHook(NamedTuple):
+    """A hook longer than the HARD cap at one level, with its length in characters."""
+
+    level: str
+    slug: str
+    length: int
+
+
+@dataclass
+class LintReport:
+    """What `lint_tree` found under `anchor`; every list is empty on a clean store."""
+
+    anchor: str
+    over_cap: list[OverCapHook] = field(default_factory=list[OverCapHook])
+    no_trigger: list[LevelSlug] = field(default_factory=list[LevelSlug])
+    unlabelled: list[LevelSlug] = field(default_factory=list[LevelSlug])
+    invalid_pointers: list[LevelLine] = field(default_factory=list[LevelLine])
+
+    @property
+    def found(self) -> bool:
+        """True when any list holds something: the lint is a check, and this is its "no"."""
+        return bool(self.over_cap or self.no_trigger or self.unlabelled or self.invalid_pointers)
+
+
+def lint_tree(anchor: str | os.PathLike[str]) -> LintReport:
     """READ-ONLY voice/frame sweep over every curated level under `anchor` (defect J - the store had
     no sweep verb, so the debt was rediscovered every dream). Reports: hooks over the HARD cap
     (the write path refuses one, so any that exist are hand-edited or legacy), hooks missing a
     trigger phrase (never fire during
     reasoning), and bodies missing the `**Why:**`/`**How to apply:**` labels (style only, see
     `_body_unlabelled`). Advisory, never a failure. Also lists pointer lines whose slug is not a plain filename
-    (`invalid_pointers`): the parser skips them and the next write drops them. Returns a report dict."""
-    anchor = _anchor(str(anchor))
-    over_cap, no_trigger, unlabelled, invalid = [], [], [], []
-    for lvl in curated_levels_under(anchor):
+    (`invalid_pointers`): the parser skips them and the next write drops them. Returns a
+    LintReport."""
+    top = _anchor(str(anchor))
+    rep = LintReport(anchor=str(top))
+    for lvl in curated_levels_under(top):
         text = read_store_text(sig.claude_local_md_path(lvl))
-        invalid.extend((lvl, raw) for raw in us.invalid_pointer_lines(text))
+        rep.invalid_pointers.extend(LevelLine(lvl, raw) for raw in us.invalid_pointer_lines(text))
         _scope, entries, bodies = read_store(lvl)
         for e in entries:
             if len(e.hook or "") > us.HOOK_HARD_MAX:
-                over_cap.append((lvl, e.slug, len(e.hook)))
+                rep.over_cap.append(OverCapHook(lvl, e.slug, len(e.hook)))
             if us.hook_missing_trigger(e.hook):
-                no_trigger.append((lvl, e.slug))
+                rep.no_trigger.append(LevelSlug(lvl, e.slug))
             if _body_unlabelled(bodies.get(e.slug, "")):
-                unlabelled.append((lvl, e.slug))
-    return {"anchor": str(anchor), "over_cap": over_cap, "no_trigger": no_trigger,
-            "unlabelled": unlabelled,
-            "invalid_pointers": invalid}
+                rep.unlabelled.append(LevelSlug(lvl, e.slug))
+    return rep
 
 
 # ---- topics: which facts and levels a rule is about ------------------------------------------
@@ -3688,7 +3723,7 @@ def _collapse_copies(anchor, slug, holders, line, write):
     """Leave ONE line of an un-bound fact: at the tree top, written before the others are dropped,
     so no moment has the fact without a line. `holders` are the levels holding one, top first, and
     `line` the one at the first of them."""
-    scratch = {"levels": {}}
+    scratch = RenderReport()             # the line writers note into one; nobody reads it
     if _level_parts(anchor, holders[0]) != tp.TOP:
         _add_lines(os.path.abspath(str(anchor)),
                    {slug: us.Pointer(slug=slug, title=line.title, hook=line.hook)},
@@ -3698,8 +3733,19 @@ def _collapse_copies(anchor, slug, holders, line, write):
             _drop_lines(level, {slug}, scratch, False, write)
 
 
+@dataclass
+class TopicsSetReport:
+    """What `set_fact_topics` did: `changed` names the facts whose `topics:` line it set (or a dry
+    run would set), `unchanged` counts the rows that already said that, and `collapsed` names the
+    un-bound facts whose lines it folded into one line at the tree top."""
+
+    changed: list[str] = field(default_factory=list[str])
+    unchanged: int = 0
+    collapsed: list[str] = field(default_factory=list[str])
+
+
 def set_fact_topics(proj, rows, dry_run=False, write=None, *,
-                    lock_timeout=PLACEMENT_LOCK_TIMEOUT_S):
+                    lock_timeout=PLACEMENT_LOCK_TIMEOUT_S) -> TopicsSetReport:
     """Set the `topics:` line of each fact in `rows`, a {slug: topics} mapping where topics is a
     tuple of tags, an empty tuple (bound to no topic) or None (remove the line).
 
@@ -3724,7 +3770,7 @@ def set_fact_topics(proj, rows, dry_run=False, write=None, *,
     seconds for it, then raises PlacementLockBusy. A dry run takes no lock. An OSError once it
     holds the lock (a level it could not lock or write) is raised as PlacementInterrupted, naming
     the cause and that the same call, run again, completes the collapse.
-    Returns {'set': [slugs], 'unchanged': n, 'collapsed': [slugs]}.
+    Returns a TopicsSetReport.
     Holds `rows`, one owner entry per row and, for a collapse, the levels holding each un-bound
     row's line; a batch over MAX_TOPIC_BATCH rows is refused."""
     if not dry_run:
@@ -3746,7 +3792,7 @@ def set_fact_topics(proj, rows, dry_run=False, write=None, *,
                                        % _ENGINE_ROUTE) from exc
 
 
-def _set_fact_topics_held(anchor, rows, allowed, dry_run, write):
+def _set_fact_topics_held(anchor, rows, allowed, dry_run, write) -> TopicsSetReport:
     """`set_fact_topics` from the row checks on; a real call's caller holds the placement lock."""
     owners = _pointer_owners(anchor, set(rows))
     problems, total = [], 0
@@ -3760,7 +3806,7 @@ def _set_fact_topics_held(anchor, rows, allowed, dry_run, write):
         raise TopicRefusal(problems, total)
     plan = _collapse_plan(anchor, rows, owners)
     write = write or us.write_if_changed
-    rep = {"set": [], "unchanged": 0, "collapsed": []}
+    rep = TopicsSetReport()
     for slug in sorted(rows):
         _placement_heartbeat()
         if slug in plan:
@@ -3769,16 +3815,16 @@ def _set_fact_topics_held(anchor, rows, allowed, dry_run, write):
             # outside its lock: the pointer writers take their own.
             if not dry_run:
                 _collapse_copies(anchor, slug, *plan[slug], write)
-            rep["collapsed"].append(slug)
+            rep.collapsed.append(slug)
         with _write_lock(sig.claude_local_md_path(owners[slug][0]), dry_run):
             body = read_store_text(us.body_path(anchor, slug)).rstrip("\n")
             tagged = _with_topics(body, rows[slug])
             if tagged == body:
-                rep["unchanged"] += 1
+                rep.unchanged += 1
                 continue
             if not dry_run:
                 us.put_body(str(anchor), slug, tagged)
-            rep["set"].append(slug)
+            rep.changed.append(slug)
     return rep
 
 
@@ -3992,7 +4038,72 @@ def _held_bytes(anchor, pinned, level_dir, goes=None):
     return split["kept"], split["stale"]
 
 
-def _census_lines(anchor, pinned, tally):
+class RenderKind(StrEnum):
+    """What a render did to the lines at one level; the value is the report's key."""
+
+    ADDED = "added"
+    REFRESHED = "refreshed"
+    REMOVED = "removed"
+    KEPT = "kept"
+
+
+@dataclass
+class RenderLevel:
+    """What a render did at one level: a count per kind, and the first slugs of each kind that
+    happened (`_RENDER_SHOWN` at most). `kept` is a misplaced line left because no level its fact is
+    placed at holds a line of it; it is 0 where none was, and the JSON then has no `kept` key."""
+
+    added: int = 0
+    refreshed: int = 0
+    removed: int = 0
+    kept: int = 0
+    examples: dict[RenderKind, list[str]] = field(default_factory=dict[RenderKind, list[str]])
+
+    def to_data(self) -> dict[str, object]:
+        """The level's row as `render-topics --json` prints it: `kept` only where a line was."""
+        row: dict[str, object] = {"added": self.added, "refreshed": self.refreshed,
+                                  "removed": self.removed,
+                                  "examples": {kind.value: slugs
+                                               for kind, slugs in self.examples.items()}}
+        if self.kept:
+            row["kept"] = self.kept
+        return row
+
+
+@dataclass
+class RenderCensus:
+    """The census of a render's one pass over the bodies: how many facts are managed, and the
+    tagged unpinned ones no line can be built from (the first _RENDER_SHOWN, sorted, and the
+    total)."""
+
+    managed: int = 0
+    incomplete: list[str] = field(default_factory=list[str])
+    incomplete_total: int = 0
+
+
+@dataclass
+class RenderReport:
+    """What `render_topics` did or, for a dry run, would do. `has_list` False means the tree has no
+    topic list: nothing was read past that, every other field keeps its default, and the JSON
+    is `{"list": false}` alone. `levels` holds a row per level dir that changed."""
+
+    has_list: bool = True
+    scope: str = ""
+    dry_run: bool = False
+    census: RenderCensus = field(default_factory=RenderCensus)
+    levels: dict[str, RenderLevel] = field(default_factory=dict[str, RenderLevel])
+
+    def to_data(self) -> dict[str, object]:
+        """The report as `render-topics --json` prints it (the printer sorts the keys)."""
+        if not self.has_list:
+            return {"list": False}
+        return {"list": True, "scope": self.scope, "dry_run": self.dry_run,
+                "levels": {level: row.to_data() for level, row in self.levels.items()},
+                "managed": self.census.managed, "incomplete": self.census.incomplete,
+                "incomplete_total": self.census.incomplete_total}
+
+
+def _census_lines(anchor, pinned, tally: RenderCensus):
     """Yield (slug, topics, line) for every managed fact, one body head at a time, counting into
     `tally` how many are managed and the tagged unpinned ones no line can be built from (the first
     _RENDER_SHOWN and their total)."""
@@ -4002,20 +4113,20 @@ def _census_lines(anchor, pinned, tally):
             continue
         line = _line_from_head(slug, head)
         if line is None:
-            tally["incomplete_total"] += 1
-            if len(tally["incomplete"]) < _RENDER_SHOWN:
-                tally["incomplete"].append(slug)
+            tally.incomplete_total += 1
+            if len(tally.incomplete) < _RENDER_SHOWN:
+                tally.incomplete.append(slug)
             continue
-        tally["managed"] += 1
+        tally.managed += 1
         yield slug, topics, line
 
 
-def _census_tally():
-    """An empty census report, filled by `_census_lines`."""
-    return {"managed": 0, "incomplete": [], "incomplete_total": 0}
+def _census_tally() -> RenderCensus:
+    """An empty census, filled by `_census_lines`."""
+    return RenderCensus()
 
 
-def _render_census(anchor, pinned, place, dirs, adds):
+def _render_census(anchor, pinned, place, dirs, adds) -> RenderCensus:
     """One pass over the bodies, before anything is written: the `_census_lines` counts, and the
     bytes each level of `adds` will hold, starting from the lines it keeps (`_held_bytes`). Raises
     RenderBlockTooLarge when a level would pass MAX_RENDER_BLOCK_BYTES, so that refusal comes
@@ -4037,7 +4148,7 @@ def _render_census(anchor, pinned, place, dirs, adds):
     if full is not None:
         raise RenderBlockTooLarge(dirs[full], kept[full], sizes[full] - kept[full],
                                   place.bound_to(full), now=now[full])
-    tally["incomplete"].sort()
+    tally.incomplete.sort()
     return tally
 
 
@@ -4068,13 +4179,15 @@ def _wanted_lines(anchor, place, pinned, parts, level_dir, held=(0, 0), skip=fro
     return wanted
 
 
-def _note(rep, level_dir, kind, slugs):
-    """Count `slugs` under `kind` for `level_dir` in the report, keeping the first few as examples."""
+def _note(rep: RenderReport, level_dir: str, kind: RenderKind,
+          slugs: list[str] | set[str]) -> None:
+    """Count `slugs` under `kind` for `level_dir` in the report, keeping the first few as examples.
+    A level gets a row only once something happened there."""
     if not slugs:
         return
-    row = rep["levels"].setdefault(level_dir, {"added": 0, "refreshed": 0, "removed": 0, "examples": {}})
-    row[kind] = row.get(kind, 0) + len(slugs)        # `kept` is counted only where it happened
-    shown = row["examples"].setdefault(kind, [])
+    row = rep.levels.setdefault(level_dir, RenderLevel())
+    setattr(row, kind.value, getattr(row, kind.value) + len(slugs))
+    shown = row.examples.setdefault(kind, [])
     shown.extend(sorted(slugs)[:_RENDER_SHOWN - len(shown)])
 
 
@@ -4112,8 +4225,8 @@ def _add_lines(level_dir, wanted, rep, dry_run, write):
                 refreshed.append(slug)
         if (added or refreshed) and not dry_run:
             write(local, us.upsert_pointer_block(text, scope, pointers))
-    _note(rep, level_dir, "added", added)
-    _note(rep, level_dir, "refreshed", refreshed)
+    _note(rep, level_dir, RenderKind.ADDED, added)
+    _note(rep, level_dir, RenderKind.REFRESHED, refreshed)
     return set(held) | set(added)
 
 
@@ -4129,7 +4242,7 @@ def _drop_lines(level_dir, doomed, rep, dry_run, write):
         removed = [p.slug for p in pointers if p.slug in doomed and not (p.pin or p.legacy)]
         if removed and not dry_run:
             write(local, us.upsert_pointer_block(text, scope, kept))
-    _note(rep, level_dir, "removed", removed)
+    _note(rep, level_dir, RenderKind.REMOVED, removed)
 
 
 def _misplaced_lines(anchor, place, pinned, parts, level_dir):
@@ -4193,7 +4306,7 @@ def _render_tree(anchor, levels, adds, place, dirs, pinned, rep, dry_run, write)
         level = os.path.abspath(str(level))
         drop, kept = _keep_last_lines(dirs, _misplaced_lines(anchor, place, pinned, parts, level),
                                       dry_run)
-        _note(rep, level, "kept", kept)
+        _note(rep, level, RenderKind.KEPT, kept)
         _drop_lines(level, drop, rep, dry_run, write)
 
 
@@ -4233,7 +4346,7 @@ def _chain_goes(place, parts, above):
     return lambda slug, topics: slug in above or parts in place(topics)
 
 
-def _chain_census(anchor, pinned, place, chain, adds):
+def _chain_census(anchor, pinned, place, chain, adds) -> RenderCensus:
     """The chain scope's census, one pass over the bodies before anything is written: the
     `_census_lines` counts and, for each chain level of `adds`, the block it will hold, the lines
     it keeps (`_held_bytes` with `_chain_goes`) plus the lines added or refreshed there. Raises
@@ -4259,7 +4372,7 @@ def _chain_census(anchor, pinned, place, chain, adds):
                 raise RenderBlockTooLarge(level, kept, sizes[i], place.bound_to(parts),
                                           stale=stale, anchor=anchor, now=now[i])
         above |= held_at[i] | added[i]
-    tally["incomplete"].sort()
+    tally.incomplete.sort()
     return tally
 
 
@@ -4303,7 +4416,7 @@ def _render_chain(anchor, chain, adds, place, pinned, rep, dry_run, write):
 
 
 def render_topics(proj, scope="tree", dry_run=False, write=None, *,
-                  lock_timeout=PLACEMENT_LOCK_TIMEOUT_S):
+                  lock_timeout=PLACEMENT_LOCK_TIMEOUT_S) -> RenderReport:
     """Place the pointer lines of every MANAGED fact of `proj`'s tree by topic.
 
     A fact is managed when its body's `topics:` is non-empty, no pointer of it is pinned or
@@ -4315,10 +4428,10 @@ def render_topics(proj, scope="tree", dry_run=False, write=None, *,
     scope to sweep; no file off the chain is written). `write(path, text)` is the port a
     level file is written through (default `uuid_store.write_if_changed`); a test passes a
     recording one. A dry run takes no lock and creates no file (`_write_lock`), so it runs on a
-    read-only tree and beside a peer's held lock. Returns a report: {'list': False} alone when the tree has no topic list (then
-    nothing is read further and nothing written), else scope, dry_run, managed, incomplete,
-    incomplete_total and, per changed level dir, the counts added / refreshed / removed with a
-    few example slugs.
+    read-only tree and beside a peer's held lock. Returns a RenderReport: `has_list` False alone
+    when the tree has no topic list (then nothing is read further and nothing written), else the
+    scope, dry_run, the census and, per changed level dir, the counts added / refreshed / removed
+    (and kept) with a few example slugs.
 
     Checked before the first write: a level whose TOPICS line does not parse and a tree top with
     no pointer block raise TopicRefusal, and a level whose block - the lines placed there plus the
@@ -4342,7 +4455,7 @@ def render_topics(proj, scope="tree", dry_run=False, write=None, *,
     proj = os.path.abspath(str(proj))
     anchor = _anchor(proj)
     if topic_store.load(anchor) is None:
-        return {"list": False}
+        return RenderReport(has_list=False)
     if dry_run:
         return _render_held(anchor, proj, scope, True, write)
     with placement_lock(anchor, "render-topics", lock_timeout):
@@ -4353,7 +4466,7 @@ def render_topics(proj, scope="tree", dry_run=False, write=None, *,
                                        % (_ENGINE_ROUTE, proj, scope)) from exc
 
 
-def _render_held(anchor, proj, scope, dry_run, write):
+def _render_held(anchor, proj, scope, dry_run, write) -> RenderReport:
     """`render_topics` from the level walk on; a real run's caller holds the placement lock."""
     levels = curated_levels_under(anchor)
     level_map, dirs = topic_level_map(anchor, levels)
@@ -4362,45 +4475,46 @@ def _render_held(anchor, proj, scope, dry_run, write):
                             "it (ensure-memory-structure writes one)" % anchor])
     pinned = _unplaceable_slugs(levels)     # pinned or legacy anywhere: never placed
     place, adds = _Placer(level_map), _add_levels(level_map)
-    rep = {"list": True, "scope": scope, "dry_run": bool(dry_run), "levels": {}}
+    rep = RenderReport(scope=scope, dry_run=bool(dry_run))
     write = write or us.write_if_changed
     if scope == "tree":
-        rep.update(_render_census(anchor, pinned, place, dirs, adds))
+        rep.census = _render_census(anchor, pinned, place, dirs, adds)
         _render_tree(anchor, levels, adds, place, dirs, pinned, rep, dry_run, write)
     else:
         chain, add_set = _chain_levels(anchor, proj, levels), frozenset(adds)
-        rep.update(_chain_census(anchor, pinned, place, chain, add_set))
+        rep.census = _chain_census(anchor, pinned, place, chain, add_set)
         _render_chain(anchor, chain, add_set, place, pinned, rep, dry_run, write)
     return rep
 
 
-def _print_render(rep, as_json):
+def _print_render(rep: RenderReport, as_json: bool) -> None:
     """Print a render report; the verb's whole output."""
     if as_json:
-        print(json.dumps(rep, sort_keys=True))
+        print(json.dumps(rep.to_data(), sort_keys=True))
         return
-    if not rep["list"]:
+    if not rep.has_list:
         print("no topic list in this tree: nothing is placed by topic")
         return
-    verb = "would change" if rep["dry_run"] else "changed"
-    for level in sorted(rep["levels"]):
-        row = rep["levels"][level]
-        print("  %s: +%d added, %d refreshed, -%d removed" % (level, row["added"], row["refreshed"],
-                                                               row["removed"]))
-    kept = [(level, row) for level, row in sorted(rep["levels"].items()) if row.get("kept")]
+    verb = "would change" if rep.dry_run else "changed"
+    for level in sorted(rep.levels):
+        row = rep.levels[level]
+        print("  %s: +%d added, %d refreshed, -%d removed" % (level, row.added, row.refreshed,
+                                                               row.removed))
+    kept = [(level, row) for level, row in sorted(rep.levels.items()) if row.kept]
     if kept:
         print("~ warning: kept %d line(s) placed elsewhere, because no level the fact is placed at "
               "holds a line of it (its body changed during the render): %s. Run render-topics "
               "--scope tree again to place them"
-              % (sum(row["kept"] for _level, row in kept),
+              % (sum(row.kept for _level, row in kept),
                  ", ".join(sorted({slug for _level, row in kept
-                                   for slug in row["examples"]["kept"]}))))
-    if rep["incomplete_total"]:
+                                   for slug in row.examples[RenderKind.KEPT]}))))
+    census = rep.census
+    if census.incomplete_total:
         print("~ %d tagged fact(s) have a body without title: or description: and stay where they "
-              "are: %s%s" % (rep["incomplete_total"], ", ".join(rep["incomplete"]),
-                             " ..." if rep["incomplete_total"] > len(rep["incomplete"]) else ""))
+              "are: %s%s" % (census.incomplete_total, ", ".join(census.incomplete),
+                             " ..." if census.incomplete_total > len(census.incomplete) else ""))
     print("render-topics (%s): %d managed fact(s); %s %d level(s)"
-          % (rep["scope"], rep["managed"], verb, len(rep["levels"])))
+          % (rep.scope, census.managed, verb, len(rep.levels)))
 
 
 def _read_topic_batch(path):
@@ -4656,14 +4770,14 @@ def _topic_write(args):
             rows = {args.slug: topics}
         rep = set_fact_topics(args.proj, rows, dry_run=args.dry_run)
         print("%s topics on %d fact(s); %d unchanged"
-              % ("would set" if args.dry_run else "set", len(rep["set"]), rep["unchanged"]))
-        if rep["collapsed"]:
-            shown = rep["collapsed"][:_REFUSALS_SHOWN]
+              % ("would set" if args.dry_run else "set", len(rep.changed), rep.unchanged))
+        if rep.collapsed:
+            shown = rep.collapsed[:_REFUSALS_SHOWN]
             print("~ note: %d un-bound fact(s) had a line at several levels; each %s one line, at "
-                  "the tree top: %s%s" % (len(rep["collapsed"]),
+                  "the tree top: %s%s" % (len(rep.collapsed),
                                           "would keep" if args.dry_run else "now has",
                                           ", ".join(shown),
-                                          " ..." if len(rep["collapsed"]) > len(shown) else ""))
+                                          " ..." if len(rep.collapsed) > len(shown) else ""))
         return 0
     topics, err = _topics_arg(args.topics)
     if err:
@@ -4914,22 +5028,21 @@ def _main(argv=None):
 
     if args.cmd == "lint":
         rep = lint_tree(args.tree)
-        print("voice/frame lint: %s" % rep["anchor"])
-        for lvl, slug, n in rep["over_cap"]:
+        print("voice/frame lint: %s" % rep.anchor)
+        for lvl, slug, n in rep.over_cap:
             print("    ! hook over HARD cap (%d chars, hand-edited past the refusal): %s [%s]"
                   % (n, slug, lvl))
-        for lvl, slug in rep["no_trigger"]:
+        for lvl, slug in rep.no_trigger:
             print("    ~ hook missing trigger: %s [%s]" % (slug, lvl))
-        for lvl, slug in rep["unlabelled"]:
+        for lvl, slug in rep.unlabelled:
             print("    ~ body missing the **Why:**/**How to apply:** labels: %s [%s]" % (slug, lvl))
-        for lvl, raw in rep["invalid_pointers"]:
+        for lvl, raw in rep.invalid_pointers:
             print("    ! pointer whose slug is not a plain filename (skipped, dropped on the next "
                   "write): %s [%s]" % (raw, lvl))
         print("TOTAL over-cap hooks: %d | trigger-less hooks: %d | bodies without Why/How labels: %d"
-              " (style advisory)" % (len(rep["over_cap"]), len(rep["no_trigger"]),
-                                     len(rep["unlabelled"])))
-        found = rep["over_cap"] or rep["no_trigger"] or rep["unlabelled"] or rep["invalid_pointers"]
-        return 1 if found else 0
+              " (style advisory)" % (len(rep.over_cap), len(rep.no_trigger),
+                                     len(rep.unlabelled)))
+        return 1 if rep.found else 0
 
     if args.cmd == "move":
         # `--slug a --slug b` and `--slug a b` both land as a list of groups; flatten to the set
@@ -5024,14 +5137,14 @@ def _main(argv=None):
     if args.cmd == "heal" and args.backfill_titles:
         rep = backfill_titles(args.proj)
         print("back-filled %d title(s); %d body(ies) already had one"
-              % (len(rep["filled"]), rep["kept"]))
-        for slug in rep["unframed"]:
+              % (len(rep.filled), rep.kept))
+        for slug in rep.unframed:
             print("    ~ body has no frontmatter, left as it is: %s" % slug)
-        for slug in rep["untitled"]:
+        for slug in rep.untitled:
             print("    ~ pointer has no title to copy, body left as it is: %s" % slug)
-        for slug in rep["missing"]:
+        for slug in rep.missing:
             print("    ! missing central body (not fabricated): %s" % slug)
-        for slug in rep["legacy"]:
+        for slug in rep.legacy:
             print("    ~ legacy uuid: pointer, migrate it first (hooks/migrate_to_slug_store.py), "
                   "left as it is: %s" % slug)
         return 0

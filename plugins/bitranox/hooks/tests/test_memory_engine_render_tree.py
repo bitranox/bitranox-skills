@@ -133,7 +133,7 @@ def test_pinned_untagged_and_unbound_facts_stay_where_they_are(tmp_path):
     us.put_body(anchor, "feedback-pinned", E._with_topics(pinned_body.read_text(encoding="utf-8"), ("python",)))
     kept = {rel: sig.claude_local_md_path(levels[rel]).read_bytes() for rel in ("c", "d")}
     rep = E.render_topics(anchor)
-    assert rep["managed"] == 1
+    assert rep.census.managed == 1
     assert {rel: sig.claude_local_md_path(levels[rel]).read_bytes() for rel in ("c", "d")} == kept
     assert "feedback-pinned" not in _slugs(levels["a/py"])
 
@@ -160,7 +160,7 @@ def test_a_line_that_says_something_else_than_its_body_is_refreshed(tmp_path):
     pointers[0].hook = "When this line went stale, it says this."
     local.write_text(us.upsert_pointer_block(text, scope, pointers), encoding="utf-8")
     rep = E.render_topics(anchor)
-    assert rep["levels"][levels["b/py"]]["refreshed"] == 1
+    assert rep.levels[levels["b/py"]].refreshed == 1
     assert HOOK in local.read_text(encoding="utf-8")
 
 
@@ -219,7 +219,9 @@ def test_without_a_topic_list_the_verb_says_so_and_changes_nothing(tmp_path, cap
     before = _snapshot(anchor)
     assert E.main(["render-topics", "--proj", anchor, "--scope", "tree"]) == 0
     assert "no topic list in this tree" in capsys.readouterr().out
-    assert _snapshot(anchor) == before and E.render_topics(anchor) == {"list": False}
+    rep = E.render_topics(anchor)
+    assert _snapshot(anchor) == before and not rep.has_list
+    assert rep.to_data() == {"list": False}
 
 
 def test_a_level_topics_line_that_does_not_parse_refuses_the_render_before_any_write(tmp_path, capsys):
@@ -563,17 +565,17 @@ def test_the_tagged_facts_without_a_title_are_all_counted_and_the_first_few_show
             "---\nname: %s\ndescription: d\ntopics: [python]\nmetadata:\n  type: feedback\n"
             "---\n\nx\n" % name, encoding="utf-8")
     rep = E.render_topics(anchor)
-    assert rep["incomplete_total"] == 25 and len(rep["incomplete"]) == 20
-    assert set(rep["incomplete"]) <= names
+    assert rep.census.incomplete_total == 25 and len(rep.census.incomplete) == 20
+    assert set(rep.census.incomplete) <= names
 
 
 def test_a_level_counts_every_added_line_and_shows_only_the_first_few(tmp_path):
     anchor = _tree(tmp_path)
     level = _level(anchor, "a", ("python",))
     _plant_tagged(anchor, "py", "python", 25, "d")
-    row = E.render_topics(anchor)["levels"][level]
-    assert row["added"] == 25 == len(_slugs(level))
-    assert row["examples"]["added"] == ["feedback-py%05d" % i for i in range(20)]
+    row = E.render_topics(anchor).levels[level]
+    assert row.added == 25 == len(_slugs(level))
+    assert row.examples[E.RenderKind.ADDED] == ["feedback-py%05d" % i for i in range(20)]
 
 
 def test_the_placement_cache_never_holds_more_topic_sets_than_its_cap(tmp_path):
@@ -645,7 +647,7 @@ def test_a_dry_run_changes_no_file_and_no_directory_mtime(tmp_path, scope):
     proj = levels["a/py"] if scope == "chain" else anchor
     before = _stat_snapshot(anchor)
     rep = E.render_topics(proj, scope=scope, dry_run=True)
-    assert rep["levels"]                       # the dry run had something to report
+    assert rep.levels                          # the dry run had something to report
     assert _stat_snapshot(anchor) == before
 
 
@@ -669,8 +671,9 @@ def test_a_dry_run_on_a_read_only_tree_reports_what_a_writable_one_does(tmp_path
         for p in paths:
             p.chmod(modes[p])
     rebase = str(tmp_path / "rw"), str(tmp_path / "ro")
-    assert json.dumps(got, sort_keys=True) == json.dumps(want, sort_keys=True).replace(*rebase)
-    assert got["levels"]
+    assert (json.dumps(got.to_data(), sort_keys=True)
+            == json.dumps(want.to_data(), sort_keys=True).replace(*rebase))
+    assert got.levels
 
 
 @pytest.mark.parametrize("age", [0.0, 3600.0])
@@ -706,7 +709,7 @@ def test_a_set_topics_dry_run_takes_no_lock_either(tmp_path):
     finally:
         for p in paths:
             p.chmod(modes[p])
-    assert rep["set"] == ["feedback-plain"] and _stat_snapshot(anchor) == before
+    assert rep.changed == ["feedback-plain"] and _stat_snapshot(anchor) == before
 
 
 # ---- the over-cap refusal names the same level whatever order the store lists bodies in ---------
@@ -750,3 +753,27 @@ def test_the_cap_refusal_names_the_first_level_in_level_order(tmp_path, monkeypa
     with pytest.raises(E.RenderBlockTooLarge) as exc:
         E.render_topics(anchor, dry_run=True)
     assert exc.value.level == first
+
+
+def test_the_render_report_is_typed_and_its_json_keeps_the_wire_shape(tmp_path):
+    """The report is a RenderReport of RenderLevel rows; its to_data() is what --json prints: a
+    row carries `kept` only where a line was kept, `examples` only the kinds that happened, and a
+    tree with no topic list reports `{"list": false}` alone."""
+    anchor, levels = _example(tmp_path)
+    rep = E.render_topics(anchor, dry_run=True)
+    assert type(rep) is E.RenderReport and type(rep.census) is E.RenderCensus
+    assert all(type(row) is E.RenderLevel for row in rep.levels.values())
+    data = rep.to_data()
+    assert sorted(data) == ["dry_run", "incomplete", "incomplete_total", "levels", "list",
+                            "managed", "scope"]
+    assert data["levels"] == {
+        levels["a/py"]: {"added": 1, "refreshed": 0, "removed": 0,
+                         "examples": {"added": ["feedback-py-rule"]}},
+        levels["b/py"]: {"added": 1, "refreshed": 0, "removed": 0,
+                         "examples": {"added": ["feedback-py-rule"]}},
+        anchor: {"added": 0, "refreshed": 0, "removed": 1,
+                 "examples": {"removed": ["feedback-py-rule"]}}}
+    kept = E.RenderLevel(removed=1, kept=2, examples={E.RenderKind.KEPT: ["a", "b"]})
+    assert kept.to_data() == {"added": 0, "refreshed": 0, "removed": 1,
+                              "examples": {"kept": ["a", "b"]}, "kept": 2}
+    assert E.RenderReport(has_list=False).to_data() == {"list": False}

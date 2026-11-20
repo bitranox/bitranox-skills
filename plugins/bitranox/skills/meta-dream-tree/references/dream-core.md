@@ -88,7 +88,9 @@ Read the mode first (`dream_state.py mode`; knobs in `~/.claude/.bitranox-memory
 - **`auto`**: no per-change prompts - CLAUDE.md edits as above, plus ship skill changes directly;
   a misplacement re-home to the tree top is applied and its cost printed in the report.
 - **`off`**: no nudges; a manual run consolidates PRIVATE memory only, and PROPOSES a misplacement
-  re-home to the tree top as propose mode does.
+  re-home to the tree top as propose mode does. That holds for every dream of the family the user
+  runs, the cross-tree ones included: none of them edits a `CLAUDE.md` or ships a skill change
+  under `off`.
 
 In a tree with a topic list, a fact tagged with topics that no level has would get its line at
 the tree top. That is a move to the top too and follows the same three rules: proposed with its
@@ -101,7 +103,8 @@ printed in auto (meta-dream-tree step 5, which shows how to see it before the re
   misplacement re-home to the tree top follows Mode (proposed in propose mode and under `off`,
   applied with its cost in auto), while a corroborated promotion to the top is applied in every
   mode.
-- **`CLAUDE.md`:** back up, then apply, then REPORT per file. A rule may be REMOVED only when the
+- **`CLAUDE.md`:** back up, then apply, then REPORT per file (in propose and auto; under `off` no
+  dream edits a `CLAUDE.md`, see Mode). A rule may be REMOVED only when the
   reachability invariant holds (`dream-passes.md` -> "CLAUDE.md reconciliation"): a covering rule at
   an ANCESTOR directory, delivered as always-loaded text. Otherwise rewrite in place and keep it.
   Git tracking is not a factor - it decides whether an edit needs a commit, never whether a rule

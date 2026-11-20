@@ -867,3 +867,96 @@ def test_block_bytes_counts_the_managed_block_only():
              " -->\n# Memory index\n<!-- BITRANOX-MEMORY-INDEX:END -->")
     assert SM.block_bytes("hand-written prose\n\n" + block + "\n\nmore prose\n") == len(block)
     assert SM.block_bytes("# Memory index\n") == len("# Memory index\n")   # no fences: whole text
+
+
+# ---- an --out that holds another tree's backup -----------------------------------------------
+
+def test_a_backup_dir_holding_another_trees_backup_is_refused_and_kept(tmp_path):
+    """A re-backup clears store/ and levels/ first. Accepting a second tree's backup into the
+    first tree's dir destroyed the first tree's only restore source, exit 0 both times."""
+    first, second = tmp_path / "first", tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    make_tree(first)
+    make_tree(second)
+    (second / "elsewhere" / "CLAUDE.local.md").unlink()
+    out = outside(tmp_path)
+    assert run_cli(["backup", "--from", str(first), "--out", str(out)], tmp_path).returncode == 0
+    r = run_cli(["backup", "--from", str(second), "--out", str(out), "--json"], tmp_path)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "another tree" in json.loads(r.stdout)["error"]
+    kept = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
+    assert kept["anchor"] == str(first.resolve())
+    assert (out / "levels" / "elsewhere" / "CLAUDE.local.md").is_file()
+
+
+def test_an_out_whose_manifest_cannot_be_read_is_refused_and_kept(tmp_path):
+    """Which tree a damaged manifest fronts cannot be told, and its copies may be the only ones."""
+    make_tree(tmp_path)
+    out = outside(tmp_path)
+    (out / "levels").mkdir(parents=True)
+    (out / "levels" / "CLAUDE.local.md").write_text("an earlier copy\n", encoding="utf-8")
+    (out / "manifest.json").write_text("{truncated", encoding="utf-8")
+    r = run_cli(["backup", "--from", str(tmp_path), "--out", str(out), "--json"], tmp_path)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "cannot be read" in json.loads(r.stdout)["error"]
+    assert (out / "levels" / "CLAUDE.local.md").read_text(encoding="utf-8") == "an earlier copy\n"
+
+
+# ---- one walk for the manifest and the copies --------------------------------------------------
+
+@pytest.mark.skipif(NO_CHMOD, reason="needs a non-root POSIX user for chmod 000")
+def test_backup_copies_every_level_its_own_walk_read(tmp_path):
+    """The levels backup copies and records are the ones derive read. A second walk found a level
+    that became unreadable in between as absent: the manifest kept its entries while `levels`
+    and the copies left it out, so the cost report read the level as never there. The profiler
+    makes a level's parent unreadable the moment any walk after the first one starts; with one
+    walk it never fires."""
+    make_tree(tmp_path)
+    out = outside(tmp_path)
+    locked = tmp_path / "projects"
+    walks = []
+
+    def on_call(frame, event, _arg):
+        if event == "call" and frame.f_code is SM.levels_under.__code__:
+            walks.append(1)
+            if len(walks) == 2:
+                locked.chmod(0)
+
+    sys.setprofile(on_call)
+    try:
+        SM.backup(root=tmp_path, scope="tree", start=tmp_path, out=out)
+    finally:
+        sys.setprofile(None)
+        locked.chmod(0o755)
+    data = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
+    assert {e["level"] for e in data["entries"]} <= set(data["levels"])
+    assert (out / "levels" / "projects" / "app" / "CLAUDE.local.md").is_file()
+
+
+@pytest.mark.skipif(NO_CHMOD, reason="needs a non-root POSIX user for chmod 000")
+def test_an_unreadable_directory_is_named_with_its_error(tmp_path):
+    """A refusal names the directory and why it could not be listed, like the level-file and body
+    refusals beside it."""
+    make_tree(tmp_path)
+    locked = tmp_path / "projects"
+    locked.chmod(0)
+    try:
+        unreadable: list[str] = []
+        SM.levels_under(tmp_path, unreadable=unreadable)
+    finally:
+        locked.chmod(0o755)
+    assert unreadable == [f"{locked} (PermissionError)"]
+
+
+def test_an_empty_scope_refusal_names_the_next_step(tmp_path):
+    """An empty tree holds no fact a run could lose; the refusal says so and what to do instead
+    of leaving the run at exit 2 with no way on."""
+    (tmp_path / "CLAUDE.md").write_text("anchor\n", encoding="utf-8")
+    (tmp_path / ".claude-memory" / "facts").mkdir(parents=True)
+    r = run_cli(["backup", "--from", str(tmp_path), "--out", str(outside(tmp_path)), "--json"],
+                tmp_path)
+    assert r.returncode == 2, r.stdout + r.stderr
+    error = json.loads(r.stdout)["error"]
+    assert "no fact a run could lose" in error
+    assert "verify as skipped" in error

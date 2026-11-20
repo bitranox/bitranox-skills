@@ -322,7 +322,8 @@ fi
 
 The three AST finders (4a, 4b, 4f) exit 2 when any path was missing or could not be parsed;
 each such file gets an `ERROR` line in the output file and was NOT scanned, so a "Found 0"
-beside an `ERROR` line is not a clean result.
+beside an `ERROR` line is not a clean result. 4b also exits 2 when the files hold no regex call
+site at all (`ERROR examined 0 regex call sites`, see 4b).
 
 #### 4b: Find Uncompiled Regex Patterns
 
@@ -362,7 +363,7 @@ Every `re.match(r'...', ...)` inside a function body should become a module-leve
 `search`, `sub` and `findall` retry the pattern at every position, so when a start can sit at
 many positions of one run and the pattern then reads to the run's end before it fails, N
 characters cost about N squared steps. Short test inputs and a profile of normal data never show
-it; the `# Quadratic Regex Starts` section of `find_uncompiled_regex.py` reports it. Two shapes,
+it; the `# Quadratic Regex Starts` section of `find_uncompiled_regex.py` reports it. Four shapes,
 one cause:
 
 - `CLASS+` before a required suffix, such as `[\w./-]+\.(?:py|sh)\b`, over a long token with no
@@ -376,6 +377,19 @@ one cause:
   heredoc) are rescanned from every line. Use `[^\S\n]*` after such an anchor, so each newline is
   a start of its own. The match then begins after the blank lines rather than before them: the
   spans move while what the caller reads from the match stays the same.
+- A repeated GROUP before a required suffix, such as `(?:[\w.-]+/)+[\w.-]+\.(?:py|sh)\b` over
+  `a/a/a/...` with no suffix: every unit of the run is a start. A lookbehind of the first class
+  inside the group is not enough, since the group's own run repeats; anchor with a negative
+  lookbehind of EVERY character the run holds, `(?<![\w./-])(?:[\w.-]+/)+...`, or match one fixed
+  piece before the suffix, `[\w.-]/[\w.-]+\.(?:py|sh)\b`, when the caller only needs the verdict.
+  Measured: 64x for 8x the input, against 8.2x for the fixed piece.
+- A repeat reached past an OPTIONAL prefix, such as `(?m)^[^\S\n]*(?:then\s+)*git` over lines of
+  `then`: the optional prefix matches empty, so every unit of the repeat's run starts at a
+  position the anchor accepts, and `\s+` carries each start over the next newline. Keep the body
+  from crossing what the anchor needs, `(?:then[^\S\n]+)*`. A match that crossed a newline
+  (`then\ngit`) then begins on the `git` line: the same matches, later spans, and the replay below
+  shows whether the caller read the span. A class run behind an optional prefix, `v?\d+\.\d+`, is
+  the first shape and takes its lookbehind.
 
 Prove a rewrite with both, since neither covers the other: a growth-ratio test (the same input at
 N and 8N: linear is about 8x, quadratic about 64x; one run per kind of character the class
@@ -389,10 +403,16 @@ measurably on a hot path.
 
 **Reading the `# Quadratic Regex Starts` section.** It covers compiled and uncompiled patterns in
 any scope, including a pattern built with `+` from module-level string constants, and skips a
-compiled pattern whose name the file only calls `.match` or `.fullmatch` on (one start). Each hit
-is `file:line - re.func(pattern, ...) [shape]`, where the shape is `class-run-before-suffix` or
-`newline-start-then-blanks`, then a `Runs that fail from every start:` line listing runs such as
-`'a' * N (end of text)` or `' ' * N + 'x'`, then the `Fix:` for its shape. The finder parses
+compiled pattern whose name the file only calls `.match` or `.fullmatch` on (one start). The
+report opens with `Examined S regex call sites in F files: C checked for quadratic starts, M in a
+shape not modelled, R built at run time`: the M and R patterns were NOT checked, so they go to
+hand review below, and a file list that yields S = 0 makes the finder exit 2 with
+`ERROR examined 0 regex call sites` (check that the list holds the files you meant; a project
+that truly has no `re` call has nothing for 4b). Each hit is
+`file:line - re.func(pattern, ...) [shape]`, where the shape is `class-run-before-suffix`,
+`newline-start-then-blanks`, `group-run-before-suffix` or `repeat-after-optional-prefix`, then a
+`Runs that fail from every start:` line listing runs such as `'a' * N (end of text)`,
+`'a/' * N (end of text)` or `' ' * N + 'x'`, then the `Fix:` for its shape. The finder parses
 the pattern with the `re` module's own parser and runs it once on a short witness of each listed
 run, so a hit is a pattern that rescans that run from every start. Before filing it, time the
 pattern on those runs at N and 8N, for example 2,000 and 16,000 (they are the growth test's
@@ -400,8 +420,9 @@ inputs, one per kind of character the class accepts), then read what text the ca
 given: the severity rules above decide on that input. A hit that times near 8x is a finder
 false positive: drop it and report the pattern as a defect of the finder. Hand review still
 covers what the finder does not model: a literal before the repeat (`/[^\s]+X` over a run of
-`/`), flags passed through a variable, a pattern assembled any other way, and a compiled pattern
-skipped as match-only in its own file that another module imports and searches with.
+`/`), a lookaround or backreference inside a repeated group, flags passed through a variable, a
+pattern assembled any other way, and a compiled pattern skipped as match-only in its own file
+that another module imports and searches with.
 
 #### 4c: Profile to Find Hot Functions
 
@@ -523,7 +544,8 @@ fi
 Parse the six output files from Step 4. Output format reference:
 
 - `cache_candidates.txt`: `file:line - function()` + `Reason: ...`
-- `uncompiled_regex.txt`: `file:line - re.func(pattern, ...)` + `Fix: ...`; after the
+- `uncompiled_regex.txt`: an `Examined S regex call sites in F files: ...` line (see 4b), then
+  `file:line - re.func(pattern, ...)` + `Fix: ...`; after the
   `# Quadratic Regex Starts` heading, `file:line - re.func(pattern, ...) [shape]` +
   `Runs that fail from every start: ...` + `Fix: ...` (Unsafe Input, see 4b)
 - `hotspots.txt`: `file:line - function()` + `Calls: N, Cumtime: Xs`

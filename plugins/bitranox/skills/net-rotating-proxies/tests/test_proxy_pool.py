@@ -576,6 +576,18 @@ def test_pool_acquire_rotates_and_rests(store):
     assert first[0] != second[0]
 
 
+def test_pool_acquire_never_picks_an_excluded_proxy(store):
+    _seed_store(store, live=["a:1", "b:1", "c:1"], speeds={"a:1": 0.1, "b:1": 0.2, "c:1": 0.3})
+    pool = pp.ProxyPool(store, need=3, cooldown=0)
+    # Without the exclusion a weighted pick of 2 of 3 would include "a:1" or "b:1" every time.
+    for seed in range(50):
+        random.seed(seed)
+        assert pool.acquire(2, exclude={"a:1", "b:1"}) == ["c:1"]
+    # Every active proxy excluded: nothing to hand out, though the pool is not empty.
+    assert pool.acquire(1, exclude={"a:1", "b:1", "c:1"}) == []
+    assert pool.active() == {"a:1", "b:1", "c:1"}
+
+
 def test_pool_record_evicts_flaky_for_this_run_only(store):
     _seed_store(store, live=["flaky:1", "spare:1"], speeds={"flaky:1": 0.1, "spare:1": 0.2})
     pool = pp.ProxyPool(store, need=1, flaky_min_samples=4, flaky_max_fail_ratio=0.5)

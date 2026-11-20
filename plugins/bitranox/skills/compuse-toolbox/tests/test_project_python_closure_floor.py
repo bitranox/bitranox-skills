@@ -18,7 +18,7 @@ FLOOR = (3, 10)
 _LAUNCH = re.compile(r'^LAUNCH_WITH = "project-python"$', re.M)
 _HEADER_FLOOR = re.compile(r'^# requires-python = ">=(\d+)\.(\d+)"$', re.M)
 # stdlib names that arrived after 3.10, the ones an upgrade pass reaches for
-_NEWER = re.compile(r"^\s*import tomllib\b|\bdatetime\.UTC\b|from datetime import [^\n]*\bUTC\b", re.M)
+_NEWER = re.compile(r"^[^\S\n]*import tomllib\b|\bdatetime\.UTC\b|from datetime import [^\n]*\bUTC\b", re.M)
 
 
 def _sibling_imports(path: Path) -> set[str]:

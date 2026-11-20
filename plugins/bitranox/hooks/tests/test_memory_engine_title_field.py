@@ -223,7 +223,8 @@ def test_backfill_never_rewrites_a_body_that_already_has_a_title(tmp_path):
     os.utime(path, (1_000_000, 1_000_000))
     before = path.read_bytes()
     rep = E.backfill_titles(proj)
-    assert rep["filled"] == [] and rep["kept"] == 1
+    assert type(rep) is E.BackfillReport
+    assert rep.filled == [] and rep.kept == 1
     assert path.read_bytes() == before and path.stat().st_mtime == 1_000_000
 
 
@@ -233,7 +234,7 @@ def test_backfill_covers_every_level_of_the_tree_not_only_the_chain(tmp_path):
     sibling.mkdir()
     (sibling / "CLAUDE.md").write_text("x\n", encoding="utf-8")
     _pre_title_fact(str(sibling), "Sibling fact", "sib-fact")
-    assert E.backfill_titles(proj)["filled"] == ["sib-fact"]
+    assert E.backfill_titles(proj).filled == ["sib-fact"]
 
 
 def test_backfill_leaves_an_unframed_body_and_reports_a_missing_one(tmp_path):
@@ -242,7 +243,7 @@ def test_backfill_leaves_an_unframed_body_and_reports_a_missing_one(tmp_path):
     bare.write_text("just prose\n", encoding="utf-8")
     _pre_title_fact(proj, "Gone", "gone").unlink()
     rep = E.backfill_titles(proj)
-    assert rep["unframed"] == ["bare"] and rep["missing"] == ["gone"]
+    assert rep.unframed == ["bare"] and rep.missing == ["gone"]
     assert _body(anchor, "bare") == "just prose\n"
 
 
@@ -278,7 +279,7 @@ def test_backfill_reports_a_pointer_with_no_title_apart_from_an_unframed_body(tm
                      encoding="utf-8")
     before = path.read_bytes()
     rep = E.backfill_titles(proj)
-    assert rep["unframed"] == [] and rep["untitled"] == ["untitled"] and rep["filled"] == []
+    assert rep.unframed == [] and rep.untitled == ["untitled"] and rep.filled == []
     assert path.read_bytes() == before
     assert E.main(["heal", "--proj", proj, "--backfill-titles"]) == 0
     out = capsys.readouterr().out
@@ -333,7 +334,7 @@ def test_backfill_names_a_legacy_pointer_it_skips(tmp_path, capsys):
                 for p in pointers]
     local.write_text(us.upsert_pointer_block(text, scope, pointers), encoding="utf-8")
     rep = E.backfill_titles(proj)
-    assert rep["legacy"] == ["old-fact"] and rep["filled"] == []
+    assert rep.legacy == ["old-fact"] and rep.filled == []
     assert E.main(["heal", "--proj", proj, "--backfill-titles"]) == 0
     out = capsys.readouterr().out
     assert "~ legacy uuid: pointer, migrate it first" in out
@@ -352,7 +353,7 @@ def test_a_legacy_line_at_one_level_does_not_hide_the_slug_from_the_backfill_at_
                         uuid=_LEGACY_UUID, legacy=True)
     top.write_text(us.upsert_pointer_block(text, scope, [*pointers, legacy]), encoding="utf-8")
     rep = E.backfill_titles(proj)
-    assert rep["legacy"] == ["old-fact"] and rep["filled"] == ["old-fact"]
+    assert rep.legacy == ["old-fact"] and rep.filled == ["old-fact"]
     assert E._body_title(_body(anchor, "old-fact")) == "Old fact title"
 
 

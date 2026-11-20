@@ -224,7 +224,7 @@ def test_an_add_grows_the_file_by_exactly_one_line(tmp_path):
 def test_a_missing_raised_is_today_with_a_question_mark(tmp_path):
     p = _backlog(tmp_path, _item(10))
     out = _add(p, 20)
-    assert out["line"].startswith("- [ ] (2026-10-08?) [20] USER: w | size: 1")
+    assert out.line.startswith("- [ ] (2026-10-08?) [20] USER: w | size: 1")
 
 
 def test_a_written_line_parses_back_to_what_was_given(tmp_path):
@@ -276,7 +276,9 @@ def test_close_deletes_the_line_and_returns_it_with_the_reason(tmp_path):
     p = _backlog(tmp_path, _item(10), _item(20, what="keep me"))
     before = p.read_text(encoding="utf-8")
     out = ow.close_item(p, 10, "shipped in 8.6.0")
-    assert out == {"rank": 10, "line": _item(10), "reason": "shipped in 8.6.0", "deleted": True}
+    assert type(out) is ow.Closed
+    assert out.to_data() == {"rank": 10, "line": _item(10), "reason": "shipped in 8.6.0",
+                             "deleted": True}
     after = p.read_text(encoding="utf-8")
     assert after == before.replace(_item(10) + "\n", "", 1)
     assert [it.rank for it in ow.list_items(p, state="all")] == [20]
@@ -286,7 +288,7 @@ def test_close_deletes_the_line_and_returns_it_with_the_reason(tmp_path):
 def test_close_keeps_a_rank_free_once_its_line_is_gone(tmp_path):
     p = _backlog(tmp_path, _item(10), _item(20))
     ow.close_item(p, 10, "done")
-    assert _add(p, 10)["rank"] == 10       # nothing holds 10 any more
+    assert _add(p, 10).rank == 10       # nothing holds 10 any more
 
 
 def test_the_new_file_header_says_a_solved_line_is_deleted():
@@ -308,7 +310,7 @@ def test_close_refuses_unknown_closed_and_ambiguous_ranks(tmp_path):
 def test_a_valid_raised_is_written_as_given(tmp_path, raised):
     p = _backlog(tmp_path, _item(10))
     out = _add(p, 20, raised=raised)
-    assert out["line"].startswith("- [ ] (%s) [20]" % raised)
+    assert out.line.startswith("- [ ] (%s) [20]" % raised)
 
 
 def test_a_refusal_for_raised_with_newline_leaves_file_unchanged(tmp_path):
@@ -365,7 +367,7 @@ def test_a_rank_above_the_ceiling_is_refused(tmp_path):
     p = _backlog(tmp_path, _item(10))
     with pytest.raises(ow.MalformedField):
         ow.add_item(p, 1000000, "FOUND", "w", "1", "o", "n")
-    assert ow.add_item(p, 999999, "FOUND", "w", "1", "o", "n")["rank"] == 999999
+    assert ow.add_item(p, 999999, "FOUND", "w", "1", "o", "n").rank == 999999
 
 
 def test_an_existing_empty_file_gets_the_header(tmp_path):
@@ -402,13 +404,13 @@ def test_add_refuses_a_found_item_above_an_open_user_item(tmp_path):
 def test_add_takes_a_found_item_below_every_open_user_item(tmp_path):
     p = tmp_path / "OPEN-WORK.md"
     _add(p, 40)
-    assert _add(p, 70, origin="FOUND")["rank"] == 70
+    assert _add(p, 70, origin="FOUND").rank == 70
 
 
 def test_a_closed_user_line_does_not_hold_a_found_item_down(tmp_path):
     p = tmp_path / "OPEN-WORK.md"
     p.write_text("- [x] (2026-10-01) [90] USER: done\n", encoding="utf-8")
-    assert _add(p, 50, origin="FOUND")["rank"] == 50
+    assert _add(p, 50, origin="FOUND").rank == 50
 
 
 def test_unranked_lines_reports_the_old_format_and_skips_items_fences_and_the_template(tmp_path):
@@ -430,3 +432,18 @@ def test_enclosing_backlog_finds_the_nearest_above_and_never_the_own_directory(t
     inner.mkdir(parents=True)
     (inner / "OPEN-WORK.md").write_text("own", encoding="utf-8")
     assert ow.enclosing_backlog(inner) == tmp_path / "OPEN-WORK.md"
+
+
+def test_add_reports_a_typed_record_whose_data_is_the_backlog_add_wire(tmp_path):
+    p = _backlog(tmp_path, _item(10))
+    out = _add(p, 20, raised="2026-09-30")
+    assert type(out) is ow.Added
+    assert out.rank == 20
+    assert out.to_data() == {"rank": 20, "line": "- [ ] (2026-09-30) [20] USER: w | size: 1 | "
+                                                 "open: o | next: n"}
+    assert list(out.to_data()) == ["rank", "line"]
+
+
+def test_close_reports_its_keys_in_the_order_backlog_close_relays(tmp_path):
+    p = _backlog(tmp_path, _item(10))
+    assert list(ow.close_item(p, 10, "done").to_data()) == ["rank", "line", "reason", "deleted"]

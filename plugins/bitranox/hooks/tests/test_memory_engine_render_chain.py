@@ -170,7 +170,7 @@ def test_a_line_a_level_above_holds_is_not_repeated_below(tmp_path):
     _fact(anchor, "feedback-py-rule", ("python",))
     rep = E.render_topics(levels["a/py"], scope="chain")
     # the top still holds the line, so the chain reads it already; the tree render moves it
-    assert rep["levels"] == {} and _slugs(levels["a/py"]) == [] and _slugs(anchor) == ["feedback-py-rule"]
+    assert rep.levels == {} and _slugs(levels["a/py"]) == [] and _slugs(anchor) == ["feedback-py-rule"]
 
 
 def test_a_chain_render_never_drops_a_line_for_being_placed_elsewhere(tmp_path):
@@ -191,7 +191,7 @@ def test_a_copy_below_a_level_that_now_holds_the_line_is_dropped(tmp_path):
     rep = E.render_topics(levels["a/py"], scope="chain", write=_recording(calls))
     assert calls == [_local(levels["a"]), _local(levels["a/py"])]      # the add, then the drop
     assert _slugs(levels["a"]) == ["feedback-py-rule"] and _slugs(levels["a/py"]) == []
-    assert rep["levels"][levels["a/py"]]["removed"] == 1
+    assert rep.levels[levels["a/py"]].removed == 1
     assert sig.claude_local_md_path(levels["b/py"]).read_bytes() == other_subtree
 
 
@@ -223,7 +223,7 @@ def test_a_chain_dry_run_writes_nothing_and_reports_its_drops(tmp_path):
     _fact(levels["a/other"], "feedback-py-rule", ("python",))
     before = _snapshot(anchor)
     rep = E.render_topics(levels["a/py"], scope="chain", dry_run=True)
-    assert rep["levels"][levels["a/py"]]["added"] == 1 and _snapshot(anchor) == before
+    assert rep.levels[levels["a/py"]].added == 1 and _snapshot(anchor) == before
     # the drop a real run would make below a level that only gains the line in this run
     _fact(anchor, "feedback-py-two", ("python",))
     E.render_topics(anchor)
@@ -231,8 +231,8 @@ def test_a_chain_dry_run_writes_nothing_and_reports_its_drops(tmp_path):
     E.set_level_topics(levels["a"], ("python",))
     before = _snapshot(anchor)
     rep = E.render_topics(levels["a/py"], scope="chain", dry_run=True)
-    assert rep["levels"][levels["a"]]["added"] == 2
-    assert rep["levels"][levels["a/py"]]["removed"] == 2 and _snapshot(anchor) == before
+    assert rep.levels[levels["a"]].added == 2
+    assert rep.levels[levels["a/py"]].removed == 2 and _snapshot(anchor) == before
 
 
 def _bound(anchor, slugs):
@@ -607,7 +607,8 @@ def test_the_top_line_is_written_before_the_others_are_dropped(tmp_path):
     assert _slugs(levels["a/py"]) == _slugs(levels["b/py"]) == ["feedback-py-rule"]
     assert E.read_body_topics(us.body_path(anchor, "feedback-py-rule")) == ("python",)
     rep = E.set_fact_topics(anchor, {"feedback-py-rule": ()})
-    assert rep["collapsed"] == ["feedback-py-rule"] and rep["set"] == ["feedback-py-rule"]
+    assert rep.collapsed == ["feedback-py-rule"] and rep.changed == ["feedback-py-rule"]
+    assert type(rep) is E.TopicsSetReport and rep.unchanged == 0
     assert _slugs(anchor) == ["feedback-py-rule"]
     assert _slugs(levels["a/py"]) == _slugs(levels["b/py"]) == []
 
@@ -616,7 +617,7 @@ def test_un_binding_a_fact_with_one_line_leaves_it_where_it_is(tmp_path):
     anchor, levels = _two_python_levels(tmp_path)
     _fact(levels["a/py"], "feedback-py-rule", ("python",))
     rep = E.set_fact_topics(anchor, {"feedback-py-rule": ()})
-    assert rep["collapsed"] == [] and _slugs(levels["a/py"]) == ["feedback-py-rule"]
+    assert rep.collapsed == [] and _slugs(levels["a/py"]) == ["feedback-py-rule"]
     assert _slugs(anchor) == []
 
 
@@ -625,7 +626,7 @@ def test_a_never_bound_duplicate_is_not_collapsed(tmp_path):
     _fact(levels["a/py"], "feedback-plain")
     _hold_lines(levels["b/py"], [us.Pointer(slug="feedback-plain", title="T feedback-plain", hook=HOOK)])
     rep = E.set_fact_topics(anchor, {"feedback-plain": ()})
-    assert rep["collapsed"] == [] and _slugs(levels["b/py"]) == ["feedback-plain"]
+    assert rep.collapsed == [] and _slugs(levels["b/py"]) == ["feedback-plain"]
 
 
 def test_a_dry_run_names_the_collapse_and_writes_nothing(tmp_path, capsys):
@@ -693,7 +694,7 @@ def test_a_collapse_that_needs_no_new_top_line_is_not_held_to_the_cap(tmp_path):
     _hold_lines(anchor, [us.Pointer(slug="feedback-py-rule", title="T feedback-py-rule", hook=HOOK)])
     _fill_top(anchor, 0)
     rep = E.set_fact_topics(anchor, {"feedback-py-rule": ()})
-    assert rep["collapsed"] == ["feedback-py-rule"]
+    assert rep.collapsed == ["feedback-py-rule"]
     assert _slugs(levels["a/py"]) == _slugs(levels["b/py"]) == []
 
 
