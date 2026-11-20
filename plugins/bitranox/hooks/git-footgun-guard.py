@@ -36,6 +36,14 @@ so; `git log @{u}..` then lists every topic commit as unpushed although origin/f
 local one, says so in one line and whether `<remote>/<branch>` exists locally. Detached HEAD, no
 upstream, or matching names: silent.
 
+A fifth check REFUSES a `git stash` that saves an entry WITHOUT a message (bare `git stash`, a
+pathspec or option-only form, `push` without -m, `save` without text) when the repository the call
+runs in (`git -C`, a leading `cd`, else the event cwd) is a LINKED worktree. refs/stash lives in
+the common git dir, so the entry lands at stash@{0} in the main checkout's list and every other
+worktree's, where a positional pop applies the wrong work. The refusal offers a named stash with
+sha-based restore, a WIP commit, and for a RED arm a mutated scratch copy. The usual cause is a RED
+arm (`git stash -q && pytest ...`): 34 of the 55 unnamed stashes in the corpus had that shape.
+
 Pure standard library. Reads the PreToolUse event JSON on stdin. Exit 2 blocks the
 call and shows stderr to the model; the advisory is `additionalContext` on stdout with exit 0;
 every other path (including any error) exits 0 so a broken guard never wedges a turn.
@@ -56,6 +64,24 @@ Decisions:
       Pinned by: tests/test_git_footgun_guard.py::test_upstream_text_that_is_no_revision_is_silent
     - Rejected: reading `@{u}` in any git statement. Why: the message-taking verbs above.
       Reopen if: never on its own; widen `_REV_VERBS` instead.
+    - An unnamed stash in a linked worktree is REFUSED, not advised (user decision 2026-11-20,
+      after the second recorded loss of edits to the shared stash). Why: the prose rule (memory
+      fact, harness note) was skipped twice; a named stash or a WIP commit does the same job and
+      passes. Evidence: measured - guard_replay over 239,519 recorded Bash calls: 55 unnamed
+      stashes (0.023%), 17 of them in a worktree by path (about 0.007%), so it is quiet.
+      Reopen if: a replay shows it refusing commands that never touched a shared stash.
+      Pinned by: tests/test_git_footgun_guard.py::test_an_unnamed_stash_in_a_linked_worktree_is_refused
+    - The main checkout is exempt. Why: its list is the shared list's home and nothing there
+      expects privacy. Evidence: argued. Reopen if: a loss in a main checkout caused by a
+      worktree's entry. Pinned by: tests/test_git_footgun_guard.py::test_an_unnamed_stash_in_the_main_checkout_passes
+    - Reading and restoring by sha (list, show, apply <sha>) pass; a positional pop/drop/apply is
+      NOT refused yet. Why: scope as approved covered saving only. Evidence: argued.
+      Reopen if: a loss caused by a positional pop in a worktree.
+      Pinned by: tests/test_git_footgun_guard.py::test_a_named_stash_or_a_reading_stash_command_in_a_worktree_passes
+    - The refusal's offered command has no angle brackets. Why: the shell-word reader drops quotes,
+      so `-m "<a> <b>"` reads as two redirections and the guard refused its own offer.
+      Evidence: measured (the test below failed with the bracketed form).
+      Pinned by: tests/test_git_footgun_guard.py::test_the_named_form_the_refusal_offers_passes
 """
 import json
 import os
@@ -430,6 +456,80 @@ def foreign_upstream(command, cwd, tool_name=None):
                    "then compare with the branch you pushed by name." % own)
 
 
+_STASH = frozenset({"stash"})
+# Subcommands that save a new entry. Any other subcommand (list, show, apply, pop, drop, branch,
+# clear, create, store) saves nothing, so it is not this check's business.
+_STASH_SAVING = frozenset({"push", "save"})
+
+
+def _stash_has_message(sub, rest):
+    """True when a saving `git stash` names its entry: -m/--message, or save's positional text."""
+    for i, token in enumerate(rest):
+        if token == "--":
+            break
+        if token in ("-m", "--message"):
+            return i + 1 < len(rest)
+        if token.startswith("--message=") or (token.startswith("-m") and not token.startswith("--")):
+            return True
+        if sub == "save" and not token.startswith("-"):
+            return True
+    return False
+
+
+def unnamed_stash(command, tool_name=None):
+    """True when a statement runs a `git stash` that saves an entry without a message.
+
+    A bare `git stash`, or one with only options or a pathspec, is `git stash push`. Push's
+    positional operands are pathspecs, so only -m/--message names its entry; save's message is
+    positional.
+    """
+    for argv in _statements(command, tool_name):
+        operands = git_verb_operands(argv, _STASH, tool_name or "Bash")
+        if operands is None:
+            continue
+        rest = drop_redirections(operands)
+        sub = "push"
+        if rest and not rest[0].startswith("-"):
+            sub, rest = rest[0], rest[1:]
+        if sub in _STASH_SAVING and not _stash_has_message(sub, rest):
+            return True
+    return False
+
+
+def _linked_worktree(repo):
+    """True when `repo` is a LINKED worktree: its git dir is not the common git dir."""
+    out = _git(repo, "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir")
+    lines = (out or "").splitlines()
+    if len(lines) != 2:
+        return False
+    return os.path.normcase(os.path.normpath(lines[0])) != os.path.normcase(os.path.normpath(lines[1]))
+
+
+def unnamed_stash_in_worktree(command, cwd, tool_name=None):
+    """True when `command` saves an unnamed stash entry from inside a linked worktree."""
+    if not unnamed_stash(command, tool_name):
+        return False
+    repo = git_verb_dir(command, cwd, _STASH, tool_name)
+    return bool(repo) and os.path.isdir(repo) and _linked_worktree(repo)
+
+
+_STASH_REFUSAL = (
+    "UNNAMED STASH IN A LINKED WORKTREE: the stash list is SHARED by every worktree of this "
+    "repository (refs/stash lives in the common git dir), so this entry lands at stash@{0} in the "
+    "main checkout's list too and shifts every entry there. A later positional pop - here or in "
+    "any other worktree - can apply the wrong work.\n"
+    "Prefer a WIP commit on this worktree's own branch (a branch IS private to the worktree). "
+    "If it must be a stash, name it, capture its sha, and restore by sha:\n"
+    # No angle brackets in the placeholder: the shell-word reader drops quotes, so a "<x> <y>"
+    # message reads as two redirections and the offered form would be refused by this guard.
+    '  git stash push -m "WORKTREE-NAME: WHY"\n'
+    "  git stash list --format='%H %gs'      # take the sha of your entry\n"
+    "  git stash apply <sha>                  # then drop that entry, found by its message\n"
+    "For a RED arm (does the test fail without my change?), mutate a scratch copy instead of "
+    "stashing the change away.\n"
+)
+
+
 def _pathspec_advice(losses):
     listed = "\n".join("  - %s: %s" % (path, what) for path, what in losses)
     return ("PATHSPEC COMMIT OVER A STAGED-ONLY CHANGE: `git commit <paths>` records the WORKTREE "
@@ -473,6 +573,12 @@ def main() -> int:
             "Fix: one path per call (`git check-ignore -q -- p`), or drop -q and read which "
             "paths it prints.\n"
         )
+    try:
+        stash_refused = unnamed_stash_in_worktree(command, event.get("cwd"), tool_name)
+    except Exception:  # noqa: BLE001 - a broken check must not wedge a turn
+        stash_refused = False
+    if stash_refused:
+        return shell_text.refuse(_STASH_REFUSAL)
     if not broken_revparse(command, tool_name):
         same = same_command_losses(command, tool_name)
         if same:

@@ -30,6 +30,18 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.15.0]
+
+### Added
+
+- `git-footgun-guard`: refuses a `git stash` that saves an entry without a message (bare
+  `git stash`, a pathspec or option-only form, `push` without `-m`, `save` without text) when the
+  repository the call runs in is a linked worktree. Every worktree shares one stash list, so the
+  entry lands at stash@{0} in the main checkout too, where a positional pop applies the wrong
+  work. The refusal offers a named stash restored by sha, a WIP commit, and for a RED arm a
+  mutated scratch copy; the main checkout and reading or by-sha commands pass. Replay over 239,519
+  recorded Bash calls: 55 unnamed stashes, about 17 of them in a worktree.
+
 ## [11.14.0]
 
 ### Fixed

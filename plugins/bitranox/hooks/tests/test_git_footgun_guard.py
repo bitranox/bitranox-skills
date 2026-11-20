@@ -512,3 +512,71 @@ def test_upstream_text_that_is_no_revision_is_silent(cut_from_master, monkeypatc
                                                      command):
     clone = _pushed(cut_from_master)
     assert _advise(monkeypatch, capsys, command, clone) is None
+
+
+# --- a stash without a message in a linked worktree --------------------------------------------
+# refs/stash lives in the COMMON git dir, so every worktree of a repository shares one stash list.
+
+
+@pytest.fixture
+def linked(repo, tmp_path):
+    """A linked worktree of `repo` with an uncommitted edit, as a worktree session leaves it."""
+    wt = tmp_path / "wt"
+    _git(repo, "worktree", "add", "-q", "-b", "topic", str(wt))
+    (wt / "f.txt").write_bytes(b"edited in the worktree\n")
+    return wt
+
+
+@pytest.mark.parametrize("command", [
+    "git stash",
+    "git stash -- f.txt",
+    "git stash -u",
+    "git stash push",
+    "git stash push -k -- f.txt",
+    "git stash save",
+    "git stash -q && git status",
+])
+def test_an_unnamed_stash_in_a_linked_worktree_is_refused(linked, monkeypatch, capsys, command):
+    rc, out = _refused(monkeypatch, capsys, command, linked)
+    assert rc == 2, command
+    assert "SHARED" in out.err and "git stash push -m" in out.err and "WIP commit" in out.err
+
+
+@pytest.mark.parametrize("template", [
+    "git -C WT stash",
+    "cd WT && git stash -- f.txt",
+])
+def test_the_worktree_is_found_through_dash_c_and_cd(repo, linked, monkeypatch, capsys, template):
+    rc, _out = _refused(monkeypatch, capsys, template.replace("WT", linked.as_posix()), repo)
+    assert rc == 2, template
+
+
+@pytest.mark.parametrize("command", [
+    'git stash push -m "wt topic: red arm"',
+    "git stash push --message=wt-red-arm -- f.txt",
+    "git stash push -mwt-red-arm",
+    'git stash save "wt topic: red arm"',
+    "git stash list --format='%H %gs'",
+    "git stash show -p",
+    "git stash apply 0123456789abcdef0123456789abcdef01234567",
+    "git commit -m 'never run a bare git stash here'",
+    "echo git stash",
+])
+def test_a_named_stash_or_a_reading_stash_command_in_a_worktree_passes(linked, monkeypatch, capsys,
+                                                                     command):
+    rc, out = _refused(monkeypatch, capsys, command, linked)
+    assert rc == 0 and out.err == "", command
+
+
+def test_an_unnamed_stash_in_the_main_checkout_passes(repo, linked, monkeypatch, capsys):
+    """Control: the main checkout's own stash is the shared list's home; only a worktree is misled."""
+    rc, out = _refused(monkeypatch, capsys, "git stash", repo)
+    assert rc == 0 and out.err == ""
+
+
+def test_the_named_form_the_refusal_offers_passes(linked, monkeypatch, capsys):
+    """Each refusal must name a form the guard lets through, or it is a dead end to route around."""
+    _rc, out = _refused(monkeypatch, capsys, "git stash", linked)
+    offered = next(line.strip() for line in out.err.splitlines() if line.strip().startswith("git stash push -m"))
+    rc, again = _refused(monkeypatch, capsys, offered, linked)
+    assert rc == 0 and again.err == "", offered
