@@ -999,3 +999,41 @@ def test_an_archive_never_drops_a_line_a_concurrent_add_wrote(tmp_path):
     assert (back, lost) == ([], []), ("%d of %d archived lines came back, %d of %d added lines "
                                       "were dropped" % (len(back), len(victims), len(lost),
                                                         len(created)))
+
+
+_POSIX_ONLY = pytest.mark.skipif(os.name == "nt", reason="a drive path is absolute on Windows")
+
+
+@_POSIX_ONLY
+def test_check_misplaced_never_files_a_windows_path_under_the_cwds_tree(tmp_path, monkeypatch):
+    r"""On POSIX a body's C:\... path is not absolute, so resolving it read it relative to the
+    cwd: run from the beta tree, alpha's fact citing only a Windows path was reported as
+    belonging to beta."""
+    top_a, proj_a, top_b, _proj_b = _two_trees(tmp_path)
+    ME.add_or_update_entry(proj_a, "Win Note", "When on the dev box, use the share.",
+                           body=r"Copy C:\work\tools\sync.py to the share.", scope_default="a")
+    monkeypatch.chdir(top_b)
+    assert R.find_misplaced(top_a) == []
+
+
+@_POSIX_ONLY
+def test_check_misplaced_is_not_outvoted_by_a_windows_path_read_as_its_own_tree(tmp_path,
+                                                                               monkeypatch):
+    r"""Run from the alpha tree, a C:\... path read relative to the cwd counted as a mention of
+    alpha itself, which hid a fact whose only real path is in beta."""
+    top_a, proj_a, top_b, proj_b = _two_trees(tmp_path)
+    ME.add_or_update_entry(proj_a, "Beta Deploy", "When deploying beta, drain first.",
+                           body=r"Edit %s/service.py, then copy C:\work\tools\sync.py." % proj_b,
+                           scope_default="a")
+    monkeypatch.chdir(proj_a)
+    found = R.find_misplaced(top_a)
+    assert [(f["slug"], f["target_anchor"]) for f in found] == [
+        ("beta-deploy", str(Path(top_b).resolve()))]
+
+
+def test_a_windows_path_shape_names_a_path_only_on_windows():
+    assert R._names_a_path_here(r"C:\work\x.py", os_name="nt")
+    assert R._names_a_path_here(r"\\srv\share\x.py", os_name="nt")
+    assert not R._names_a_path_here(r"C:\work\x.py", os_name="posix")
+    assert not R._names_a_path_here(r"\\srv\share\x.py", os_name="posix")
+    assert R._names_a_path_here("/opt/work/x.py", os_name="posix")

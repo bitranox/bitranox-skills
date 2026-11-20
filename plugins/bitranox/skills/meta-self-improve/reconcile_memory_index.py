@@ -43,6 +43,7 @@ Pure standard library; cross-platform; ASCII output only.
 
 import argparse
 import contextlib
+import ntpath
 import os
 import re
 import shutil
@@ -786,7 +787,9 @@ def _is_sharded_body_name(name: str) -> bool:
 # shape "/dir/repo/x.py", and matching that substring would resolve a DIFFERENT path than the
 # one the body names. Leaving the Windows shapes enabled on POSIX too costs nothing - a path
 # that does not resolve to an anchor is skipped a few lines below - and keeps this testable
-# from either platform.
+# from either platform. What is skipped on POSIX is a Windows shape itself (`_names_a_path_here`):
+# it is not absolute there, so resolving it read it relative to the cwd and filed it under the
+# cwd's tree.
 _ABS_PATH_RX = re.compile(
     r"([A-Za-z]:[\\/][\w.@+-]+(?:[\\/][\w.@+-]+){1,}"      # C:\dir\repo\x.py  /  C:/dir/repo/x.py
     r"|\\\\[\w.@+-]+(?:\\[\w.@+-]+){2,}"                    # \\server\share\repo\x.py
@@ -817,6 +820,8 @@ def find_misplaced(anchor: _StrPath) -> list[Misplaced]:
             own = 0
             for m in _ABS_PATH_RX.finditer(body):
                 p = m.group(1)
+                if not _names_a_path_here(p):
+                    continue
                 found = us.resolve_anchor(p) or _existing_ancestor_anchor(p)
                 if found is None:
                     continue
@@ -832,6 +837,15 @@ def find_misplaced(anchor: _StrPath) -> list[Misplaced]:
                 out.append({"level": lvl, "slug": e.slug, "target_anchor": target,
                             "paths": sorted(set(paths))})
     return out
+
+
+def _names_a_path_here(path: str, os_name: str = os.name) -> bool:
+    r"""True when `path` can name a file on this OS: everything on Windows, and on POSIX all but a
+    drive or UNC shape (`C:\dir\x.py`, `\\server\share\x.py`). On POSIX those are not absolute,
+    so resolving one read it relative to the cwd: a body citing a Windows path was attributed to
+    whatever tree the audit ran from, a false misplacement from another tree's cwd and a hidden
+    one (its own-tree mention outvoting the real foreign path) from this tree's."""
+    return os_name == "nt" or not ntpath.splitdrive(path)[0]
 
 
 def _existing_ancestor_anchor(path: str) -> Path | None:
