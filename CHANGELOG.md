@@ -30,6 +30,21 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.18.1]
+
+### Fixed
+
+- memory_engine on Windows: store reads (level files and bodies) and relocate's pre-check reads
+  retry a momentary sharing violation. Before, a read failed the whole add, or made an add overlook
+  the level that owns a slug and create the fact a second time.
+- memory_engine on Windows: the first update of a legacy entry archives its old sharded body even
+  while a reader holds it for a moment. Before, the legacy file stayed behind for good.
+- An add no longer runs git under the level lock on every call: git is asked once per level and
+  pattern per process, outside the lock (5.4 to 2.6 ms per add measured on Linux).
+- `memory_lock` checks a held lock for staleness at most once a second instead of every 5 ms. On
+  Windows each check could keep a just-released lock file delete-pending, so the next create was
+  refused.
+
 ## [11.18.0]
 
 ### Fixed
