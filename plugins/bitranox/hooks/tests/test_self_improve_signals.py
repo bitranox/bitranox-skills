@@ -1586,12 +1586,37 @@ def test_memory_lock_reclaims_stale(tmp_path):
     target = tmp_path / "m3"
     stale = tmp_path / "m3.lock"
     stale.write_text("", encoding="utf-8")
-    import os as _os
     old = time.time() - (S.LOCK_STALE_S + 10)
-    _os.utime(stale, (old, old))                      # make the lock look stale (crashed holder)
+    os.utime(stale, (old, old))                       # make the lock look stale (crashed holder)
     with S.memory_lock(target, timeout=0.05):         # reclaims it instead of timing out
         assert stale.exists()
     assert not stale.exists()
+
+
+def test_a_waiter_looks_for_a_stale_lock_at_most_once_a_second(tmp_path):
+    """The head of the queue tries the lock every 5 ms and looked at its age on every try. On
+    Windows each look holds a handle on the lock file, and one that lands as the holder deletes it
+    refuses the next create. Counted, not timed: the looks over the wait may not exceed one per
+    _STALE_CHECK_S of the time it actually waited, plus the first."""
+    target = tmp_path / "m4"
+    (tmp_path / "m4.lock").write_text("", encoding="utf-8")     # held, and fresh
+    looks: list[float] = []
+
+    def profile(frame, event, _arg):
+        if event == "call" and frame.f_code.co_name == "_reclaim_stale_lock":
+            looks.append(time.monotonic())
+
+    start = time.monotonic()
+    previous = sys.getprofile()
+    sys.setprofile(profile)
+    try:
+        with pytest.raises(TimeoutError), S.memory_lock(target, timeout=1.5):
+            pass
+    finally:
+        sys.setprofile(previous)
+    waited = time.monotonic() - start
+    assert looks, "the waiter never looked for a stale lock"
+    assert len(looks) <= 1 + int(waited / S._STALE_CHECK_S), (len(looks), waited)
 
 
 def test_a_permission_error_is_transient_only_on_windows():

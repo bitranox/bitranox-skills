@@ -441,6 +441,12 @@ _QUEUE_PLACE_FRESH_S = 2.0
 # waiters behind it keep their own `poll`.
 _HEAD_POLL_S = 0.005
 
+# How often a waiter looks at the lock file's age for a crashed holder. Each look is a stat(), and
+# on Windows a stat() holds a handle: one that lands as the holder deletes the lock keeps the name
+# delete-pending, and the next O_EXCL create of it is refused. At the head's 5 ms poll that was a
+# stat every try; a lock is stale only after LOCK_STALE_S, so once a second loses nothing.
+_STALE_CHECK_S = 1.0
+
 # Windows reports "another handle has this name open" as PermissionError, not as a distinct error.
 # A lock file the previous holder just deleted stays delete-pending while any handle (a virus
 # scanner, a waiter's stat()) is still open on it, and a new O_EXCL create of that name fails with
@@ -563,8 +569,9 @@ def memory_lock(target_path: _StrPath, timeout: float = 5.0, poll: float = 0.05,
     Waiters are served in arrival order. A caller refused once takes a place in the lock's queue
     (`<target>.lock.q...`, refreshed every poll, removed when it gets the lock or gives up), and
     nobody tries the lock while a place taken earlier is still live - a caller arriving with no
-    place included. The head of the queue tries every _HEAD_POLL_S, so a hand-off leaves the lock
-    idle for milliseconds, not for a whole `poll`. Without it a holder that took the lock again the moment it let go left a
+    place included. Every queued waiter polls every _HEAD_POLL_S, so the head notices a hand-off,
+    and the next in line its turn, within milliseconds, not a whole `poll`; a waiter the dir
+    refused a place keeps its own `poll`. Without it a holder that took the lock again the moment it let go left a
     50 ms poller a gap of microseconds: the waiter timed out behind a writer that was making
     progress all along (thousands of holds in a row, measured), and every caller skips its write
     on that TimeoutError.
@@ -579,7 +586,20 @@ def memory_lock(target_path: _StrPath, timeout: float = 5.0, poll: float = 0.05,
           Evidence: measured: the starvation test in tests/test_self_improve_signals.py (1342
           holds before, at most 3 after). Reopen if: the lock moves to an OS primitive that
           queues its waiters itself.
-          Pinned by: tests/test_self_improve_signals.py::test_a_waiter_is_let_in_by_a_holder_that_retakes_the_lock_at_once"""
+          Pinned by: tests/test_self_improve_signals.py::test_a_waiter_is_let_in_by_a_holder_that_retakes_the_lock_at_once
+        - Kept the queue after removing git from the level lock (ensure_level no longer runs
+          ensure_gitignored under it, and caches its answer per process). Why: that shortened each
+          add, measured 5.4 ms to 2.6 ms per add on Linux, and argued from a Windows
+          profile (2.47 s of 2.97 s for 10 adds in git) to about 250 ms to 50 ms there; a
+          shorter hold does not stop a holder re-taking the lock at once, which is what starved
+          the waiter. Evidence: argued from the starvation test, which re-takes with no work at
+          all. Reopen if: no in-process caller loops over adds at one level any more.
+        - Chosen: look for a stale lock at most once per _STALE_CHECK_S. Why: on Windows each
+          look is a handle on the lock file, and one open as the holder deletes it refuses the
+          next create (seen on the Windows dev box, counted as contention); 120 s staleness needs
+          no 5 ms look. Evidence: argued; the count is pinned. Reopen if: LOCK_STALE_S drops to
+          seconds.
+          Pinned by: tests/test_self_improve_signals.py::test_a_waiter_looks_for_a_stale_lock_at_most_once_a_second"""
     clock = time.time if now is None else now
     lock = Path(str(target_path) + ".lock")
     try:
@@ -587,6 +607,7 @@ def memory_lock(target_path: _StrPath, timeout: float = 5.0, poll: float = 0.05,
     except OSError:
         pass
     deadline = clock() + timeout
+    next_stale_check = clock()
     fd: int | None = None
     place: Path | None = None
     try:
@@ -597,8 +618,10 @@ def memory_lock(target_path: _StrPath, timeout: float = 5.0, poll: float = 0.05,
                     fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
                     break
                 except FileExistsError:
-                    if _reclaim_stale_lock(lock, clock):
-                        continue
+                    if clock() >= next_stale_check:
+                        next_stale_check = clock() + _STALE_CHECK_S
+                        if _reclaim_stale_lock(lock, clock):
+                            continue
                 except PermissionError as exc:
                     if not is_transient_sharing_error(exc):
                         raise
