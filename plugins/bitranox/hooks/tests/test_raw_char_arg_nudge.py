@@ -180,3 +180,61 @@ def test_the_hook_still_only_nudges_where_it_does_not_block():
     done = _run({"tool_name": "Write", "tool_input": {"file_path": "/x/notes.txt", "content": RLO}})
     assert done.returncode == 0
     assert "U+202E" in json.loads(done.stdout)["hookSpecificOutput"]["additionalContext"]
+
+
+AR_TWO = chr(0x0662)    # ARABIC-INDIC DIGIT TWO
+DEVA_ONE = chr(0x0967)  # DEVANAGARI DIGIT ONE
+FW_ONE = chr(0xFF11)    # FULLWIDTH DIGIT ONE
+FW_A = chr(0xFF21)      # FULLWIDTH LATIN CAPITAL LETTER A
+HW_KA = chr(0xFF76)     # HALFWIDTH KATAKANA LETTER KA
+SUPER_TWO = chr(0xB2)   # SUPERSCRIPT TWO: category No, not Nd
+FENCE = "`" * 3
+
+
+@pytest.mark.parametrize(("tool", "tool_input"), [
+    ("Write", {"file_path": "/x/test_a.py", "content": f'assert not re.fullmatch("[0-9]", "{AR_TWO}")\n'}),
+    ("Edit", {"file_path": "/x/t.py", "old_string": "a", "new_string": f'"{DEVA_ONE}"'}),
+    ("MultiEdit", {"file_path": "/x/t.py", "edits": [{"old_string": "a", "new_string": f"{FW_ONE}"}]}),
+    ("Write", {"file_path": "/x/t.py", "content": f'NAME = "{FW_A}"\n'}),
+    ("Write", {"file_path": "/x/t.py", "content": f'NAME = "{HW_KA}"\n'}),
+    ("Write", {"file_path": "/x/plan.md", "content": f"Step\n\n{FENCE}python\nx = int('{AR_TWO}')\n{FENCE}\n"}),
+    ("Write", {"file_path": "/x/plan.md", "content": f"{FENCE}py title\n'{FW_ONE}'\n{FENCE}\n"}),
+    ("Edit", {"file_path": "/x/PLAN.MD", "old_string": "a", "new_string": f"~~~python\n'{AR_TWO}'\n~~~"}),
+])
+def test_a_lookalike_digit_or_width_form_in_python_source_is_blocked_with_its_chr_form(tool, tool_input):
+    reason = N.block_reason(tool, tool_input)
+    assert reason is not None
+    assert "chr(0x" in reason and reason.count("U+") >= 1
+
+
+def test_the_refusal_names_the_code_point_and_the_chr_spelling():
+    reason = N.block_reason("Write", {"file_path": "/x/t.py", "content": f"'{AR_TWO}{AR_TWO}{FW_ONE}'"})
+    assert "U+0662 ARABIC-INDIC DIGIT TWO (chr(0x0662))" in reason
+    assert "U+FF11 FULLWIDTH DIGIT ONE (chr(0xFF11))" in reason
+
+
+@pytest.mark.parametrize(("tool", "tool_input"), [
+    # Markdown prose and non-python blocks: a lookalike there can be the point of the text.
+    ("Write", {"file_path": "/x/doc.md", "content": f"The digit {AR_TWO} is not [0-9].\n"}),
+    ("Write", {"file_path": "/x/doc.md", "content": f"{FENCE}text\n{AR_TWO}\n{FENCE}\n"}),
+    ("Write", {"file_path": "/x/doc.md", "content": f"{FENCE}\n{AR_TWO}\n{FENCE}\n"}),
+    # Text after a python block closes is prose again.
+    ("Write", {"file_path": "/x/doc.md", "content": f"{FENCE}python\nx = 1\n{FENCE}\n{FW_ONE}\n"}),
+    # Other targets keep their old behaviour.
+    ("Write", {"file_path": "/x/data.toml", "content": f'v = "{AR_TWO}"\n'}),
+    ("Write", {"file_path": "/x/notes.txt", "content": FW_A}),
+    ("Agent", {"prompt": f"use {AR_TWO}"}),
+    # ASCII digits, other numeric categories and letters stay allowed.
+    ("Write", {"file_path": "/x/t.py", "content": f'x = "0123456789 {SUPER_TWO} K{UMLAUT}che"\n'}),
+    # Removing a lookalike is how you fix it.
+    ("Edit", {"file_path": "/x/t.py", "old_string": AR_TWO, "new_string": "chr(0x0662)"}),
+])
+def test_lookalikes_outside_python_source_are_not_blocked(tool, tool_input):
+    assert N.block_reason(tool, tool_input) is None
+
+
+def test_the_hook_blocks_a_lookalike_in_a_py_write_with_exit_2():
+    done = _run({"hook_event_name": "PreToolUse", "tool_name": "Write",
+                 "tool_input": {"file_path": "/x/test_d.py", "content": f"V = '{AR_TWO}'\n"}})
+    assert done.returncode == 2
+    assert "chr(0x0662)" in done.stderr

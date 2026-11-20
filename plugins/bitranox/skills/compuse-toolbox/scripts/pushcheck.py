@@ -35,8 +35,10 @@ in the JSON `skipped` list and on a `not scanned` line, and a range adding nothi
 content is refused as unscanned rather than passed.
 
 Documentation-safe values are deliberately NOT findings: the RFC5737 ranges (192.0.2.0/24,
-198.51.100.0/24, 203.0.113.0/24), `example.com`/`.test`/`.invalid`, loopback, and placeholder
-home paths like `/home/user/`. Flagging those trains a reader to skim the report, which is how a
+198.51.100.0/24, 203.0.113.0/24), `example.com`/`.test`/`.invalid`, loopback, placeholder
+home paths like `/home/user/`, and a well-known service address that is the same on every
+network, such as Tailscale's MagicDNS resolver 100.100.100.100 (inside 100.64.0.0/10 like every
+tailnet address, but it names no machine of yours). Flagging those trains a reader to skim the report, which is how a
 real finding gets waved through.
 
 The pattern list is a FLOOR, never a proof. It cannot know your infrastructure's names, so pass
@@ -106,6 +108,10 @@ _IPV4_RX = re.compile(r"\b(?P<ip>\d{1,3}(?:\.\d{1,3}){3})\b")
 # RFC5737 exists so an address can be written down. Treating one as a leak is a false positive
 # with a real cost: it is the kind that makes people pass --no-verify.
 _DOC_NETS = ("192.0.2.", "198.51.100.", "203.0.113.")
+# Addresses that are identical on every network they appear in, so writing one down reveals no
+# layout: Tailscale's MagicDNS resolver (quad-100) sits inside CGNAT 100.64.0.0/10, which is
+# otherwise flagged because a tailnet node's own address there IS private.
+_WELL_KNOWN_ADDRESSES = frozenset({"100.100.100.100"})
 
 
 @dataclass(frozen=True)
@@ -208,7 +214,7 @@ def _private_ip_hits(line: str) -> list[str]:
             a, b = (int(x) for x in ip.split(".")[:2])
         except ValueError:                                   # not four real octets
             continue
-        if any(ip.startswith(net) for net in _DOC_NETS):
+        if any(ip.startswith(net) for net in _DOC_NETS) or ip in _WELL_KNOWN_ADDRESSES:
             continue
         if a == 10 or (a == 172 and 16 <= b <= 31) or (a == 192 and b == 168):
             out.append(ip)

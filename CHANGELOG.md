@@ -30,6 +30,29 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.16.0]
+
+### Added
+
+- `conflict_resolve.py` rule `ours-minus-theirs-deletions`: for a diff3 hunk where upstream deleted a line next to one your side added, it keeps ours and removes only the base lines theirs deleted. It refuses, writing nothing, when theirs added, rewrote or moved a line, when the hunk has no base section, when ours does not keep a deleted line verbatim, and when ours holds more copies of it than base.
+- `raw-char-arg-nudge` refuses a Write/Edit/MultiEdit to a `.py` file, or to a fenced python block of a `.md` file in the written text, that holds a digit outside 0-9 or a halfwidth/fullwidth form (U+FF00-U+FFEF), naming the `chr(0x....)` form to write instead. Replayed over the transcript corpus: 9 of 26,893 such calls, all Arabic-Indic digits that landed as literal test values.
+- compuse-git: a scratch clone of a local checkout gets the checkout's LOCAL main as its `origin/main`; the row says how to base it on the checkout's `refs/remotes/origin/main` instead.
+
+### Changed
+
+- process-agents-subagent-driven-development: a finding or note that conflicts with a user decision goes to the human at once, never to the ledger; a plan-mandated finding in security, layering or real-dependency test coverage is routed before the final review whatever severity it was filed at; the final reviewer re-judges ledgered plan-mandated items and checks the shipped behaviour, defaults included, against every recorded user answer.
+- meta-dream-tree: the backup dir is the dream's working dir, where every subagent writes its full result to a `.txt` file and makes its scratch dirs (`mktemp -d -p <backup dir>`, also for the jev shadow files).
+- meta-claude-hooks: references re-stamped against upstream hooks.md (where the HTTP hook allowlists are set; terminalSequence inside tmux and GNU screen).
+- coding-python-pwshpy: registry keys take the hive form; the drive form `HKLM:\...` is refused with `Unknown registry hive: 'HKLM:'`.
+- infra-proxmox-bindsnap: `vzdump --mode snapshot` of a running CT is crash-consistent like the freeze route, and falls back to suspend when a volume's storage cannot snapshot.
+- process-agents-dispatching-parallel: a background agent's brief asks for its final report via SendMessage in parts of about 4,000 characters, and a fixer's throwaway commit bumps far above origin (`X.99.0`) where the commit gate compares versions with origin.
+- coding-python-performance-review: before fixing a quadratic regex start in a test file, replay the test's own inputs through both patterns; keep the pattern with a comment when what the test reads differs.
+- `pushcheck.py`: Tailscale's MagicDNS resolver `100.100.100.100` is a documentation-safe value, not a `private_ip` finding; a tailnet node's own 100.64.0.0/10 address still is.
+
+### Fixed
+
+- `versionrot.py`: a fact placed by topic is reported by its topics and how many levels list it (JSON `level` null), not by one arbitrary level; a version after another package's name ("codex plugin 1.0.6") or after a pronoun is no longer attributed to an earlier package.
+
 ## [11.15.1]
 
 ### Changed

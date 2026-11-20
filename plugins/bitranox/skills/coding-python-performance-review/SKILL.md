@@ -407,6 +407,12 @@ finding. It is SEVERE when the scanned text can grow without bound (a transcript
 pasted command) or real input already costs seconds per run, and MEDIUM when it only costs
 measurably on a hot path.
 
+In a TEST file the slow shape can be what the test exists to check (a `\s*` that crosses a
+blank line, say): replay that test's own inputs through the old and the proposed pattern before
+changing it, and when what the test reads differs, keep the pattern with a comment saying why.
+Measured: `[^\S\n]*` in place of `\s*` moved the one match of a test named for a `\s*` crossing
+a blank line, which would have turned it into a copy of its blank-free control test.
+
 **Reading the `# Quadratic Regex Starts` section.** It covers compiled and uncompiled patterns in
 any scope, including a pattern built with `+` from module-level string constants, and skips a
 compiled pattern whose name the file only calls `.match` or `.fullmatch` on (one start). The

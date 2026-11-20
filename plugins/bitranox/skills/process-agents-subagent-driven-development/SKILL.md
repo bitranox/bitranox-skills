@@ -520,8 +520,15 @@ final whole-branch review. When you fill a reviewer template:
   rule like "accept no technical debt" is met by the ledger and the final
   review's triage, not by fixing now. Every fix round is new code the next
   re-review reads with fresh eyes, so rounds for minors breed more minors:
-  that is how one task reached ten fix rounds. A Minor that contradicts a
-  user decision goes to the final review flagged for the user.
+  that is how one task reached ten fix rounds. Two kinds of finding never
+  go to the ledger, whatever severity they carry. One that conflicts with
+  a user decision, a Minor or a note in a log, goes to your human partner
+  at once as a decision (in a headless run, "When No Human Can Answer"
+  decides it). One labeled plan-mandated in security (an input path
+  outside an origin or auth check), layering (an inner layer naming an
+  adapter library's type) or test coverage (no real-dependency test of a
+  new write path) is routed by the plan-mandated rule below before the
+  final review, whatever severity the reviewer filed it at.
 - A finding labeled plan-mandated  -  or any finding that conflicts with
   what the plan's text requires  -  is decided by what its FIX changes.
   If the fix only makes the plan's code obey a rule the plan itself states
@@ -653,13 +660,16 @@ Its instructions, in the dispatch:
    amendment, decisions file, review log, nowhere), and whether the design supports it. A departure
    recorded nowhere is also a DEFECT.
 3. Triage the deferred Minor list: fix before merge, or keep as recorded debt, one line each.
+   Re-judge each item labeled plan-mandated at the rubric's severity, not the one it was filed at.
 4. Check every decision the PLAN took (an accepted exception, a narrowed scope, a numbered
    decision entry in the plan or the decisions file) against the user's recorded answers in
    `USER-DECISIONS.jsonl`. A plan decision that narrows a user decision, or adds an exception the
    user's answer does not carry, is a DEFECT however faithfully the code follows the plan; in
    place of a failing input it quotes the plan's line and the user's answer. A plan decision on a
-   point no recorded answer covers is no DEFECT here. With no such file, report this check as not
-   made.
+   point no recorded answer covers is no DEFECT here. Then check the SHIPPED behaviour against
+   every recorded answer, the plan aside: quote each answer verbatim beside what the branch does
+   for it, defaults and pre-filled values included; a behaviour that departs from an answer is a
+   DEFECT even where the plan prescribes it. With no such file, report this check as not made.
    The task reviews judge code against the plan, so they approve code that follows such a
    decision. Measured: a plan accepted one error path that named less than the user's answer
    required, six task reviews approved the code, and only a final review that read the user's

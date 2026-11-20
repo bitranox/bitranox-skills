@@ -69,6 +69,14 @@ def test_an_rfc1918_address_is_found_and_a_documentation_address_is_not():
     assert PC.scan_text("host 192.0.2.10 and 198.51.100.4 and 203.0.113.9", "f") == []
 
 
+def test_tailscales_magicdns_resolver_is_not_a_finding_but_a_tailnet_node_is():
+    """100.100.100.100 is the same on every tailnet and names no machine; a node's own CGNAT
+    address does."""
+    assert PC.scan_text("nameserver 100.100.100.100", "resolv.conf") == []
+    assert [h.kind for h in PC.scan_text("ssh 100.101.7.12", "f")] == ["private_ip"]
+    assert [h.kind for h in PC.scan_text("dns 100.100.100.101", "f")] == ["private_ip"]
+
+
 def test_a_loopback_and_an_unspecified_address_are_not_findings():
     assert PC.scan_text("bind 127.0.0.1 and 0.0.0.0", "f") == []
 

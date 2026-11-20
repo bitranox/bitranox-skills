@@ -235,6 +235,12 @@ the success line, abort-and-show on a miss).
    (exit 2, `no pointers found in scope`): go on without the backup, write
    `verify skipped (no pointers before the run)` in step 8, and list each pointer the dream adds
    at the tree top with its cost.
+   This backup dir is also the dream's working dir. Every subagent the dream dispatches writes
+   its full result to a named `.txt` file there (a plain name such as `review-<lens>.txt`: a
+   subagent's Write to a name like `report.md` can be refused) and makes any scratch dir with
+   `mktemp -d -p <backup dir>`, and the brief says both. Read the result from the file, not from
+   the hand-back, which can arrive cut short. A bare `mktemp -d` lands in the shared `/tmp`,
+   where a draft left behind outlives the dream.
    Then commit the store's git repo (Durability pass) so the pre-dream state is one `git diff`
    away. Start step 4's `dedup_scan.py` now with `run_in_background`: over a large store it runs
    for minutes, past the foreground Bash limit, and started here it finishes while step 3 reads and
@@ -371,17 +377,17 @@ the success line, abort-and-show on a miss).
      router biased, run the check in references/dream-core.md, "Reading a high tree-top share".
    - **Jev shadow on placement** (only when step 0c found `jev_shadow.py status` on; home
      `<plugin>/skills/meta-self-improve/`, launch via `hooks/run-python.sh`; procedure in its
-     `references/jev-shadow.md`; both files in a fresh `D=$(mktemp -d)` outside any repo, since
-     they hold unredacted fact text), in this order: (1) `jev_shadow.py items --site
+     `references/jev-shadow.md`; both files in a fresh `D=$(mktemp -d -p <backup dir>)`, outside any
+     repo, since they hold unredacted fact text), in this order: (1) `jev_shadow.py items --site
      dream-placement --anchor <anchor> --sample 40 --seed <dream id> --out "$D/items.jsonl"`, 40
      lines drawn from every pairing of a fact with a level on its chain (id `<slug>|<level>`, the
      level relative to the anchor, `.` for the anchor). Each line pairs the fact with ONE level of
      its chain, usually not the one holding its pointer, so most lines score 0, and a 0 says only
      that THIS level is wrong for the fact, never that the fact is misplaced where it sits. Before
      reading any 0, or a report built on these lines, as a misplacement, find the level that holds
-     the fact's pointer (`find <anchor> -name CLAUDE.local.md -exec grep -l "mem:<slug>" {} +`)
-     and route the fact from there with the routing prompt above: that routing decides, never
-     the 0; (2) YOU route every fact, as above; (3)
+     the fact's pointer (`find <anchor> -name CLAUDE.local.md -exec grep -l "mem:<slug>" {} +`) and
+     route the fact from there with the routing prompt above: that routing decides, never the 0; (2)
+     YOU route every fact, as above; (3)
      write YOUR score for every sampled line to `$D/verdicts.jsonl` (`{"id": "<slug>|<level>",
      "verdict": {"fits_level": 2}}`: 2 belongs here, 1 could live here but is narrower or broader,
      0 does not belong; none left out); (4) `jev_shadow.py run --site dream-placement --dream
@@ -465,7 +471,7 @@ the success line, abort-and-show on a miss).
    as a collision), propose-diff, apply.
    Bodies missing the frame or the **Why:**/**How to apply:** sections get the same treatment.
    - **Jev shadow on the firing check** (only when step 0c found `jev_shadow.py status` on; home, launch and
-     procedure as in step 5's shadow bullet; a fresh `D=$(mktemp -d)` of its own outside any repo):
+     procedure as in step 5's shadow bullet; a fresh `D=$(mktemp -d -p <backup dir>)` of its own):
      `jev_shadow.py items --site dream-firing --anchor <anchor> --sample 40 --seed <dream id> --out
      "$D/items.jsonl"` writes 40 facts of the tree. YOU judge every hook in the store, as above;
      write YOUR verdict for every sampled fact to `$D/verdicts.jsonl` FIRST (`{"id": "<slug>",
@@ -492,10 +498,11 @@ the success line, abort-and-show on a miss).
       upgrade or migration, a result measured on one version? These pass every other check (the
       claim was true, the file it names still exists, a named version even reads as re-testable),
       so find them with `versionrot.py scan --tree <anchor> --pypi --json` (home:
-      `<plugin>/skills/meta-dream-tree/`, launch via `hooks/run-python.sh`). Exit 1 lists the
-      facts naming a version a newer release replaced, each with the level that owns its pointer;
-      exit 0 lists none; exit 2 is an error to report, never a clean tree. A listed claim is a
-      CANDIDATE: re-check it against the CURRENT release (its `--help`, its changelog, or a rerun)
+      `<plugin>/skills/meta-dream-tree/`, launch via `hooks/run-python.sh`). Exit 1 lists the facts
+      naming a version a newer release replaced, each with the level that owns its pointer, or, for
+      a fact placed by topic, its topics and how many levels list it (its JSON `level` is then
+      null); exit 0 lists none; exit 2 is an error to report, never a clean tree. A listed claim is
+      a CANDIDATE: re-check it against the CURRENT release (its `--help`, its changelog, or a rerun)
       before acting, then do exactly one of:
       - **still true** -> reword it to the current state with the version history dropped:
         `factedit.py show --body --slug <slug> --level <its level>`, edit that text in a file,
@@ -518,8 +525,8 @@ the success line, abort-and-show on a miss).
       ("before Python 3.14") that the supported range still spans.
 
    - **Jev shadow on those three questions** (only when step 0c found `jev_shadow.py status` on;
-     home, launch and procedure as in step 5's shadow bullet; a fresh `D=$(mktemp -d)` of its own
-     outside any repo): `jev_shadow.py items --site dream-prune --anchor <anchor> --sample 40
+     home, launch and procedure as in step 5's shadow bullet; a fresh `D=$(mktemp -d -p <backup
+     dir>)` of its own): `jev_shadow.py items --site dream-prune --anchor <anchor> --sample 40
      --seed <dream id> --out "$D/items.jsonl"` writes 40 facts of the tree. YOU answer all three
      questions for every sampled fact; write YOUR answers to `$D/verdicts.jsonl` FIRST (`{"id":
      "<slug>", "verdict": {"untestable_negative": false, "unlabelled_unsolved": false,

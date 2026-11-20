@@ -16,7 +16,20 @@ Rules (`--hunk N=RULE`, 1-based; `--match REGEX=RULE`; `--all RULE` for every hu
     ours | theirs | base       keep that side (`base` only on a diff3 hunk, one with `|||||||`)
     both                       ours, then theirs
     both-theirs-first          theirs, then ours (the CHANGELOG case: the incoming entry on top)
+    ours-minus-theirs-deletions
+                               ours, with every base line theirs DELETED removed from it (diff3
+                               hunks only): the hunk where one side deleted or moved away a line
+                               next to a line the other side added
     file:<path>                the hunk becomes that file's text, in the hunk's line ending
+
+`ours-minus-theirs-deletions` replays base -> theirs onto ours, so it applies only when that step
+deleted lines and did nothing else. It refuses, writing nothing, when the hunk has no base section,
+when theirs adds or rewrites any line relative to base (a line theirs MOVED within the hunk is an
+addition at its new place, so it is refused too: keeping ours' order would undo the move), when
+ours does not keep a deleted line verbatim, and when ours holds more copies of a deleted line than
+base does (which copy to drop is then a guess). Measured: an upstream cleanup that deleted a
+`#![cfg]` line beside two lines a topic added left a hunk where `ours` restored the deleted line,
+`theirs` dropped the added ones and `both` duplicated the shared context.
 
 In a Markdown file (`.md`, `.markdown`, `.mdx`) the two joined sides of `both` /
 `both-theirs-first` are separated by one blank line when the line where they meet is an ATX heading
@@ -67,6 +80,7 @@ remaining_markers: [{line, text}], written, note?}`.
 """
 from __future__ import annotations
 
+import difflib
 import os
 import re
 import sys
@@ -141,10 +155,12 @@ class RuleKind(str, Enum):
     BASE = "base"
     BOTH = "both"
     BOTH_THEIRS_FIRST = "both-theirs-first"
+    OURS_MINUS_THEIRS_DELETIONS = "ours-minus-theirs-deletions"
     FILE = "file"
 
 
 _SIDE_KINDS = tuple(k.value for k in RuleKind if k is not RuleKind.FILE)
+_NEEDS_BASE = frozenset({RuleKind.BASE, RuleKind.OURS_MINUS_THEIRS_DELETIONS})
 
 
 @dataclass(frozen=True)
@@ -373,9 +389,10 @@ def assign_rules(hunks: list[Hunk], *, by_number: dict[int, Rule] | None = None,
         if rule is None:
             raise Refusal("hunk %d (lines %d-%d) has no rule - give --hunk %d=RULE or --all"
                           % (h.n, h.start, h.end, h.n))
-        if rule.kind is RuleKind.BASE and h.base is None:
-            raise Refusal("hunk %d (lines %d-%d) has no ||||||| base section, so `base` cannot "
-                          "apply (only a diff3-style hunk has one)" % (h.n, h.start, h.end))
+        if rule.kind in _NEEDS_BASE and h.base is None:
+            raise Refusal("hunk %d (lines %d-%d) has no ||||||| base section, so `%s` cannot "
+                          "apply (only a diff3-style hunk has one)"
+                          % (h.n, h.start, h.end, rule.kind.value))
         rules.append(rule)
     return rules
 
@@ -414,6 +431,52 @@ def _join(first: list[str], second: list[str], eol: str, markdown: bool) -> list
     return first + second
 
 
+def _where(hunk: Hunk) -> str:
+    return "hunk %d (lines %d-%d)" % (hunk.n, hunk.start, hunk.end)
+
+
+def _deleted_base_lines(hunk: Hunk, base: list[str]) -> list[int]:
+    """Indexes into `base` of the lines theirs deleted. Refuses when theirs did anything else."""
+    deleted: list[int] = []
+    matcher = difflib.SequenceMatcher(None, base, hunk.theirs, autojunk=False)
+    for tag, b0, b1, t0, _t1 in matcher.get_opcodes():
+        if tag == "delete":
+            deleted.extend(range(b0, b1))
+        elif tag != "equal":
+            raise Refusal("%s: theirs adds or rewrites lines relative to base (first: %r), so "
+                          "it is not a pure deletion; resolve it with another rule"
+                          % (_where(hunk), _body(hunk.theirs[t0])))
+    return deleted
+
+
+def _ours_minus_theirs_deletions(hunk: Hunk) -> list[str]:
+    """Ours with the base lines theirs deleted removed: base -> theirs replayed onto ours.
+
+    Each deleted base line is located in ours through the base -> ours alignment, never by text
+    alone, so a line ours added that happens to read the same is not the one removed.
+    """
+    base = hunk.base
+    if base is None:
+        raise Refusal("%s has no ||||||| base section, so `%s` cannot apply"
+                      % (_where(hunk), RuleKind.OURS_MINUS_THEIRS_DELETIONS.value))
+    deleted = _deleted_base_lines(hunk, base)
+    in_ours: dict[int, int] = {}
+    matcher = difflib.SequenceMatcher(None, base, hunk.ours, autojunk=False)
+    for tag, b0, b1, o0, _o1 in matcher.get_opcodes():
+        if tag == "equal":
+            in_ours.update((b0 + k, o0 + k) for k in range(b1 - b0))
+    for index in deleted:
+        line = base[index]
+        if index not in in_ours:
+            raise Refusal("%s: ours does not keep the line theirs deleted (%r) verbatim, so "
+                          "there is nothing exact to remove" % (_where(hunk), _body(line)))
+        if hunk.ours.count(line) > base.count(line):
+            raise Refusal("%s: ours holds more copies of the line theirs deleted (%r) than base "
+                          "does, so which one to remove is a guess" % (_where(hunk), _body(line)))
+    drop = {in_ours[index] for index in deleted}
+    return [line for i, line in enumerate(hunk.ours) if i not in drop]
+
+
 def _replacement(hunk: Hunk, rule: Rule, read_file, markdown: bool = False) -> list[str]:
     if rule.kind is RuleKind.FILE:
         return _file_lines(read_file(rule.path), hunk.eol)
@@ -429,6 +492,8 @@ def _replacement(hunk: Hunk, rule: Rule, read_file, markdown: bool = False) -> l
                           "apply (only a diff3-style hunk has one)"
                           % (hunk.n, hunk.start, hunk.end))
         return list(hunk.base)
+    if rule.kind is RuleKind.OURS_MINUS_THEIRS_DELETIONS:
+        return _ours_minus_theirs_deletions(hunk)
     return list(hunk.ours if rule.kind is RuleKind.OURS else hunk.theirs)
 
 
@@ -532,7 +597,7 @@ def _build_parser() -> EnvelopeArgumentParser:
     ap.add_argument("file", help="the conflicted file")
     ap.add_argument("--hunk", action="append", default=[], metavar="N=RULE",
                     help="rule for hunk N (1-based): ours|theirs|base|both|both-theirs-first|"
-                         "file:<path>")
+                         "ours-minus-theirs-deletions|file:<path>")
     ap.add_argument("--match", action="append", default=[], metavar="REGEX=RULE",
                     help="rule for the one hunk whose ours or theirs text matches REGEX")
     ap.add_argument("--all", metavar="RULE", help="rule for every hunk no other rule names")

@@ -55,6 +55,24 @@ Decisions:
     match stays `unresolved`. Reopen if a real package the repos do not use is reported unresolved
     often enough to matter (pass it with --current then). Pinned by
     TestPypiAsksOnlyAboutPackageMentions.
+
+    A linker that is also an alias ("plugin") names its package only after filler, and a pronoun
+    ends the walk back to a package. Why: "codex plugin 1.0.6" and "a bitranox repo has hit it as
+    1.5.1" were both compared with this plugin's version. Evidence: measured over a 2098-fact
+    store, 1121 claims: 13 changed, all from a package to unresolved; 9 were wrong attributions
+    now withdrawn, 3 changed only the unresolved name, and 1 correct attribution was lost ("same
+    plugin content as 8.6.1's", a DATED claim, so no report changed). Rejected: letting a
+    preposition pass only one unknown word, which cost 3 correct attributions in the same run
+    ("the btx_lib_mail floor had moved from 3.0.1"). Reopen if: a scan shows real superseded
+    claims hidden by either rule. Pinned by
+    test_a_linker_alias_after_another_name_binds_to_that_name and
+    test_a_pronoun_between_a_package_and_a_version_ends_the_search.
+
+    A fact whose body carries topics is reported by its topics, with every level that lists it,
+    and its JSON `level` is null. Why: a topic-placed fact sits at every level holding one of its
+    topics (measured: 30 levels), so the first level found is an arbitrary one, and reviewers
+    corrected it before judging. Reopen if: the engine stops rendering topic-placed lines at
+    several levels. Pinned by test_a_topic_placed_fact_is_reported_by_its_topics_and_every_level.
 """
 
 import argparse
@@ -72,6 +90,7 @@ from pathlib import Path
 from typing import cast
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "hooks"))
+import memory_engine  # noqa: E402
 import uuid_store  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -105,6 +124,8 @@ _PREPS = frozenset({"in", "on", "at", "from", "to", "since", "before", "after", 
                     "as", "of", "is", "was", "and", "or", "the", "fixed", "pinned", "bumped",
                     "requires"})
 _FILLER = _LINKERS | _PREPS
+# A pronoun between a package and a version stands for something else: "hit it as 1.5.1".
+_PRONOUNS = frozenset({"it", "they", "them", "he", "she", "him", "her"})
 # A two-part number is a version only right beside a resolved package (within this many words);
 # alone it is a score, a deadline, a Python minor.
 _NEAR = 2
@@ -240,10 +261,17 @@ def _words(segment: str) -> list[str]:
 
 
 def _known_name(words: list[str], i: int, reg: Registry) -> str | None:
-    """The package words[i] names - alone or as the end of a two-word name - or None."""
+    """The package words[i] names - alone or as the end of a two-word name - or None.
+
+    A LINKER that is also an alias (a bare "plugin" meaning this plugin) names that package only
+    when nothing but filler stands before it: in "codex plugin 1.0.6" the linker binds the version
+    to "codex", never to this plugin.
+    """
     if i > 0 and reg.lookup(f"{words[i - 1]}-{words[i]}") is not None:
         return reg.canonical(f"{words[i - 1]}-{words[i]}")
     key = normalize(words[i])
+    if key in _LINKERS and i > 0 and normalize(words[i - 1]) not in _FILLER:
+        return None
     if key in reg.aliases or (key not in _FILLER and reg.lookup(key) is not None):
         return reg.canonical(key)
     return None
@@ -254,7 +282,8 @@ def _resolve(words: list[str], reg: Registry) -> tuple[str | None, Known | None,
 
     Walks back from the version. A known package resolves it. An unknown word owns it - unless
     a preposition stood between, in which case the search goes on and the nearest unknown word is
-    only the fallback name.
+    only the fallback name. A PRONOUN ends the search: what it refers to owns the version, and that
+    is no word of this sentence ("a bitranox repo has hit it as 1.5.1" names no bitranox release).
     """
     introduced = False
     nearest: str | None = None
@@ -266,7 +295,7 @@ def _resolve(words: list[str], reg: Registry) -> tuple[str | None, Known | None,
         if key in _FILLER:
             introduced = introduced or key in _PREPS
             continue
-        if not introduced:
+        if not introduced or key in _PRONOUNS:
             return key, None, dist
         nearest = nearest or key
     return nearest, None, _LOOKBACK
@@ -436,9 +465,25 @@ def pypi_version(name: str, timeout: float = 5.0) -> str | None:
 
 @dataclass
 class FactReport:
+    """One fact's claims and where it is placed.
+
+    `level` is the first level found pointing at it; `levels` lists every one. A fact whose body
+    carries topics is placed BY TOPIC, so its pointer lines sit at every level holding one of its
+    topics and no single level is its place: `topics` is non-empty then, and reports name the
+    topics instead of `level`.
+    """
+
     level: str
     slug: str
     claims: list[Claim]
+    topics: tuple[str, ...] = ()
+    levels: list[str] = field(default_factory=list[str])
+
+    def placement(self) -> str:
+        """How a reader finds this fact: its topics, or its level, and how many levels list it."""
+        where = f"topics: {', '.join(self.topics)}" if self.topics else self.level
+        count = len(self.levels)
+        return where if count <= 1 else f"{where}; listed at {count} levels"
 
 
 def _strip_frontmatter(text: str) -> str:
@@ -454,24 +499,28 @@ def scan_facts(levels: list[Path], store: Path | None, reg: Registry,
     """Every pointed-at fact's claims, and the slugs whose body could not be read."""
     reports: list[FactReport] = []
     missing: list[str] = []
-    seen: set[str] = set()
+    seen: dict[str, FactReport] = {}
     asked: set[str] = set()
     for path in levels:
         for ptr in parse_pointers(_read_level(path), level=str(Path(path).parent)):
             if ptr.slug in seen:
+                seen[ptr.slug].levels.append(ptr.level)
                 continue
-            seen.add(ptr.slug)
             body = ""
+            topics: tuple[str, ...] = ()
             body_path = store / ".claude-memory" / "facts" / f"{ptr.slug}.md" if store else None
             try:
                 if body_path is not None:
                     body = _strip_frontmatter(body_path.read_text(encoding="utf-8"))
-            except (OSError, UnicodeDecodeError):
+                    topics = memory_engine.read_body_topics(body_path) or ()
+            except (OSError, UnicodeDecodeError, uuid_store.TreeWalkError):
                 missing.append(ptr.slug)
             if fetch is not None:
                 _resolve_online([ptr.hook, body], reg, fetch, asked)
             claims = find_claims(ptr.hook, reg, "hook") + find_claims(body, reg, "body")
-            reports.append(FactReport(ptr.level, ptr.slug, claims))
+            report = FactReport(ptr.level, ptr.slug, claims, topics, [ptr.level])
+            seen[ptr.slug] = report
+            reports.append(report)
     return reports, missing
 
 
@@ -532,7 +581,7 @@ def _render(reports: list[FactReport], stale: list[FactReport], counts: dict[Cla
              + ", ".join(f"{k} {v}" for k, v in sorted(counts.items())), ""]
     lines.append(f"== SUPERSEDED: {len(stale)} fact(s) name a version a newer release replaced ==")
     for rep in stale:
-        lines.append(f"   {rep.slug}   [{rep.level}]")
+        lines.append(f"   {rep.slug}   [{rep.placement()}]")
         for c in rep.claims:
             if c.status == ClaimStatus.SUPERSEDED:
                 lines.append(f"        {c.pkg} {c.named} -> {c.current} ({c.where}): {c.context}")
@@ -626,7 +675,8 @@ def main(argv: list[str] | None = None) -> int:
         print(_envelope(True, {
             "facts_scanned": len(reports),
             "claims_by_status": counts,
-            "superseded": [{"level": r.level, "slug": r.slug,
+            "superseded": [{"level": None if r.topics else r.level, "topics": list(r.topics),
+                            "levels": r.levels, "slug": r.slug,
                             "claims": [_claim_dict(c) for c in r.claims
                                        if c.status == ClaimStatus.SUPERSEDED]} for r in stale],
             "unresolved_packages": sorted({c.pkg for r in reports for c in r.claims

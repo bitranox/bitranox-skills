@@ -367,7 +367,10 @@ requires `hookEventName` set to the event name).
 
 Because hooks have no controlling terminal, this is the only way to fire a desktop notification, set a window
 title, or ring the bell. Claude Code writes it through its own terminal path, which is race-free and works in
-tmux, screen and on Windows.
+tmux, screen and on Windows. Inside tmux 3.3 or later the sequence reaches the terminal only with
+`set -g allow-passthrough on` in `~/.tmux.conf` (it applies to every program in those panes; `on` passes
+only panes tmux is showing, `all` on tmux 3.4 or later also the other panes of an attached session).
+Inside GNU screen a sequence from a background window is dropped, so keep Claude Code's window showing.
 
 Allowed: OSC 0/1/2 (titles), OSC 9 (iTerm2, ConEmu, Windows Terminal, WezTerm, including `9;4` taskbar progress),
 OSC 99 (Kitty), OSC 777 (urxvt, Ghostty, Warp), bare BEL. Terminate with BEL or ST. Rejected: CSI cursor and

@@ -31,7 +31,14 @@ characters named by code point on stderr, the text itself never quoted back):
   the shape that shipped one - a heredoc writes the -F file and the same call commits it - is
   invisible to commit-tell-sweep, which reads the file before the call has written it);
 - a Write/Edit/MultiEdit to a `.py`, `.md` or `.toml` file (source, docs and config, where a
-  bidi override is a trojan-source hazard and nothing renders it).
+  bidi override is a trojan-source hazard and nothing renders it);
+- a Write/Edit/MultiEdit to a `.py` file, or to a fenced python block of a `.md` file inside the
+  written text, that holds a digit outside 0-9 (Unicode category Nd: Arabic-Indic, Devanagari,
+  fullwidth digits) or a halfwidth or fullwidth form (U+FF00-U+FFEF). These are printable, so the
+  invisible-character rule above lets them through, yet they are the usual test values of a
+  digit or width check, typed as a backslash-u escape that JSON turned into the literal: the
+  refusal names the `chr(0x....)` form to write instead. An Edit inside a fence the written text
+  does not itself contain is not seen.
 
 Everywhere else it only NUDGES (additionalContext, exit 0), because a raw character can be meant
 there - a BOM a data format requires, a subagent brief quoting one. Owner decision 2026-10-12, after
@@ -42,6 +49,12 @@ shell arm fires on 1 of 130,609 Bash calls, and that one is the commit that ship
 RIGHT-TO-LEFT OVERRIDE; the file arm fires on 92 of 18,421 Write/Edit calls, each one a raw
 invisible character landing in a .py, .md or .toml file - mostly test source where an escape was
 meant. Not classified one by one beyond that; every refused call has the chr() route.
+
+The digit and width-form arm was priced 2026-11-20 the same way (a corpus walk deduped by
+tool_use id): it fires on 9 of 26,893 Write/Edit/MultiEdit calls to a .py or .md file (14,102 and
+12,791). All 9 are Arabic-Indic digits that landed as literals: 7 in test files, 2 in plan
+documents' python blocks, each a test value of a digit check; none was a fullwidth form. Whether
+each author meant the escape was not checked one by one; every refused call has the chr() route.
 """
 
 import json
@@ -70,6 +83,10 @@ _SHELL_TOOLS = frozenset({"Bash", "PowerShell"})
 #: git verbs whose text is permanent once pushed.
 _PERMANENT_VERBS = frozenset({"commit", "tag"})
 _ALLOWED_CONTROLS = frozenset("\t\n\r")
+#: The halfwidth and fullwidth forms block.
+_WIDTH_FORMS = range(0xFF00, 0xFFF0)
+#: Info-string words that open a python block in Markdown.
+_PYTHON_FENCES = frozenset({"python", "py", "python3", "py3", "pycon"})
 
 _ADVICE = (
     "If you meant the ESCAPE text (Python source, a test value, a doc), JSON decoded it on the way: "
@@ -85,6 +102,61 @@ def _flagged(character: str) -> bool:
     if category == "Cc":
         return character not in _ALLOWED_CONTROLS
     return category in _FLAGGED_CATEGORIES
+
+
+def _lookalike(character: str) -> bool:
+    """A digit outside 0-9 or a halfwidth/fullwidth form: printable, yet rarely meant literally."""
+    if ord(character) in _WIDTH_FORMS:
+        return True
+    return ord(character) > 0x7F and unicodedata.category(character) == "Nd"
+
+
+def _fence_open(line: str) -> tuple[str, bool] | None:
+    """(fence, is_python) when `line` opens a fenced block, else None."""
+    stripped = line.lstrip(" ")
+    if len(line) - len(stripped) > 3:
+        return None
+    for mark in "`~":
+        if stripped.startswith(mark * 3):
+            run = len(stripped) - len(stripped.lstrip(mark))
+            info = stripped[run:].split()
+            return mark * run, bool(info) and info[0].lower() in _PYTHON_FENCES
+    return None
+
+
+def _python_blocks(text: str) -> str:
+    """The lines of every fenced python block in Markdown `text`, joined."""
+    kept: list[str] = []
+    fence, is_python = "", False
+    for line in text.split("\n"):
+        if not fence:
+            opened = _fence_open(line)
+            if opened:
+                fence, is_python = opened
+            continue
+        stripped = line.strip()
+        if stripped.startswith(fence) and not stripped.strip(fence[0]):
+            fence = ""
+        elif is_python:
+            kept.append(line)
+    return "\n".join(kept)
+
+
+def _lookalike_reports(tool_name: str, tool_input: dict) -> list[str]:
+    """One "field: U+XXXX NAME (chr(0xXXXX)), ..." line per written .py / .md-python text with a lookalike."""
+    path = tool_input.get("file_path")
+    if tool_name not in _FILE_TOOLS or not isinstance(path, str):
+        return []
+    suffix = PurePath(path).suffix.lower()
+    if suffix not in (".py", ".md"):
+        return []
+    reports = []
+    for field, text in _texts(tool_name, tool_input):
+        scanned = text if suffix == ".py" else _python_blocks(text)
+        found = sorted({character for character in scanned if _lookalike(character)})
+        if found:
+            reports.append(f"{field}: " + ", ".join(f"{_label(c)} (chr(0x{ord(c):04X}))" for c in found))
+    return reports
 
 
 def _label(character: str) -> str:
@@ -160,6 +232,13 @@ def block_reason(tool_name: str, tool_input: object) -> str | None:
     """The refusal text when this call writes a flagged character where it is never wanted."""
     if not isinstance(tool_input, dict):
         return None
+    lookalikes = _lookalike_reports(tool_name, tool_input)
+    if lookalikes:
+        return (f"BLOCKED: a digit outside 0-9 or a halfwidth/fullwidth form in python source written "
+                f"by this {tool_name} - " + "; ".join(lookalikes) + ". A backslash-u escape typed into a "
+                "tool argument is decoded by JSON into the literal character. Write the character with "
+                "chr() in the source instead (the chr(0x....) form named above), so the file stays "
+                "ASCII; check it afterwards with `LC_ALL=C grep -nP '[^\\x00-\\x7F]' <file>`.")
     target = _permanent_target(tool_name, tool_input)
     reports = _reports(tool_name, tool_input) if target else []
     if not reports:

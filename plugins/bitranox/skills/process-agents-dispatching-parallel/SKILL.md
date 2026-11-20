@@ -205,6 +205,21 @@ Each agent gets:
   example `evidence/<item>-<date>/` on the test host) and writes there as it goes. If the agent
   stops without a report, that path is where you look for its numbers; a brief that names none
   leaves them only in its transcript.
+- **A final report in parts, for a background agent.** Its last message reaches you through the
+  idle notification's result field, which cuts a long one off ("[result truncated - ask the agent
+  for the rest via SendMessage]"), and the cut falls at the end, in the open items and false
+  premises that most change what you do next. Write: "send your final report with SendMessage to
+  the dispatcher, in parts of at most about 4,000 characters (part A: per-item changes and
+  RED/GREEN evidence; part B: tests, changelog lines, decisions you took, false premises, open
+  items)." Measured: 4 of 6 final reports in one fan-out were cut; asking for the rest as two
+  shorter messages got through every time.
+- **A far-ahead version for a throwaway commit, when the repo's commit gate wants a bump against
+  origin** (a marketplace whose gate refuses a commit at or below origin's version). A fixer whose
+  commit you drop at integration bumps it to a version far above origin (for example `X.99.0`),
+  never the next patch: other sessions can release while the fan-out runs, a next-patch bump then
+  sits at or below origin, and the gate refuses the fixer's commits until it rebuilds its branch.
+  You bump once, at release. Measured: origin released twice during one seven-fixer fan-out and
+  four fixers had commits refused.
 - **A base that holds what the agent builds on.** An agent dispatched with `isolation: worktree`
   branches from origin's default branch, not from your local HEAD (setting and fixes:
   bitranox:git-worktrees, Step 1a), so a commit you made locally and have not pushed is missing

@@ -84,6 +84,19 @@ class TestFindClaims:
         c = _only(versionrot.find_claims("Fixed in plugin 7.22.10.", reg))
         assert (c.pkg, c.current, c.status) == ("bitranox", "8.23.0", "superseded")
 
+    def test_a_linker_alias_after_another_name_binds_to_that_name(self):
+        # Measured on a live store: "codex plugin 1.0.6" was compared with this plugin's version.
+        reg = _reg(bitranox="11.13.9")
+        reg.aliases[versionrot.normalize("plugin")] = versionrot.normalize("bitranox")
+        c = _only(versionrot.find_claims("Measured on codex plugin 1.0.6 there.", reg))
+        assert (c.pkg, c.status) == ("codex", "unresolved")
+
+    def test_a_pronoun_between_a_package_and_a_version_ends_the_search(self):
+        # Measured: "a bitranox repo has hit it as 1.5.1" was read as a bitranox release.
+        claims = versionrot.find_claims("A bmk repo has hit it as 1.5.1 -> 1.5.2 once.",
+                                        _reg(bmk="3.21.1"))
+        assert [(c.pkg, c.status) for c in claims] == [("it", "unresolved")] * 2
+
     def test_an_ip_address_is_not_a_version(self):
         text = "Ping 10.0.0.12 and 192.168.1.5 from bmk hosts."
         assert versionrot.find_claims(text, _reg(bmk="3.21.1")) == []
@@ -250,6 +263,32 @@ class TestCli:
         rc, env = _run(capsys, "scan", "--chain", str(tmp_path / "nope"))
         assert rc == 2
         assert env["ok"] is False
+
+    def test_a_topic_placed_fact_is_reported_by_its_topics_and_every_level(self, tmp_path, capsys):
+        root = _store(tmp_path, {
+            "topical": ("When X, know it was fixed in bmk 3.13.0.", "The lock race."),
+            "placed": ("When Y, know bmk 3.12.0 did it.", "Another."),
+        })
+        body = root / ".claude-memory" / "facts" / "topical.md"
+        body.write_text(body.read_text(encoding="utf-8").replace(
+            "---\n\n", "topics: [python]\n---\n\n", 1), encoding="utf-8")
+        child = root / "child"
+        child.mkdir()
+        (child / "CLAUDE.local.md").write_text(
+            "# Memory index\n\n## Memory index\n- [topical](mem:topical) - When X, know it was "
+            "fixed in bmk 3.13.0.\n", encoding="utf-8")
+        rc, env = _run(capsys, "scan", "--chain", str(child), "--current", "bmk=3.21.1")
+        assert rc == 1
+        by_slug = {f["slug"]: f for f in env["data"]["superseded"]}
+        assert by_slug["topical"]["level"] is None
+        assert by_slug["topical"]["topics"] == ["python"]
+        assert sorted(by_slug["topical"]["levels"]) == sorted([str(child), str(root)])
+        assert by_slug["placed"]["level"] == str(root)
+        assert by_slug["placed"]["topics"] == []
+        versionrot.main(["scan", "--chain", str(child), "--current", "bmk=3.21.1"])
+        out = capsys.readouterr().out
+        assert "topical   [topics: python; listed at 2 levels]" in out
+        assert f"placed   [{root}]" in out
 
     def test_repos_are_discovered_for_current_versions(self, tmp_path, capsys):
         root = _store(tmp_path / "tree", {"s": ("When X, know lib_a 1.0.0 did it.", "B.")})

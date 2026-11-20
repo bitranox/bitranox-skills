@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-11-08",
+  "generated_at": "2026-11-20",
   "generator": "scripts/hookdoc_stamp.py",
   "normalisation": {
     "id": "n1",
@@ -18,11 +18,11 @@
       "name": "hooks-reference",
       "url": "https://code.claude.com/docs/en/hooks.md",
       "tier": "api",
-      "raw_bytes": 289929,
-      "normalised_lines": 4299,
-      "content_sha256": "d40fe422477c9574094c1954cba885b30679d954acf13f88f89db3cba505280e",
-      "structure_sha256": "8f3aa9930caddd66d99271e224fed445cfd0fd4842266db1fddd4f01856c2dd7",
-      "max_cli_version_mentioned": "2.1.319",
+      "raw_bytes": 294686,
+      "normalised_lines": 4359,
+      "content_sha256": "023796a78c9ddebae3a581b4bdab096cdd80ca0622b6f15212155fb175033268",
+      "structure_sha256": "1892797befc9cb36bdfd5f6e9329eec2215bbabc29c1ed39f817d35bb1c83aec",
+      "max_cli_version_mentioned": "2.1.328",
       "control": {
         "min_raw_bytes": 138611,
         "require_headings": [
@@ -34,10 +34,10 @@
         "min_events": 18
       },
       "counts": {
-        "headings": 180,
+        "headings": 182,
         "events": 33,
         "json_fields": 142,
-        "output_fields": 63,
+        "output_fields": 64,
         "handler_types": 5,
         "env_vars": 20,
         "table_keys": 224
@@ -144,6 +144,7 @@
           "H4:Failed hooks on Windows without Git Bash",
           "H4:FileChanged input",
           "H4:FileChanged output",
+          "H4:Get terminal notifications inside tmux or GNU screen",
           "H4:Glob",
           "H4:Grep",
           "H4:HTTP hook fields",
@@ -152,6 +153,7 @@
           "H4:How the tool's result is read",
           "H4:InstructionsLoaded decision control",
           "H4:InstructionsLoaded input",
+          "H4:Limit HTTP hooks",
           "H4:Limits on skill hooks",
           "H4:MCP tool hook fields",
           "H4:Match MCP tools",
@@ -409,6 +411,7 @@
           "additionalContext",
           "agent_id",
           "agent_type",
+          "all",
           "args",
           "async",
           "asyncRewake",
@@ -734,7 +737,7 @@
         {
           "path": "## Hook lifecycle > ### How a hook resolves",
           "lines": 151,
-          "sha256": "c3cbe12a0a974cfbd0d6fd0e860259434552e08599f9ff52f300018c2b2c9e95"
+          "sha256": "f3bb91c80b91815657a439c4b6e871e6595ebb383eb6b29108b3363c1ebce62e"
         },
         {
           "path": "## Configuration",
@@ -743,13 +746,18 @@
         },
         {
           "path": "## Configuration > ### Hook locations",
-          "lines": 35,
-          "sha256": "115e00b456791ba6bd056915238c3b0fa5b6f6cc5de78c9f5b6d4c215f65116f"
+          "lines": 30,
+          "sha256": "df832d6352c51722e4fc9ae5c5b3127fc1e9ceb617786b7da147496c8211db24"
+        },
+        {
+          "path": "## Configuration > ### Hook locations > #### Limit HTTP hooks",
+          "lines": 6,
+          "sha256": "f564eb4d137d4845da643e77723404a7d82d8b7d71df0f88e7ce42a65d20402f"
         },
         {
           "path": "## Configuration > ### Matcher patterns",
           "lines": 65,
-          "sha256": "3b2dd999f5f381cfeb9a0ec70b540db6e8636c5423e4c8ac2b02a5c5588d04f1"
+          "sha256": "84420fd8b8a9a87b7ffc4d5076a65a835ed1fae21d88f9e6030af5cd0e51adbe"
         },
         {
           "path": "## Configuration > ### Matcher patterns > #### Match MCP tools",
@@ -774,7 +782,7 @@
         {
           "path": "## Configuration > ### Hook handler fields > #### How `if` patterns match Bash commands",
           "lines": 13,
-          "sha256": "f4b73dd47f8348f1db050e1bccbdafc58cc6222d9b7c02ade025cf57a52bc349"
+          "sha256": "c24a75a53ffa9165deffe74a0b21ce405352a9f8432815fc6e0c8aa86b553d0b"
         },
         {
           "path": "## Configuration > ### Hook handler fields > #### Command hook fields",
@@ -784,12 +792,12 @@
         {
           "path": "## Configuration > ### Hook handler fields > #### HTTP hook fields",
           "lines": 37,
-          "sha256": "7ab20bbf4885deb02e7777ff468e63e5b03b25f2f793738a23a37169f9da0da6"
+          "sha256": "afbdbc5ce7a08acdae3648f4dec452ac704c6c8c2a5bba52ba0f20800050968d"
         },
         {
           "path": "## Configuration > ### Hook handler fields > #### MCP tool hook fields",
-          "lines": 43,
-          "sha256": "5da4459d18bb938009cd1d33328f4c025b2a23a032802ecb25148390c85fdfa8"
+          "lines": 53,
+          "sha256": "32a1bcca2a63eae7c5e9f88cd3845a85cdc006be0c1c1086dc7f8f969b6ce000"
         },
         {
           "path": "## Configuration > ### Hook handler fields > #### Prompt and agent hook fields",
@@ -804,7 +812,7 @@
         {
           "path": "## Configuration > ### Hooks in skills and agents",
           "lines": 25,
-          "sha256": "dc91a969ba69b0305f3c1496e317c26adb78071eae736cb2bf390c649ca8b07a"
+          "sha256": "5e67d411f116b89a87019464d7d8a2d99e7bd9f63ee7e532faf58d1b216a067c"
         },
         {
           "path": "## Configuration > ### Hooks in skills and agents > #### Limits on skill hooks",
@@ -834,37 +842,37 @@
         {
           "path": "## Hook input and output > ### Exit code output",
           "lines": 25,
-          "sha256": "b75bb8bd10c2c844f6ff7bd601fbba7138396d762c38f1aa431783626ad89478"
+          "sha256": "af9ebbdf7c5e4d2d81ed4bfd3616db0f9b26e28854beb3a19c262fceb3bfa3ce"
         },
         {
           "path": "## Hook input and output > ### Exit code output > #### Exit code 0",
           "lines": 16,
-          "sha256": "532c7e77a3b8e50c2c74870af6639c54e1164b1a8a5ac0ae080ba0c25e3b7054"
+          "sha256": "658afe5302def25dc5d48a76e466d66009d862bafbe43fee6f425392b9a1f705"
         },
         {
           "path": "## Hook input and output > ### Exit code output > #### Exit code 2",
-          "lines": 28,
-          "sha256": "5793239bcc0e069abd9d5be8cb4ed7e36133303e78cca450beba42f4370f12d6"
+          "lines": 29,
+          "sha256": "f0e2ecf980427026151f158ab872b3fc58f68b465da196467542cf183ee98c1d"
         },
         {
           "path": "## Hook input and output > ### Exit code output > #### Other exit codes",
           "lines": 19,
-          "sha256": "e18f575542578360b3152aaf71ad6adfb4c262a7a22b09b0625dfb7b8e05ad14"
+          "sha256": "d43322a3e9eb4302a3c426ea08772dc83522d922d2ac5917ec4d7c2fbf235250"
         },
         {
           "path": "## Hook input and output > ### Exit code output > #### Timeouts",
-          "lines": 5,
-          "sha256": "a6d444fe8bf88ef969ec3387a642973f16fd1594c7a07c3322062ef38237067e"
+          "lines": 9,
+          "sha256": "f9f410527ca6b754f01079beb7378afd58ff579fc0137ea91e5a5a9ff51c0c03"
         },
         {
           "path": "## Hook input and output > ### Exit code output > #### Hooks that start a background process",
-          "lines": 18,
-          "sha256": "500137bdea2cd75e3c36cc48431dd4963cef72ba8a0dd10d89b29d519aab59f3"
+          "lines": 23,
+          "sha256": "6eee4ffa19e26d45ad1c5f1be5cb75987f41aa7b87623aac6cfa9ffe940856a2"
         },
         {
           "path": "## Hook input and output > ### Exit code output > #### Block the action when a hook fails",
-          "lines": 49,
-          "sha256": "1eb3481162f6da0290f2461f51c2a036dbcd162667cefee5cac09a64a010d4d7"
+          "lines": 56,
+          "sha256": "c162406da9f29774b0c5621cbb7d7ce99d7527c4810959149258094d71ac947f"
         },
         {
           "path": "## Hook input and output > ### Exit code output > #### Failed hooks on Windows without Git Bash",
@@ -878,8 +886,8 @@
         },
         {
           "path": "## Hook input and output > ### Exit code output > #### Exit code 2 behavior per event",
-          "lines": 41,
-          "sha256": "ae56bf8d477c83a62045f9bd6a27e14a440e09b6ac29d9d4cec1fe9b4babb5b2"
+          "lines": 43,
+          "sha256": "25a862d54db3ebc266ba9510a2b1aeefcd4907685cb9b4f21dd9056890872a2c"
         },
         {
           "path": "## Hook input and output > ### HTTP response handling",
@@ -889,12 +897,17 @@
         {
           "path": "## Hook input and output > ### JSON output",
           "lines": 35,
-          "sha256": "c13ac8c1c6e5993e7e4245cb207ef89bc05fdeaeb7cf0d316c52aa3f1ddac3aa"
+          "sha256": "1956403765615b7a46a971944db77cc4d902bf6de52efd40ecb42ec1e7ff73d9"
         },
         {
           "path": "## Hook input and output > ### JSON output > #### Emit terminal notifications",
-          "lines": 30,
-          "sha256": "052a1f2836aaf52f76599f429e733771b75599fa3a7c36b1499d594482038095"
+          "lines": 31,
+          "sha256": "c0a57dbaa0af137e1015f78d99c6736ef3d496ab0c499ee1eac23c8681cc9a93"
+        },
+        {
+          "path": "## Hook input and output > ### JSON output > #### Get terminal notifications inside tmux or GNU screen",
+          "lines": 6,
+          "sha256": "1222a6dcc6116efdcc38a5934072183f0736d1d6a70b716eb09b920c6e3ecbcd"
         },
         {
           "path": "## Hook input and output > ### JSON output > #### Add context for Claude",
@@ -904,7 +917,7 @@
         {
           "path": "## Hook input and output > ### JSON output > #### Decision control",
           "lines": 75,
-          "sha256": "f7d9a3c1d4b77b915f4f4ab420b6280683372a8cea9dc225c8d5cd1867a79980"
+          "sha256": "d2f0af09435213b6fdc7e09045d6a4174d1d756f60fed9e192c490596ca46146"
         },
         {
           "path": "## Hook events",
@@ -968,8 +981,8 @@
         },
         {
           "path": "## Hook events > ### UserPromptSubmit",
-          "lines": 17,
-          "sha256": "044f5ce8d60e2ce77dac063aa1c0c07fee20a81f894b10114f9625e5591adf8c"
+          "lines": 18,
+          "sha256": "b3092efadd35769ad43cec7dd84b79e2945dd258e9963fcab806a64be51d8e49"
         },
         {
           "path": "## Hook events > ### UserPromptSubmit > #### `Esc` during a prompt check",
@@ -984,12 +997,12 @@
         {
           "path": "## Hook events > ### UserPromptSubmit > #### UserPromptSubmit decision control",
           "lines": 33,
-          "sha256": "19ba5b002ec2513332f704886acfe3ccde4c03e72cdbac0132e53874d8bf765f"
+          "sha256": "71744107045a75cbbf642c5977a850a55915608c97d058f7baa15d24e042157a"
         },
         {
           "path": "## Hook events > ### UserPromptSubmit > #### What a blocked prompt leaves behind",
           "lines": 5,
-          "sha256": "b01ff632116a1fa4101f75ad3ef5daa709799a7f58709da4b77d8b7dd3024b3b"
+          "sha256": "de513969e6ebab7a4d87e869b12660c86f19ba5d0aaa47d9ee474f11ee674d38"
         },
         {
           "path": "## Hook events > ### UserPromptExpansion",
@@ -999,7 +1012,7 @@
         {
           "path": "## Hook events > ### UserPromptExpansion > #### UserPromptExpansion input",
           "lines": 16,
-          "sha256": "1695eab483ce44acd97760c0f6977cabaf06ece46912c14076f081c63df672a5"
+          "sha256": "6155c262b1aa24867db76a3b131453a0feb83ce80bcd58208b5874b985140355"
         },
         {
           "path": "## Hook events > ### UserPromptExpansion > #### UserPromptExpansion decision control",
@@ -1029,7 +1042,7 @@
         {
           "path": "## Hook events > ### PreToolUse > #### PreToolUse input",
           "lines": 200,
-          "sha256": "cc0c19a57230cf56fe051e16a921fc2f716e65ed3f54e78b8224d21eeb99a0ba"
+          "sha256": "cc14e1bb77d60a84d8f1b19893178df7369ce7603abbee7e74e0a53c2126de99"
         },
         {
           "path": "## Hook events > ### PreToolUse > #### PreToolUse decision control",
@@ -1069,12 +1082,12 @@
         {
           "path": "## Hook events > ### PermissionRequest > #### PermissionRequest decision control",
           "lines": 27,
-          "sha256": "a49b6c49087da2ae94936a90c9555939eebd419456e56c6f57543a3dc9064673"
+          "sha256": "6e915c2933c955408539bef20c2a3da5811c34857927ac8eacd2201389dd732a"
         },
         {
           "path": "## Hook events > ### PermissionRequest > #### Permission update entries",
-          "lines": 29,
-          "sha256": "701ff41a814e9a9e7b44d42a26e582c5dd3d6b5a8459e73fc31aa27802553886"
+          "lines": 37,
+          "sha256": "b59378012dd618f89c9d9d47d7c0a21550795def0ee13d860d8f3fa459e7980e"
         },
         {
           "path": "## Hook events > ### PostToolUse",
@@ -1094,12 +1107,12 @@
         {
           "path": "## Hook events > ### PostToolUse > #### PostToolUse decision control",
           "lines": 33,
-          "sha256": "5878f8da7ff5ed127cd40fdd38a0376ddc24b88916f42e72e5eabe561c93b3c0"
+          "sha256": "8c2ea8f3f993c25cad28964f3c0d08cf4b5a43c36063b8a2807aa2b807c80395"
         },
         {
           "path": "## Hook events > ### PostToolUse > #### Annotate a result for the auto mode classifier",
           "lines": 28,
-          "sha256": "f94fab7ac6eaf1c2ca5ecff4f0a7c7176a40115646030dbdfea3a2543223abd6"
+          "sha256": "464b1c468a970f917bc2ec5842c5aa3ebbcd778e2d9537eac14fdbc5b98327d4"
         },
         {
           "path": "## Hook events > ### PostToolUseFailure",
@@ -1138,8 +1151,8 @@
         },
         {
           "path": "## Hook events > ### PermissionDenied > #### PermissionDenied input",
-          "lines": 22,
-          "sha256": "e922d6aaf3ff33850366a7290dbd5da8a787813f5c11c56e9cbc4b8a893b9e8b"
+          "lines": 28,
+          "sha256": "a52b57d256edbcb7be9c2a31640f98c7f0a2a9c66295780d8cee612a1e190b12"
         },
         {
           "path": "## Hook events > ### PermissionDenied > #### PermissionDenied decision control",
@@ -1153,8 +1166,8 @@
         },
         {
           "path": "## Hook events > ### Notification > #### Notification input",
-          "lines": 15,
-          "sha256": "abfc16dc09323b94f917b91c6424dc64c247e1b418c11c7d715ce347aef99ca7"
+          "lines": 14,
+          "sha256": "1d0c6bd41b4a02ede76e7b9f9eae889561026d46901ebedfaf3b586837094b2b"
         },
         {
           "path": "## Hook events > ### SubagentStart",
@@ -1203,8 +1216,8 @@
         },
         {
           "path": "## Hook events > ### TaskCompleted > #### TaskCompleted decision control",
-          "lines": 20,
-          "sha256": "707a040d3899b4d1ad7448eea647d4aae1632c5438292fa7823de7039fdf4b06"
+          "lines": 21,
+          "sha256": "2d24c2ce37523dc8fd7f69be24020a2960787034c24716c32af9f93d6a8b1c06"
         },
         {
           "path": "## Hook events > ### Stop",
@@ -1214,7 +1227,7 @@
         {
           "path": "## Hook events > ### Stop > #### Stop input",
           "lines": 61,
-          "sha256": "3416a64522ab8668fdaa61ffee43f94a83e83e980d1471e5095d0387d3a31fbb"
+          "sha256": "fab26f19f4ed5e7c4620e67aebc47f1fd14a66e49af70e968c9c339c350c2590"
         },
         {
           "path": "## Hook events > ### Stop > #### Stop decision control",
@@ -1229,7 +1242,7 @@
         {
           "path": "## Hook events > ### StopFailure > #### StopFailure input",
           "lines": 21,
-          "sha256": "c0e996970deb6d6a5b51f26518f2d9b50dca585b5e654957d3c81ff01bd4e5cf"
+          "sha256": "4d9bde60009df1b93a353850b6dae4680e8f7db8b6f529bbb4592abf52e16d22"
         },
         {
           "path": "## Hook events > ### TeammateIdle",
@@ -1243,13 +1256,13 @@
         },
         {
           "path": "## Hook events > ### TeammateIdle > #### TeammateIdle decision control",
-          "lines": 17,
-          "sha256": "751ce7b977b4d568cd84fd2b608017fd677d07db598ff74fa01817c84fce8bf7"
+          "lines": 18,
+          "sha256": "88c2d2745cf8768114a2b2d54dd84773a3cd93d9dc02e0c57e2887f01a7ccafd"
         },
         {
           "path": "## Hook events > ### ConfigChange",
-          "lines": 33,
-          "sha256": "42034ac8cf5c1a1b5acd1b7f11af475ccbe194a05dab03a802010785649b9b82"
+          "lines": 39,
+          "sha256": "f5b03d05a7c69c3d1b93f1142580ae23396508fe48d1a83fc73ea44be5a7aa38"
         },
         {
           "path": "## Hook events > ### ConfigChange > #### ConfigChange input",
@@ -1319,12 +1332,12 @@
         {
           "path": "## Hook events > ### WorktreeRemove",
           "lines": 46,
-          "sha256": "58f117e65c980c21720f148eec3f91232210e256ea62c9cc3f76845db94c85a4"
+          "sha256": "9331b9a1a2fcc93400e7589e4e68448cf2162a5a9c17a3b13a2af0f58ae4945b"
         },
         {
           "path": "## Hook events > ### WorktreeRemove > #### WorktreeRemove input",
-          "lines": 17,
-          "sha256": "67883655c0e8f318fe0d18660874ef56a1f4bf8f6d0054de4beedc0c48fe7b00"
+          "lines": 16,
+          "sha256": "1dc8f8aefb68870365e59af510e1681ad961139fffda39f27c2f58e1fcd9039d"
         },
         {
           "path": "## Hook events > ### PreCompact",
@@ -1408,8 +1421,8 @@
         },
         {
           "path": "## Hook events > ### Elicitation > #### Elicitation output",
-          "lines": 37,
-          "sha256": "2be57a2b3ca63870239a07c5faf6ad25e5245ae86d3b4e7ee6e63cf018b69f3d"
+          "lines": 35,
+          "sha256": "0a52817da3c9ab76e1b030c41a392a006da4c54305cc72b268ab9492cb2bea36"
         },
         {
           "path": "## Hook events > ### Elicitation > #### Other ways to decline an elicitation",
@@ -1419,7 +1432,7 @@
         {
           "path": "## Hook events > ### Elicitation > #### Answer a form request from a script",
           "lines": 86,
-          "sha256": "12a660cd07c39b80a01aea79489a60d657e17239b6c3421c41a93f3b018f2979"
+          "sha256": "f8aeb11efe9bf64b5be19b53acaa5ec2e6f658e4dd081133317f684f3e527343"
         },
         {
           "path": "## Hook events > ### ElicitationResult",
@@ -1434,12 +1447,12 @@
         {
           "path": "## Hook events > ### ElicitationResult > #### ElicitationResult output",
           "lines": 46,
-          "sha256": "8c1a43eb80d5cfe86d9d7db5dcd75fc47e8ff30999f42a99903a7d9de98f4465"
+          "sha256": "e635a8ee16bd44b19e465dc9bf8d71e772ed612a167b7c044acaae5a2d303b3e"
         },
         {
           "path": "## Prompt-based hooks",
           "lines": 43,
-          "sha256": "516757a484442e31bd463fe07c869c2d874e550b84fb61c672eaeac8ad221819"
+          "sha256": "e74b42704fc2af4e56bd5f85d82b0c0f311891ae261b98bcdbb1bdb38ebf0a64"
         },
         {
           "path": "## Prompt-based hooks > ### How prompt-based hooks work",
@@ -1454,7 +1467,7 @@
         {
           "path": "## Prompt-based hooks > ### Response schema",
           "lines": 29,
-          "sha256": "aa88e2d8c9022667922c253a1a437ee4ed13f8aac278ea81db205333e7a367be"
+          "sha256": "7d3ffe97a53e4aafc58c6cc38dc8f26f3c81802cd4b3b17949125fdf4bc96c14"
         },
         {
           "path": "## Prompt-based hooks > ### Check multiple conditions before stopping",
@@ -1542,9 +1555,9 @@
       "name": "hooks-guide",
       "url": "https://code.claude.com/docs/en/hooks-guide.md",
       "tier": "prose",
-      "raw_bytes": 67002,
+      "raw_bytes": 66876,
       "normalised_lines": 1067,
-      "content_sha256": "6d59e693cc92e07c4dc707cfc456e1bdc4c212d1dca10cb09db8a9e16f02a055",
+      "content_sha256": "84bb31e3450115f9604965cbe4fafd95310606fd27415077c50c1f6588036c37",
       "structure_sha256": "931ce1f43d8a670a6d8d6fcd37084b1783de3160a9bfbb6fe8053f9e75fcc392",
       "max_cli_version_mentioned": "2.1.288",
       "control": {
@@ -1610,7 +1623,7 @@
         {
           "path": "## Set up your first hook",
           "lines": 52,
-          "sha256": "7b59967f406cd33e84d91fb4b1045e9ccb70093291328898c61e48817d321645"
+          "sha256": "7a8cd84c159bc2cb8afeac0384a46f71d0e71cceb012fa8eabec0d06d4ad65b1"
         },
         {
           "path": "## What you can automate",
@@ -1625,12 +1638,12 @@
         {
           "path": "## What you can automate > ### Auto-format code after edits",
           "lines": 31,
-          "sha256": "45d0cdbc25a1988112983db5c84636b8fdc69e8ee26a0ff932d9a9135767f311"
+          "sha256": "b30e77847a3ca14126c489dc880be017e2284cbb95ea92c505299776f4562225"
         },
         {
           "path": "## What you can automate > ### Block edits to protected files",
-          "lines": 59,
-          "sha256": "d671ac1069f7837dbfbf4ae0684f624e924346c6cf5545e85d57e5a192086dd0"
+          "lines": 63,
+          "sha256": "8381014a46f5c23fa78c15bc65e1748b7dddda4d89c89375ab45cac10fd19ee6"
         },
         {
           "path": "## What you can automate > ### Re-inject context after compaction",
@@ -1640,7 +1653,7 @@
         {
           "path": "## What you can automate > ### Audit configuration changes",
           "lines": 25,
-          "sha256": "6c88b32261f432ffef09bb8420e9c0f5c9b044e878101e0c32381b86de10dd30"
+          "sha256": "58f85d9d2d05117b3ece12c5d11942be6b520255d81924710427c13f47c49d60"
         },
         {
           "path": "## What you can automate > ### Reload environment when directory or files change",
@@ -1674,8 +1687,8 @@
         },
         {
           "path": "## How hooks work > ### Read input and return output > #### Hook output",
-          "lines": 23,
-          "sha256": "92f064a7d9651b940b6795f0f311f02d6322540b15a1eb12f0338af538cb705d"
+          "lines": 21,
+          "sha256": "c02bc145efc787b99daba5cf5ca697d92b4c0f8d563c9d2d6a7bc58e05a60d24"
         },
         {
           "path": "## How hooks work > ### Read input and return output > #### Structured JSON output",
@@ -1685,12 +1698,12 @@
         {
           "path": "## How hooks work > ### Filter hooks with matchers",
           "lines": 115,
-          "sha256": "2bceab03f8c1a22d441543b90d7ffed03f482a86a7ab5f7a09b843bfa016293c"
+          "sha256": "77d36b7077d7674281edad304ab9619a4bd48efa053b3aa812055c2e6d36a0c7"
         },
         {
           "path": "## How hooks work > ### Filter hooks with matchers > #### Filter by tool name and arguments with the `if` field",
           "lines": 38,
-          "sha256": "5e51f36beb3b8a9afa24883a0cb2c97c98ac93f6154330310ddfce6309fe690b"
+          "sha256": "ee07f499289a1ac711ca5fca2f81aeb0e4bcc1d6d0d0b7dfa29b16b0e14d0a8e"
         },
         {
           "path": "## How hooks work > ### Configure hook location",
@@ -1709,8 +1722,8 @@
         },
         {
           "path": "## HTTP hooks",
-          "lines": 35,
-          "sha256": "d1f48cd9eea2c8fd0d25784d90225d3aa54d8b17544e55a4783db534dc9b4d4a"
+          "lines": 33,
+          "sha256": "ae7c54cbdfd80c07bdc8687bb600bb17f87bdd9c0f7bc3a50517c7bfdcbc05ed"
         },
         {
           "path": "## Limitations and troubleshooting",
@@ -1725,7 +1738,7 @@
         {
           "path": "## Limitations and troubleshooting > ### Hooks and permission modes",
           "lines": 19,
-          "sha256": "bb43ebe6dee26e9275e09a118b96d1a00c52e623cb9abe515e43d72fe39fcadb"
+          "sha256": "aec33c0b32d55496aa18b55bd7e3c395004c08e95581efb250ca2b40ba34dfa2"
         },
         {
           "path": "## Limitations and troubleshooting > ### Hook not firing",
@@ -1765,7 +1778,7 @@
         {
           "path": "## Limitations and troubleshooting > ### Check what a hook did",
           "lines": 12,
-          "sha256": "5a6200e953c07251356e79581914c6fbf934df797cd2a313db211961f8f5ad81"
+          "sha256": "a97b321a3ffe96bc4d86206f90048272befa41a2ddceb0828b1b7ad18e6ef1c0"
         },
         {
           "path": "## Learn more",

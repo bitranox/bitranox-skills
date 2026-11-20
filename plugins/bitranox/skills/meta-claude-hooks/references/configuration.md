@@ -52,7 +52,8 @@ settings file.
 settings, and disables plugins with a `command` source unless `disableCommandPluginSources` is explicitly `false`.
 The same setting blocks marketplace `headersHelper` commands, except for a marketplace managed settings declare.
 
-Two allowlists apply to HTTP hooks from **every** source, managed included:
+Two allowlists limit HTTP hooks. Set them in managed settings to cover the hooks your organization
+deploys, or in any settings file to cover other hooks:
 
 | Setting                  | Effect                                                            |
 |--------------------------|-------------------------------------------------------------------|

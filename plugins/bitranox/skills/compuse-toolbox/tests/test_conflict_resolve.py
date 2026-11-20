@@ -446,3 +446,90 @@ def test_the_cli_treats_a_dot_md_file_as_markdown(tmp_path):
     q = _file(tmp_path, CHANGELOG_HUNK, "notes.py")
     assert _run(q, "--all", "both-theirs-first").returncode == 0
     assert "alike.\n## [1.15.3]" in q.read_text()
+
+
+# --- ours-minus-theirs-deletions ---------------------------------------------------------------
+
+def _diff3(ours, base, theirs):
+    return ("before\n<<<<<<< HEAD\n" + "".join(ours) + "||||||| base\n" + "".join(base)
+            + "=======\n" + "".join(theirs) + ">>>>>>> upstream\nafter\n")
+
+
+# Upstream deleted the cfg line; the topic added a line next to it.
+_DEL_BASE = ["use a;\n", "#![cfg(x)]\n", "use b;\n"]
+_DEL_OURS = ["use a;\n", "#![cfg(x)]\n", "use ours_new;\n", "use b;\n"]
+_DEL_THEIRS = ["use a;\n", "use b;\n"]
+_MINUS = "ours-minus-theirs-deletions"
+
+
+def _minus(text):
+    return R.resolve_text(text, R.assign_rules(R.parse_hunks(text), default=R.parse_rule(_MINUS)))
+
+
+def test_minus_rule_keeps_ours_additions_and_applies_theirs_deletions():
+    out = _minus(_diff3(_DEL_OURS, _DEL_BASE, _DEL_THEIRS))
+    assert out == "before\nuse a;\nuse ours_new;\nuse b;\nafter\n"
+
+
+def test_minus_rule_differs_from_every_side_rule():
+    text = _diff3(_DEL_OURS, _DEL_BASE, _DEL_THEIRS)
+    hunks = R.parse_hunks(text)
+    others = {R.resolve_text(text, R.assign_rules(hunks, default=R.parse_rule(k)))
+              for k in ("ours", "theirs", "base", "both", "both-theirs-first")}
+    assert _minus(text) not in others
+
+
+def test_minus_rule_with_theirs_equal_to_base_is_ours():
+    out = _minus(_diff3(_DEL_OURS, _DEL_BASE, _DEL_BASE))
+    assert out == "before\n" + "".join(_DEL_OURS) + "after\n"
+
+
+def test_minus_rule_refuses_a_hunk_with_no_base():
+    plain = "<<<<<<< a\nx\n=======\ny\n>>>>>>> b\n"
+    with pytest.raises(R.Refusal, match="no \\|\\|\\|\\|\\|\\|\\| base section"):
+        R.assign_rules(R.parse_hunks(plain), default=R.parse_rule(_MINUS))
+    with pytest.raises(R.Refusal, match="base section"):
+        R.resolve_text(plain, [R.Rule(_MINUS)])
+
+
+@pytest.mark.parametrize(("theirs", "why"), [
+    (["use a;\n", "use b;\n", "use theirs_new;\n"], "theirs added a line"),
+    (["use a;\n", "use B;\n"], "theirs rewrote a line"),
+    (["use b;\n", "use a;\n"], "theirs moved a line"),
+])
+def test_minus_rule_refuses_when_theirs_did_more_than_delete(theirs, why):
+    with pytest.raises(R.Refusal, match="not a pure deletion"):
+        _minus(_diff3(_DEL_OURS, _DEL_BASE, theirs))
+
+
+def test_minus_rule_refuses_when_ours_changed_the_deleted_line():
+    ours = ["use a;\n", "#![cfg(y)]\n", "use ours_new;\n", "use b;\n"]
+    with pytest.raises(R.Refusal, match="does not keep the line theirs deleted"):
+        _minus(_diff3(ours, _DEL_BASE, _DEL_THEIRS))
+
+
+def test_minus_rule_refuses_when_ours_added_a_copy_of_the_deleted_line():
+    base = ["x\n", "\n", "y\n"]
+    ours = ["x\n", "\n", "new\n", "\n", "y\n"]
+    with pytest.raises(R.Refusal, match="more copies"):
+        _minus(_diff3(ours, base, ["x\n", "y\n"]))
+
+
+def test_minus_rule_removes_the_aligned_copy_when_counts_match():
+    base = ["\n", "x\n", "\n", "y\n"]
+    ours = ["\n", "x\n", "added\n", "\n", "y\n"]
+    out = _minus(_diff3(ours, base, ["\n", "x\n", "y\n"]))
+    assert out == "before\n\nx\nadded\ny\nafter\n"
+
+
+def test_cli_minus_rule_writes_the_file_and_refusal_leaves_it(tmp_path):
+    good = _file(tmp_path, _diff3(_DEL_OURS, _DEL_BASE, _DEL_THEIRS), "good.rs")
+    r = _run(good, "--hunk", "1=" + _MINUS, "--json")
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout)["data"]["hunks"][0]["rule"] == _MINUS
+    assert good.read_text(encoding="utf-8") == "before\nuse a;\nuse ours_new;\nuse b;\nafter\n"
+    raw = _diff3(_DEL_OURS, _DEL_BASE, ["use a;\n", "use b;\n", "extra\n"])
+    bad = _file(tmp_path, raw, "bad.rs")
+    r = _run(bad, "--all", _MINUS)
+    assert r.returncode == 2 and "not a pure deletion" in r.stderr
+    assert bad.read_text(encoding="utf-8") == raw
