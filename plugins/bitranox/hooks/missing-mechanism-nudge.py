@@ -47,6 +47,7 @@ from self_improve_signals import session_state_path
 from shell_text import (
     argv_for_match,
     basename_for_tool,
+    is_rooted,
     is_shell_tool,
     iter_segments,
     resolve_path,
@@ -126,9 +127,14 @@ def _read_hook_file(path, cwd, tool_name="Bash"):
     """The text of a hook file that already exists and is small, else None.
 
     The path is read as the shell hands it to the engine: a Git Bash drive path (`/c/temp/h.txt`)
-    is drive C on a Windows host, and a relative path with no cwd stays relative.
+    is drive C on a Windows host, and a relative path with no cwd stays relative. Another Git Bash
+    mount there (`/tmp/h.txt`, which Git Bash hands on as the user's %TEMP%) is not read at all:
+    the file os.path would open at the current drive's root is not the one the engine reads.
     """
-    path = resolve_path(path, cwd, tool_name) or path
+    resolved = resolve_path(path, cwd, tool_name)
+    if resolved is None and is_rooted(path):
+        return None
+    path = resolved or path
     try:
         if not os.path.isfile(path) or os.path.getsize(path) > _HOOK_FILE_CAP:
             return None

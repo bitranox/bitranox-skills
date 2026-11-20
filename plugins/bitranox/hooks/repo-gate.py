@@ -3810,7 +3810,9 @@ def _unpushed_message(name, checkout, branch):
 #: Said under any block whose repository came from `hook_landing`'s fallback.
 _FALLBACK_NOTE = ("repo-gate: the directory this command runs git in could not be read from its text, "
                   "so the session's repository %s was judged. If the commit lands elsewhere, name the "
-                  "target literally (cd /path/to/repo && git commit, or git -C /path/to/repo commit).")
+                  "target literally (cd /path/to/repo && git commit, or git -C /path/to/repo commit). "
+                  "On Windows spell it with its drive (/c/... or C:/...): Git Bash maps any other "
+                  "rooted path, /tmp included, through its mount table, which the gate cannot read.")
 
 
 def _say_unverifiable(names, marketplace):

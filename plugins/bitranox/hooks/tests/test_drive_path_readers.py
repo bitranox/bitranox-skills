@@ -12,7 +12,10 @@ remembered:
 - no caller outside shell_text passes `msys_drives=`, which would opt out of the host's reading;
 - `msys_drive_path` is called directly only where `ALLOWED_DRIVE_CALLS` says why; a caller that
   wants the host's reading of one word uses `msys_drive_path_for_tool`, which asks
-  `reads_msys_drives` like every other reader, instead of deciding the host itself.
+  `reads_msys_drives` like every other reader, instead of deciding the host itself;
+- `unknown_mounts=` is passed only where `ALLOWED_MOUNT_READINGS` says why: it reads a Git Bash
+  mount (`/tmp/x` on Windows) at the current drive's root, a directory Git Bash never means, so
+  only a caller that asks whether a landing is rooted, and never opens it, may take it.
 """
 import ast
 from pathlib import Path
@@ -24,7 +27,8 @@ _SINKS = {"join", "normpath", "abspath"}
 # (file relative to the plugin root, function) -> why is_rooted plus a join is safe there.
 ALLOWED_JOINS = {
     ("hooks/compact-resume.py", "_collect_targets"): "the token went through _as_bash_reads, which "
-                                                     "already spelled a Git Bash drive as its drive",
+                                                     "already spelled a Git Bash drive as its drive "
+                                                     "and dropped any other Git Bash mount",
     ("hooks/git-path-not-here-nudge.py", "notice"): "a rooted path is skipped, never joined; only a "
                                                     "relative one is joined onto the cwd",
 }
@@ -32,6 +36,14 @@ ALLOWED_JOINS = {
 # (file, function) -> why that function decides the drive reading itself. Empty: every shipped
 # caller that reads one word takes the host's reading from `msys_drive_path_for_tool`.
 ALLOWED_DRIVE_CALLS: dict[tuple[str, str], str] = {}
+
+# (file, function) -> why that function may read a Git Bash mount at the current drive's root.
+ALLOWED_MOUNT_READINGS = {
+    ("hooks/block-write-after-sibling-cd.py", "_write_target"): "asks only whether the -C directory "
+                                                               "is rooted, and never opens it",
+    ("hooks/block-write-after-sibling-cd.py", "targetless_write"): "asks only whether the landing "
+                                                                  "is rooted, and never opens it",
+}
 
 
 def _shipped_python_files():
@@ -52,8 +64,8 @@ def _called_name(func):
 
 def _findings(source):
     """({functions calling is_rooted and a path sink}, {functions passing msys_drives=},
-    {functions calling msys_drive_path}) for `source`."""
-    joins, opt_outs, drive_calls = set(), set(), set()
+    {functions calling msys_drive_path}, {functions passing unknown_mounts=}) for `source`."""
+    joins, opt_outs, drive_calls, mount_readings = set(), set(), set(), set()
     for fn in ast.walk(ast.parse(source)):
         if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
@@ -65,7 +77,9 @@ def _findings(source):
             opt_outs.add(fn.name)
         if "msys_drive_path" in names:
             drive_calls.add(fn.name)
-    return joins, opt_outs, drive_calls
+        if any(kw.arg == "unknown_mounts" for call in calls for kw in call.keywords):
+            mount_readings.add(fn.name)
+    return joins, opt_outs, drive_calls, mount_readings
 
 
 def test_the_walk_sees_the_plugin_tree():
@@ -85,8 +99,9 @@ def test_the_detector_finds_each_shape():
         "def opt_out(stmt, here):\n    return directory_change(stmt, here, msys_drives=False)\n"
         "def by_hand(p):\n    return shell_text.msys_drive_path(p, True)\n"
         "def classify(p):\n    return is_rooted(p)\n"
+        "def at_root(stmt):\n    return directory_change(stmt, None, unknown_mounts=False)\n"
     )
-    assert _findings(source) == ({"join_it"}, {"opt_out"}, {"by_hand"})
+    assert _findings(source) == ({"join_it"}, {"opt_out"}, {"by_hand"}, {"at_root"})
 
 
 def test_no_shipped_function_resolves_a_rooted_path_by_hand():
@@ -116,3 +131,14 @@ def test_msys_drive_path_is_called_directly_only_where_allowed():
         for name in _findings(path.read_text(encoding="utf-8"))[2]
     }
     assert found == set(ALLOWED_DRIVE_CALLS)
+
+
+def test_a_mount_is_read_at_the_current_drive_only_where_allowed():
+    found = {
+        (path.relative_to(PLUGIN_ROOT).as_posix(), name)
+        for path in _shipped_python_files()
+        for name in _findings(path.read_text(encoding="utf-8"))[3]
+    }
+    assert found == set(ALLOWED_MOUNT_READINGS), (
+        "a Git Bash mount is unknown by default (shell_text Decisions); reading it at the current "
+        "drive names a directory Git Bash never means")

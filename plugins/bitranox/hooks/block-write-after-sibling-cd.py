@@ -171,8 +171,14 @@ def _skip_option_values(args):
 
 
 def _write_target(tokens, here, tool_name):
-    """(writes, directory or None) for one statement starting at `here` (None = inherited)."""
-    is_git, where = git_segment_dir(tokens, WRITE_VERBS, here, tool_name)
+    """(writes, directory or None) for one statement starting at `here` (None = inherited).
+
+    The directory is asked only whether it is rooted, never opened, so a `-C` into a Git Bash mount
+    (`git -C /tmp/r commit` on Windows) keeps the host's reading (`unknown_mounts=False`): it is
+    rooted wherever the mount table puts it, and reading it as unknown would refuse a command that
+    names its target.
+    """
+    is_git, where = git_segment_dir(tokens, WRITE_VERBS, here, tool_name, unknown_mounts=False)
     if is_git:
         return True, where
     jig = _gate_jig_target(tokens, here, tool_name)
@@ -287,11 +293,13 @@ def targetless_write(command, tool_name="Bash"):
     """The first statement of `command` that writes to a repository with no absolute target, or None.
 
     The walk starts from an UNKNOWN directory: only an absolute `cd` makes the rest of the command
-    independent of where it was started.
+    independent of where it was started. A cd into a Git Bash mount (`cd /tmp/r` on Windows) is
+    one: only the mount table says where it lands, but it lands there whatever the start, so it is
+    read with `unknown_mounts=False` and only its rootedness is used.
     """
     here = None
     for text, tokens in _statements(command, tool_name):
-        changed, landing = directory_change(text, here, tool_name)
+        changed, landing = directory_change(text, here, tool_name, unknown_mounts=False)
         if changed:
             here = landing if _absolute(landing) else None
             continue

@@ -67,6 +67,7 @@ from shell_text import (
     directory_change,
     is_shell_tool,
     iter_segments,
+    resolve_path,
 )
 
 __all__ = ["Notice", "PushedRef", "TriggerState", "main", "notice", "push_trigger_state"]
@@ -160,6 +161,10 @@ def _repo_dir(command: str, cwd: str, tool_name: str = "Bash") -> str | None:
     the VALUE is then taken from the raw text at the same offsets, because both steps preserve
     length. Comparing values on the masked form would decide the path by its filler, not by what it
     says, and finding them on the heredoc-STRIPPED form shifts every offset after a heredoc.
+
+    The `-C` value is placed by `shell_text.resolve_path`, as the cd walk is: on Windows Git Bash
+    reads `/c/repo` as drive C and `/tmp/r` through its mount table, where pathlib joined both onto
+    the cwd's drive. A mount it cannot place makes the answer None.
     """
     found = _DASH_C.search(commands_only_aligned(command, tool_name))
     if not found:
@@ -167,8 +172,11 @@ def _repo_dir(command: str, cwd: str, tool_name: str = "Bash") -> str | None:
     token = command[found.start(1):found.end(1)]
     if not token or any(ch in token for ch in _UNRESOLVABLE):
         return None
+    placed = resolve_path(token, cwd, tool_name)
+    if placed is None:
+        return None
     try:
-        return str((Path(cwd) / token).resolve())
+        return str(Path(placed).resolve())
     except (OSError, ValueError):
         return None
 

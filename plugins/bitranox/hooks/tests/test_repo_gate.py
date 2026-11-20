@@ -4406,6 +4406,9 @@ def test_a_fallback_block_names_the_repo_it_judged_and_why(tmp_path, monkeypatch
     err = capsys.readouterr().err
     assert str(tool) in err, "the block must name the repository it judged"
     assert "could not be read" in err, "and say it judged the session's repo because the cd was unreadable"
+    # The remedy must name a spelling the gate can read on Windows too: there a rooted path that is
+    # not a drive (/path/to/repo itself) is a Git Bash mount, which reads as unknown.
+    assert "/c/..." in err and "mount table" in err
 
 
 def test_a_block_after_a_readable_cd_names_the_repo_without_a_fallback_note(tmp_path, monkeypatch, capsys):

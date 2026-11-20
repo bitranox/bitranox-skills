@@ -13,6 +13,7 @@ import io
 import json
 import os
 import random
+import re
 import subprocess
 import sys
 import time
@@ -691,10 +692,15 @@ def test_an_unquoted_backslash_path_is_not_the_file_bash_edits(tmp_path, command
 
 def _host_checked_reading(token, escaped):
     """`_as_bash_reads` as it read a word with its own host check (`os.name == "nt"`): the
-    reference the shared reading must equal."""
+    reference the shared reading must equal. On Windows a rooted word that is neither a drive
+    (`/c/...`) nor UNC (`//server/x`) is a Git Bash mount, which no reader places (None)."""
     if escaped:
         token = H._BASH_ESCAPE.sub(r"\1", token)
-    return shell_text.msys_drive_path(token, os.name == "nt")
+    windows = os.name == "nt"
+    if (windows and token[:1] == "/" and not re.match(r"/[A-Za-z](?:/|$)", token)
+            and not re.match(r"//[^/]", token)):
+        return None
+    return shell_text.msys_drive_path(token, windows)
 
 
 def _random_words(count, seed=250):
@@ -715,6 +721,24 @@ def test_a_bash_word_s_drive_reading_equals_the_host_checked_one(escaped):
     Windows cell runs the other one."""
     for token in _BASH_WORDS + _random_words(2000):
         assert H._as_bash_reads(token, escaped=escaped) == _host_checked_reading(token, escaped), token
+
+
+@pytest.mark.parametrize("command", [
+    "sed -i '1s/12:00/12:03/' /tmp/x/handover.md",
+    "cd /tmp/x && sed -i '1s/12:00/12:03/' handover.md",
+])
+def test_a_git_bash_mount_names_no_file_bash_edits_on_windows(tmp_path, command):
+    """Git Bash maps `/tmp` through its mount table (the user's %TEMP%), so on Windows the file it
+    edits is not C:\\tmp\\x\\handover.md and the call vouches for nothing; elsewhere `/tmp` is
+    just a rooted directory."""
+    expected = {} if os.name == "nt" else {H._norm("/tmp/x/handover.md"): False}
+    assert H.bash_targets(command, str(tmp_path)) == expected
+
+
+def test_a_script_body_keeps_its_own_reading_of_a_mount_path(tmp_path):
+    """A heredoc feeds a native interpreter, which opens `/tmp/...` at the current drive's root."""
+    command = "python3 - <<'PY'\nopen('/tmp/x/handover.md', 'w').write('x')\nPY"
+    assert H.bash_targets(command, str(tmp_path)) == {H._norm("/tmp/x/handover.md"): False}
 
 
 def _git_bash_spelling(path):

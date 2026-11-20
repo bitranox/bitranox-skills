@@ -40,6 +40,7 @@ from shell_text import (
     is_shell_tool,
     iter_segments,
     mask_data_regions,
+    resolve_path,
     strip_heredoc_bodies,
 )
 
@@ -153,6 +154,21 @@ def _resolve(token, cwd):
     return None if cwd is None else Path(cwd) / p
 
 
+def _resolve_word(token, cwd, tool_name="Bash"):
+    """`token`, a word of a shell statement, as a path from `cwd`, or None when it cannot be placed.
+
+    `_resolve` reads a path the way a native program does, which is right for a Write path and a
+    script body but not for the shell's own words: on Windows Git Bash reads `/c/repo` as drive C
+    and `/tmp/x` through its mount table, where pathlib joined both onto the cwd. `resolve_path`
+    gives Git Bash's reading, and None for a mount it cannot place.
+    """
+    t = token.strip("'\"")
+    if t.startswith("~/"):
+        return Path.home() / t[2:]
+    found = resolve_path(t, cwd, tool_name)
+    return None if found is None else Path(found)
+
+
 def notice_path(path, cwd, is_root=_is_marketplace_root):
     """The nudge text when a write to `path` from a session at `cwd` is a detour, else None."""
     if not path or not cwd or in_dream_room(cwd, is_root):
@@ -189,9 +205,9 @@ def notice_bash(command, cwd, is_root=_is_marketplace_root, tool_name="Bash"):
             continue
         root = None
         for target in _redirect_targets(seg, tool_name):
-            root = root or marketplace_root(_resolve(target, here), is_root)
+            root = root or marketplace_root(_resolve_word(target, here, tool_name), is_root)
         if root is None and _WRITE_VERB.search(seg):
-            root = _first_marketplace_path(seg, here, is_root)
+            root = _first_marketplace_path(seg, here, is_root, shell_tool=tool_name or "Bash")
             if root is None and _GIT_VERB.search(seg):
                 root = marketplace_root(here, is_root)
         if root is not None:
@@ -221,9 +237,16 @@ def _redirect_targets(seg, tool_name="Bash"):
     return out
 
 
-def _first_marketplace_path(text, cwd, is_root):
+def _first_marketplace_path(text, cwd, is_root, *, shell_tool=None):
+    """The marketplace root of the first path in `text` that lies inside one, else None.
+
+    `shell_tool` names the shell whose statement `text` is, so its words get that shell's reading
+    (`_resolve_word`); None is a script body, whose paths a native interpreter opens (`_resolve`).
+    """
     for m in _PATH_TOKEN.finditer(text):
-        root = marketplace_root(_resolve(m.group(1), cwd), is_root)
+        token = m.group(1)
+        path = _resolve(token, cwd) if shell_tool is None else _resolve_word(token, cwd, shell_tool)
+        root = marketplace_root(path, is_root)
         if root is not None:
             return root
     return None

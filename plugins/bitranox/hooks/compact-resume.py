@@ -626,7 +626,10 @@ def _collect_targets(text: str, base: str | None, out: dict[str, bool], *, shell
         token = match.group(0)
         if shell:
             quoted = text[match.start() - 1:match.start()] in ("'", '"')
-            token = _as_bash_reads(token, escaped=raw and not quoted)
+            reached = _as_bash_reads(token, escaped=raw and not quoted)
+            if reached is None:
+                continue                 # a Git Bash mount: only the shell knows which file it is
+            token = reached
         if "$" in token or not is_checkpoint_name(os.path.basename(token)):
             continue
         token = os.path.expanduser(token)
@@ -638,18 +641,20 @@ def _collect_targets(text: str, base: str | None, out: dict[str, bool], *, shell
         out[key] = out.get(key, False) or removes
 
 
-def _as_bash_reads(token: str, *, escaped: bool) -> str:
-    """The path Git Bash reaches for a word of a statement. PURE apart from the host check.
+def _as_bash_reads(token: str, *, escaped: bool) -> str | None:
+    """The path Git Bash reaches for a word of a statement, or None when only its mount table can
+    say. PURE apart from the host check.
 
     `escaped` is True for an unquoted word as written, whose backslashes bash drops as escapes
     (`C:\\temp\\x` is `C:tempx`, measured in Git Bash): the word then names another file than
     the one a Windows path parse would find. A quoted word, or one the shell already read, keeps
-    them. On Windows a `/c/...` drive path is drive C, as every shell_text reader reads it
+    them. On Windows a `/c/...` drive path is drive C, and another rooted path (`/tmp/x`, which
+    Git Bash maps to the user's %TEMP%) is None, as every shell_text reader reads them
     (`shell_text.msys_drive_path_for_tool`).
     """
     if escaped:
         token = _BASH_ESCAPE.sub(r"\1", token)
-    return cast(str, shell_text.msys_drive_path_for_tool(token))
+    return cast(str | None, shell_text.msys_drive_path_for_tool(token))
 
 
 def _epoch(stamp: object) -> float | None:

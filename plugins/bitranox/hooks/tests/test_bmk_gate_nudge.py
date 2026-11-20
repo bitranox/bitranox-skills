@@ -77,6 +77,19 @@ def test_the_powershell_tool_keeps_a_slash_drive_path_at_the_current_drive_root(
     assert nudge.notice(command, str(tmp_path), "PowerShell") is None
 
 
+@pytest.mark.parametrize("template", ["make -C {} test", "cd {} && make test"])
+def test_a_git_bash_mount_path_names_no_repo_on_windows(bmk_repo, tmp_path, monkeypatch, template):
+    """A rooted path that is not a drive (`/opt/...` here) reaches Git Bash's mount table, not the
+    current drive's root, so on Windows the hook cannot say which Makefile runs and stays silent;
+    elsewhere it is the repo itself. The cwd is moved onto the repo's drive so the current-drive
+    reading would find it on every Windows host."""
+    monkeypatch.chdir(tmp_path)
+    command = template.format(bmk_repo.as_posix()[len(bmk_repo.drive):])
+    fired = nudge.notice(command, str(tmp_path), "Bash") is not None
+    assert fired is (os.name != "nt")
+    assert nudge.notice(command, str(tmp_path), "PowerShell") is not None
+
+
 @pytest.mark.parametrize("command", ["bmk test", "uvx bmk@latest install", "uvx bmk deps --update"])
 def test_running_bmk_itself_fires_anywhere(plain_repo, command):
     assert nudge.notice(command, str(plain_repo)) is not None

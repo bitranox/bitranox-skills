@@ -10,6 +10,7 @@ main() with HOME redirected, so the once-per-session flag is the real file.
 
 import io
 import json
+import os
 import sys
 
 import pytest
@@ -170,6 +171,34 @@ def test_a_git_dash_c_push_is_noticed(rooms):
 def test_an_in_place_sed_on_a_hook_is_noticed(rooms):
     _, work = rooms
     assert TDN.notice_bash("sed -i 's/a/b/' %s" % _hook_file(rooms), str(work))
+
+
+def _git_bash_spelling(path):
+    """`C:\\x\\y` as Git Bash prints it, `/c/x/y`."""
+    return "/" + path.drive[0].lower() + path.as_posix()[len(path.drive):]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Git Bash drive paths exist on Windows only")
+@pytest.mark.parametrize("template", ["echo x > {}", "sed -i 's/a/b/' {}"])
+def test_a_write_through_a_git_bash_drive_path_is_noticed(rooms, template):
+    """Git Bash reads `/c/...` as drive C; pathlib called it relative and joined it onto the cwd,
+    so a write into the marketplace spelled the way Git Bash prints paths went unnoticed."""
+    mkt, work = rooms
+    target = _git_bash_spelling(mkt / "plugins" / "x" / "hooks" / "a.py")
+    assert TDN.notice_bash(template.format(target), str(work))
+
+
+@pytest.mark.parametrize("template", ["echo x > {}", "sed -i 's/a/b/' {}"])
+def test_a_write_through_a_git_bash_mount_names_no_marketplace_on_windows(rooms, monkeypatch,
+                                                                         template):
+    """A rooted path that is not a drive reaches Git Bash's mount table, so on Windows the hook
+    cannot say where the write lands and stays silent; elsewhere it is the marketplace file. The
+    cwd is moved onto the file's drive so the current-drive reading would find it."""
+    mkt, work = rooms
+    monkeypatch.chdir(work)
+    hook = mkt / "plugins" / "x" / "hooks" / "a.py"
+    fired = bool(TDN.notice_bash(template.format(hook.as_posix()[len(hook.drive):]), str(work)))
+    assert fired is (os.name != "nt")
 
 
 def test_a_redirect_into_the_marketplace_is_noticed(rooms):

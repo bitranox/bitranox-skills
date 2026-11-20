@@ -162,6 +162,21 @@ def test_a_git_bash_drive_path_hook_file_is_read_as_that_drive(tmp_path):
     assert N.notice(_hook_file_command(spelled), "PowerShell", cwd=str(tmp_path)) is None
 
 
+def test_a_git_bash_mount_hook_file_is_not_read_on_windows(tmp_path, monkeypatch):
+    """Git Bash hands a rooted path that is not a drive (`/tmp/h.txt`, `/opt/...`) to the engine
+    through its mount table, so the file os.path finds at the current drive's root is not the one
+    the engine reads: on Windows it is not read. Elsewhere the path is simply rooted, and the
+    PowerShell tool passes it on unchanged, so there it is read. The cwd is moved onto the file's
+    drive so that "the current drive's root" holds the file on every Windows host."""
+    monkeypatch.chdir(tmp_path)
+    hook = tmp_path / "h.txt"
+    hook.write_text("the opt-in defaults off\n", encoding="utf-8")
+    drive_less = hook.as_posix()[len(hook.drive):]
+    fired = N.notice(_hook_file_command(drive_less), "Bash", cwd=str(tmp_path)) is not None
+    assert fired is (os.name != "nt")
+    assert N.notice(_hook_file_command(drive_less), "PowerShell", cwd=str(tmp_path)) is not None
+
+
 def test_a_hook_file_that_does_not_exist_yet_is_silent(tmp_path):
     """PreToolUse runs before the command, so a file the same command writes is not there yet."""
     assert N.notice(_hook_file_command("h.txt"), cwd=str(tmp_path)) is None

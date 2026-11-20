@@ -6,6 +6,7 @@ shape of the mock instead of the behaviour that matters.
 """
 
 import json
+import os
 import shlex
 import subprocess
 
@@ -309,6 +310,11 @@ def test_bulk_tags_prefers_the_newest_by_time_not_the_highest_version(repo, caps
 
 
 
+# A rooted path the Bash tool places on every host: on Windows a rooted path with no drive is a Git
+# Bash mount (`/other/repo`), which no reader places, so the fixtures carry the drive there.
+_ROOT = "C:" if os.name == "nt" else ""
+
+
 def _names(resolved, posix_path):
     """Does `resolved` name `posix_path`? `_repo_dir` returns an ABSOLUTE path, so on Windows
     `/real/repo` comes back as `D:\\real\\repo`. A bare `==` fails there - and a bare `!=`
@@ -331,7 +337,7 @@ def test_a_dash_c_inside_a_heredoc_body_is_not_the_repo():
 
 def test_a_real_dash_c_is_still_the_repo():
     """The direction where it must NOT apply."""
-    assert _names(hook._repo_dir("git -C /real/repo push origin master", "/cwd"), "/real/repo")
+    assert _names(hook._repo_dir(f"git -C {_ROOT}/real/repo push origin master", "/cwd"), "/real/repo")
 
 
 def test_a_neighbouring_statements_flag_is_not_read_as_this_ones():
@@ -455,7 +461,7 @@ def test_a_leading_cd_moves_the_repo_the_push_targets():
     armed the gate on a commit that session never pushed, so the watch polled a run that had
     finished days before and reported success. `tooling-detour-nudge` already tracks a leading
     `cd` for exactly this reason; this hook read `git -C` alone."""
-    assert _names(hook._repo_dir("cd /other/repo && git push", "/cwd"), "/other/repo")
+    assert _names(hook._repo_dir(f"cd {_ROOT}/other/repo && git push", "/cwd"), "/other/repo")
 
 
 def test_a_cd_in_a_heredoc_body_does_not_move_the_repo():
@@ -482,9 +488,9 @@ def test_the_shared_cd_reader_follows_a_loop_body_and_a_quoted_path():
     program, so the push was credited to the session's own repo; a quoted path with a space was
     refused outright. `shell_text.directory_change` reads both, and refuses a bare `cd` (HOME of
     the shell) rather than leaving the push in the cwd."""
-    assert _names(hook._repo_dir("for i in 1; do cd /other/repo && git push; done", "/cwd"),
+    assert _names(hook._repo_dir(f"for i in 1; do cd {_ROOT}/other/repo && git push; done", "/cwd"),
                   "/other/repo")
-    assert _names(hook._repo_dir('cd "/other/my repo" && git push', "/cwd"), "/other/my repo")
+    assert _names(hook._repo_dir(f'cd "{_ROOT}/other/my repo" && git push', "/cwd"), "/other/my repo")
     assert hook._repo_dir("for r in a b; do cd $r && git push; done", "/cwd") is None
     assert hook._repo_dir("cd && git push", "/cwd") is None
 
@@ -577,7 +583,7 @@ def test_a_heredoc_before_the_push_does_not_change_the_remote_read():
 
 
 def test_a_heredoc_before_a_dash_c_names_the_real_repo():
-    cmd = "cat <<'EOF' > n.txt\nsome notes\nEOF\ngit -C /real/repo push"
+    cmd = f"cat <<'EOF' > n.txt\nsome notes\nEOF\ngit -C {_ROOT}/real/repo push"
     assert _names(hook._repo_dir(cmd, "/cwd"), "/real/repo")
 
 
@@ -591,9 +597,10 @@ def test_a_heredoc_before_a_dash_c_names_the_real_repo():
 
 
 def test_a_heredoc_before_a_leading_cd_still_moves_the_repo():
-    cmd = _NOTES + "cd /other/repo && git push -q origin master"
+    cmd = _NOTES + f"cd {_ROOT}/other/repo && git push -q origin master"
     assert _names(hook._repo_dir(cmd, "/cwd"), "/other/repo")
-    assert _names(hook._repo_dir("cd /other/repo && git push -q origin master", "/cwd"), "/other/repo")
+    assert _names(hook._repo_dir(f"cd {_ROOT}/other/repo && git push -q origin master", "/cwd"),
+                  "/other/repo")
 
 
 def test_a_heredoc_then_cd_into_a_repo_without_ci_records_nothing(tmp_path, repo, capsys):
@@ -784,3 +791,20 @@ def test_one_workflow_that_runs_outweighs_one_that_cannot_be_judged(repo, capsys
     _git(repo, "commit", "-q", "-am", "two")
     _git(repo, "push", "-q")
     assert hook.push_trigger_state(str(repo), "master") == hook.TriggerState.RUNS
+
+
+@pytest.mark.parametrize("template", ["cd {} && git push", "git -C {} push"])
+def test_a_git_bash_mount_names_no_repo_on_windows(template):
+    """On Windows Git Bash places `/tmp/r` through its mount table, not at the current drive's
+    root, so the push's repository is unknown there; elsewhere it is /tmp/r."""
+    found = hook._repo_dir(template.format("/tmp/r"), "/cwd")
+    if os.name == "nt":
+        assert found is None
+    else:
+        assert _names(found, "/tmp/r")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Git Bash drive paths exist on Windows only")
+def test_a_git_bash_drive_path_in_a_dash_c_names_that_drive():
+    """`git -C /c/r` is drive C to Git Bash; pathlib joined it onto the cwd's drive as \\c\\r."""
+    assert hook._repo_dir("git -C /c/r push", "D:/cwd").replace("\\", "/").lower() == "c:/r"
