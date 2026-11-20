@@ -441,14 +441,26 @@ def _work_roots(cwd: Path) -> list[Path]:
     return [cwd]
 
 
-def candidates(event: dict) -> list[Path]:
-    """Review logs a shell command may have written: at the work roots and any path it names."""
+def candidates(event: dict, *, os_name: str = os.name) -> list[Path]:
+    """Review logs a shell command may have written: at the work roots and any path it names.
+
+    A path the command names is a word of its shell, so it is read the way that shell reads it
+    before `_resolve` places it: on a Windows host Git Bash reads `/c/repo/...` as drive C and
+    `/tmp/...` through its mount table, where pathlib joined both onto the cwd's drive and named
+    a file the command never wrote. `shell_text.msys_drive_path_for_tool` spells the drive, and a
+    mount no reader can place is skipped. `os_name` is a parameter so tests reach the Windows
+    reading on any host.
+    """
     raw_cwd = event.get("cwd")
     cwd = Path(raw_cwd) if isinstance(raw_cwd, str) and raw_cwd else None
     found = [root / REVIEW_NAME for root in (_work_roots(cwd) if cwd else [])]
     command = (event.get("tool_input") or {}).get("command")
     if isinstance(command, str) and REVIEW_NAME.lower() in command.lower():
-        found.extend(_resolve(m.group(0), raw_cwd) for m in _PATH_IN_TEXT.finditer(command))
+        tool = event.get("tool_name") if isinstance(event.get("tool_name"), str) else "Bash"
+        for m in _PATH_IN_TEXT.finditer(command):
+            word = shell_text.msys_drive_path_for_tool(m.group(0), tool, os_name)
+            if word is not None:
+                found.append(_resolve(word, raw_cwd))
     unique = []
     for path in found:
         if path not in unique:

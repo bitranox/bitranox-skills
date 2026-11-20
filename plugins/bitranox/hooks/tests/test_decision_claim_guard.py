@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+import decision_claim_guard as guard
+
 _HOOK = Path(__file__).resolve().parent.parent / "decision-claim-guard.py"
 _REVIEW = "EXECUTION-USER-REVIEW.md"
 
@@ -309,3 +311,43 @@ def test_an_empty_dot_git_dir_is_no_work_tree_root(tmp_path):
     assert _run(_shell("PreToolUse", sub), tmp_path).returncode == 0
     (real / _REVIEW).write_text(_CLAIM, encoding="utf-8")
     assert "DECISION CLAIM CHECK" in _post(_shell("PostToolUse", sub), tmp_path)
+
+
+def _named(command, cwd, os_name, tool="Bash"):
+    """The candidate logs `command` names, without the work-root ones the cwd adds."""
+    event = {"tool_name": tool, "cwd": str(cwd), "tool_input": {"command": command}}
+    roots = set(guard.candidates({**event, "tool_input": {"command": ""}}, os_name=os_name))
+    return [p for p in guard.candidates(event, os_name=os_name) if p not in roots]
+
+
+def test_a_git_bash_drive_path_in_a_command_is_read_as_its_drive(tmp_path):
+    # Git Bash reads /c/w/... as drive C; pathlib read it as rooted at the cwd's drive (C:\c\w on
+    # Windows, /c/w here), a file the command never wrote, so the real log was never snapshotted.
+    named = _named("echo x >> /c/w/" + _REVIEW, tmp_path, "nt")
+    assert [p.as_posix().endswith("C:/w/" + _REVIEW) for p in named] == [True], named
+
+
+def test_a_git_bash_mount_in_a_command_names_no_candidate(tmp_path):
+    # /tmp/w on Windows lands wherever Git Bash's mount table says; no reader here can place it.
+    assert _named("echo x >> /tmp/w/" + _REVIEW, tmp_path, "nt") == []
+
+
+@pytest.mark.parametrize("os_name, tool", [("posix", "Bash"), ("nt", "PowerShell")])
+def test_a_rooted_path_keeps_its_reading_off_git_bash(tmp_path, os_name, tool):
+    # Off a Windows Git Bash the word is an ordinary rooted path, read as before: the host's own
+    # join, which on a Windows interpreter roots it at the cwd's drive.
+    named = _named("echo x >> /tmp/w/" + _REVIEW, tmp_path, os_name, tool)
+    assert named == [Path(os.path.normpath(os.path.join(str(tmp_path), "/tmp/w/" + _REVIEW)))]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Git Bash drive paths exist on Windows only")
+def test_bash_finds_a_log_the_command_names_by_its_git_bash_drive_path(repo, tmp_path):
+    _log(repo)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    review = repo / _REVIEW
+    spelled = "/" + review.drive[0].lower() + review.as_posix()[len(review.drive):]
+    command = f"echo x >> {spelled}"
+    assert _run(_shell("PreToolUse", elsewhere, command), tmp_path).returncode == 0
+    review.write_text(_CLAIM, encoding="utf-8")
+    assert "DECISION CLAIM CHECK" in _post(_shell("PostToolUse", elsewhere, command), tmp_path)

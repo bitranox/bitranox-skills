@@ -15,7 +15,15 @@ remembered:
   `reads_msys_drives` like every other reader, instead of deciding the host itself;
 - `unknown_mounts=` is passed only where `ALLOWED_MOUNT_READINGS` says why: it reads a Git Bash
   mount (`/tmp/x` on Windows) at the current drive's root, a directory Git Bash never means, so
-  only a caller that asks whether a landing is rooted, and never opens it, may take it.
+  only a caller that asks whether a landing is rooted, and never opens it, may take it;
+- a function that reads command text (calls a shell_text reader, or reads a `command` key) must
+  not place a path with pathlib itself (`Path(cwd) / token`, `.is_absolute()`, `os.path.isabs`)
+  nor call a function of its module that does, unless `ALLOWED_PATHLIB_RESOLUTION` says why:
+  pathlib is the native reading, which on Windows roots `/c/repo` and `/tmp/x` at the cwd's
+  drive. tooling-detour-nudge and ci-watch-nudge resolved shell words that way, which the first
+  rule cannot see because neither called `is_rooted`. A function that also calls `resolve_path`
+  or `msys_drive_path_for_tool` is taken to read its words there first. The rule looks one call
+  deep, so a resolver two calls below the reader passes unseen.
 """
 import ast
 from pathlib import Path
@@ -44,6 +52,24 @@ ALLOWED_MOUNT_READINGS = {
     ("hooks/block-write-after-sibling-cd.py", "targetless_write"): "asks only whether the landing "
                                                                   "is rooted, and never opens it",
 }
+
+# (file, function) -> why a command-reading function that places a path with pathlib is safe.
+ALLOWED_PATHLIB_RESOLUTION = {
+    ("hooks/commit-tell-sweep.py", "same_command_messages"): "its one pathlib check is "
+                                                             "provably_missing, which on Windows "
+                                                             "checks only a drive path and leaves "
+                                                             "a drive-less root unchecked",
+    ("hooks/stamp-clock-nudge.py", "_bash_writes"): "it joins a bare record file name "
+                                                    "(OPEN-WORK.md, handover*.md) that its regex "
+                                                    "matches without a directory, so the word is "
+                                                    "never rooted",
+    ("hooks/stamp-clock-nudge.py", "assess"): "it reaches pathlib only through _bash_writes",
+}
+_PATH_TYPES = {"Path", "PurePath", "PurePosixPath", "PureWindowsPath"}
+_ABSOLUTE_CHECKS = {"is_absolute", "isabs"}
+# A function calling one of these reads its words the shell's way first (decision-claim-guard's
+# candidates spells each word with msys_drive_path_for_tool before pathlib places it).
+_SHELL_READINGS = {"resolve_path", "msys_drive_path_for_tool"}
 
 
 def _shipped_python_files():
@@ -104,6 +130,67 @@ def test_the_detector_finds_each_shape():
     assert _findings(source) == ({"join_it"}, {"opt_out"}, {"by_hand"}, {"at_root"})
 
 
+def _places_with_pathlib(fn):
+    """True when `fn` joins a variable onto a variable with pathlib or asks if a path is absolute."""
+    for node in ast.walk(fn):
+        if (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div)
+                and isinstance(node.left, ast.Call) and _called_name(node.left.func) in _PATH_TYPES
+                and node.left.args and not isinstance(node.left.args[0], ast.Constant)
+                and not isinstance(node.right, (ast.Constant, ast.JoinedStr))):
+            return True
+        if isinstance(node, ast.Call) and _called_name(node.func) in _ABSOLUTE_CHECKS:
+            return True
+    return False
+
+
+def _shell_text_names(tree):
+    names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "shell_text":
+            names |= {alias.asname or alias.name for alias in node.names}
+    return names
+
+
+def _is_command_key(node):
+    return isinstance(node, ast.Constant) and node.value == "command"
+
+
+def _reads_command_text(fn, shell_names):
+    """True when `fn` calls a shell_text reader or reads a `command` key (`.get` or a subscript)."""
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Name) and func.id in shell_names:
+                return True
+            if (isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name)
+                    and func.value.id == "shell_text"):
+                return True
+            if _called_name(func) == "get" and node.args and _is_command_key(node.args[0]):
+                return True
+        if isinstance(node, ast.Subscript) and _is_command_key(node.slice):
+            return True
+    return False
+
+
+def _pathlib_resolutions(source):
+    """Functions of `source` that read command text and place a path with pathlib, themselves or
+    through a function of the same module that does."""
+    tree = ast.parse(source)
+    shell_names = _shell_text_names(tree)
+    functions = [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    placers = {fn.name for fn in functions if _places_with_pathlib(fn)}
+    found = set()
+    for fn in functions:
+        if not _reads_command_text(fn, shell_names):
+            continue
+        called = {_called_name(n.func) for n in ast.walk(fn) if isinstance(n, ast.Call)}
+        if called & _SHELL_READINGS:
+            continue
+        if fn.name in placers or called & placers:
+            found.add(fn.name)
+    return found
+
+
 def test_no_shipped_function_resolves_a_rooted_path_by_hand():
     found = {
         (path.relative_to(PLUGIN_ROOT).as_posix(), name)
@@ -142,3 +229,44 @@ def test_a_mount_is_read_at_the_current_drive_only_where_allowed():
     assert found == set(ALLOWED_MOUNT_READINGS), (
         "a Git Bash mount is unknown by default (shell_text Decisions); reading it at the current "
         "drive names a directory Git Bash never means")
+
+
+def test_the_pathlib_detector_finds_both_hooks_it_was_written_for():
+    """The two shapes that escaped the drive reading: ci-watch-nudge joined a `git -C` value onto
+    the cwd, and tooling-detour-nudge called a pathlib helper on a shell word. A function that
+    only joins a constant, or reads no command text, stays quiet."""
+    source = (
+        "from pathlib import Path\n"
+        "from shell_text import commands_only_aligned, iter_segments\n"
+        "def repo_dir(command, cwd):\n"
+        "    token = commands_only_aligned(command)\n"
+        "    return str((Path(cwd) / token).resolve())\n"
+        "def resolve(token, cwd):\n"
+        "    p = Path(token)\n"
+        "    return p if p.is_absolute() else Path(cwd) / p\n"
+        "def notice_bash(command, cwd):\n"
+        "    for seg in iter_segments(command):\n"
+        "        resolve(seg, cwd)\n"
+        "def write_path(event, cwd):\n"
+        "    return resolve(event['tool_input']['file_path'], cwd)\n"
+        "def by_key(event, cwd):\n"
+        "    return resolve(event.get('command'), cwd)\n"
+        "def state_file(event, home):\n"
+        "    return Path(home) / 'state.json', event.get('command')\n"
+        "def read_first(event, cwd):\n"
+        "    return resolve(msys_drive_path_for_tool(event.get('command')), cwd)\n"
+    )
+    assert _pathlib_resolutions(source) == {"repo_dir", "notice_bash", "by_key"}
+
+
+def test_no_command_reader_places_a_path_with_pathlib():
+    found = {
+        (path.relative_to(PLUGIN_ROOT).as_posix(), name)
+        for path in _shipped_python_files()
+        for name in _pathlib_resolutions(path.read_text(encoding="utf-8"))
+    }
+    assert found - set(ALLOWED_PATHLIB_RESOLUTION) == set(), (
+        "place a command word with shell_text.resolve_path (or msys_drive_path_for_tool), which "
+        "reads a Git Bash drive (/c/...) as its drive and a mount (/tmp/x) as unknown on Windows")
+    assert set(ALLOWED_PATHLIB_RESOLUTION) <= found, (
+        "an ALLOWED_PATHLIB_RESOLUTION entry no longer matches: remove it")
