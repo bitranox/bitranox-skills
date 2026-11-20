@@ -45,10 +45,18 @@ HOOKS = Path(E.__file__).resolve().parent
 # real session pauses between its writes; this keeps the adds landing many times per verb.
 _PACE = 0.005
 
+# Every _GAP_EVERY-th write the pause is _GAP instead, a little more than one poll. On Windows an
+# add holds the lock for about 250 ms, and behind such holds 5 ms apart a relocate's 5 s wait
+# still ran out (1 run in 3). Pausing that long after EVERY write let the stale copy the
+# relocate test exists to catch slip through in 1 of 2 runs; the short pauses keep the adds dense.
+_GAP, _GAP_EVERY = 0.06, 4
+
 
 def _script(path, source):
-    """Write a worker's source to `path`, its PACE set to `_PACE`."""
-    path.write_text(source.replace("PACE", repr(_PACE)), encoding="utf-8")
+    """Write a worker's source to `path`, its PACE, GAP and GAP_EVERY set to the constants."""
+    for name, value in (("GAP_EVERY", _GAP_EVERY), ("GAP", _GAP), ("PACE", _PACE)):
+        source = source.replace(name, repr(value))
+    path.write_text(source, encoding="utf-8")
 
 _UPDATER = r'''
 import json, random, sys, time
@@ -72,7 +80,7 @@ while time.time() < deadline:
     updated = n
     if n == 1:
         Path(ready).write_text("x", encoding="utf-8")
-    time.sleep(random.uniform(0.0, PACE))
+    time.sleep(GAP if n % GAP_EVERY == 0 else random.uniform(0.0, PACE))
 print(json.dumps({"updated": updated, "ended": ended}))
 '''
 
@@ -302,7 +310,7 @@ while not os.path.exists(stop) and time.time() < deadline:
     n += 1
     E.add_or_update_entry(level, "Citer", "When racing %d, see [[fact]] and [[renamed]]." % n,
                           body="prose %d cites [[fact]] and [[renamed]]." % n, slug="citer")
-    time.sleep(random.uniform(0.0, PACE))
+    time.sleep(GAP if n % GAP_EVERY == 0 else random.uniform(0.0, PACE))
 print(json.dumps({"role": "citer", "done": n}))
 '''
 
