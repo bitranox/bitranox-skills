@@ -461,6 +461,62 @@ def test_cli_reports_how_many_call_sites_it_examined(tmp_path, run_script):
             b"0 in a shape not modelled, 1 built at run time") in r.stdout
 
 
+UNCHECKED_MODULE = (
+    "import re\n"                                  # 1
+    "SEP = ','\n"                                  # 2
+    "def f(s, name, pat):\n"                       # 3
+    "    re.search(f'{name}=(\\\\d+)', s)\n"       # 4
+    "    re.findall('a' + re.escape(name), s)\n"   # 5
+    "    re.sub(pat, '', s)\n"                     # 6
+    "    re.split(SEP + '+', s)\n"                 # 7: folded from a constant, so checked
+    "    return re.finditer('%s' % name, s)\n"     # 8
+)
+
+
+def test_cli_lists_each_unchecked_site_under_the_examined_line(tmp_path, run_script):
+    p = tmp_path / "m.py"
+    p.write_text(UNCHECKED_MODULE, encoding="utf-8")
+    r = run_script(SCRIPT, str(p))
+    assert r.returncode == 0, r.stderr
+    lines = r.stdout.decode("utf-8").splitlines()
+    head = next(i for i, line in enumerate(lines) if line.startswith("Examined "))
+    assert lines[head] == ("Examined 5 regex call sites in 1 file: 1 checked for quadratic "
+                           "starts, 0 in a shape not modelled, 4 built at run time")
+    assert lines[head + 1:head + 6] == [
+        f"  not checked: {p}:4 - built at run time: an f-string, assembled when the line runs",
+        (f"  not checked: {p}:5 - built at run time: joined with + from a part that is not a "
+         "string constant: re.escape(name)"),
+        (f"  not checked: {p}:6 - built at run time: pat is not a module-level name bound once "
+         "to a string"),
+        f"  not checked: {p}:8 - built at run time: '%s' % name is evaluated when the line runs",
+        "",
+    ]
+
+
+def test_scan_lists_unchecked_sites_in_file_and_line_order(tmp_path):
+    a, b = tmp_path / "a.py", tmp_path / "b.py"
+    a.write_text(UNCHECKED_MODULE, encoding="utf-8")
+    b.write_text("import re\ndef g(s, p):\n    return re.search(p, s)\n", encoding="utf-8")
+    total = fur.ScanCounts()
+    for path in (a, b):
+        total.merge(fur.scan_quadratic_regex(str(path))[1])
+    assert [(u["file"], u["line"]) for u in total.unchecked] == [
+        (str(a), 4), (str(a), 5), (str(a), 6), (str(a), 8), (str(b), 3)]
+    assert len(total.unchecked) == total.unreadable + total.not_modelled
+
+
+def test_a_not_modelled_site_is_listed_with_its_reason():
+    # No pattern this checker parses reaches a not-modelled shape today, so the record is
+    # exercised directly: a shape added later must still come out with a location.
+    counts = fur.ScanCounts()
+    counts.record(fur._Site.NOT_MODELLED, file="/opt/m.py", line=9,
+                  reason="its parse tree holds GROUPREF")
+    counts.record(fur._Site.CHECKED, file="/opt/m.py", line=10)
+    assert counts.unchecked == [{"file": "/opt/m.py", "line": 9, "kind": "shape not modelled",
+                                 "reason": "its parse tree holds GROUPREF"}]
+    assert (counts.sites, counts.not_modelled, counts.checked) == (2, 1, 1)
+
+
 def test_cli_zero_call_sites_exits_2(tmp_path, run_script):
     p = tmp_path / "plain.py"
     p.write_text("def f(s):\n    return s.strip()\n", encoding="utf-8")
@@ -492,7 +548,7 @@ class _VirtualCPU:
         self.work = hi
 
 
-@pytest.mark.parametrize("offset", range(0, 120))
+@pytest.mark.parametrize("offset", range(120))
 def test_a_fast_moment_does_not_make_a_linear_scan_read_superlinear(offset):
     # A fast stretch one small scan long, placed at every small-scan boundary of the whole run:
     # timing the small arm as one short pass lets it fall wholly inside that pass (ratio 80x).

@@ -411,10 +411,17 @@ measurably on a hot path.
 any scope, including a pattern built with `+` from module-level string constants, and skips a
 compiled pattern whose name the file only calls `.match` or `.fullmatch` on (one start). The
 report opens with `Examined S regex call sites in F files: C checked for quadratic starts, M in a
-shape not modelled, R built at run time`: the M and R patterns were NOT checked, so they go to
-hand review below, and a file list that yields S = 0 makes the finder exit 2 with
-`ERROR examined 0 regex call sites` (check that the list holds the files you meant; a project
-that truly has no `re` call has nothing for 4b). Each hit is
+shape not modelled, R built at run time`. The rest of S tries one start (a `match` or
+`fullmatch` call, or the compile of a pattern only ever matched) and needs no check, or does not
+compile. The M and R patterns were NOT checked, and each one is listed under that line as
+`  not checked: file:line - <kind>: <reason>`, the kind `built at run time` or
+`shape not modelled`: start hand review from those lines. A pattern written as an f-string counts
+in R and reads
+`built at run time: an f-string, assembled when the line runs`, one joined with `+` names the part
+that is not a string constant, and one passed in a variable names that variable. A file list
+that yields S = 0 makes the finder exit 2 with `ERROR examined 0 regex call sites` (check that
+the list holds the files you meant; a project that truly has no `re` call has nothing for 4b).
+Each hit is
 `file:line - re.func(pattern, ...) [shape]`, where the shape is `class-run-before-suffix`,
 `newline-start-then-blanks`, `group-run-before-suffix` or `repeat-after-optional-prefix`, then a
 `Runs that fail from every start:` line listing runs such as `'a' * N (end of text)`,
@@ -550,7 +557,8 @@ fi
 Parse the six output files from Step 4. Output format reference:
 
 - `cache_candidates.txt`: `file:line - function()` + `Reason: ...`
-- `uncompiled_regex.txt`: an `Examined S regex call sites in F files: ...` line (see 4b), then
+- `uncompiled_regex.txt`: an `Examined S regex call sites in F files: ...` line (see 4b) with one
+  `  not checked: file:line - <kind>: <reason>` line under it per unchecked site, then
   `file:line - re.func(pattern, ...)` + `Fix: ...`; after the
   `# Quadratic Regex Starts` heading, `file:line - re.func(pattern, ...) [shape]` +
   `Runs that fail from every start: ...` + `Fix: ...` (Unsafe Input, see 4b)

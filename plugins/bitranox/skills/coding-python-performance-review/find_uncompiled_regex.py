@@ -38,7 +38,11 @@ reported: those try one start. Patterns built by ``+`` from module-level string 
 resolved. Not modelled: a leading literal before the repeat, a mixed run under ``\\b`` beyond one
 word/non-word pair, a lookaround or backreference inside a repeated body, and flags passed through
 a variable (inline flags are read). The report opens with how many regex call sites it examined,
-how many patterns it checked for quadratic starts, and how many it could not read or model.
+how many patterns it checked for quadratic starts, and how many it could not read or model; under
+that line each site it could not check is listed as ``not checked: file:line - kind: reason``, so
+hand review starts from the report. A pattern assembled with an f-string, or built from a name,
+call or attribute, is ``built at run time``; one whose parse tree holds an item the checker does
+not model is ``shape not modelled``.
 
 Recognised spellings: ``re.match(...)``, ``import re as X`` then ``X.match(...)``,
 ``from re import match [as m]`` then ``match(...)``, and the ``pattern=`` keyword.
@@ -58,6 +62,9 @@ Decisions:
   the body's own run quadratic (``a/a/a/``). Pinned by test_repeated_group_before_suffix_*.
 - Zero call sites examined exits 2, not 0: a finder over files with no regex call has checked
   nothing. Pinned by test_cli_zero_call_sites_exits_2.
+- Only the sites the Examined line counts as unchecked (built at run time, shape not modelled)
+  are listed by file:line; one-start sites need no check and a pattern that does not compile
+  raises when its line runs. Pinned by test_cli_lists_each_unchecked_site_under_the_examined_line.
 """
 
 from __future__ import annotations
@@ -71,7 +78,7 @@ import os
 import re
 import sys
 from collections.abc import Callable, Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Protocol, TypedDict, cast
 
@@ -105,6 +112,14 @@ class QuadraticFinding(TypedDict):
     shape: str
     witnesses: list[str]
     suggestion: str
+
+
+class UncheckedSite(TypedDict):
+    """A multi-start call site whose pattern was NOT checked for quadratic starts."""
+    file: str
+    line: int
+    kind: str    # 'built at run time' or 'shape not modelled'
+    reason: str  # why, for the hand review that has to start from this line
 
 
 # --- typed facade over the re module's parser ----------------------------------------------
@@ -611,19 +626,26 @@ class _Check(Enum):
     NOT_MODELLED = 'not-modelled'  # the parse tree holds a shape this checker does not model
 
 
-def _check_pattern(pattern: str | bytes, flags: int) -> tuple[QuadraticVerdict | None, _Check]:
+@dataclass(frozen=True)
+class _PatternCheck:
+    verdict: QuadraticVerdict | None
+    check: _Check
+    why: str = ''  # for NOT_MODELLED: the parse-tree item the checker does not model
+
+
+def _check_pattern(pattern: str | bytes, flags: int) -> _PatternCheck:
     compiled = re.compile(pattern, flags)
     parsed = _PARSER.parse(pattern, flags)
     ctx = _Context(parsed.state.flags, isinstance(pattern, bytes))
     try:
         starts = list(itertools.islice(_starts(_convert(parsed, ctx)), _MAX_STARTS))
-    except _Unsupported:
-        return None, _Check.NOT_MODELLED
+    except _Unsupported as exc:
+        return _PatternCheck(None, _Check.NOT_MODELLED, str(exc))
     found = _witnesses(starts, compiled, ctx)
     ordered = list(dict.fromkeys(w for kind in _StartKind for w in found[kind]))
     if not ordered:
-        return None, _Check.MODELLED
-    return QuadraticVerdict(_shape(found, starts), tuple(ordered)), _Check.MODELLED
+        return _PatternCheck(None, _Check.MODELLED)
+    return _PatternCheck(QuadraticVerdict(_shape(found, starts), tuple(ordered)), _Check.MODELLED)
 
 
 def quadratic_verdict(pattern: str | bytes, flags: int = 0) -> QuadraticVerdict | None:
@@ -640,7 +662,7 @@ def quadratic_verdict(pattern: str | bytes, flags: int = 0) -> QuadraticVerdict 
     >>> quadratic_verdict(r'(?m)^[^\\S\\n]*(?:then\\s+)*git').shape
     'repeat-after-optional-prefix'
     """
-    return _check_pattern(pattern, flags)[0]
+    return _check_pattern(pattern, flags).verdict
 
 
 _SHAPE_FIX = {
@@ -847,11 +869,13 @@ def _scan_context(tree: ast.Module) -> _ScanContext:
 _CALL_TEXT_WIDTH = 70
 
 
-def _call_text(call: ast.Call, name: str, pattern: ast.expr) -> str:
-    source = ast.unparse(pattern)
-    if len(source) > _CALL_TEXT_WIDTH:
-        source = source[:_CALL_TEXT_WIDTH - 3] + '...'
-    return f're.{name}({source}, ...)'
+def _short(node: ast.expr) -> str:
+    source = ast.unparse(node)
+    return source if len(source) <= _CALL_TEXT_WIDTH else source[:_CALL_TEXT_WIDTH - 3] + '...'
+
+
+def _call_text(name: str, pattern: ast.expr) -> str:
+    return f're.{name}({_short(pattern)}, ...)'
 
 
 class _Site(Enum):
@@ -864,16 +888,21 @@ class _Site(Enum):
     CHECKED = 'checked'
 
 
+_UNCHECKED_KIND = {_Site.UNREADABLE: 'built at run time', _Site.NOT_MODELLED: 'shape not modelled'}
+
+
 @dataclass
 class ScanCounts:
-    """How much a scan examined, so an empty report can be told from a scan of nothing."""
+    """How much a scan examined, so an empty report can be told from a scan of nothing, and
+    where the sites it could not check are, so hand review can start from the report."""
     files: int = 0
     sites: int = 0         # re calls with a pattern argument, in any scope
     checked: int = 0       # multi-start patterns read and checked for quadratic starts
     not_modelled: int = 0
     unreadable: int = 0    # multi-start patterns built at run time, so never read
+    unchecked: list[UncheckedSite] = field(default_factory=list[UncheckedSite])
 
-    def record(self, site: _Site) -> None:
+    def record(self, site: _Site, *, file: str, line: int, reason: str = '') -> None:
         if site is _Site.NOT_A_SITE:
             return
         self.sites += 1
@@ -883,6 +912,9 @@ class ScanCounts:
             self.not_modelled += 1
         elif site is _Site.UNREADABLE:
             self.unreadable += 1
+        kind = _UNCHECKED_KIND.get(site)
+        if kind:
+            self.unchecked.append({'file': file, 'line': line, 'kind': kind, 'reason': reason})
 
     def merge(self, other: ScanCounts) -> None:
         self.files += other.files
@@ -890,32 +922,59 @@ class ScanCounts:
         self.checked += other.checked
         self.not_modelled += other.not_modelled
         self.unreadable += other.unreadable
+        self.unchecked.extend(other.unchecked)
 
 
-def _quadratic_check(file_path: str, call: ast.Call,
-                     scan: _ScanContext) -> tuple[QuadraticFinding | None, _Site]:
+def _concat_leaves(node: ast.expr) -> Iterator[ast.expr]:
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        yield from _concat_leaves(node.left)
+        yield from _concat_leaves(node.right)
+    else:
+        yield node
+
+
+def _run_time_reason(node: ast.expr, constants: dict[str, str | bytes]) -> str:
+    """Why the pattern *node* could not be read from the source."""
+    if isinstance(node, ast.JoinedStr):
+        return 'an f-string, assembled when the line runs'
+    if isinstance(node, ast.Name):
+        return f'{node.id} is not a module-level name bound once to a string'
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        parts = [_short(p) for p in _concat_leaves(node) if _fold(p, constants) is None]
+        return 'joined with + from a part that is not a string constant: ' + ', '.join(parts)
+    return f'{_short(node)} is evaluated when the line runs'
+
+
+@dataclass(frozen=True)
+class _SiteOutcome:
+    site: _Site
+    finding: QuadraticFinding | None = None
+    reason: str = ''  # why an UNREADABLE or NOT_MODELLED site was not checked
+
+
+def _quadratic_check(file_path: str, call: ast.Call, scan: _ScanContext) -> _SiteOutcome:
     name = _re_function(call, scan.modules, scan.functions)
     pattern_node = _pattern_arg(call)
     if pattern_node is None or name not in (RE_FUNCTIONS | {'compile'}):
-        return None, _Site.NOT_A_SITE
+        return _SiteOutcome(_Site.NOT_A_SITE)
     if name not in _MULTI_START_FLAGS_INDEX or scan.targets.get(id(call)) in scan.single_start:
-        return None, _Site.SINGLE_START
+        return _SiteOutcome(_Site.SINGLE_START)
     pattern = _fold(pattern_node, scan.constants)
     if pattern is None:
-        return None, _Site.UNREADABLE
+        return _SiteOutcome(_Site.UNREADABLE, reason=_run_time_reason(pattern_node, scan.constants))
     try:
-        verdict, check = _check_pattern(pattern, _flags_value(_flags_arg(call, name), scan.modules))
+        result = _check_pattern(pattern, _flags_value(_flags_arg(call, name), scan.modules))
     except (re.error, ValueError, TypeError, OverflowError):
-        return None, _Site.NOT_COMPILED  # a pattern that does not compile is not this finding
-    if check is _Check.NOT_MODELLED:
-        return None, _Site.NOT_MODELLED
-    if verdict is None:
-        return None, _Site.CHECKED
+        return _SiteOutcome(_Site.NOT_COMPILED)  # a pattern that does not compile is not this finding
+    if result.check is _Check.NOT_MODELLED:
+        return _SiteOutcome(_Site.NOT_MODELLED, reason=f'its parse tree holds {result.why}')
+    if result.verdict is None:
+        return _SiteOutcome(_Site.CHECKED)
     finding: QuadraticFinding = {
-        'file': file_path, 'line': call.lineno, 'call': _call_text(call, name, pattern_node),
-        'shape': verdict.shape, 'witnesses': list(verdict.witnesses),
-        'suggestion': _SHAPE_FIX[verdict.shape]}
-    return finding, _Site.CHECKED
+        'file': file_path, 'line': call.lineno, 'call': _call_text(name, pattern_node),
+        'shape': result.verdict.shape, 'witnesses': list(result.verdict.witnesses),
+        'suggestion': _SHAPE_FIX[result.verdict.shape]}
+    return _SiteOutcome(_Site.CHECKED, finding)
 
 
 def scan_quadratic_regex(file_path: str) -> tuple[list[QuadraticFinding], ScanCounts]:
@@ -930,11 +989,12 @@ def scan_quadratic_regex(file_path: str) -> tuple[list[QuadraticFinding], ScanCo
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        finding, site = _quadratic_check(file_path, node, scan)
-        counts.record(site)
-        if finding:
-            findings.append(finding)
+        outcome = _quadratic_check(file_path, node, scan)
+        counts.record(outcome.site, file=file_path, line=node.lineno, reason=outcome.reason)
+        if outcome.finding:
+            findings.append(outcome.finding)
     findings.sort(key=lambda f: f['line'])
+    counts.unchecked.sort(key=lambda u: u['line'])
     return findings, counts
 
 
@@ -993,7 +1053,10 @@ def _print_counts(counts: ScanCounts) -> None:
     files = f"{counts.files} file" + ("" if counts.files == 1 else "s")
     print(f"Examined {counts.sites} regex call sites in {files}: {counts.checked} "
           f"checked for quadratic starts, {counts.not_modelled} in a shape not modelled, "
-          f"{counts.unreadable} built at run time\n")
+          f"{counts.unreadable} built at run time")
+    for u in counts.unchecked:
+        print(f"  not checked: {u['file']}:{u['line']} - {u['kind']}: {u['reason']}")
+    print()
 
 
 _WITNESSES_SHOWN = 6
