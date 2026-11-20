@@ -21,6 +21,8 @@ if sys.platform == "win32":
 pytestmark = pytest.mark.skipif(sys.platform != "win32",
                                 reason="only Windows refuses an open by share mode")
 
+_LEGACY_UUID = "11111111-0000-5000-8000-000000000000"
+
 
 _FILE_SHARE_READ = 1
 
@@ -83,3 +85,22 @@ def test_an_add_never_takes_over_a_slug_while_its_owning_level_is_held(tmp_path)
     assert not (Path(here) / "CLAUDE.local.md").exists() or _line(here, "fact") is None
     assert not us.body_path(str(root), "fact").exists()
 
+
+def test_a_legacy_body_held_for_a_moment_is_still_archived_by_the_update_that_flips_it(tmp_path):
+    """The first update of a legacy entry moves its old sharded body to `.archive/`. A refused
+    rename fell into the best-effort `pass`, so the legacy file stayed behind for good beside the
+    new slug-named body. The holder shares reading, the way a scanner does, so the update's read of
+    the body goes through and only the rename meets the refusal."""
+    root = tmp_path / "tree"
+    (proj,) = _tree(root, "proj")
+    legacy = us.legacy_body_path(str(root), _LEGACY_UUID)
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text("OLD\n", encoding="utf-8")
+    (Path(proj) / "CLAUDE.local.md").write_text(
+        f"{us.LEGACY_INDEX_BEGIN}\n# Memory index\n"
+        f"- [Old](uuid:{_LEGACY_UUID}) - When old, keep it. <!-- bx:slug=old-fact -->\n"
+        f"{us.LEGACY_INDEX_END}\n", encoding="utf-8")
+    with _HeldExclusive(legacy, 0.3, share=_FILE_SHARE_READ):
+        E.upsert_entry(proj, "Old", "When old, keep it newly.", body="NEW", slug="old-fact")
+    assert not legacy.exists()
+    assert us.body_path(str(root), "old-fact").is_file()

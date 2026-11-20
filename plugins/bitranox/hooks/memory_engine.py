@@ -1746,7 +1746,9 @@ def _archive_legacy_body(anchor: _StrPath, entry: Entry) -> None:
         if old.is_file():
             dest = us.central_facts_dir(anchor).parent / ".archive"
             dest.mkdir(parents=True, exist_ok=True)
-            old.rename(us.free_archive_path(dest, old.name))
+            # Retried while Windows refuses it: a reader holding the old body for a moment made the
+            # rename fail into the `pass` below, leaving the legacy file behind for good.
+            sig.retry_while_shared(old.rename, us.free_archive_path(dest, old.name))
     except OSError:
         pass
 
