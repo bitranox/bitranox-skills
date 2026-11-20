@@ -644,11 +644,12 @@ def _as_bash_reads(token: str, *, escaped: bool) -> str:
     `escaped` is True for an unquoted word as written, whose backslashes bash drops as escapes
     (`C:\\temp\\x` is `C:tempx`, measured in Git Bash): the word then names another file than
     the one a Windows path parse would find. A quoted word, or one the shell already read, keeps
-    them. On Windows a `/c/...` drive path is drive C (see `shell_text.msys_drive_path`).
+    them. On Windows a `/c/...` drive path is drive C, as every shell_text reader reads it
+    (`shell_text.msys_drive_path_for_tool`).
     """
     if escaped:
         token = _BASH_ESCAPE.sub(r"\1", token)
-    return cast(str, shell_text.msys_drive_path(token, os.name == "nt"))
+    return cast(str, shell_text.msys_drive_path_for_tool(token))
 
 
 def _epoch(stamp: object) -> float | None:

@@ -14,6 +14,29 @@ others allow.
 
 Import it directly (`import shell_text`); the hooks directory is on `sys.path` for both the
 `run-python.sh` launch and the test conftest.
+
+Decisions
+---------
+Git Bash mounts other than the drives are NOT resolved (`/tmp`, `/usr`, `/bin`, `/etc`, `/`).
+- Decision: on a Windows host a rooted Bash-tool path that is not a drive path (`/c/...`) keeps the
+  host's os.path reading, rooted at the current drive. `msys_drive_path` translates the drive
+  form only.
+- Why: the mapping lives in the shell's mount table, and nothing a hook can read cheaply states it.
+  `/` is the Git INSTALL directory (C:/Program Files/Git by default, but a per-user, portable or
+  package-manager install puts it elsewhere), `/bin` is the install's usr/bin, and `/tmp` is the
+  calling user's own %TEMP% only because the shipped /etc/fstab carries a `usertemp` line, which a
+  user may edit, as they may add mounts of their own. `EXEPATH`, which names the install, is set
+  only by the bin/bash.exe launcher, not by usr/bin/bash.exe. Asking `cygpath -w` is exact but
+  spawns a process per hook call, and a host without Git Bash has no cygpath (nor a Bash tool whose
+  text would need it). A guessed mapping lands a guard in a directory the shell never entered,
+  which is worse than the reading it replaces.
+- Evidence: measured with `mount` and `cygpath -w` in Git Bash (Git for Windows, MSYS 3.6): `/` ->
+  C:/Program Files/Git, `/bin` and `/usr/bin` -> C:/Program Files/Git/usr/bin, `/tmp` ->
+  C:/Users/<user>/AppData/Local/Temp (mount option `usertemp`), `/cygdrive/c` -> C:/Program
+  Files/Git/cygdrive/c; one `cygpath` call took 63 ms; a native child of usr/bin/bash.exe had no
+  `EXEPATH`. Pinned by `test_a_non_drive_mount_keeps_the_host_s_reading`.
+- Reopen if: Claude Code passes the hook the Git Bash it runs (its root or mount table), or a
+  measured guard decision on Windows turns on a `/tmp` or `/usr` path.
 """
 
 import bisect
@@ -608,7 +631,8 @@ def msys_drive_path(path, windows):
     `pwd` prints `/c/temp` and `cd /c/temp` lands in C:\\temp, either letter case. os.path has no
     such mount and roots `/c/temp` at the CURRENT drive, C:\\c\\temp - a directory the shell never
     entered. Only the drive form is translated: `/cygdrive/c` does not resolve in Git Bash at all,
-    and the other mounts (`/tmp`, `/usr`) need the mount table, which a static read does not have.
+    and the other mounts (`/tmp`, `/usr`) need the mount table, which a hook cannot read cheaply
+    (see Decisions in the module docstring).
     The caller decides `windows` (the host is Windows AND the text is Git Bash's, not PowerShell's
     or a script's: `reads_msys_drives`), so both arms are testable on every host. Readers resolve
     through `resolve_path`, which asks `reads_msys_drives` by default.
@@ -617,6 +641,17 @@ def msys_drive_path(path, windows):
     if not match:
         return path
     return match.group(1).upper() + ":/" + path[match.end():]
+
+
+def msys_drive_path_for_tool(path, tool_name="Bash", os_name=os.name):
+    """`path` as `tool_name`'s shell on this host reaches it, for a caller reading ONE word. PURE.
+
+    `msys_drive_path` with the drive decision taken from `reads_msys_drives`, the decision every
+    other reader here takes, so a caller cannot decide the host on its own and disagree with them.
+    A caller with a base directory to join onto uses `resolve_path` instead. `os_name` is a
+    parameter so tests reach both arms on any host.
+    """
+    return msys_drive_path(path, reads_msys_drives(tool_name, os_name))
 
 
 def is_work_tree_root(directory):

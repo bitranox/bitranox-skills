@@ -10,7 +10,9 @@ remembered:
 - a function outside shell_text that calls `is_rooted` must not also join, normalise or absolutise
   a path (`os.path.join`/`normpath`/`abspath`) unless `ALLOWED_JOINS` says why that is safe;
 - no caller outside shell_text passes `msys_drives=`, which would opt out of the host's reading;
-- `msys_drive_path` is called directly only where `ALLOWED_DRIVE_CALLS` says why.
+- `msys_drive_path` is called directly only where `ALLOWED_DRIVE_CALLS` says why; a caller that
+  wants the host's reading of one word uses `msys_drive_path_for_tool`, which asks
+  `reads_msys_drives` like every other reader, instead of deciding the host itself.
 """
 import ast
 from pathlib import Path
@@ -27,10 +29,9 @@ ALLOWED_JOINS = {
                                                     "relative one is joined onto the cwd",
 }
 
-ALLOWED_DRIVE_CALLS = {
-    ("hooks/compact-resume.py", "_as_bash_reads"): "it reads only Bash-tool text, so the host alone "
-                                                   "decides the drive reading",
-}
+# (file, function) -> why that function decides the drive reading itself. Empty: every shipped
+# caller that reads one word takes the host's reading from `msys_drive_path_for_tool`.
+ALLOWED_DRIVE_CALLS: dict[tuple[str, str], str] = {}
 
 
 def _shipped_python_files():

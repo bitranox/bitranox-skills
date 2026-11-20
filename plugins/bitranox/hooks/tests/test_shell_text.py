@@ -1211,6 +1211,48 @@ def test_the_drive_reading_is_decided_by_the_tool_and_the_host(tool, os_name, ex
     assert S.reads_msys_drives(tool, os_name) is expected
 
 
+_ONE_WORDS = ["/c/temp/x", "/C/temp", "/d", "/c/", "/c", "/tmp/x", "/usr/bin", "/cygdrive/c/x",
+              "//c/x", "/cc/x", "c/temp", "C:/temp", "C:\\temp", "~/x", "", "/"]
+
+
+@pytest.mark.parametrize("tool", ["Bash", None, "PowerShell"])
+@pytest.mark.parametrize("os_name", ["nt", "posix"])
+def test_one_word_s_drive_reading_is_the_shared_decision_on_each_arm(tool, os_name):
+    """A caller reading ONE word gets the reading every other reader gets: `msys_drive_path` with
+    the drive decision left to `reads_msys_drives`, never a host check of its own. `os_name`
+    reaches the Windows arm on every host."""
+    windows = S.reads_msys_drives(tool, os_name)
+    for word in _ONE_WORDS:
+        assert S.msys_drive_path_for_tool(word, tool, os_name) == S.msys_drive_path(word, windows)
+
+
+@pytest.mark.parametrize("tool, os_name, expected", [
+    ("Bash", "nt", "C:/temp/x"),
+    ("PowerShell", "nt", "/c/temp/x"),
+    ("Bash", "posix", "/c/temp/x"),
+])
+def test_one_word_s_drive_reading_by_value(tool, os_name, expected):
+    assert S.msys_drive_path_for_tool("/c/temp/x", tool, os_name) == expected
+
+
+def test_one_word_s_drive_reading_defaults_to_the_bash_tool_on_this_host():
+    expected = "C:/temp/x" if os.name == "nt" else "/c/temp/x"
+    assert S.msys_drive_path_for_tool("/c/temp/x") == expected
+
+
+# Measured on a Windows box with Git for Windows (`mount`, `cygpath -w`): `/` is the INSTALL
+# directory, `/bin` its usr\bin, `/tmp` the user's own %TEMP% (an fstab `usertemp` mount), and
+# `/cygdrive/c` the install directory's cygdrive\c. None of that is in a hook's reach without the
+# mount table, so these stay where the host's os.path roots them (the decision is in shell_text's
+# module docstring). Resolving `/tmp` from TEMP, or `/usr` from a guessed install root, fails here.
+
+@pytest.mark.parametrize("path", ["/tmp/x", "/usr/bin", "/bin", "/etc", "/", "/cygdrive/c/x"])
+def test_a_non_drive_mount_keeps_the_host_s_reading(path):
+    assert S.msys_drive_path(path, True) == path
+    assert S.resolve_path(path, _HERE, msys_drives=True) == path
+    assert S.directory_change(f"cd {path}", _HERE, msys_drives=True) == (True, _norm(path))
+
+
 @pytest.mark.parametrize("windows, expected", [(True, "C:/temp/x"), (False, "/c/temp/x")])
 def test_a_cd_into_a_git_bash_drive_path_reads_each_arm_on_every_host(windows, expected):
     """Both arms on every CI cell: a translated drive path is rooted wherever the test runs, so the

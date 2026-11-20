@@ -12,6 +12,7 @@ import datetime
 import io
 import json
 import os
+import random
 import subprocess
 import sys
 import time
@@ -21,6 +22,7 @@ import pytest
 
 import compact_resume as H
 import self_improve_signals as SIG
+import shell_text
 
 HOOKS_DIR = Path(__file__).resolve().parent.parent
 SCRIPT = HOOKS_DIR / "compact-resume.py"
@@ -685,6 +687,34 @@ def test_an_unquoted_backslash_path_is_not_the_file_bash_edits(tmp_path, command
     checkpoint at all, so the quoted controls are expected to reach it only there."""
     expected = {H._norm(r"C:\temp\x\handover.md"): False} if reached and os.name == "nt" else {}
     assert H.bash_targets(command, str(tmp_path)) == expected
+
+
+def _host_checked_reading(token, escaped):
+    """`_as_bash_reads` as it read a word with its own host check (`os.name == "nt"`): the
+    reference the shared reading must equal."""
+    if escaped:
+        token = H._BASH_ESCAPE.sub(r"\1", token)
+    return shell_text.msys_drive_path(token, os.name == "nt")
+
+
+def _random_words(count, seed=250):
+    rng = random.Random(seed)
+    alphabet = "/cCdDx:.~\\ '\"-_"
+    return ["".join(rng.choice(alphabet) for _ in range(rng.randint(0, 12))) for _ in range(count)]
+
+
+_BASH_WORDS = ["/c/temp/x/handover.md", "/C/temp", "/d", "/c/", "/c", "/tmp/handover.md",
+               "/usr/bin", "/cygdrive/c/x", "//c/x", "/cc/x", "x/handover.md", r"C:\temp\x",
+               r"x\handover.md", r"\/c/temp", "~/handover.md", ""]
+
+
+@pytest.mark.parametrize("escaped", [True, False])
+def test_a_bash_word_s_drive_reading_equals_the_host_checked_one(escaped):
+    """The word reader takes the drive decision from shell_text (`reads_msys_drives` for the Bash
+    tool), which must answer exactly as the host check it replaces, on this host's arm; the
+    Windows cell runs the other one."""
+    for token in _BASH_WORDS + _random_words(2000):
+        assert H._as_bash_reads(token, escaped=escaped) == _host_checked_reading(token, escaped), token
 
 
 def _git_bash_spelling(path):
