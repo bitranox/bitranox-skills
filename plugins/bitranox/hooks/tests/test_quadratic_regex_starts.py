@@ -18,6 +18,7 @@ import pytest
 if sys.platform != "win32":
     import resource
 
+import block_or_echo_verdict as BOEV
 import block_write_after_sibling_cd as BW
 import compact_resume as CR
 import git_footgun_guard as GF
@@ -127,6 +128,9 @@ _CASES = [
     ("toolbox-nudge pushcheck: assignment lines", lambda t: TN._PUSHCHECK_RX.search(t), "A=1\n"),
     ("toolbox-nudge pushcheck: env lines", lambda t: TN._PUSHCHECK_RX.search(t), "env\n-u\nX\n"),
     ("block-write separator: blanks", lambda t: BW._separator(t), " "),
+    # Every `;`, `&`, `|`, `(` and `{` is a start, and a newline after a launcher ends it.
+    *[(f"block-or-echo-verdict: {unit!r} run", lambda t: BOEV.refused_shape(t + " || echo clean"),
+       unit) for unit in ("&", "(", ";", "{", "|", "sudo\n", "nice\n", "A=(", "/&")],
     ("compact-resume checkpoint path", lambda t: list(CR._BASH_PATH.finditer(t)), "0"),
     ("git-footgun upstream mark", lambda t: GF._UPSTREAM_MARK.search(t), "0"),
     ("harness_checks non-zero exit", lambda t: HC._NONZERO_EXIT_RX.search(t), "\n"),

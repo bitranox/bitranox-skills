@@ -36,6 +36,10 @@ _HOOK = Path(__file__).resolve().parent.parent / "block-or-echo-verdict.py"
         "n=$(grep -l foo *.py || echo none); echo \"$n\"",
         "grep -q x f || { echo missing; exit 1; }",
         "for f in a b; do grep -q k \"$f\" || echo \"MISSING $f\"; done",
+        # a launcher or path word stops at the next start; a masked value still runs through it
+        "X=$(date) LC_ALL=${L} grep -q x f || echo none",
+        "sudo\ngrep -q x f || echo none",
+        "true;/usr/bin/grep -q x f || echo none",
     ],
 )
 def test_a_verdict_on_any_nonzero_exit_is_refused(command: str) -> None:
@@ -143,3 +147,10 @@ def test_a_long_heredoc_costs_linear_time_not_quadratic():
 
 def test_a_verdict_echo_on_an_indented_line_after_a_keyword_is_still_refused():
     assert mod.refused_shape("if true; then\n\t  grep -q x f || echo none\nfi") is not None
+
+
+def test_the_refused_shape_starts_at_the_program_after_a_separator() -> None:
+    # A path word stops at a separator, so the quoted shape is the program's own statement and
+    # not the statement before it glued on.
+    shape = mod.refused_shape("true;/usr/bin/grep -q x f || echo none")
+    assert shape == "/usr/bin/grep -q x f || echo none"
