@@ -43,6 +43,10 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 - `meta-context-watcher` backlog tools (`open_work.py`): a ranked line written without its
   `(date)` prefix (`- [ ] [84] USER: ...`) is an item with no raised date, so `backlog_close`
   deletes it and `backlog_list` lists it, instead of "no line holds rank 84".
+- `meta-consolidate-claude-md` `claudemd_variance.py`: prunes copies (virtualenvs incl. `.venv-*`,
+  `node_modules`, `site-packages`, `.claude/worktrees/`, linked git worktrees; `--no-prune` opts
+  out), takes `--levels 1-3` to split at more than `## `, counts and names files with no section
+  at the chosen levels, and treats a table re-padded by a formatter as the same body.
 
 ## [11.13.7]
 

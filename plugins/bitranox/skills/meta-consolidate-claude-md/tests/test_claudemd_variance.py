@@ -735,3 +735,91 @@ class TestCliRobustness:
         # the documented envelope: ok TRUE (it ran without error) and no `error` - nothing
         # failed, the answer is "no", and that answer is carried by the exit code
         assert payload["ok"] is True and "error" not in payload
+
+
+class TestVendoredAndWorktreeCopiesArePruned:
+    """A CLAUDE.md inside a virtualenv, node_modules or a linked worktree is a COPY: counted, it
+    inflates every duplicate count with files nobody edits."""
+
+    SECTION = "## Rules\n\nbody\n"
+
+    @pytest.mark.parametrize("vendored", [
+        ".venv/lib/pkg", ".venv-3.12/lib/pkg", ".venv-win/x", "node_modules/pkg",
+        "lib/python3.14/site-packages/pkg", ".claude/worktrees/feature-x",
+    ])
+    def test_a_copy_under_a_vendored_or_worktree_dir_is_not_counted(self, tmp_path, vendored):
+        write(tmp_path / "CLAUDE.md", self.SECTION)
+        write(tmp_path / vendored / "CLAUDE.md", self.SECTION)
+        report = CV.analyze([tmp_path], min_members=1)
+        assert report.files_matched == 1
+        assert report.dirs_pruned >= 1
+
+    def test_a_linked_worktree_elsewhere_is_pruned_but_a_submodule_is_not(self, tmp_path):
+        write(tmp_path / "CLAUDE.md", self.SECTION)
+        write(tmp_path / "wt" / ".git", "gitdir: /src/repo/.git/worktrees/wt\n")
+        write(tmp_path / "wt" / "CLAUDE.md", self.SECTION)
+        write(tmp_path / "sub" / ".git", "gitdir: ../.git/modules/sub\n")
+        write(tmp_path / "sub" / "CLAUDE.md", self.SECTION)
+        report = CV.analyze([tmp_path], min_members=1)
+        assert sorted(p.parent.name for p in
+                      (m for g in report.heading_groups for v in g.variants for m in v.members)) \
+            == sorted([tmp_path.name, "sub"])
+
+    def test_a_root_that_is_itself_a_linked_worktree_is_walked(self, tmp_path):
+        write(tmp_path / ".git", "gitdir: /src/repo/.git/worktrees/me\n")
+        write(tmp_path / "CLAUDE.md", self.SECTION)
+        assert CV.analyze([tmp_path]).files_matched == 1
+
+    def test_no_prune_walks_everything(self, tmp_path):
+        write(tmp_path / "CLAUDE.md", self.SECTION)
+        write(tmp_path / ".venv" / "CLAUDE.md", self.SECTION)
+        assert CV.analyze([tmp_path], prune=False).files_matched == 2
+
+
+class TestHeadingLevels:
+    """Many CLAUDE.md files have no '## ' heading at all; '## ' alone undercounts them."""
+
+    TEXT = "# Title\n\nintro\n\n### Deep\n\ndeep body\n\n## Mid\n\nmid body\n"
+
+    def test_the_default_splits_at_level_two_only(self):
+        assert [h for h, _, _ in CV.split_sections(self.TEXT)] == ["Mid"]
+
+    def test_levels_one_to_three_split_at_every_selected_heading(self):
+        got = [(h, CV.normalize_body(b)) for h, b, _ in
+               CV.split_sections(self.TEXT, levels=(1, 2, 3))]
+        assert got == [("Title", "intro"), ("Deep", "deep body"), ("Mid", "mid body")]
+
+    def test_the_cli_takes_a_level_range(self, tmp_path):
+        write(tmp_path / "a" / "CLAUDE.md", "# Shared\n\nsame\n")
+        write(tmp_path / "b" / "CLAUDE.md", "# Shared\n\nsame\n")
+        proc = run_cli("--root", str(tmp_path), "--levels", "1-3", "--json")
+        assert proc.returncode == 0, proc.stderr
+        data = json.loads(proc.stdout)["data"]
+        assert [g["heading"] for g in data["heading_groups"]] == ["Shared"]
+        assert data["levels"] == [1, 2, 3]
+
+    @pytest.mark.parametrize("bad", ["0", "7", "3-1", "x", ""])
+    def test_a_bad_level_range_is_a_usage_error(self, tmp_path, bad):
+        write(tmp_path / "CLAUDE.md", self.TEXT)
+        assert run_cli("--root", str(tmp_path), "--levels", bad).returncode == 2
+
+    def test_files_with_no_section_are_counted_and_named(self, tmp_path):
+        write(tmp_path / "a" / "CLAUDE.md", "# Only a title\n\nno level-two heading\n")
+        write(tmp_path / "b" / "CLAUDE.md", self.TEXT)
+        report = CV.analyze([tmp_path], min_members=1)
+        assert [p.parent.name for p in report.files_without_sections] == ["a"]
+        proc = run_cli("--root", str(tmp_path))
+        assert "1 had no section at the chosen levels" in proc.stderr
+
+
+class TestTablePadding:
+    def test_a_table_differing_only_in_cell_padding_hashes_the_same(self):
+        a = "| A | B |\n|---|:---:|\n| x | y |\n"
+        b = "| A   | B     |\n|-----|:-----:|\n| x   | y     |\n"
+        assert CV.section_hash(a) == CV.section_hash(b)
+
+    def test_a_table_with_different_cell_text_hashes_different(self):
+        assert CV.section_hash("| A | B |\n") != CV.section_hash("| A | C |\n")
+
+    def test_alignment_colons_are_kept(self):
+        assert CV.section_hash("|---|\n") != CV.section_hash("|:---|\n")
