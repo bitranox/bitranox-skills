@@ -302,7 +302,8 @@ def test_relocate_waits_out_a_reader_holding_the_source_body(tmp_path):
 
 _CITER = r'''
 import json, os, random, sys, time
-hooks, level, stop, deadline = sys.argv[1], sys.argv[2], sys.argv[3], float(sys.argv[4])
+hooks, level, stop, deadline, progress = (sys.argv[1], sys.argv[2], sys.argv[3],
+                                          float(sys.argv[4]), sys.argv[5])
 sys.path.insert(0, hooks)
 import memory_engine as E
 n = 0
@@ -310,6 +311,11 @@ while not os.path.exists(stop) and time.time() < deadline:
     n += 1
     E.add_or_update_entry(level, "Citer", "When racing %d, see [[fact]] and [[renamed]]." % n,
                           body="prose %d cites [[fact]] and [[renamed]]." % n, slug="citer")
+    try:
+        with open(progress, "w", encoding="utf-8") as fh:
+            fh.write(str(n))
+    except OSError:
+        pass                                     # the test is reading it; the next one lands
     time.sleep(GAP if n % GAP_EVERY == 0 else random.uniform(0.0, PACE))
 print(json.dumps({"role": "citer", "done": n}))
 '''
@@ -344,7 +350,18 @@ print(json.dumps({"role": "observer", "samples": samples, "drops": drops}))
 '''
 
 
-RENAMES = 12
+# The run ends once BOTH counts are reached: the renames the rewrite is tested on, and the
+# citer's writes they must overlap. A fixed rename count alone let 12 renames finish while a
+# paced citer on a slow macOS runner had written 16 times.
+RENAMES, CITES = 12, 20
+
+
+def _progress(path):
+    """The count a worker last wrote to `path`; 0 before its first write, or mid-write."""
+    try:
+        return int(path.read_text(encoding="utf-8") or 0)
+    except (OSError, ValueError):
+        return 0
 
 
 def test_the_inbound_ref_rewrite_never_writes_back_an_older_citer(tmp_path):
@@ -368,10 +385,10 @@ def test_the_inbound_ref_rewrite_never_writes_back_an_older_citer(tmp_path):
     citer, observer = tmp_path / "citer.py", tmp_path / "observer.py"
     _script(citer, _CITER)
     _script(observer, _OBSERVER)
-    stop = tmp_path / "stop"
-    deadline = time.time() + 120.0              # a safety net only: the renames end the run
+    stop, progress = tmp_path / "stop", tmp_path / "citer.count"
+    deadline = time.time() + 120.0              # a safety net only: the counts end the run
     procs = [subprocess.Popen([sys.executable, str(citer), str(HOOKS), proj, str(stop),
-                               repr(deadline)],
+                               repr(deadline), str(progress)],
                               # it warns on stderr for each ref to the name the fact does not
                               # have now: a pipe nobody reads fills, and the citer then stalls
                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
@@ -382,8 +399,8 @@ def test_the_inbound_ref_rewrite_never_writes_back_an_older_citer(tmp_path):
     renames, rewrote, names = 0, 0, ("fact", "renamed")
     try:
         time.sleep(0.5)                              # both workers imported and running
-        # A fixed count, not a clock: a 4 s window held 9 renames on a slow macOS runner.
-        while renames < RENAMES:
+        # Counts, not a clock: a 4 s window held 9 renames on a slow macOS runner.
+        while (renames < RENAMES or _progress(progress) < CITES) and time.time() < deadline:
             rep = E.rename_entry(proj, names[renames % 2], names[(renames + 1) % 2])
             assert rep.renamed, rep.refused
             rewrote += {r.citer for r in rep.refs_rewritten} == {"citer"}
@@ -403,7 +420,8 @@ def test_the_inbound_ref_rewrite_never_writes_back_an_older_citer(tmp_path):
                 proc.kill()
                 proc.communicate()
     assert rewrote == renames, (renames, rewrote)
-    assert results["citer"]["done"] >= 20, results
+    assert renames >= RENAMES, (renames, results)
+    assert results["citer"]["done"] >= CITES, results
     assert results["observer"]["samples"] >= 200, results
     assert results["observer"]["drops"] == 0, (renames, results)
 
@@ -437,13 +455,6 @@ print(json.dumps({"amends": n, "stale": stale}))
 
 AMENDS_TO_MEET = 300
 """How many title amends the retitler makes before the body amends stop: counted, not timed."""
-
-
-def _progress(path):
-    try:
-        return int(path.read_text(encoding="utf-8") or 0)
-    except (OSError, ValueError):
-        return 0
 
 
 def test_an_amend_without_a_title_never_writes_back_an_older_title(tmp_path):

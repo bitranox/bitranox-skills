@@ -44,6 +44,9 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 - `memory_lock` checks a held lock for staleness at most once a second instead of every 5 ms. On
   Windows each check could keep a just-released lock file delete-pending, so the next create was
   refused.
+- The inbound-ref rename race test ends once both its renames and the citer's writes reach their
+  counts. A fixed rename count alone ended before a paced citer on a slow macOS runner had written
+  enough, which failed the 11.18.0 CI run.
 
 ## [11.18.0]
 
