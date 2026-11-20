@@ -393,3 +393,53 @@ def test_remove_keeps_the_last_line_of_a_fact_and_reports_it(tmp_path, capsys):
     assert "kept 2 line(s)" in out and "feedback-py" in out and "render-topics" in out
     E.render_topics(anchor)
     assert _where(anchor, "feedback-py") == [levels["c"]] and _broken_invariants(anchor) == []
+
+
+def test_a_move_decides_placed_by_topic_under_the_placement_lock(tmp_path):
+    """move refuses a fact placed by topic, but it read that without the placement lock: a
+    set-topics binding the fact after that read met a move that took its line to a level its
+    topics do not place it at. The lock is held here while the holder binds the fact, as a
+    set-topics does; the move must wait, then refuse on what the body says THEN."""
+    anchor, levels = _example(tmp_path)
+    _fact(levels["d"], "feedback-plain")
+    lock = _lock_file(anchor)
+    lock.write_text("peer\n", encoding="utf-8")
+    proc = _start(_engine("move", "--from-level", levels["d"], "--to-level", anchor,
+                          "--slug", "feedback-plain"))
+    waited = _held_back(proc)
+    # the holder's write: the binding a set-topics makes while it holds the lock
+    body = us.body_path(anchor, "feedback-plain").read_text(encoding="utf-8")
+    us.put_body(anchor, "feedback-plain", E._with_topics(body.rstrip("\n"), ("python",)))
+    lock.unlink()
+    rc, out = _finish(proc)
+    assert waited, "move did not wait for the placement lock"
+    assert rc == 2 and "! refused" in out, out
+    assert _where(anchor, "feedback-plain") == [levels["d"]]
+
+
+def test_a_held_placement_lock_times_out_a_move_with_nothing_moved(tmp_path):
+    anchor, levels = _example(tmp_path)
+    _fact(levels["d"], "feedback-plain")
+    lock = _lock_file(anchor)
+    lock.write_text("peer\n", encoding="utf-8")
+    with pytest.raises(E.PlacementLockBusy) as exc:
+        E.move_entry(levels["d"], anchor, "feedback-plain", lock_timeout=0.3)
+    assert "move" in str(exc.value) and str(lock) in str(exc.value)
+    assert _where(anchor, "feedback-plain") == [levels["d"]]
+    assert lock.read_text(encoding="utf-8") == "peer\n"
+
+
+def test_a_move_in_a_tree_without_a_topic_list_takes_no_placement_lock(tmp_path):
+    """A tree that places nothing by topic has nothing a move could race with: it neither waits
+    for nor creates the lock file."""
+    anchor = tmp_path / "plain"
+    anchor.mkdir()
+    (anchor / "CLAUDE.md").write_text("x\n", encoding="utf-8")
+    (anchor / us.STORE_DIRNAME).mkdir()
+    child = _level(str(anchor), "d")
+    _fact(child, "feedback-plain")
+    lock = _lock_file(anchor)
+    lock.write_text("peer\n", encoding="utf-8")
+    rep = E.move_entry(child, str(anchor), "feedback-plain", lock_timeout=0.3)
+    assert rep.moved, rep.refused
+    assert lock.read_text(encoding="utf-8") == "peer\n"

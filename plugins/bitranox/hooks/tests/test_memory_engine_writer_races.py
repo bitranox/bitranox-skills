@@ -406,3 +406,94 @@ def test_the_inbound_ref_rewrite_never_writes_back_an_older_citer(tmp_path):
     assert results["citer"]["done"] >= 20, results
     assert results["observer"]["samples"] >= 200, results
     assert results["observer"]["drops"] == 0, (renames, results)
+
+
+_RETITLER = r'''
+import json, os, random, sys, time
+from pathlib import Path
+hooks, level, progress, stop = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+sys.path.insert(0, hooks)
+import memory_engine as E
+import uuid_store as us
+
+
+def title_now():
+    text = Path(level, "CLAUDE.local.md").read_text(encoding="utf-8")
+    return int(next(p for p in us.parse_pointer_index(text)[1] if p.slug == "pinned-fact").title[1:])
+
+
+n = stale = 0
+while not os.path.exists(stop):
+    # nothing but this process writes a title, so a title below n, read before the next amend
+    # or right after this one, is an older title another writer put back over this one
+    stale += title_now() < n
+    n += 1
+    E.amend_pinned_entry(level, "pinned-fact", title="T%d" % n)
+    stale += title_now() < n
+    Path(progress).write_text(str(n), encoding="utf-8")
+    time.sleep(random.uniform(0.0, PACE))
+print(json.dumps({"amends": n, "stale": stale}))
+'''
+
+AMENDS_TO_MEET = 300
+"""How many title amends the retitler makes before the body amends stop: counted, not timed."""
+
+
+def _progress(path):
+    try:
+        return int(path.read_text(encoding="utf-8") or 0)
+    except (OSError, ValueError):
+        return 0
+
+
+def test_an_amend_without_a_title_never_writes_back_an_older_title(tmp_path):
+    """amend-pinned with no title read the stored title before the level lock and wrote that read
+    back: a concurrent amend's new title landing in between was undone (both exit 0). A real
+    process amends the title in a loop and reads each back; this one amends the body only, over
+    and over. The retitler must never read a title older than the one it just wrote."""
+    (proj,) = _tree(tmp_path / "tree", "proj")
+    E.add_or_update_entry(proj, "T0", "When racing, keep the pin.", body="prose 0",
+                          slug="pinned-fact", pin=True)
+    worker, progress, stop = tmp_path / "retitler.py", tmp_path / "progress", tmp_path / "stop"
+    _script(worker, _RETITLER)
+    proc = subprocess.Popen([sys.executable, str(worker), str(HOOKS), proj, str(progress),
+                             str(stop)],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding="utf-8")
+    body_amends = 0
+    try:
+        while _progress(progress) < 1:
+            assert proc.poll() is None, proc.communicate()
+            time.sleep(0.002)
+        while _progress(progress) < AMENDS_TO_MEET and body_amends < 20000:
+            body_amends += 1
+            E.amend_pinned_entry(proj, "pinned-fact", body="prose %d" % body_amends)
+            # paced like the worker: re-taking the level lock at once starves its 50 ms poll
+            time.sleep(random.uniform(0.0, _PACE))
+        stop.write_text("x", encoding="utf-8")
+        out, err = proc.communicate(timeout=60)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.communicate()
+    assert proc.returncode == 0, err
+    res = json.loads(out.strip().splitlines()[-1])
+    assert res["amends"] >= AMENDS_TO_MEET and body_amends >= 10, (res, body_amends)
+    assert res["stale"] == 0, "%d of %d title amends were undone by %d body amends" % (
+        res["stale"], res["amends"], body_amends)
+
+
+def test_an_update_only_write_refuses_a_slug_the_level_holds_no_line_of(tmp_path):
+    """`must_exist` (amend-pinned's write) decides presence under the level lock: a fact that left
+    the level after the amend's own fast check is refused with UnknownSlug, never created anew
+    and never re-adopted from its body, which an ordinary add does with a body no level points
+    at."""
+    root = tmp_path / "tree"
+    (proj,) = _tree(root, "proj")
+    E.add_or_update_entry(proj, "T0", "When racing, keep the pin.", body="prose 0",
+                          slug="pinned-fact", pin=True)
+    E.drop_pointer(proj, "pinned-fact")                # its body stays: a dangling body
+    with pytest.raises(E.UnknownSlug):
+        E.upsert_entry(proj, "", "", body="new prose", slug="pinned-fact",
+                       allow_pinned_overwrite=True, must_exist=True)
+    assert _line(proj, "pinned-fact") is None
+    assert "prose 0" in us.body_path(str(root), "pinned-fact").read_text(encoding="utf-8")

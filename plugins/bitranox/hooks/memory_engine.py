@@ -718,16 +718,18 @@ def _placement_lock_if_bound(anchor: _StrPath, slug: str, verb: str) -> contextl
     return placement_lock(anchor, verb)
 
 
-def placement_lock_if_listed(anchor: _StrPath | None, verb: str) -> contextlib.AbstractContextManager[None]:
+def placement_lock_if_listed(anchor: _StrPath | None, verb: str,
+                             timeout: float = PLACEMENT_LOCK_TIMEOUT_S) -> contextlib.AbstractContextManager[None]:
     """The placement lock for a verb that walks EVERY level holding a fact's line (`rename`,
     `retitle`, reconcile's archive): held whenever `anchor`'s tree has a topic list, else none.
     Such a verb reads a level, then writes it, level after level; a fact bound, placed and
     un-bound by peers between two of those steps would get a line put back where a collapse had
     dropped it. Holding the lock for any fact of a tree that places by topic rules that out; a
-    tree without a list places nothing, and nothing there takes it."""
+    tree without a list places nothing, and nothing there takes it. `timeout` is how long it waits
+    before raising PlacementLockBusy."""
     if anchor is None or not topic_store.store_path(anchor).is_file():
         return contextlib.nullcontext()
-    return placement_lock(anchor, verb)
+    return placement_lock(anchor, verb, timeout)
 
 
 # ---- several level locks at once, and the line writes made under them --------------------------
@@ -966,7 +968,8 @@ def add_or_update_entry(proj: _StrPath, title: str, hook: str | None, body: str 
 
 def upsert_entry(proj: _StrPath, title: str, hook: str | None, body: str = "", type_: str | None = None, pin: bool = False,
                  scope_default: str = "", slug: str | None = None, allow_over_cap_hook: bool = False,
-                 allow_pinned_overwrite: bool = False, skill: str | None = None) -> tuple[str, bool]:
+                 allow_pinned_overwrite: bool = False, skill: str | None = None, *,
+                 must_exist: bool = False) -> tuple[str, bool]:
     """Upsert a curated fact into `<proj>`'s pointer block + the anchor's central store (the single write
     path). Ensures the level's pointer block + scope, and writes under a lock, mtime-neutral.
     Returns (slug, created): `created` is True when this call made a new fact, decided under the
@@ -999,6 +1002,10 @@ def upsert_entry(proj: _StrPath, title: str, hook: str | None, body: str = "", t
     `skill` ties the fact to the skill it belongs with (`metadata: skill:`); it follows the same
     rules as `type_` - kept on an update that does not name it, set in place by one with no body -
     and an invalid name raises `InvalidSkill` before any write.
+
+    `must_exist` is `amend_pinned_entry`'s: the write only UPDATES. A slug this level holds no line
+    of, decided under the level lock, raises `UnknownSlug` before any write (never a create, never
+    an adopted dangling body), and an empty `title` keeps the stored one, read under that lock.
 
     Under BITRANOX_MEMORY_WRITES=off it raises `sig.MemoryWritesOff` as its first statement, before
     the lock is taken and before anything is read: this is the entry write path the skill scripts
@@ -1045,11 +1052,11 @@ def upsert_entry(proj: _StrPath, title: str, hook: str | None, body: str = "", t
     # placed decision below and every line it rewrites see no render or set-topics half done.
     with _placement_lock_if_bound(anchor, slug, "add"):
         return _upsert_checked(proj, anchor, slug, title, hook, body, type_, pin, scope_default,
-                               allow_pinned_overwrite, skill)
+                               allow_pinned_overwrite, skill, must_exist)
 
 
 def _upsert_checked(proj: str, anchor: _StrPath, slug: str, title: str, hook: str, body: str, type_: str | None, pin: bool, scope_default: str,
-                    allow_pinned_overwrite: bool, skill: str | None) -> tuple[str, bool]:
+                    allow_pinned_overwrite: bool, skill: str | None, must_exist: bool) -> tuple[str, bool]:
     """The writing half of `upsert_entry`, from the placed-by-topic checks on: its caller has
     validated every argument and holds the placement lock when the fact is bound."""
     # A fact placed by topic (see `_placed_slugs`) has a line at each level its topics place it
@@ -1069,6 +1076,11 @@ def _upsert_checked(proj: str, anchor: _StrPath, slug: str, title: str, hook: st
     store_existed = store_dir.exists()
     lock_target = sig.claude_local_md_path(proj)
     with sig.memory_lock(lock_target):
+        # An amend decides "this level holds the fact" here, under the lock: decided on an
+        # earlier read, a fact moved or archived since was created anew (or its dangling body
+        # adopted) by a verb that never creates.
+        if must_exist and _current_line(proj, slug) is None:
+            raise UnknownSlug(slug)
         # Before the level is scaffolded, so the refusal writes nothing: a slug another level of
         # the tree points at is that level's fact, wherever the level sits.
         owners = _slug_owned_elsewhere(anchor, proj, slug)
@@ -1095,7 +1107,10 @@ def _upsert_checked(proj: str, anchor: _StrPath, slug: str, title: str, hook: st
             if e.pin and not allow_pinned_overwrite:
                 raise PinnedEntry(slug)
             old_hook = e.hook
-            e.title, e.hook = title, (hook or e.hook)
+            # an amend with no title keeps the one stored NOW: the title its caller read before
+            # this lock was taken would write back over a concurrent amend's
+            e.title = title if title or not must_exist else e.title
+            e.hook = hook or e.hook
             if _has_prose(body):
                 # A blank or frame-only body is no body: taken as one it replaced the stored prose
                 # with the bare frame. No explicit --type on an UPDATE means "leave the kind alone": re-deriving it from
@@ -1262,14 +1277,13 @@ def amend_pinned_entry(proj: _StrPath, slug: str, hook: str | None = None, body:
     proj = os.path.abspath(str(proj))
     _require_valid_slug(slug)
     _require_known_type(type_)
-    _scope, entries, _bodies = read_store(proj)
-    by_slug = {e.slug: e for e in entries}
-    if slug not in by_slug:
+    # A fast refusal before the body checks of the write (an empty body for an absent fact would
+    # otherwise read as EmptyBody); the write decides presence again under the level lock, and an
+    # absent title is filled from the store there too (`must_exist`).
+    if _current_line(proj, slug) is None:
         raise UnknownSlug(slug)
-    wanted = _normalised_title(title)
-    return add_or_update_entry(proj, title=wanted or by_slug[slug].title,
-                               hook=hook or "", body=body or "", type_=type_,
-                               slug=slug, allow_pinned_overwrite=True)
+    return upsert_entry(proj, title=_normalised_title(title), hook=hook or "", body=body or "",
+                        type_=type_, slug=slug, allow_pinned_overwrite=True, must_exist=True)[0]
 
 
 def _slug_owned_elsewhere(anchor: _StrPath, proj: _StrPath, slug: str) -> list[str]:
@@ -2010,7 +2024,8 @@ def _nearest_common_level(src: Path, dst: Path, anchor: Path) -> Path:
     return anchor
 
 
-def move_entry(from_level: _StrPath, to_level: _StrPath, slug: str | Iterable[str], force: bool = False) -> MoveReport:
+def move_entry(from_level: _StrPath, to_level: _StrPath, slug: str | Iterable[str], force: bool = False, *,
+               lock_timeout: float = PLACEMENT_LOCK_TIMEOUT_S) -> MoveReport:
     """Relocate a fact's POINTER LINE - or a whole SET of them, together - between two levels of one
     tree (the body file never moves - the slug is the identity and the body is anchored centrally).
 
@@ -2043,9 +2058,22 @@ def move_entry(from_level: _StrPath, to_level: _StrPath, slug: str | Iterable[st
     grow that block (see `_move_cap_refusal`), and a target level whose path below the anchor
     crosses a directory the level walk prunes (see `NonLevelDir`).
 
+    In a tree with a topic list the whole move, checks and writes, runs under the tree's placement
+    lock (`placement_lock_if_listed`), waiting up to `lock_timeout` seconds for it and raising
+    PlacementLockBusy past that. The placed-by-topic refusal is decided under it: read without it,
+    a set-topics binding and placing the fact after that read met a move that took its line to a
+    level its topics do not place it at, and left the level they do without one.
+
     Returns a `MoveReport`; its `slug` is the comma-joined set, identical to the input for a
     single slug."""
     sig.refuse_if_memory_writes_off()
+    anchor = us.resolve_anchor(str(Path(from_level).resolve()))
+    with placement_lock_if_listed(anchor, "move", lock_timeout):
+        return _move_entry(from_level, to_level, slug, force)
+
+
+def _move_entry(from_level: _StrPath, to_level: _StrPath, slug: str | Iterable[str], force: bool) -> MoveReport:
+    """`move_entry` itself; its caller holds the placement lock of a tree with a topic list."""
     slugs = _as_slug_list(slug)
     rep = MoveReport(slugs=list(slugs), from_level=str(from_level), to_level=str(to_level))
     if not slugs:
