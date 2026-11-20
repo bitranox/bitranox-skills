@@ -36,7 +36,7 @@ import os
 import re
 import sys
 import time
-from collections.abc import Callable, Collection, Container, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Container, Generator, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -688,7 +688,7 @@ def _placement_heartbeat() -> None:
 
 
 @contextlib.contextmanager
-def placement_lock(anchor: _StrPath, verb: str, timeout: float = PLACEMENT_LOCK_TIMEOUT_S) -> Iterator[None]:
+def placement_lock(anchor: _StrPath, verb: str, timeout: float = PLACEMENT_LOCK_TIMEOUT_S) -> Generator[None]:
     """Hold `anchor`'s placement lock for the block; `verb` names the caller in a timeout's
     PlacementLockBusy. Take it before any level lock (see the section comment). While it is held,
     `_placement_heartbeat` keeps its mtime fresh."""
@@ -748,7 +748,7 @@ def placement_lock_if_listed(anchor: _StrPath | None, verb: str,
 # `add_pointer`, a retitle) takes no second lock while it holds it.
 
 @contextlib.contextmanager
-def _hold_level_locks(levels: Iterable[_StrPath]) -> Iterator[None]:
+def _hold_level_locks(levels: Iterable[_StrPath]) -> Generator[None]:
     """Hold the level lock of every level in `levels` (duplicates and spellings of one dir count
     once), taken in the global order described above, for the block."""
     ordered = sorted({Path(level).resolve() for level in levels}, key=lambda p: p.parts)

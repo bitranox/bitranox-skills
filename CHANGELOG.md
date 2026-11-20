@@ -30,6 +30,56 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.18.0]
+
+### Fixed
+
+- memory_engine on Windows: rename and relocate now retry the archive move of the old body while
+  another process has it open (WinError 32). Before, the move failed, the old body stayed in place
+  and a concurrent add adopted it, so the slug still resolved after the rename.
+- memory_engine on Windows: reading a body head retries a transient sharing violation (Errno 13)
+  instead of failing a concurrent add while relocate replaces that body.
+- context-watcher reads `CLAUDE_CODE_MAX_CONTEXT_TOKENS` from the real process environment. It
+  checked for a plain dict, which `os.environ` is not, so the launcher's declared window was never
+  used.
+- net-firewall-pfsense `doctor` no longer crashes comparing an IPv4 pool bound with an IPv6 one,
+  and its git probe catches only the errors it expects.
+- decision-claim-guard resolves a Bash path read through pathlib correctly on Windows.
+- The memory-engine race tests and the block-or-echo-verdict growth tests no longer fail on a busy
+  machine: the race tests count operations and pace their writers, and the growth tests time equal
+  work at both sizes.
+- reconcile's archive runs under the level lock, so it can no longer drop a line a concurrent add
+  wrote.
+- move decides its topic refusal under the placement lock, and amend-pinned checks the fact exists
+  and keeps its stored title under the level lock, so it no longer undoes a concurrent retitle.
+- `memory_lock` serves waiters in arrival order: a writer that takes the lock again at once can no
+  longer starve a waiter into its timeout.
+- `proj_key` accepts a bytes path; a `discovery_roots` value or word list of the wrong type is
+  reported on stderr and read as nothing, where a string was split per character and a number
+  crashed the recall hook.
+- On POSIX the misplacement audit no longer reads a Windows path as relative to the cwd.
+- stamp-clock-nudge reads the OPEN-WORK.md or handover the command actually writes, not the cwd's
+  copy.
+- dream_state session-review, contrib_queue queues and release, and the Stop gate's nap block no
+  longer crash on a state field that is not text.
+
+### Changed
+
+- The memory helpers other modules call (`anchor_dir`, `split_frontmatter`, `body_title`,
+  `commit_store`, `audit_dir`, `excluded_anchor_dirs` and others) are public names, and the typed
+  Protocol views over the annotated sibling modules are gone; callers use the modules directly.
+  `self_improve_signals.config_path` and `read_config_file` are public too, and
+  `shell_text.resolve_path` takes an `os_name`. No behaviour change.
+- net-firewall-pfsense reads its command line into typed per-verb records; output is unchanged.
+- context-watcher is annotated to pyright strict; behaviour unchanged.
+- memory_engine's placement and level lock context managers are typed `Generator[None]`.
+
+### Added
+
+- `hooks/checkpoint_names.py`: the one checkpoint-file-name rule that context-watcher and
+  compact-resume both use, replacing two copies kept in step by a test.
+- The drive-path reader test also detects pathlib-based path resolution in hooks.
+
 ## [11.17.5]
 
 ### Fixed

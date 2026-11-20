@@ -59,11 +59,6 @@ ALLOWED_PATHLIB_RESOLUTION = {
                                                              "provably_missing, which on Windows "
                                                              "checks only a drive path and leaves "
                                                              "a drive-less root unchecked",
-    ("hooks/stamp-clock-nudge.py", "_bash_writes"): "it joins a bare record file name "
-                                                    "(OPEN-WORK.md, handover*.md) that its regex "
-                                                    "matches without a directory, so the word is "
-                                                    "never rooted",
-    ("hooks/stamp-clock-nudge.py", "assess"): "it reaches pathlib only through _bash_writes",
 }
 _PATH_TYPES = {"Path", "PurePath", "PurePosixPath", "PureWindowsPath"}
 _ABSOLUTE_CHECKS = {"is_absolute", "isabs"}
