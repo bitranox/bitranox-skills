@@ -13,16 +13,15 @@ Addresses are RFC 5737 documentation ranges throughout.
 """
 import argparse
 import datetime
+import json
 import os
 import pathlib
-import json
 import shutil
 import subprocess
 import sys
 
-import pytest
-
 import pfsense as P
+import pytest
 
 TARGET = P.Target(host="192.0.2.1", user="admin", ssh="ssh -i /key")
 
@@ -155,10 +154,10 @@ def test_an_override_reply_of_another_shape_is_refused_naming_the_box(reply, cap
 
 @pytest.mark.parametrize("reply", [
     '{"version":"2.8.0","dhcp_backend":"isc","resolver":"unbound","packages":[]}',  # no interfaces
-    '{"version":"2.8.0","dhcp_backend":"isc","resolver":"unbound","packages":[],'
-    '"interfaces":[{"name":"lan","descr":"","ipaddr":"192.0.2.1","subnet":"24"}]}',  # no if
-    '{"version":"2.8.0","dhcp_backend":"isc","resolver":"unbound","interfaces":[],'
-    '"packages":[{"name":"snort","version":4}]}',                                      # a number for text
+    ('{"version":"2.8.0","dhcp_backend":"isc","resolver":"unbound","packages":[],'
+     '"interfaces":[{"name":"lan","descr":"","ipaddr":"192.0.2.1","subnet":"24"}]}'),  # no if
+    ('{"version":"2.8.0","dhcp_backend":"isc","resolver":"unbound","interfaces":[],'
+     '"packages":[{"name":"snort","version":4}]}'),                                    # a number for text
 ])
 def test_an_info_reply_of_another_shape_is_refused_naming_the_box(reply, capsys):
     fake = FakeRun([('"dhcp_backend"', (0, reply, ""))])
@@ -325,7 +324,7 @@ def test_parse_arp_marks_the_permanent_entry():
 
 
 def test_parse_arp_keeps_an_incomplete_entry_with_no_mac():
-    incomplete = [e for e in P.parse_arp(ARP_TEXT) if e.ip == "192.0.2.99"][0]
+    incomplete = next(e for e in P.parse_arp(ARP_TEXT) if e.ip == "192.0.2.99")
     assert incomplete.mac == ""
 
 
@@ -850,7 +849,7 @@ def _git_says(answer, code=0):
     it. A double whose SHAPE differs from the seam tests nothing.
     """
     def fake(argv, *, timeout=None, stdin_text=None):
-        assert argv[0] == "git", "the probe must shell out to git, got %r" % (argv[0],)
+        assert argv[0] == "git", f"the probe must shell out to git, got {argv[0]!r}"
         return code, answer, ""
     return fake
 
@@ -1529,8 +1528,8 @@ INFO_JSON = json.dumps({
 def _dhcp_edit_fake():
     # The edit payloads also read config_get_path("dhcpd"), so their markers come first.
     return FakeRun([
-        ("$added", (0, '{"added":{"interface":"lan","mac":"00:11:22:33:44:50","ip":"192.0.2.50",'
-                       '"hostname":"printer"},"unbound_follows":false}', "")),
+        ("$added", (0, ('{"added":{"interface":"lan","mac":"00:11:22:33:44:50","ip":"192.0.2.50",'
+                        '"hostname":"printer"},"unbound_follows":false}'), "")),
         ("$renamed", (0, '{"renamed":[{"interface":"lan","ip":"192.0.2.31"}],"unbound_follows":false}', "")),
         ('"dhcp_backend"', (0, INFO_JSON, BANNER)),
         ('config_get_path("dhcpd"', (0, RESERVATIONS_JSON, BANNER)),

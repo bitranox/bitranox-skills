@@ -20,7 +20,9 @@ import json
 import random
 import re
 import shlex
+import shutil
 import sys
+import types
 import xml.etree.ElementTree as ET
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -647,7 +649,6 @@ def run_matrix(module, root: Path, states: dict | None = None):
             for json_mode in (False, True):
                 case_root = root / "case"
                 if case_root.exists():
-                    import shutil  # noqa: PLC0415 - only the matrix cleans its scratch
                     shutil.rmtree(case_root)
                 case_root.mkdir()
                 outcome = run_one(module, factory(), argv, case_root, json_mode=json_mode)
@@ -656,7 +657,6 @@ def run_matrix(module, root: Path, states: dict | None = None):
 
 def load_module(path: Path, name: str, source: str | None = None):
     """Import a pfsense.py from `path`, or from `source` text standing at that path."""
-    import types  # noqa: PLC0415 - only the before/after loaders need it
     text = source if source is not None else path.read_text(encoding="utf-8")
     module = types.ModuleType(name)
     module.__file__ = str(path)

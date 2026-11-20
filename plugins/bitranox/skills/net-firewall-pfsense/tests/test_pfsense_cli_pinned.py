@@ -14,10 +14,9 @@ and say which in the commit.
 import json
 from pathlib import Path, PureWindowsPath
 
-import pytest
-
 import fake_firewall as F
 import pfsense as P
+import pytest
 
 DIGESTS = Path(__file__).with_name("pfsense_cli_digests.json")
 SCRIPT = Path(P.__file__)
