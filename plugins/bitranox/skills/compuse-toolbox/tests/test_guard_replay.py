@@ -1,4 +1,5 @@
 """Tests for guard_replay.py - replay real Bash calls through a guard predicate. ASCII."""
+import ast
 import json
 import tracemalloc
 
@@ -1080,3 +1081,35 @@ def test_a_call_is_one_record_with_a_key_set_per_output(tmp_path):
     assert out.read_text(encoding="utf-8").splitlines()[0] == (
         '{"id": "t1", "transcript": "/t.jsonl", "cwd": "/srv/p", "command": "fire", '
         '"error": "no"}')
+
+
+# --- the public surface -----------------------------------------------------------------------
+# Other jigs import this module (corpus_prompts, jig_probe) and so do tests; __all__ is the list
+# they may rely on. Derived from the source, so a new public name that nobody adds fails here.
+
+def _public_names_defined_here() -> set[str]:
+    tree = ast.parse(Path(G.__file__).read_text(encoding="utf-8"))
+    names: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, ast.Assign):
+            names.update(t.id for t in node.targets if isinstance(t, ast.Name))
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            names.add(node.target.id)
+    return {n for n in names if not n.startswith("_")}
+
+
+def test_all_names_every_public_name_the_module_defines_and_nothing_else():
+    assert sorted(G.__all__) == sorted(_public_names_defined_here())
+    assert len(G.__all__) == len(set(G.__all__))
+
+
+def test_all_covers_what_other_modules_import():
+    imported = {"Call", "TOOL_PAYLOAD", "UnsupportedTool", "UsageError", "classify", "exit_code",
+                "extract_calls", "is_gate_block", "load_predicate", "main", "payload_field",
+                "replay", "write_firings"}
+    assert imported <= set(G.__all__)
+    star: dict[str, object] = {}
+    exec("from guard_replay import *", star)                     # noqa: S102 - a fixed literal
+    assert imported <= set(star)

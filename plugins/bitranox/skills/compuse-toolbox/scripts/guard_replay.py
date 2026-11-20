@@ -72,6 +72,27 @@ from _claude_config import projects_dir
 from _cli_envelope import EXIT_ERROR, EnvelopeArgumentParser, emit, guarded
 from corpus_prompts import iter_transcript_lines
 
+__all__ = [
+    "DEFAULT_BLOCK_PATTERN",
+    "INCONCLUSIVE_NOTHING_REPLAYED",
+    "INCONCLUSIVE_PREDICATE_RAISED",
+    "TOOL_PAYLOAD",
+    "Call",
+    "UnreadableField",
+    "UnsupportedTool",
+    "UsageError",
+    "classify",
+    "exit_code",
+    "extract_calls",
+    "inconclusive_reason",
+    "is_gate_block",
+    "load_predicate",
+    "main",
+    "payload_field",
+    "replay",
+    "write_firings",
+]
+
 try:                                                     # fast path when available (uv run installs it)
     import orjson
 
