@@ -643,20 +643,23 @@ forwarded (e.g. `make push fix login bug`). Most have short aliases.
   adds `exclude-newer` when the project has none, and an `exclude-newer-package` entry set to
   `false` for every package named in `[bmk.supply_chain] own_packages` that the project reaches,
   directly or only through another own package: an own library whose newest release needs a newer
-  release of another own library resolves to an OLDER release unless both are exempt. That list
-  defaults to the bitranox libraries, so if you publish packages of your own, set it (it REPLACES
-  the default, so list the bitranox libraries the project uses as well) or they get no exemption. A
-  third-party floor younger than the cooldown gets a per-package pin, a timestamp one second after
-  that release's upload, so the lock can take it; in a bmk project declare the floor and let bmk
-  write the pin. A release whose files straddle the cooldown cutoff (first wheels older than it,
-  last ones younger, so the lock would see a half-uploaded release) gets a pin BACK to one second
-  after the newest file of the latest release wholly before the cutoff: older than the cooldown and
-  narrowing on purpose, and gone once the cut release clears the cooldown. A pin of bmk's that
-  no declared floor needs any more is removed once the cooldown admits the release it served. bmk
-  recognises its pins by VALUE, so a hand pin at upload time plus
-  one second counts as bmk's; any other entry is left alone, and so is the whole block when PyPI
-  does not answer (bmk says so on stderr). Never lower a floor to get under the cooldown: the
-  release the floor names is the one the project needs, and the pin is what admits it.
+  release of another own library resolves to an OLDER release unless both are exempt. The project
+  itself gets an entry too when its own name is in that list: `uv pip install <project>` run inside
+  the repository (the CI Quickstart notebook installs the published release that way) obeys the
+  project's `[tool.uv]`, and with only its libraries exempt it installs a release older than the
+  cooldown against the newest libraries. That list defaults to the bitranox libraries, so if you
+  publish packages of your own, set it (it REPLACES the default, so list the bitranox libraries the
+  project uses as well) or they get no exemption. A third-party floor younger than the cooldown gets
+  a per-package pin, a timestamp one second after that release's upload, so the lock can take it; in
+  a bmk project declare the floor and let bmk write the pin. A release whose files straddle the
+  cooldown cutoff (first wheels older than it, last ones younger, so the lock would see a
+  half-uploaded release) gets a pin BACK to one second after the newest file of the latest release
+  wholly before the cutoff: older than the cooldown and narrowing on purpose, and gone once the cut
+  release clears the cooldown. A pin of bmk's that no declared floor needs any more is removed once
+  the cooldown admits the release it served. bmk recognises its pins by VALUE, so a hand pin at
+  upload time plus one second counts as bmk's; any other entry is left alone, and so is the whole
+  block when PyPI does not answer (bmk says so on stderr). Never lower a floor to get under the
+  cooldown: the release the floor names is the one the project needs, and the pin is what admits it.
 - **A dependency installed from a git URL (`pkg @ git+https://...`) is invisible to those pins.**
   bmk reads a package's requirements from its PyPI releases, never from a git source, so a floor
   the git source declares is never walked. When that floor needs a release younger than the
