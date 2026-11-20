@@ -82,11 +82,13 @@ class InvalidTopic(ValueError):
     """A topic that is not a plain tag, or more topics than one item may carry."""
 
 
-def normalise_topics(raw: Iterable[str]) -> tuple[str, ...]:
+def normalise_topics(raw: Iterable[object]) -> tuple[str, ...]:
     """`raw` as a sorted tuple without repeats. Raises InvalidTopic for a tag that is not lower
     case letters, digits and dashes (at most 32 characters, starting and ending with a letter or
-    digit, never two dashes in a row), and for more than MAX_TOPICS tags, and for a bare string
-    given where the list belongs."""
+    digit, never two dashes in a row), for an element that is not a str at all, for more than
+    MAX_TOPICS tags, and for a bare string given where the list belongs. Typed for any element
+    because it checks each one itself: a caller holding parsed data (a JSON list, a frontmatter
+    value) hands it over as it is, with no cast that claims what is not yet checked."""
     if isinstance(raw, str):
         raise InvalidTopic("a topic list must be a list of tags, not the string %r" % (raw,))
     seen: set[str] = set()
@@ -185,7 +187,8 @@ class LevelMap:
         children = self._children[level]
         if level == TOP or len(children) < 2:
             return frozenset()
-        return frozenset.intersection(*(self._effective[child] for child in children))
+        first, *rest = (self._effective[child] for child in children)
+        return first.intersection(*rest)
 
     def levels(self) -> list[Level]:
         """Every level, the top first, then by path."""

@@ -1,5 +1,7 @@
 """Tests for the pure placement rules: which levels a topic-bound fact's pointer lines go to."""
 
+from collections.abc import Iterable
+
 import pytest
 
 import topic_placement as tp
@@ -7,15 +9,14 @@ import topic_placement as tp
 A_PY, B_PY, C_RUST, D_MACH = ("a", "python"), ("b", "python"), ("c", "rust"), ("d", "machines")
 
 
-def _design_tree(**extra):
+def _design_tree() -> tp.LevelMap:
     """The design's example: /a/python/{x1,x2}, /b/python/{y1,y2}, /c/rust, /d/machines."""
-    levels = {
+    levels: dict[tp.Level, list[str]] = {
         tp.TOP: [], ("a",): [], ("b",): [], ("c",): [], ("d",): [],
         A_PY: ["python"], A_PY + ("x1",): [], A_PY + ("x2",): [],
         B_PY: ["python"], B_PY + ("y1",): [], B_PY + ("y2",): [],
         C_RUST: ["rust"], D_MACH: ["machines"],
     }
-    levels.update(extra)
     return tp.LevelMap(levels)
 
 
@@ -97,6 +98,17 @@ def test_normalise_sorts_dedups_and_refuses_a_bad_tag():
         tp.normalise_topics("t%d" % i for i in range(tp.MAX_TOPICS + 1))
 
 
+def test_normalise_takes_unchecked_elements_and_refuses_each_that_is_not_a_tag():
+    """Typed Iterable[object]: it checks every element itself, so parsed data goes in as it is,
+    and a non-str element is an InvalidTopic like any other bad tag, never a TypeError."""
+    parsed: Iterable[object] = [" python", "uv"]
+    assert tp.normalise_topics(parsed) == ("python", "uv")
+    for bad in (3, None, b"python", ["python"]):
+        unchecked: list[object] = ["uv", bad]
+        with pytest.raises(tp.InvalidTopic):
+            tp.normalise_topics(unchecked)
+
+
 def test_parse_and_format_round_trip_including_the_empty_list():
     assert tp.parse_topics("[python, uv]") == ("python", "uv")
     assert tp.parse_topics("uv,python") == ("python", "uv")
@@ -130,7 +142,7 @@ def test_descriptor_digest_ignores_the_topics_line_and_sees_every_other_change()
     assert tp.descriptor_digest(scope) != tp.descriptor_digest("WHAT: x\nSTACK: z")
 
 
-def _small_tree():
+def _small_tree() -> tp.LevelMap:
     return tp.LevelMap({tp.TOP: [], ("a",): ["python"], ("b",): ["rust"]})
 
 
@@ -146,7 +158,7 @@ def test_format_refuses_a_bare_string_for_a_topic_list():
 
 def test_a_level_map_refuses_a_string_level_key():
     with pytest.raises(TypeError):
-        tp.LevelMap({tp.TOP: [], "ab": ["x"]})
+        tp.LevelMap({tp.TOP: [], "ab": ["x"]})  # pyright: ignore[reportArgumentType] - the refusal under test
 
 
 def test_placements_refuses_a_bare_string_and_an_invalid_tag():
@@ -166,14 +178,14 @@ def test_placed_at_normalises_its_topics_and_refuses_a_string_level():
     with pytest.raises(tp.InvalidTopic):
         tree.placed_at(("a",), "python")
     with pytest.raises(TypeError):
-        tree.placed_at("a", ["python"])
+        tree.placed_at("a", ["python"])  # pyright: ignore[reportArgumentType] - the refusal under test
 
 
 # ---- a CR is a line ending: the text mode the store is read in turns "\r" and "\r\n" into "\n" ----
 
 @pytest.mark.parametrize("scope", ["WHAT: x\r\nTOPICS: rust\r\nSTACK: y", "WHAT: x\rTOPICS: rust\rSTACK: y",
                                    "WHAT: x\nTOPICS: rust\r"])
-def test_a_topics_line_ended_or_started_by_a_cr_is_read(scope):
+def test_a_topics_line_ended_or_started_by_a_cr_is_read(scope: str) -> None:
     assert tp.descriptor_topics(scope) == ("rust",)
 
 
@@ -185,7 +197,7 @@ def test_a_cr_ended_topics_line_is_replaced_not_duplicated():
 
 
 @pytest.mark.parametrize("nl", ["\r\n", "\r", "\n"])
-def test_an_added_topics_line_follows_stack_with_the_descriptor_s_own_line_end(nl):
+def test_an_added_topics_line_follows_stack_with_the_descriptor_s_own_line_end(nl: str) -> None:
     """Added after `STACK:`, the new line ends as the descriptor's lines do: a CRLF descriptor
     gained a bare-LF line, and a CR-only one was read as a single line, so the TOPICS line went to
     the end instead of after `STACK:`."""
@@ -213,7 +225,7 @@ def test_a_bad_cr_ended_topics_line_is_refused_not_read_as_absent():
 # ---- the tag grammar: dashes only BETWEEN letters or digits ------------------------------------
 
 @pytest.mark.parametrize("bad", ["python-", "a--b", "a-", "x" * 31 + "-"])
-def test_a_tag_with_a_trailing_or_doubled_dash_is_refused(bad):
+def test_a_tag_with_a_trailing_or_doubled_dash_is_refused(bad: str) -> None:
     with pytest.raises(tp.InvalidTopic):
         tp.normalise_topics([bad])
 
@@ -247,7 +259,7 @@ def test_level_map_topics_refuses_a_string_level():
     tree = _small_tree()
     assert tree.topics(("a",)) == frozenset({"python"})
     with pytest.raises(TypeError):
-        tree.topics("a")
+        tree.topics("a")  # pyright: ignore[reportArgumentType] - the refusal under test
 
 
 # ---- the Decisions block: placements normalises its topics -------------------------------------
@@ -260,4 +272,5 @@ def test_placements_normalises_and_refuses_as_the_decisions_block_records():
     with pytest.raises(tp.InvalidTopic):
         tree.placements(["Python"])
     doc = tp.__doc__
+    assert doc is not None
     assert "test_placements_normalises_and_refuses_as_the_decisions_block_records" in doc
