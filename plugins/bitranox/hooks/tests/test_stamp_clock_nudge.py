@@ -2,6 +2,7 @@
 
 import datetime
 import json
+import os
 
 import pytest
 
@@ -102,3 +103,69 @@ def test_a_backlog_stamp_keeps_the_same_command_advice():
 def test_main_is_silent_on_junk_and_quiet_events():
     assert N.main("not json") == 0
     assert N.main(json.dumps({"tool_name": "Read"})) == 0
+
+
+# ---- a Bash write is compared with the record it names, not the one in the cwd -----------------
+
+def _append(target, stamp="17:30"):
+    return "cat >> %s <<'EOF'\n- (2026-11-09 %s) note\nEOF\n" % (target, stamp)
+
+
+def _bash(cmd, cwd, **kw):
+    return N.assess({"tool_name": "Bash", "cwd": str(cwd), "tool_input": {"command": cmd}},
+                    now_local=NOW, now_utc=UTC, **kw)
+
+
+@pytest.fixture
+def two_records(tmp_path):
+    """A cwd whose OPEN-WORK.md already holds 17:30, and another dir whose record does not."""
+    here, there = tmp_path / "here", tmp_path / "there"
+    here.mkdir()
+    there.mkdir()
+    (here / "OPEN-WORK.md").write_text("- (2026-11-09 17:30) old\n", encoding="utf-8")
+    (there / "OPEN-WORK.md").write_text("- nothing stamped\n", encoding="utf-8")
+    return here, there
+
+
+@pytest.mark.parametrize("form", ["cat >> {p} <<'EOF'", "cat >>{p} <<'EOF'", "tee -a {p} <<'EOF'"])
+def test_an_append_to_another_dirs_record_reads_that_record(two_records, form):
+    """The stamp is new in the record the command writes; the cwd's record already holding it
+    made the nudge stay silent."""
+    here, there = two_records
+    cmd = form.format(p=there / "OPEN-WORK.md") + "\n- (2026-11-09 17:30) note\nEOF\n"
+    text = _bash(cmd, here)
+    assert text is not None and "17:30" in text and "OPEN-WORK.md" in text
+
+
+def test_a_stamp_already_in_the_named_record_is_not_new_whatever_the_cwd(two_records):
+    """The other direction: the named record holds the stamp, the cwd's does not."""
+    here, there = two_records
+    assert _bash(_append(here / "OPEN-WORK.md"), there) is None
+
+
+def test_a_quoted_record_path_with_a_space_is_read_whole(tmp_path):
+    spaced = tmp_path / "a b"
+    spaced.mkdir()
+    (spaced / "handover.md").write_text("at 17:30\n", encoding="utf-8")
+    assert _bash(_append('"%s"' % (spaced / "handover.md")), tmp_path) is None
+
+
+@pytest.mark.skipif(os.name == "nt", reason="needs a host where C:/... is a relative path")
+def test_a_git_bash_drive_path_is_read_as_that_drive_on_a_windows_host(tmp_path, monkeypatch):
+    """`/c/...` is drive C under Git Bash: the record read is `C:/w/OPEN-WORK.md`, and off
+    Windows `/c/w/OPEN-WORK.md` itself. On a POSIX host `C:/w/...` is a relative path, so a record
+    planted at `<cwd>/C:/w/` shows which of the two was read."""
+    planted = tmp_path / "C:" / "w"
+    planted.mkdir(parents=True)
+    (planted / "OPEN-WORK.md").write_text("at 17:30\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    cmd = _append("/c/w/OPEN-WORK.md")
+    assert _bash(cmd, tmp_path, os_name="nt") is None             # read C:/w/: holds the stamp
+    assert "17:30" in _bash(cmd, tmp_path, os_name="posix")         # /c/w/ does not exist here
+
+
+def test_a_git_bash_mount_is_read_as_no_record_on_a_windows_host(two_records):
+    """`/tmp/...` under Git Bash lands where only its mount table says; it is never read from
+    this host's /tmp."""
+    here, _there = two_records
+    assert "17:30" in _bash(_append(str(here / "OPEN-WORK.md")), here, os_name="nt")

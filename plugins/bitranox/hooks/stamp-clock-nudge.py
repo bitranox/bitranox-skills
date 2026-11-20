@@ -21,6 +21,7 @@ replaced text (Edit) or on disk (Write, a Bash rewrite) are not new.
 
 import datetime
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -99,8 +100,26 @@ def _edit_tool_text(tool_input):
     return str(tool_input.get("content") or ""), None
 
 
-def _bash_writes(command, cwd):
-    """(added text, on-disk text, durable file name) for a Bash command writing a durable record."""
+def _named_record(segments):
+    """The path a statement names for a durable record (a redirection target, `tee`'s operand),
+    as written; None when no word of the statements is one."""
+    for segment in segments:
+        for word in shell_text.argv_for_match(segment, "Bash"):
+            # `>>/x/OPEN-WORK.md` and `x>>OPEN-WORK.md` carry the target in the same word
+            path = re.split(r"[<>]", str(word))[-1]
+            if _DURABLE.search(path.replace("\\", "/")):
+                return path
+    return None
+
+
+def _bash_writes(command, cwd, os_name=os.name):
+    """(added text, on-disk text, durable file name) for a Bash command writing a durable record.
+
+    The on-disk text is read from the file the command names, through `shell_text.resolve_path`
+    (a Git Bash `/c/...` path is drive C on a Windows host; a mount no reader can place reads as
+    no text): reading the name from `cwd` instead compared an append to `/x/OPEN-WORK.md` with
+    whatever record the cwd happened to hold. A record named only inside a program's text (a
+    Python heredoc's `open(...)`) has no path to resolve and is read from `cwd`."""
     if _CLOCK_READ.search(command):
         return None
     named = _DURABLE_IN_TEXT.search(command)
@@ -108,19 +127,23 @@ def _bash_writes(command, cwd):
         return None
     lines = command.split("\n")
     added = ["\n".join(lines[start:end]) for _line, _opener, (start, end) in shell_text.iter_heredocs(command)]
+    segments = [segment for _at, segment in
+                shell_text.iter_segments(shell_text.strip_heredoc_bodies(command), "Bash")]
     # an `echo ... >> OPEN-WORK.md` carries the text on the statement itself
-    for _at, segment in shell_text.iter_segments(shell_text.strip_heredoc_bodies(command), "Bash"):
-        if _DURABLE_IN_TEXT.search(segment) and ">" in segment:
-            added.append(segment)
+    added.extend(segment for segment in segments
+                 if _DURABLE_IN_TEXT.search(segment) and ">" in segment)
     if not added:
         return None
-    path = named.group(0)
-    old = _read(Path(cwd or ".") / path)
-    return "\n".join(added), old, path
+    path = _named_record(segments) or named.group(0)
+    landing = shell_text.resolve_path(path, cwd or ".", "Bash", os_name=os_name)
+    old = _read(landing) if landing else ""
+    return "\n".join(added), old, path.replace("\\", "/").rsplit("/", 1)[-1]
 
 
-def assess(event, now_local=None, now_utc=None):
-    """The nudge text for this PreToolUse event, or None. PURE apart from reading the target."""
+def assess(event, now_local=None, now_utc=None, *, os_name=os.name):
+    """The nudge text for this PreToolUse event, or None. PURE apart from reading the target.
+    `os_name` is the host a Bash command's paths are read for (see `_bash_writes`), a parameter
+    so tests reach the Windows reading on any host."""
     now_local = now_local or datetime.datetime.now()
     now_utc = now_utc or datetime.datetime.now(datetime.timezone.utc)
     tool = event.get("tool_name")
@@ -136,7 +159,7 @@ def assess(event, now_local=None, now_utc=None):
         command = tool_input.get("command")
         if not isinstance(command, str):
             return None
-        found = _bash_writes(command, event.get("cwd"))
+        found = _bash_writes(command, event.get("cwd"), os_name)
         if found is None:
             return None
         added, old, name = found
