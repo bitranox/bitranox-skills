@@ -7,6 +7,7 @@ the mtime-neutral writers, and the full cwd->bodies resolver across multiple alt
 """
 import os
 import stat
+import threading
 import uuid as _uuid
 
 import pytest
@@ -691,3 +692,39 @@ def test_add_pointer_refuses_a_scope_default_carrying_a_topics_line(tmp_path):
                        scope_default="lvl scope\nTOPICS: python")
     assert isinstance(exc.value, E.ADD_REFUSALS)
     assert not (tmp_path / "CLAUDE.local.md").exists()
+
+
+# A file the user cannot open stands in, on any host, for Windows refusing an open while another
+# session replaces the file: the `windows` reading is what makes that refusal transient.
+_CAN_REFUSE_AN_OPEN = os.name != "nt" and getattr(os, "geteuid", lambda: 0)() != 0
+
+
+@pytest.mark.skipif(not _CAN_REFUSE_AN_OPEN, reason="needs a non-root POSIX user to refuse an open")
+def test_a_store_read_waits_out_an_open_refused_for_a_moment_on_windows(tmp_path):
+    """Most store reads take no lock, so on Windows an open can meet the file at the instant
+    another session's write replaces it. That refusal used to raise TreeWalkError("unreadable"),
+    failing the whole add, and a walk that skips an unreadable level then read a level that owns a
+    slug as one that does not."""
+    path = tmp_path / "CLAUDE.local.md"
+    path.write_text("held\n", encoding="utf-8")
+    path.chmod(0)
+    timer = threading.Timer(0.2, path.chmod, args=(0o644,))
+    timer.start()
+    try:
+        assert us.read_store_text(path, windows=True) == "held\n"
+    finally:
+        timer.join()
+        path.chmod(0o644)
+
+
+@pytest.mark.skipif(not _CAN_REFUSE_AN_OPEN, reason="needs a non-root POSIX user to refuse an open")
+def test_a_store_read_refused_on_posix_raises_at_once(tmp_path):
+    """The control: on POSIX a refused open is a lasting permission problem, named, not waited out."""
+    path = tmp_path / "CLAUDE.local.md"
+    path.write_text("held\n", encoding="utf-8")
+    path.chmod(0)
+    try:
+        with pytest.raises(us.TreeWalkError, match="unreadable"):
+            us.read_store_text(path, windows=False)
+    finally:
+        path.chmod(0o644)

@@ -2739,14 +2739,15 @@ def _relocate_body_refusal(src_body: Path, dst_body: Path, slug: str) -> tuple[s
     re-running completes. Compared as BYTES: whether two files are one fact needs no decoding, and
     a text compare crashed on a target body that was not UTF-8 instead of refusing to land on it."""
     try:
-        src_data = src_body.read_bytes() if src_body.is_file() else b""
+        # Read without a lock on the pre-check: retried while Windows refuses it (see read_store_text).
+        src_data = sig.retry_while_shared(src_body.read_bytes) if src_body.is_file() else b""
     except OSError as exc:
         return "could not read the body %s: %s" % (src_body, exc), b"", False
     # Topics are tagged against ONE tree's closed list, so the copy leaves them behind.
     data, dropped_topics = _without_topics_line(src_data)
     if dst_body.is_file():
         try:
-            same = dst_body.read_bytes() in (data, src_data)
+            same = sig.retry_while_shared(dst_body.read_bytes) in (data, src_data)
         except OSError as exc:
             return ("could not compare with the target tree's body %s: %s" % (dst_body, exc),
                     data, dropped_topics)

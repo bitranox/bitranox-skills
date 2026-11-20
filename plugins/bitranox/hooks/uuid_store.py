@@ -563,7 +563,7 @@ class TreeWalkError(RuntimeError):
         self.path, self.reason = str(path), reason
 
 
-def read_store_text(path: _StrPath) -> str:
+def read_store_text(path: _StrPath, *, windows: bool = os.name == "nt") -> str:
     """The text of one store file, or "" when it does not exist.
 
     THE reader for a level file or a fact body, so every read of the store fails the same named
@@ -572,9 +572,16 @@ def read_store_text(path: _StrPath) -> str:
     UTF-8 - raises TreeWalkError naming the file: a `read_text` guarded by `except OSError` let a
     UnicodeDecodeError past and read a permission error as an empty level. Otherwise the text is
     what `read_text(encoding="utf-8")` returned before: a BOM decodes (it is UTF-8) and is kept,
-    and line endings are translated to "\\n" the way text mode reads them."""
+    and line endings are translated to "\\n" the way text mode reads them.
+
+    Most reads take no lock, so on Windows one can meet the file at the instant another session's
+    write replaces it, and the open is refused. That refusal is retried
+    (`sig.retry_while_shared`, up to 1 s): raised, it failed a whole add or verb, and a walk that
+    skips an unreadable level read a level that owns a slug as one that does not. `windows` says
+    whether a PermissionError is that transient refusal (tests reach the Windows reading on any
+    host); on POSIX it is a lasting one and raises at once."""
     try:
-        data = Path(path).read_bytes()
+        data = sig.retry_while_shared(Path(path).read_bytes, windows=windows)
     except (FileNotFoundError, NotADirectoryError):
         return ""
     except OSError as exc:
