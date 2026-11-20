@@ -708,6 +708,7 @@ def _refused_collapse(anchor, capsys, slug):
         assert E.main(["set-topics", "--proj", anchor, "--slug", slug, "--universal", *extra]) == 2
         out = capsys.readouterr().out
         assert out.startswith("! refused") and _snapshot(anchor) == before, out
+    assert out is not None
     return out
 
 
@@ -866,6 +867,7 @@ def _unbind_following_refusals(tmp_path, anchor, slugs, below, dest):
         else:
             route, words = _engine_route(out, _MOVE_KEPT)
             sizes = _line_bytes(anchor)
+            assert move is not None
             moved = _shortest_run([s for s in sizes if s not in pending], sizes, int(move.group(1)))
             _run_outside(tmp_path, [str(route), *words, dest, "--slug", *moved])
             taken.append(("move", moved))

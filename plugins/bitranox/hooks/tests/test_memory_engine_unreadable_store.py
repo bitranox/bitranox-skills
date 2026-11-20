@@ -239,5 +239,6 @@ def test_a_cross_tree_relocate_onto_an_undecodable_body_refuses_instead_of_crash
     clash = other / ".claude-memory" / "facts" / "a-fact.md"
     clash.write_bytes(BODY.encode("utf-8") + CP1252)
     rep = E.relocate_entry(str(tree), str(other), "a-fact")
+    assert rep.refused is not None
     assert not rep.relocated and "DIFFERENT body" in rep.refused
     assert clash.read_bytes().endswith(CP1252)

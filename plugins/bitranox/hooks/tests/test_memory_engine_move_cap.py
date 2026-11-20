@@ -173,6 +173,7 @@ def test_a_down_move_is_held_to_the_cap_too(tmp_path):
     _plant(a, [us.Pointer(slug="feedback-down", title="T", hook="k" * 200)])
     _fill(b, CAP - 50)
     rep = E.move_entry(a, b, "feedback-down")
+    assert rep.refused is not None
     assert rep.moved is False and "bytes over the %d bytes" % CAP in rep.refused
     assert _slugs(a) == ["feedback-down"]
 

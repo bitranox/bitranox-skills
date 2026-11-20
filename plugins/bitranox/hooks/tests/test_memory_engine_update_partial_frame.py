@@ -44,6 +44,7 @@ def _stored(anchor, slug):
 
 def _frame(text):
     _head, m = E._frontmatter(text)
+    assert m is not None
     return m.group(1)
 
 

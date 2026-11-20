@@ -85,7 +85,8 @@ def test_a_list_that_drops_a_topic_in_use_is_refused_and_names_the_users(tmp_pat
     rc = E.main(["topics-set-list", "--proj", proj, "--from-file", _list_file(tmp_path, {"git": "git"})])
     out = capsys.readouterr().out
     assert rc == 2 and "feedback-uses-python carries python" in out and "declares rust" in out
-    assert topic_store.load(anchor).topics == LIST
+    stored = topic_store.load(anchor)
+    assert stored is not None and stored.topics == LIST
 
 
 def test_a_list_file_that_is_not_the_expected_json_is_a_usage_error(tmp_path, capsys):
@@ -350,7 +351,8 @@ def test_an_empty_topic_list_is_refused(tmp_path, capsys):
     anchor, proj = _tree(tmp_path)
     rc = E.main(["topics-set-list", "--proj", proj, "--from-file", _list_file(tmp_path, {})])
     assert rc == 2 and "empty" in capsys.readouterr().out
-    assert topic_store.load(anchor).topics == LIST
+    stored = topic_store.load(anchor)
+    assert stored is not None and stored.topics == LIST
 
 
 def test_a_dropped_topic_is_judged_by_the_trimmed_name(tmp_path, capsys):
@@ -361,7 +363,8 @@ def test_a_dropped_topic_is_judged_by_the_trimmed_name(tmp_path, capsys):
     rc = E.main(["topics-set-list", "--proj", proj, "--from-file",
                  _list_file(tmp_path, {" rust ": "Rust code", "git": "git"})])
     assert rc == 0, capsys.readouterr().out
-    assert set(topic_store.load(anchor).topics) == {"rust", "git"}
+    stored = topic_store.load(anchor)
+    assert stored is not None and set(stored.topics) == {"rust", "git"}
 
 
 def test_a_stored_topics_line_that_does_not_parse(tmp_path, capsys):
@@ -597,7 +600,8 @@ def test_a_symlinked_level_is_tagged_recorded_and_reads_fresh(tmp_path, capsys):
     capsys.readouterr()
     assert E.main(["set-level-topics", "--proj", level, "--topics", "python"]) == 0
     assert "Traceback" not in capsys.readouterr().err
-    assert topic_store.load(anchor).levels == {"link": tp.descriptor_digest(_scope(level))}
+    stored = topic_store.load(anchor)
+    assert stored is not None and stored.levels == {"link": tp.descriptor_digest(_scope(level))}
     assert E.main(["topics-stale", "--proj", level]) == 0
     assert capsys.readouterr().out.strip() == "fresh"
 
@@ -614,7 +618,8 @@ def test_record_level_refuses_a_level_outside_the_tree_and_records_nothing(tmp_p
     ran = []
     with pytest.raises(topic_store.TopicStoreError):
         topic_store.record_level(anchor, tmp_path / "outside", "d", before=lambda: ran.append(1))
-    assert ran == [] and topic_store.load(anchor).levels == {}
+    stored = topic_store.load(anchor)
+    assert ran == [] and stored is not None and stored.levels == {}
 
 
 def test_record_level_runs_the_callers_write_only_after_the_store_checks_pass(tmp_path):
@@ -625,7 +630,8 @@ def test_record_level_runs_the_callers_write_only_after_the_store_checks_pass(tm
     assert ran == []
     topic_store.save_list(anchor, LIST, "jev")
     topic_store.record_level(anchor, anchor, "d", before=lambda: ran.append(1))
-    assert ran == [1] and topic_store.load(anchor).levels == {"": "d"}
+    stored = topic_store.load(anchor)
+    assert ran == [1] and stored is not None and stored.levels == {"": "d"}
 
 
 # ---- dry runs, batches, pinned facts and usage errors ------------------------------------------
@@ -675,8 +681,10 @@ def test_a_batch_line_over_the_byte_cap_is_a_usage_error(tmp_path, capsys):
 def test_a_batch_over_the_row_cap_is_refused_at_the_first_row_past_it(tmp_path):
     rows = ['{"slug": "feedback-n%05d", "topics": []}' % i for i in range(E.MAX_TOPIC_BATCH + 1)]
     rows_ok, err = E._read_topic_batch(_batch(tmp_path, rows))
+    assert err is not None
     assert rows_ok is None and "more than %d rows" % E.MAX_TOPIC_BATCH in err
     rows_ok, err = E._read_topic_batch(_batch(tmp_path, rows[:-1], name="ok.jsonl"))
+    assert rows_ok is not None
     assert err is None and len(rows_ok) == E.MAX_TOPIC_BATCH
 
 
@@ -686,6 +694,7 @@ def test_a_batch_with_a_bom_and_one_that_is_not_utf8(tmp_path):
     assert E._read_topic_batch(str(f)) == ({"feedback-a": ()}, None)
     f.write_bytes(b'{"slug": "feedback-a", "topics": []}\n{"slug": "feedback-\xff", "topics": []}\n')
     rows, err = E._read_topic_batch(str(f))
+    assert err is not None
     assert rows is None and "line 2" in err and "UTF-8" in err
 
 
@@ -705,6 +714,7 @@ def test_reading_a_batch_holds_one_capped_line_not_the_whole_file(tmp_path):
     large.write_bytes(b'{"slug": "' + b"a" * 8_000_000 + b'"}\n')
     *_, peak_small = _batch_peak(str(small))
     rows, err, peak_large = _batch_peak(str(large))
+    assert err is not None
     assert rows is None and "line 1" in err
     assert peak_large < 1_000_000 and peak_large < peak_small * 2 + 50_000
 
@@ -716,6 +726,7 @@ def test_reading_a_batch_past_the_row_cap_does_not_grow_with_the_file(tmp_path):
     large.write_text("".join(line % i for i in range(E.MAX_TOPIC_BATCH * 20)), encoding="utf-8")
     *_, peak_small = _batch_peak(str(small))
     rows, err, peak_large = _batch_peak(str(large))
+    assert err is not None
     assert rows is None and "more than" in err
     assert peak_large < peak_small * 1.5 + 50_000
 
@@ -766,6 +777,7 @@ def test_a_deeply_nested_batch_line_is_a_usage_error_naming_the_line(tmp_path):
     # Under the byte cap a line can still nest past the decoder's depth: a RecursionError there
     # (or, on an unlimited stack, a list where an object belongs) names the line, never a traceback.
     rows, err = E._read_topic_batch(_batch(tmp_path, ["[" * 2000 + "]" * 2000]))
+    assert err is not None
     assert rows is None and "line 1" in err
 
 
@@ -845,7 +857,8 @@ def test_a_topics_line_past_the_head_still_blocks_dropping_its_topic(tmp_path, c
     spec = _list_file(tmp_path, {k: v for k, v in LIST.items() if k != "rust"})
     rc = E.main(["topics-set-list", "--proj", proj, "--from-file", spec])
     assert rc == 2 and "feedback-a carries rust" in capsys.readouterr().out
-    assert "rust" in topic_store.load(anchor).topics
+    stored = topic_store.load(anchor)
+    assert stored is not None and "rust" in stored.topics
 
 
 def test_a_long_body_opening_with_a_rule_and_no_frame_reads_as_untagged(tmp_path):
@@ -890,8 +903,11 @@ def test_a_list_change_cannot_scan_between_a_set_topics_check_and_its_write(tmp_
         _wait_briefly(child)
         E._set_fact_topics_held(anchor, {"feedback-a": ("rust",)}, LIST, False, None)
     out, err = child.communicate(timeout=120)
-    listed = set(topic_store.load(anchor).topics)
-    assert set(_topics(anchor, "feedback-a")) <= listed, (child.returncode, out, err)
+    stored = topic_store.load(anchor)
+    assert stored is not None
+    listed = set(stored.topics)
+    bound = _topics(anchor, "feedback-a")
+    assert bound is not None and set(bound) <= listed, (child.returncode, out, err)
     assert child.returncode == 2 and "feedback-a carries rust" in out, (out, err)
 
 

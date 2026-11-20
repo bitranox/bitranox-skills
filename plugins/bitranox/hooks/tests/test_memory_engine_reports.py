@@ -87,6 +87,7 @@ def test_a_same_tree_relocate_carries_the_moves_outcome(tmp_path):
 def test_a_refused_same_tree_relocate_carries_the_moves_reason(tmp_path):
     anchor, proj = _levels(tmp_path, "t", "t/p")
     rep = E.relocate_entry(proj, anchor, "nope")
+    assert rep.refused is not None
     assert rep.relocated is False and "not found" in rep.refused
 
 
@@ -115,6 +116,7 @@ def test_a_rename_lists_each_repointed_ref_as_a_named_record(tmp_path):
 def test_a_refused_rename_carries_its_reason_as_text(tmp_path):
     _anchor, proj = _levels(tmp_path, "t", "t/p")
     rep = E.rename_entry(proj, "nope", "other")
+    assert rep.refused is not None
     assert type(rep) is E.RenameReport and "not found" in rep.refused and rep.renamed is False
 
 
@@ -179,6 +181,7 @@ def test_ensure_all_trees_returns_a_tree_report_per_tree(tmp_path):
     assert type(rep) is E.TreesReport and rep.roots == [str(work)]
     by_top = {Path(tr.top).name: tr for tr in rep.trees}
     assert all(type(tr) is E.TreeReport for tr in rep.trees)
+    assert by_top["work"].why is not None
     assert by_top["work"].status is E.TreeStatus.AMBIGUOUS and "stray" in by_top["work"].why
     assert by_top["bk"].status is E.TreeStatus.OK and by_top["bk"].why is None
     [left] = by_top["mk"].refused_levels

@@ -820,7 +820,9 @@ def _damaged_fact(tmp_path, body, title="Ruled fact", pin=False):
 def test_appended_type_damage_is_recognised_in_both_shapes():
     assert R.appended_type_damage(_old_retype(RULE_BODY, "feedback")) == (
         RULE_BODY.lstrip(), "feedback")
-    prose, kind = R.appended_type_damage(_old_retype(RULE_BODY_NO_SECOND, "user") + "\n")
+    damage = R.appended_type_damage(_old_retype(RULE_BODY_NO_SECOND, "user") + "\n")
+    assert damage is not None
+    prose, kind = damage
     assert kind == "user" and "metadata:" not in prose and "Only one rule" in prose
 
 

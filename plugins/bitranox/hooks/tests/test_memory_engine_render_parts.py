@@ -43,7 +43,7 @@ def _tree(tmp_path):
     return str(anchor)
 
 
-def _level(anchor, rel, topics=None, scope=SCOPE):
+def _level(anchor, rel, topics=None, scope: str | None = SCOPE):
     level = Path(anchor, *rel.split("/"))
     level.mkdir(parents=True, exist_ok=True)
     (level / "CLAUDE.md").write_text("x\n", encoding="utf-8")
@@ -112,6 +112,7 @@ def test_a_line_is_built_from_the_body_alone(tmp_path):
     head = us.body_path(anchor, "feedback-a").read_text(encoding="utf-8")
     line = E._line_from_head("feedback-a", head)
     stored = us.parse_pointer_index(sig.claude_local_md_path(anchor).read_text(encoding="utf-8"))[1][0]
+    assert line is not None
     assert line.index_line() == stored.index_line() and line.pin is False
     assert E._line_from_head("feedback-a", head.replace("title: T feedback-a\n", "")) is None
     assert E._line_from_head("feedback-a", head.replace("description: " + HOOK + "\n", "")) is None

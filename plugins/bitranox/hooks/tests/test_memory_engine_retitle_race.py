@@ -141,6 +141,7 @@ def test_a_line_dropped_meanwhile_is_not_put_back(tmp_path, monkeypatch):
     rep = _retitle_with(profile, proj, "New title")
 
     assert fired, "the interleaving was not exercised"
+    assert rep.refused is not None
     assert rep.retitled is False and "left" in rep.refused, rep
     assert _line(proj) is None
     assert us.body_path(anchor, "fact").read_bytes() == body_before
@@ -157,8 +158,10 @@ def test_a_fact_pinned_meanwhile_is_refused_and_left_alone(tmp_path, monkeypatch
     rep = _retitle_with(profile, proj, "New title")
 
     assert fired, "the interleaving was not exercised"
+    assert rep.refused is not None
     assert rep.retitled is False and "amend-pinned" in rep.refused, rep
-    assert (_line(proj).title, _line(proj).pin) == ("T0", True)
+    line = _line(proj)
+    assert line is not None and (line.title, line.pin) == ("T0", True)
 
 
 def test_the_line_keeps_a_hook_written_meanwhile(tmp_path, monkeypatch):
@@ -173,4 +176,6 @@ def test_the_line_keeps_a_hook_written_meanwhile(tmp_path, monkeypatch):
     rep = _retitle_with(profile, proj, "New title")
 
     assert fired and rep.retitled is True, rep
-    assert (_line(proj).title, _line(proj).hook) == ("New title", "When racing, a newer hook.")
+    line = _line(proj)
+    assert line is not None
+    assert (line.title, line.hook) == ("New title", "When racing, a newer hook.")

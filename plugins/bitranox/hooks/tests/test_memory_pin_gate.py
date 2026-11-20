@@ -95,6 +95,7 @@ def test_add_still_succeeds_on_an_unpinned_target(proj, capsys):
 
     assert rc == 0 and "! refused:" not in out
     ptr = _pointer(proj, slug)
+    assert ptr is not None
     assert ptr.hook == "When testing, do the UPDATED thing."
 
 
@@ -108,6 +109,7 @@ def test_amend_pinned_changes_the_hook_and_the_fact_stays_pinned(proj, capsys):
 
     assert rc == 0, out
     ptr = _pointer(proj, slug)
+    assert ptr is not None
     assert ptr.hook == "When testing, do the AMENDED thing."
     assert ptr.pin is True, "amend-pinned must not silently unpin the fact"
 
@@ -124,7 +126,8 @@ def test_source_flag_is_gone_from_both_verbs(proj, capsys):
         with pytest.raises(SystemExit) as exc:      # argparse exits 2 on an unknown option
             E.main(argv)
         assert exc.value.code == 2, "%s must reject --source" % argv[0]
-    assert _pointer(proj, slug).pin is True         # the fact is untouched by the refusal
+    ptr = _pointer(proj, slug)
+    assert ptr is not None and ptr.pin is True         # the fact is untouched by the refusal
 
 
 def test_amend_pinned_reads_the_hook_from_a_file(tmp_path, proj, capsys):
@@ -140,6 +143,7 @@ def test_amend_pinned_reads_the_hook_from_a_file(tmp_path, proj, capsys):
 
     assert rc == 0, out
     ptr = _pointer(proj, slug)
+    assert ptr is not None
     assert ptr.hook == "When testing, read the AMENDED hook from a file."
     assert ptr.pin is True
 
@@ -155,7 +159,8 @@ def test_amend_pinned_refuses_an_unreadable_hook_file_before_writing(tmp_path, p
 
     assert rc == 2
     assert "! error:" in err and "absent.txt" in err
-    assert _pointer(proj, slug).hook == "When testing, do the original thing."
+    ptr = _pointer(proj, slug)
+    assert ptr is not None and ptr.hook == "When testing, do the original thing."
 
 
 def test_amend_pinned_with_neither_hook_form_is_not_an_error(proj, capsys):
@@ -171,7 +176,8 @@ def test_amend_pinned_with_neither_hook_form_is_not_an_error(proj, capsys):
 
     assert rc == 0, out
     assert "! refused:" not in out
-    assert _pointer(proj, slug).hook == "When testing, do the original thing."
+    ptr = _pointer(proj, slug)
+    assert ptr is not None and ptr.hook == "When testing, do the original thing."
     assert "An amended body." in us.body_path(E._anchor(proj), slug).read_text(encoding="utf-8")
 
 
@@ -193,4 +199,5 @@ def test_pinned_fact_survives_move_and_the_gate_still_refuses_at_the_destination
     assert rc == 2
     assert "! refused:" in out and slug in out
     ptr = _pointer(mid, slug)
+    assert ptr is not None
     assert ptr.hook == "When testing, do the original thing."   # still unchanged after the move

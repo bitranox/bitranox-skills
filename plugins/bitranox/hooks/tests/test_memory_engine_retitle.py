@@ -101,6 +101,7 @@ def test_an_unknown_slug_is_refused(tmp_path):
 
     rep = E.retitle_entry(proj, "no-such-fact", "Accurate title")
 
+    assert rep.refused is not None
     assert rep.retitled is False and "not found" in rep.refused
 
 
@@ -110,6 +111,7 @@ def test_a_no_op_retitle_is_refused(tmp_path):
 
     rep = E.retitle_entry(proj, "same-title", "Same title")
 
+    assert rep.refused is not None
     assert rep.retitled is False and "same" in rep.refused
 
 
@@ -119,6 +121,7 @@ def test_a_whitespace_only_title_is_refused(tmp_path):
 
     rep = E.retitle_entry(proj, "stale-title", "   \n  ")
 
+    assert rep.refused is not None
     assert rep.retitled is False and "empty" in rep.refused
     assert _pointer(proj, "stale-title").title == "Stale title"
 
@@ -131,6 +134,7 @@ def test_a_pinned_fact_is_refused_and_the_message_names_the_deliberate_path(tmp_
     rep = E.retitle_entry(proj, "iron-rule", "Accurate iron rule")
 
     assert rep.retitled is False
+    assert rep.refused is not None
     assert "amend-pinned" in rep.refused and "--title" in rep.refused
     assert _pointer(proj, "iron-rule").title == "Iron rule"
 
@@ -147,6 +151,7 @@ def test_a_legacy_pointer_is_refused(tmp_path):
 
     rep = E.retitle_entry(proj, "stale-title", "Accurate title")
 
+    assert rep.refused is not None
     assert rep.retitled is False and "legacy" in rep.refused
 
 

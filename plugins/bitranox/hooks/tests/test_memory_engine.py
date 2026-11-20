@@ -593,6 +593,7 @@ def test_move_multi_slug_still_refuses_a_citer_outside_the_set(tmp_path):
     E.add_or_update_entry(mid, "Outsider", "also builds on [[fact-a]]", body="C", scope_default="m")
     rep = E.move_entry(anchor, proj, [a, b])
     assert rep.moved is False and "dangle" in (rep.refused or "")
+    assert rep.refused is not None
     assert "outsider" in rep.refused                    # the blocking citer is named
     assert _slugs_at(anchor) == {a, b} and _slugs_at(proj) == set()      # nothing moved
     rep2 = E.move_entry(anchor, proj, [a, b], force=True)  # --force still overrides, with a warning
@@ -648,6 +649,7 @@ def test_move_multi_slug_legacy_member_refuses_and_names_it(tmp_path):
         encoding="utf-8")
     rep = E.move_entry(mid, proj, ["fresh", "old-fact"])
     assert rep.moved is False and "migrate" in (rep.refused or "").lower()
+    assert rep.refused is not None
     assert "old-fact" in rep.refused and _slugs_at(proj) == set()
 
 
@@ -772,6 +774,7 @@ def test_ensure_all_trees_refuses_stray_top_bootstrap(two_trees):
     rep = E.ensure_all_trees(roots=[str(two_trees.root)], apply=True)
     by_top = {t.top: t for t in rep.trees}
     stray = by_top[str(two_trees.root)]
+    assert stray.why is not None
     assert stray.status is E.TreeStatus.AMBIGUOUS and "merge" in stray.why
     assert stray.created == []
     assert not (two_trees.root / "CLAUDE.local.md").exists()   # nothing scaffolded at the stray top

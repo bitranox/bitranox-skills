@@ -135,6 +135,7 @@ def test_rename_onto_a_live_slug_is_refused_no_silent_overwrite(tmp_path):
 
     rep = E.rename_entry(proj, "one", "two")
 
+    assert rep.refused is not None
     assert rep.renamed is False and "already exists" in rep.refused
     assert _slugs_at(proj) == {"one"} and _slugs_at(mid) == {"two"}
     assert "TWO" in us.body_path(anchor, "two").read_text(encoding="utf-8"), "the victim survives intact"
@@ -165,8 +166,10 @@ def test_unknown_slug_and_no_op_rename_are_refused(tmp_path):
     _anchor, _mid, proj = _three_levels(tmp_path)
     E.add_or_update_entry(proj, "Here", "h", body="B")
 
-    assert "not found" in E.rename_entry(proj, "absent", "whatever").refused
-    assert "same as the old one" in E.rename_entry(proj, "here", "here").refused
+    absent = E.rename_entry(proj, "absent", "whatever").refused
+    assert absent is not None and "not found" in absent
+    same = E.rename_entry(proj, "here", "here").refused
+    assert same is not None and "same as the old one" in same
 
 
 def test_a_non_canonical_new_slug_is_normalised_with_a_warning(tmp_path):

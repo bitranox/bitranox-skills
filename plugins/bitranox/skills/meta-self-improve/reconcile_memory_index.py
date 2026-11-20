@@ -47,13 +47,118 @@ import os
 import re
 import shutil
 import sys
+from collections.abc import Callable, Container, Iterable, Mapping, Sequence
 from pathlib import Path
+from typing import Protocol, TypedDict, cast
 
 # reuse the UUID-native engine (single source of truth for the on-disk format) from the hooks dir
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "hooks"))
 import memory_engine as ME  # noqa: E402
 import self_improve_signals as sig  # noqa: E402
 import uuid_store as us  # noqa: E402
+
+type _StrPath = str | os.PathLike[str]
+"""A path as this tool's callers pass it: a str (the CLI) or a Path (the tests, the engine)."""
+
+type _MovePort = Callable[[str, str], object]
+"""The body-move seam of `archive_entry`: shutil.move, or a test's stand-in."""
+
+type _CommitPort = Callable[[str, str, list[ME.Entry], dict[str, str]], object]
+"""The pointer-write seam of `archive_entry`: the engine's store commit, or a test's stand-in."""
+
+type _PinsPort = Callable[[_StrPath], Container[str]]
+"""Asked for a tree's pinned or legacy slugs (`_TreePins`, or a fixed set in a caller)."""
+
+type _DriftRow = tuple[str, int, int, int, list[str]]
+"""One `render_drift` row: level, lines missing, differing, placed elsewhere, example slugs."""
+
+
+# The functions of the sibling modules that carry no annotations yet, typed as this tool calls
+# them (the pattern memory_engine uses). Each view is the MODULE ITSELF under a Protocol type,
+# never a copy: a call through it looks the function up when it is made, so a test that patches
+# the module still reaches this one. Drop a view, and call the module directly, once that module
+# is annotated. The engine's own private helpers are called by name with a reportPrivateUsage
+# marker each: this tool shares the engine's on-disk rules, and the engine does not export them.
+
+class _UuidStoreView(Protocol):
+    def parse_pointer_index(self, text: str) -> tuple[str, list[us.Pointer]]: ...
+    def invalid_pointer_lines(self, text: str) -> list[str]: ...
+    def central_facts_dir(self, anchor_dir: _StrPath) -> Path: ...
+    def body_path(self, anchor_dir: _StrPath, slug: str) -> Path: ...
+    def legacy_body_path(self, anchor_dir: _StrPath, fact_uuid_str: str) -> Path: ...
+    def free_archive_path(self, archive_dir: _StrPath, name: str) -> Path: ...
+    def is_valid_slug(self, slug: object) -> bool: ...
+    def is_non_level_dirname(self, name: str) -> bool: ...
+    def shard(self, fact_uuid_str: str) -> str: ...
+    def resolve_anchor(self, proj: _StrPath) -> Path | None: ...
+
+
+class _SignalsView(Protocol):
+    def altitude_chain(self, proj: _StrPath) -> list[Path]: ...
+
+
+_us = cast("_UuidStoreView", us)
+_sig = cast("_SignalsView", sig)
+
+
+class ReconcileReport(TypedDict):
+    """What `reconcile` reports for one level."""
+
+    dir: str
+    facts: int
+    already_indexed: int
+    added: list[str]
+    orphans: list[str]
+    dry_run: bool
+
+
+class ReferenceReport(TypedDict):
+    """What `check_references` found on a chain: (source, ref) pairs, and repeated lines."""
+
+    checked: int
+    orphans: list[tuple[str, str]]
+    downward: list[tuple[str, str]]
+    repeated: list[tuple[str, str, str]]
+
+
+class Mentions(TypedDict):
+    """What still names a slug (`inbound_mentions`): (level, source) pairs and CLAUDE.md paths."""
+
+    refs: list[tuple[str, str]]
+    prose: list[tuple[str, str]]
+    docs: list[str]
+
+
+class Misplaced(TypedDict):
+    """One `find_misplaced` candidate: the fact, and the other tree its body's paths name."""
+
+    level: str
+    slug: str
+    target_anchor: str
+    paths: list[str]
+
+
+class TreeReport(TypedDict):
+    """What `check_tree` found under one anchor."""
+
+    anchor: str
+    levels: int
+    duplicates: dict[str, list[str]]
+    render_drift: list[_DriftRow]
+    render_refused: str
+    orphan_pointers: list[tuple[str, str]]
+    orphan_refs: list[tuple[str, str, str]]
+    sideways_refs: list[tuple[str, str, str]]
+    danglers: list[str]
+    decoy_anchors: list[str]
+    unreadable_dirs: list[str]
+    frame_only_bodies: list[str]
+    appended_type_damage: list[str]
+
+
+def _walk_error_reason(exc: ME.TreeWalkError) -> str:
+    """The reason a TreeWalkError carries; uuid_store sets it from a str and is not annotated."""
+    return cast("str", exc.reason)
 
 _FRONTMATTER_KEY_RE = re.compile(r"^([A-Za-z0-9_-]+):\s*(.*)$")
 _SLUG_SEP_RE = re.compile(r"[_-]")
@@ -70,16 +175,16 @@ _NON_ENTRY = {"claude.md", "claude.local.md"}
 
 # ---- frontmatter parsing (the NATIVE tier's topic files still carry name/description) ------------
 
-def parse_frontmatter(text):
+def parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
     """Return (meta, body). meta has 'name'/'description' when present (stdlib, no YAML dep)."""
-    meta = {}
+    meta: dict[str, str] = {}
     # a BOM made the opening delimiter unrecognisable; "\n" only because splitlines() also breaks
     # on U+2028 and \f, which can sit inside a value
     text = text.lstrip("\ufeff")
     lines = text.split("\n")
     if not lines or lines[0].strip() != "---":
         return meta, text
-    end = None
+    end: int | None = None
     for i in range(1, len(lines)):
         if lines[i].strip() == "---":
             end = i
@@ -96,7 +201,7 @@ def parse_frontmatter(text):
             continue
         key, val = m.group(1), m.group(2)
         if val in (">", "|", ">-", "|-", ">+", "|+"):
-            chunk = []
+            chunk: list[str] = []
             i += 1
             while i < len(block) and (block[i].startswith((" ", "\t")) or not block[i].strip()):
                 chunk.append(block[i].strip())
@@ -119,11 +224,11 @@ def parse_frontmatter(text):
     return meta, body
 
 
-def _collapse(text):
+def _collapse(text: str | None) -> str:
     return " ".join((text or "").split())
 
 
-def derive_title(meta, body, filename):
+def derive_title(meta: Mapping[str, str], body: str, filename: _StrPath) -> str:
     """A human-ish title: first body heading, else de-slugified name, else the filename stem."""
     for line in body.split("\n"):
         s = line.strip()
@@ -137,7 +242,7 @@ def derive_title(meta, body, filename):
     return title[:1].upper() + title[1:] if title else Path(filename).stem
 
 
-def derive_hook(meta, body):
+def derive_hook(meta: Mapping[str, str], body: str) -> str:
     """One-line hook: the frontmatter description, else the first body sentence; capped."""
     hook = _collapse(meta.get("description", ""))
     if not hook:
@@ -150,24 +255,24 @@ def derive_hook(meta, body):
 
 # ---- altitude model (pointer block + central bodies) -------------------------------------------
 
-def _canon(s):
+def _canon(s: str) -> str:
     """Canonical slug for MATCHING: lowercase, treat `-` and `_` as the same separator."""
     return s.strip().lower().replace("_", "-")
 
 
-def _ref_slug(token):
+def _ref_slug(token: str) -> str:
     """Normalize a wiki-link token to a bare canonical slug: '[[global:fleet_ssh]]' -> 'fleet-ssh'."""
     return _canon(token.split(":")[-1])
 
 
-def is_curated(d):
+def is_curated(d: _StrPath) -> bool:
     """A dir is CURATED when its `CLAUDE.local.md` holds a managed pointer block. The engine's own
     test, so this and the tree walk cannot disagree: absent is False, and a file that exists but
     cannot be read or is not UTF-8 raises `TreeWalkError` rather than reading as "not a level"."""
-    return ME._carries_pointer_block(Path(d) / "CLAUDE.local.md")
+    return ME._carries_pointer_block(Path(d) / "CLAUDE.local.md")  # pyright: ignore[reportPrivateUsage]
 
 
-def altitude_targets(d):
+def altitude_targets(d: _StrPath) -> set[str]:
     """Every canonical slug a curated altitude offers as a `[[wikilink]]` target: each pointer's slug.
     A NON-curated level contributes nothing (it is a plain project dir, not a memory store - never
     rglob its subtree, which would scan docs/code and manufacture false refs)."""
@@ -178,7 +283,7 @@ def altitude_targets(d):
     return {_canon(e.slug) for e in entries}
 
 
-def altitude_sources(d):
+def altitude_sources(d: _StrPath) -> list[tuple[str, str]]:
     """[(source_slug, text)] to scan for `[[wikilinks]]` at a curated altitude - one source PER pointer
     (its hook + central body). A NON-curated level contributes nothing."""
     d = Path(d)
@@ -188,7 +293,7 @@ def altitude_sources(d):
     return [(_canon(e.slug), e.hook + "\n" + bodies.get(e.slug, "")) for e in entries]
 
 
-def _unpassed_ancestor_levels(dirs):
+def _unpassed_ancestor_levels(dirs: Sequence[_StrPath]) -> list[Path]:
     """Ancestor altitudes of `dirs` the caller did NOT pass, narrow -> broad.
 
     `[[refs]]` are upward-only, so a level's refs can only ever resolve against itself and its
@@ -200,18 +305,17 @@ def _unpassed_ancestor_levels(dirs):
     also grant its slugs that position, and the downward test (`max(where) < pos`) could then never
     fire for a full chain.
     """
-    import self_improve_signals as sig             # hooks/ is on sys.path from this module's import
-
-    def _key(p):
+    def _key(p: _StrPath) -> Path | None:
         try:
             return Path(p).resolve()
         except OSError:
             return None
 
     passed = {k for k in (_key(d) for d in dirs) if k is not None}
-    seen, out = set(), []
+    seen: set[Path] = set()
+    out: list[Path] = []
     for d in dirs:
-        for lvl in sig.altitude_chain(str(d)):
+        for lvl in _sig.altitude_chain(str(d)):
             key = _key(lvl)
             if key is None or key in passed or key in seen:
                 continue
@@ -220,7 +324,7 @@ def _unpassed_ancestor_levels(dirs):
     return out
 
 
-def _narrow_to_broad(dirs):
+def _narrow_to_broad(dirs: Iterable[Path]) -> list[Path]:
     """Order levels narrow -> broad by ancestry DEPTH, stably.
 
     Altitude used to come from argv POSITION with nothing checking it, so the same store answered
@@ -233,7 +337,7 @@ def _narrow_to_broad(dirs):
     the caller. The sort is STABLE, which is what keeps SIBLING levels - equal depth, not ancestors,
     so depth cannot rank them - in the order they were given rather than inventing an altitude.
     """
-    def depth(path):
+    def depth(path: Path) -> int:
         try:
             return len(Path(path).resolve().parts)
         except OSError:
@@ -241,7 +345,7 @@ def _narrow_to_broad(dirs):
     return sorted(dirs, key=lambda path: -depth(path))
 
 
-def check_references(dirs):
+def check_references(dirs: Iterable[_StrPath]) -> ReferenceReport:
     """Verify `[[ref]]` integrity across an altitude chain, in any order the caller passes. Returns
     {checked, orphans, downward}: `orphans` refs resolve nowhere in the chain; `downward` refs resolve
     only at a NARROWER altitude than the source. Both are (source_slug, ref_slug) pairs.
@@ -249,21 +353,23 @@ def check_references(dirs):
     Ancestor altitudes above `dirs` are pulled in as TARGET providers automatically, so checking a
     single project dir is correct rather than a wall of false orphans. Only the passed dirs supply
     ref SOURCES, so `checked` still counts what the caller asked about."""
-    dirs = _narrow_to_broad([Path(d) for d in dirs])
-    targets = {}                                  # slug -> set of altitude positions offering it
-    for pos, d in enumerate(dirs):
+    chain = _narrow_to_broad([Path(d) for d in dirs])
+    targets: dict[str, set[int]] = {}             # slug -> set of altitude positions offering it
+    for pos, d in enumerate(chain):
         for s in altitude_targets(d):
             targets.setdefault(s, set()).add(pos)
 
     # Ancestors sit at positions broader than every passed dir, which is what they are; an upward
     # ref out of the listed dirs is the only direction the storage spec permits.
-    for offset, lvl in enumerate(_unpassed_ancestor_levels(dirs)):
+    for offset, lvl in enumerate(_unpassed_ancestor_levels(chain)):
         for s in altitude_targets(lvl):
-            targets.setdefault(s, set()).add(len(dirs) + offset)
+            targets.setdefault(s, set()).add(len(chain) + offset)
 
-    orphans, downward, checked = [], [], 0
+    orphans: list[tuple[str, str]] = []
+    downward: list[tuple[str, str]] = []
+    checked = 0
     pins = _TreePins()
-    for pos, d in enumerate(dirs):
+    for pos, d in enumerate(chain):
         for label, text in altitude_sources(d):
             for m in _WIKILINK_RX.finditer(ME.mask_code_regions(text)):
                 ref = _ref_slug(m.group(1))
@@ -275,17 +381,17 @@ def check_references(dirs):
                 # none on this chain, or only below the citer, and neither is the citer's to fix.
                 # Asked only for a ref that would be reported, so a clean ref reads no body.
                 if (not where or max(where) < pos) and _placed_by_topic(
-                        ME._anchor(str(d)), ref, pins):
+                        ME._anchor(str(d)), ref, pins):  # pyright: ignore[reportPrivateUsage]
                     continue
                 if not where:
                     orphans.append((label, ref))
                 elif max(where) < pos:
                     downward.append((label, ref))
     return {"checked": checked, "orphans": sorted(set(orphans)), "downward": sorted(set(downward)),
-            "repeated": chain_repeats(dirs)}
+            "repeated": chain_repeats(chain)}
 
 
-def has_inbound_refs(dirs, slug):
+def has_inbound_refs(dirs: Iterable[_StrPath], slug: str) -> bool:
     """True if any OTHER entry across the chain references `[[slug]]` - move/demotion safety.
     Delegates to the engine's scan (memory_engine.inbound_ref_sources is the single source)."""
     return ME.has_inbound_refs([str(d) for d in dirs], slug)
@@ -293,7 +399,7 @@ def has_inbound_refs(dirs, slug):
 
 # ---- advisory size probe on the always-loaded pointer block ------------------------------------
 
-def over_cap(level_dir, max_bytes=_WARN_BYTES):
+def over_cap(level_dir: _StrPath, max_bytes: int = _WARN_BYTES) -> tuple[bool, int, int]:
     """(within, lines, bytes) for a level's always-loaded pointer block (the managed span in its
     CLAUDE.local.md). NOT hard-capped: `within` is False only to raise an ADVISORY warning when the
     block grows large; the remedy is to shrink the block where it is (fold near-duplicates, trim
@@ -317,21 +423,21 @@ def over_cap(level_dir, max_bytes=_WARN_BYTES):
 
 # ---- reconcile (report orphan pointers) + archive ----------------------------------------------
 
-def reconcile(level_dir, dry_run=False):
+def reconcile(level_dir: _StrPath, dry_run: bool = False) -> ReconcileReport:
     """Report pointers at `level_dir` whose central body is missing (unreconstructable - a raw body
     carries no title/hook/slug). Additive/idempotent: it writes nothing (there is no backfill in the
     UUID model; the engine writes pointer + body atomically). Returns a report dict."""
     d = Path(level_dir)
     _scope, entries, _bodies = ME.read_store(str(d))
-    anchor = ME._anchor(str(d))
+    anchor = ME._anchor(str(d))  # pyright: ignore[reportPrivateUsage]
     orphans = sorted(
         _canon(e.slug) for e in entries
-        if not (us.legacy_body_path(anchor, e.uuid) if e.legacy else us.body_path(anchor, e.slug)).is_file())
+        if not (_us.legacy_body_path(anchor, e.uuid) if e.legacy else _us.body_path(anchor, e.slug)).is_file())
     return {"dir": str(d), "facts": len(entries), "already_indexed": len(entries),
             "added": [], "orphans": orphans, "dry_run": dry_run}
 
 
-def _other_levels_pointing(anchor, level_dir, slug):
+def _other_levels_pointing(anchor: _StrPath, level_dir: _StrPath, slug: str) -> bool:
     """True when any OTHER curated level in the tree still has a pointer for `slug` - SIBLINGS and
     DESCENDANTS included, not just `level_dir`'s altitude chain. The archive guard depends on this:
     dropping a pointer at a HIGH level must not archive the body while a LOWER level still points at
@@ -342,18 +448,18 @@ def _other_levels_pointing(anchor, level_dir, slug):
             continue
         # raises TreeWalkError rather than skip: "no other level points at it" is the answer
         # that archives a body a level still needs
-        _s, ptrs = us.parse_pointer_index(ME.read_store_text(Path(lvl) / "CLAUDE.local.md"))
+        _s, ptrs = _us.parse_pointer_index(ME.read_store_text(Path(lvl) / "CLAUDE.local.md"))
         if any(_canon(x.slug) == qcanon for x in ptrs):
             return True
     return False
 
 
-def _names_invalid_pointer(level_dir, slug):
+def _names_invalid_pointer(level_dir: _StrPath, slug: str) -> bool:
     """True when `level_dir`'s pointer block carries a line for `slug` that the parser skips because
     the slug (or legacy uuid) is not a plain store name."""
     text = ME.read_store_text(Path(level_dir) / "CLAUDE.local.md")
     needles = ("](mem:%s)" % slug, "](uuid:%s)" % slug, "bx:slug=%s " % slug)
-    return any(n in raw + " " for raw in us.invalid_pointer_lines(text) for n in needles)
+    return any(n in raw + " " for raw in _us.invalid_pointer_lines(text) for n in needles)
 
 
 # A slug-shaped token: starts and ends alphanumeric, may hold `-`, `_` and `.` inside. The
@@ -362,47 +468,50 @@ _TOKEN_RX = re.compile(r"(?<![A-Za-z0-9_.-])[A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z
 _LINK_RX = re.compile(r"\[\[([^\]]+)\]\]")
 
 
-def prose_mentions(texts, known):
+def prose_mentions(texts: Mapping[str, str | None], known: Container[str]) -> dict[str, list[str]]:
     """{target: [sources]} for every known HYPHENATED slug a source names in plain text. PURE.
 
     `texts` maps a canonical source slug to its text. `[[...]]` spans are cut first, so a linked
     ref is never counted twice, and a source never mentions itself. A slug with no hyphen is not
     searched for: it is indistinguishable from an ordinary word. Code is NOT masked, since a slug
     quoted in backticks is still a name that goes stale."""
-    out = {}
+    out: dict[str, set[str]] = {}
     for source, text in texts.items():
+        token: str
         for token in _TOKEN_RX.findall(_LINK_RX.sub(" ", text or "")):
-            target = ME._canon_slug(token)  # noqa: SLF001 - the engine owns the canonical form
+            target = ME._canon_slug(token)  # noqa: SLF001 - the engine owns the canonical form  # pyright: ignore[reportPrivateUsage]
             if "-" in target and target in known and target != source:
                 out.setdefault(target, set()).add(source)
     return {k: sorted(v) for k, v in out.items()}
 
 
-def inbound_mentions(anchor, slug):
+def inbound_mentions(anchor: _StrPath, slug: str) -> Mentions:
     """What still names `slug` anywhere under `anchor`: {"refs": [(level, source)], "prose":
     [(level, source)], "docs": [CLAUDE.md path]}. Raises the engine's TreeWalkError on a level or
     body it cannot read: "nothing names it" is the answer that permits an archive."""
-    qcanon = ME._canon_slug(slug)  # noqa: SLF001
+    qcanon = ME._canon_slug(slug)  # noqa: SLF001  # pyright: ignore[reportPrivateUsage]
     levels = _all_curated_levels(anchor)
     refs = ME.inbound_ref_sources(levels, slug)
-    texts, where = {}, {}
+    texts: dict[str, str | None] = {}
+    where: dict[str, str] = {}
     for lvl in levels:
         _scope, entries, bodies = ME.read_store(str(lvl))
         for e in entries:
-            key = ME._canon_slug(e.slug)  # noqa: SLF001
+            key = ME._canon_slug(e.slug)  # noqa: SLF001  # pyright: ignore[reportPrivateUsage]
             texts[key] = "%s\n%s" % (e.hook or "", bodies.get(e.slug, ""))
             where[key] = str(lvl)
-    linked = {ME._canon_slug(src) for _lvl, src in refs}  # noqa: SLF001
+    linked = {ME._canon_slug(src) for _lvl, src in refs}  # noqa: SLF001  # pyright: ignore[reportPrivateUsage]
     prose = [(where[src], src) for src in prose_mentions(texts, {qcanon}).get(qcanon, [])
              if src not in linked]
-    docs = []
+    docs: list[str] = []
     for lvl in sorted({str(Path(anchor))} | {str(x) for x in levels}):
         doc = Path(lvl) / "CLAUDE.md"
         try:
             text = doc.read_text(encoding="utf-8-sig")
         except (OSError, UnicodeDecodeError):
             continue
-        if any(ME._canon_slug(t) == qcanon for t in _TOKEN_RX.findall(text)):  # noqa: SLF001
+        tokens: list[str] = _TOKEN_RX.findall(text)
+        if any(ME._canon_slug(t) == qcanon for t in tokens):  # noqa: SLF001  # pyright: ignore[reportPrivateUsage]
             docs.append(str(doc))
     return {"refs": sorted(refs), "prose": sorted(prose), "docs": docs}
 
@@ -413,7 +522,7 @@ class ArchiveBlocked(Exception):
     `found` is `inbound_mentions`'s result. Not an OSError: nothing failed, the archive was
     declined, and the CLI reports it as a found problem (exit 1), never as "could not run"."""
 
-    def __init__(self, slug, found):
+    def __init__(self, slug: str, found: Mentions) -> None:
         super().__init__("%s is still named by %d fact link(s), %d prose mention(s) and %d "
                          "CLAUDE.md file(s)" % (slug, len(found["refs"]), len(found["prose"]),
                                                 len(found["docs"])))
@@ -425,11 +534,11 @@ class ArchiveRollbackFailed(OSError):
     The message names where the body now is, since the pointer still names the old place."""
 
 
-def _put_back(moved, cause, move):
+def _put_back(moved: Sequence[tuple[Path, Path]], cause: BaseException, move: _MovePort) -> None:
     """Undo the body moves of an archive whose pointer write failed, newest first, so the failure
     leaves the fact exactly as it was. Raises ArchiveRollbackFailed naming any body it could not
     return: the caller must not then report the fact as unchanged."""
-    stuck = []
+    stuck: list[tuple[Path, Path]] = []
     for src, dest in reversed(moved):
         try:
             move(str(dest), str(src))
@@ -442,15 +551,15 @@ def _put_back(moved, cause, move):
             "the pointer still names the old path, so move it back by hand") from cause
 
 
-def placed_copies(anchor, level_dir, slug):
+def placed_copies(anchor: _StrPath, level_dir: _StrPath, slug: str) -> list[str]:
     """The OTHER levels holding a line of `slug` when its fact is placed by topic, in level order
     (the top first, a parent before its children, siblings by name); [] for every other fact.
     Placed means what the engine's renderer manages (`memory_engine._placed_copies`: a body bound
     to a topic with `title:` and `description:`, no line of it pinned at any level). Levels are
     compared lexically, as the engine compares them. Archiving such a fact forgets it at every
     level: one line dropped would only be render drift the next render puts back."""
-    others = [str(level) for level, _ptr in ME._placed_copies(anchor, slug)
-              if not ME._same_level(level, level_dir)]
+    others = [str(level) for level, _ptr in ME._placed_copies(anchor, slug)  # pyright: ignore[reportPrivateUsage]
+              if not ME._same_level(level, level_dir)]  # pyright: ignore[reportPrivateUsage]
     return sorted(others, key=lambda level: Path(os.path.abspath(level)).parts)
 
 
@@ -460,7 +569,8 @@ class ArchiveIncomplete(OSError):
     message names the re-run that finishes the archive and the render that puts the dropped lines
     back."""
 
-    def __init__(self, slug, level, anchor, dropped, remaining, cause):
+    def __init__(self, slug: str, level: str, anchor: _StrPath, dropped: Sequence[str],
+                 remaining: Sequence[str], cause: BaseException) -> None:
         super().__init__(
             "could not finish archiving %s (%s): its line(s) at %s are dropped; its body and its "
             "line(s) at %s are unchanged. Re-run skills/meta-self-improve/reconcile_memory_index.py "
@@ -470,8 +580,9 @@ class ArchiveIncomplete(OSError):
         self.slug, self.dropped, self.remaining = slug, list(dropped), list(remaining)
 
 
-def archive_entry(level_dir, slug, archive_subdir=".archive", dry_run=False, *, move=None,
-                  commit=None, force=False):
+def archive_entry(level_dir: _StrPath, slug: str, archive_subdir: str = ".archive",
+                  dry_run: bool = False, *, move: _MovePort | None = None,
+                  commit: _CommitPort | None = None, force: bool = False) -> bool:
     """Forget a fact: drop its pointer line and move its central body to `<anchor>/.claude-memory/
     <archive_subdir>/`. With `dry_run`, report whether an entry WOULD be removed but write nothing.
     Returns True if an entry was (or, under dry_run, would be) removed.
@@ -502,20 +613,22 @@ def archive_entry(level_dir, slug, archive_subdir=".archive", dry_run=False, *, 
     `placement_lock_if_listed`) across every line it drops and the body move, so no render places
     the fact again between them; it waits for it as `set-topics` does and raises
     PlacementLockBusy (a TimeoutError, so an OSError) when it stays held."""
+    held: contextlib.AbstractContextManager[None]
     if dry_run:
         held = contextlib.nullcontext()
     else:
         sig.refuse_if_memory_writes_off()
-        held = ME.placement_lock_if_listed(ME._anchor(str(level_dir)),
+        held = ME.placement_lock_if_listed(ME._anchor(str(level_dir)),  # pyright: ignore[reportPrivateUsage]
                                            "reconcile_memory_index.py --archive")
     with held:
         return _archive_entry(level_dir, slug, archive_subdir, dry_run, move, commit, force)
 
 
-def _archive_entry(level_dir, slug, archive_subdir, dry_run, move, commit, force):
+def _archive_entry(level_dir: _StrPath, slug: str, archive_subdir: str, dry_run: bool,
+                   move: _MovePort | None, commit: _CommitPort | None, force: bool) -> bool:
     """`archive_entry` itself; its caller holds the placement lock for a bound fact."""
-    move = move or shutil.move
-    commit = commit or ME._commit_store
+    move_body: _MovePort = move or shutil.move
+    write: _CommitPort = commit or ME._commit_store  # pyright: ignore[reportPrivateUsage]
     d = Path(level_dir)
     scope, entries, bodies = ME.read_store(str(d))
     qcanon = _canon(slug)
@@ -526,9 +639,9 @@ def _archive_entry(level_dir, slug, archive_subdir, dry_run, move, commit, force
         if not _names_invalid_pointer(d, slug):
             return False
         if not dry_run:
-            commit(str(d), scope, entries, bodies)
+            write(str(d), scope, entries, bodies)
         return True
-    anchor = ME._anchor(str(d))
+    anchor = ME._anchor(str(d))  # pyright: ignore[reportPrivateUsage]
     # A fact placed by topic is archived at EVERY level it has a line at, so this is its last
     # pointer whatever the other levels hold, and whatever names it is left naming nothing.
     others = placed_copies(anchor, d, slug)
@@ -538,14 +651,15 @@ def _archive_entry(level_dir, slug, archive_subdir, dry_run, move, commit, force
             raise ArchiveBlocked(slug, found)
     if dry_run:                                  # a dry run reports the outcome and writes NOTHING
         return True
-    dropped = []
+    dropped: list[str] = []
     try:
         for other in others:
             # before the body moves: a failure here leaves the body, this level's line and the
             # lines not yet reached, which a render repairs, never a line with no body
-            ME._drop_pointer(other, slug)
+            ME._drop_pointer(other, slug)  # pyright: ignore[reportPrivateUsage]
             dropped.append(other)
-        _archive_here(d, anchor, slug, scope, entries, kept, bodies, archive_subdir, move, commit)
+        _archive_here(d, anchor, slug, scope, entries, kept, bodies, archive_subdir, move_body,
+                      write)
     except ArchiveRollbackFailed as exc:
         if not dropped:
             raise
@@ -561,22 +675,24 @@ def _archive_entry(level_dir, slug, archive_subdir, dry_run, move, commit, force
     return True
 
 
-def _archive_here(d, anchor, slug, scope, entries, kept, bodies, archive_subdir, move, commit):
+def _archive_here(d: Path, anchor: Path, slug: str, scope: str, entries: list[ME.Entry],
+                  kept: list[ME.Entry], bodies: dict[str, str], archive_subdir: str,
+                  move: _MovePort, commit: _CommitPort) -> None:
     """Move the body to the archive when no OTHER level still holds a line of `slug` (the caller
     has dropped them), then write this level's block without it; a failed write moves the body
     back (see `archive_entry`)."""
     qcanon = _canon(slug)
-    moved = []
+    moved: list[tuple[Path, Path]] = []
     for e in entries:
         if _canon(e.slug) == qcanon:
-            src = us.legacy_body_path(anchor, e.uuid) if e.legacy else us.body_path(anchor, e.slug)
+            src = _us.legacy_body_path(anchor, e.uuid) if e.legacy else _us.body_path(anchor, e.slug)
             # archive the body ONLY when no other level in the tree still points at this slug
             others = _other_levels_pointing(anchor, d, e.slug)
             if src.is_file() and not others:
-                archive = us.central_facts_dir(anchor).parent / archive_subdir
+                archive = _us.central_facts_dir(anchor).parent / archive_subdir
                 archive.mkdir(parents=True, exist_ok=True)
                 # an archive is the only copy of a retired fact: never move onto an earlier one
-                dest = us.free_archive_path(archive, src.name)
+                dest = _us.free_archive_path(archive, src.name)
                 move(str(src), str(dest))
                 moved.append((src, dest))
     try:
@@ -588,7 +704,7 @@ def _archive_here(d, anchor, slug, scope, entries, kept, bodies, archive_subdir,
 
 # ---- CLI ---------------------------------------------------------------------------------------
 
-def _print_mentions(found):
+def _print_mentions(found: Mentions) -> None:
     for lvl, src in found["refs"]:
         print("    [[ref]]  %s  @ %s" % (src, lvl))
     for lvl, src in found["prose"]:
@@ -597,7 +713,7 @@ def _print_mentions(found):
         print("    doc      %s" % doc)
 
 
-def _all_curated_levels(anchor, unreadable=None):
+def _all_curated_levels(anchor: _StrPath, unreadable: list[str] | None = None) -> list[str]:
     """Every curated level dir under `anchor` (a `CLAUDE.local.md` with a managed pointer block).
     Delegates to the engine's `curated_levels_under` (the single tree-walk) so this tool and the
     engine's `lint --tree` never enumerate the tree differently. It raises on anything it cannot
@@ -605,7 +721,7 @@ def _all_curated_levels(anchor, unreadable=None):
     return ME.curated_levels_under(anchor, unreadable=unreadable)
 
 
-def _list_store_dir(d, unreadable):
+def _list_store_dir(d: Path, unreadable: list[str] | None) -> list[Path]:
     """The entries of one directory of the body store; [] when it does not exist.
 
     A directory that exists but cannot be listed raises `TreeWalkError`, or - for a caller that
@@ -623,7 +739,7 @@ def _list_store_dir(d, unreadable):
         return []
 
 
-def _store_bodies(facts, unreadable=None):
+def _store_bodies(facts: Path, unreadable: list[str] | None = None) -> tuple[set[str], dict[str, str]]:
     """(flat slugs, {legacy uuid: "<shard>/<uuid>"}) for every body in a central store.
 
     Both layouts the engine reads: `facts/<slug>.md`, and the pre-pivot sharded
@@ -632,17 +748,17 @@ def _store_bodies(facts, unreadable=None):
     is not a body at all. The same rule as compuse-toolbox's `mem_levels.py`."""
     entries = _list_store_dir(facts, unreadable)
     flat = {e.stem for e in entries if e.suffix == ".md" and e.is_file()}
-    sharded = {}
+    sharded: dict[str, str] = {}
     for d in entries:
         if not d.is_dir() or d.is_symlink():
             continue
         for f in _list_store_dir(d, unreadable):
-            if f.suffix == ".md" and f.is_file() and us.shard(f.stem) == d.name:
+            if f.suffix == ".md" and f.is_file() and _us.shard(f.stem) == d.name:
                 sharded[f.stem] = "%s/%s" % (d.name, f.stem)
     return flat, sharded
 
 
-def find_dangling_bodies(anchor, unreadable=None):
+def find_dangling_bodies(anchor: _StrPath, unreadable: list[str] | None = None) -> list[str]:
     """Central bodies that NO curated level in the tree points at - the invisible orphans: loaded
     by nothing, yet the slug is 'taken' so a plain `add` used to refuse re-creating it.
 
@@ -652,8 +768,9 @@ def find_dangling_bodies(anchor, unreadable=None):
 
     A store directory that cannot be listed raises `TreeWalkError`, unless `unreadable` is a list,
     which then receives its path instead."""
-    flat, sharded = _store_bodies(us.central_facts_dir(Path(anchor)), unreadable)
-    pointed, legacy = set(), set()
+    flat, sharded = _store_bodies(_us.central_facts_dir(Path(anchor)), unreadable)
+    pointed: set[str] = set()
+    legacy: set[str] = set()
     for lvl in _all_curated_levels(anchor):
         entries = ME.read_store(str(lvl))[1]
         pointed |= {e.slug for e in entries}
@@ -662,7 +779,7 @@ def find_dangling_bodies(anchor, unreadable=None):
                                            if uuid not in legacy)
 
 
-def _is_sharded_body_name(name):
+def _is_sharded_body_name(name: str) -> bool:
     """True for a `find_dangling_bodies` name that is a pre-pivot `<shard>/<uuid>` body."""
     return "/" in name
 
@@ -687,7 +804,7 @@ _ABS_PATH_RX = re.compile(
 )
 
 
-def find_misplaced(anchor):
+def find_misplaced(anchor: _StrPath) -> list[Misplaced]:
     """Facts under `anchor` whose body is ABOUT a different tree - the wrong-dir capture, made visible.
 
     Capture routes by cwd, so a learning discovered about repo B while working in repo A lands in
@@ -701,19 +818,19 @@ def find_misplaced(anchor):
     never relocates on its own.
     """
     anchor_r = Path(anchor).resolve()
-    out = []
+    out: list[Misplaced] = []
     for lvl in ME.curated_levels_under(str(anchor_r)):
         _scope, entries, bodies = ME.read_store(lvl)
         for e in entries:
             body = bodies.get(e.slug) or ""
-            foreign = {}
+            foreign: dict[str, list[str]] = {}
             own = 0
             for m in _ABS_PATH_RX.finditer(body):
                 p = m.group(1)
-                a = ME.us.resolve_anchor(p) or _existing_ancestor_anchor(p)
-                if a is None:
+                found = _us.resolve_anchor(p) or _existing_ancestor_anchor(p)
+                if found is None:
                     continue
-                a = Path(a).resolve()
+                a = Path(found).resolve()
                 if a == anchor_r:
                     own += 1
                 else:
@@ -727,16 +844,16 @@ def find_misplaced(anchor):
     return out
 
 
-def _existing_ancestor_anchor(path):
+def _existing_ancestor_anchor(path: str) -> Path | None:
     """Anchor for the nearest EXISTING ancestor of `path` (a body cites files, not just dirs)."""
     p = Path(path)
     for cand in [p] + list(p.parents):
         if cand.exists():
-            return ME.us.resolve_anchor(str(cand))
+            return _us.resolve_anchor(str(cand))
     return None
 
 
-def find_decoy_anchors(anchor, unreadable=None):
+def find_decoy_anchors(anchor: _StrPath, unreadable: list[str] | None = None) -> list[str]:
     """Every `.claude-memory` store dir STRICTLY BELOW the tree top - a DECOY anchor. resolve_anchor
     always returns the TOPMOST ancestor carrying CLAUDE.md + a store, so any store dir deeper in the
     tree is dead to the engine, yet the `CLAUDE.local.md` walk-up retrieval text resolves a
@@ -752,25 +869,23 @@ def find_decoy_anchors(anchor, unreadable=None):
 
     `unreadable`, when a list, receives the path of every directory the walk could not list: a
     plain os.walk skips one in silence, so a decoy (or a whole level) behind it reads as absent."""
-    import os
-    import self_improve_signals as sig
-    anchor = Path(anchor).resolve()
-    audit_root = sig._audit_dir().resolve()
-    found = []
+    top = Path(anchor).resolve()
+    audit_root = sig._audit_dir().resolve()  # pyright: ignore[reportPrivateUsage]
+    found: list[str] = []
 
-    def _note(exc):
+    def _note(exc: OSError) -> None:
         if unreadable is not None:
             unreadable.append(str(getattr(exc, "filename", None) or exc))
 
-    for root, dirs, _files in os.walk(str(anchor), onerror=_note):
+    for root, dirs, _files in os.walk(str(top), onerror=_note):
         rootp = Path(root)
         for d in dirs:
-            if d == us.STORE_DIRNAME and rootp.resolve() != anchor:
+            if d == us.STORE_DIRNAME and rootp.resolve() != top:
                 found.append(str(rootp / d))
         # never descend into a store, a backup/variant dir (`<store>-*`), a vendored dir, or the
         # dream's own backup root
         dirs[:] = [d for d in dirs
-                   if not us.is_non_level_dirname(d) and (rootp / d).resolve() != audit_root]
+                   if not _us.is_non_level_dirname(d) and (rootp / d).resolve() != audit_root]
     return sorted(found)
 
 
@@ -781,7 +896,7 @@ def find_decoy_anchors(anchor, unreadable=None):
 _RENDER_ROUTE = "hooks/memory_engine.py render-topics --proj %s --scope %s"
 
 
-def render_drift(anchor):
+def render_drift(anchor: _StrPath) -> tuple[list[_DriftRow], str]:
     """([(level, missing, differing, extra, example slugs)], refused) for `anchor`'s tree: what a
     `render-topics --scope tree` would change, read from its dry run, so the check and the
     renderer cannot disagree. Per level with a few examples, never one row per fact. `refused` is
@@ -798,7 +913,7 @@ def render_drift(anchor):
     except OSError as exc:                         # a file gone or unreadable between the reads
         return [], "the dry run could not read a store file (%s)" % (
             str(exc) or type(exc).__name__)
-    rows = []
+    rows: list[_DriftRow] = []
     for level in sorted(rep.levels):
         row = rep.levels[level]
         examples = sorted({slug for slugs in row.examples.values() for slug in slugs})[:5]
@@ -811,39 +926,39 @@ class _TreePins:
     `_unplaceable_slugs`), read on first use per anchor: one tree walk, one record per such
     pointer. Such a fact is never placed by topic."""
 
-    def __init__(self):
-        self._by_anchor = {}
+    def __init__(self) -> None:
+        self._by_anchor: dict[str, set[str]] = {}
 
-    def __call__(self, anchor):
+    def __call__(self, anchor: _StrPath) -> set[str]:
         key = str(anchor)
         if key not in self._by_anchor:
-            self._by_anchor[key] = ME._unplaceable_slugs(ME.curated_levels_under(key))
+            self._by_anchor[key] = ME._unplaceable_slugs(ME.curated_levels_under(key))  # pyright: ignore[reportPrivateUsage]
         return self._by_anchor[key]
 
 
-def _placed_by_topic(anchor, slug, pins):
+def _placed_by_topic(anchor: _StrPath, slug: str, pins: _PinsPort) -> bool:
     """True when the renderer manages `slug` (the engine's own test): its body carries a non-empty
     `topics:` line and the title and description a line is built from, and no level pins it or
     holds a legacy line of it (`pins(anchor)`, asked only for such a body). Its lines then stand wherever the levels' topics
     place them, at levels a citing fact's chain need not include. Reads one body head."""
-    if not us.is_valid_slug(slug):
+    if not _us.is_valid_slug(slug):
         return False
-    head = ME._read_body_head(us.body_path(anchor, slug))
-    if head is None or ME._managed_topics(slug, head, ()) is None:
+    head = ME._read_body_head(_us.body_path(anchor, slug))  # pyright: ignore[reportPrivateUsage]
+    if head is None or ME._managed_topics(slug, head, ()) is None:  # pyright: ignore[reportPrivateUsage]
         return False
     return slug not in pins(anchor)
 
 
-def _level_pointers(level):
-    return us.parse_pointer_index(ME.read_store_text(sig.claude_local_md_path(level)))[1]
+def _level_pointers(level: _StrPath) -> list[us.Pointer]:
+    return _us.parse_pointer_index(ME.read_store_text(sig.claude_local_md_path(level)))[1]
 
 
-def _levels_above(level, anchor):
+def _levels_above(level: Path, anchor: Path) -> list[Path]:
     """The curated levels above `level` up to the tree top, narrow to broad: found lexically, as
     the engine's chain render finds its chain. [] when `level` is the top or not below it."""
     if anchor not in level.parents:
         return []
-    out = []
+    out: list[Path] = []
     for up in level.parents:
         if is_curated(up):
             out.append(up)
@@ -852,18 +967,19 @@ def _levels_above(level, anchor):
     return out
 
 
-def chain_repeats(dirs):
+def chain_repeats(dirs: Iterable[_StrPath]) -> list[tuple[str, str, str]]:
     """[(slug, level, level above)] for every topic-placed line at one of `dirs` that a level
     above it also holds: both are read in the same session, so the lower copy is surplus
     (`render-topics --scope chain` from that level drops it). A fact pinned at any level, or one
     the renderer does not manage, is not placed by topic and is left to --check-tree. Holds the
     slugs of one level above at a time."""
-    pins, out = _TreePins(), set()
+    pins = _TreePins()
+    out: set[tuple[str, str, str]] = set()
     for d in _narrow_to_broad([Path(d) for d in dirs]):
         if not is_curated(d):
             continue
         here = Path(os.path.abspath(str(d)))
-        anchor = Path(os.path.abspath(str(ME._anchor(str(here)))))
+        anchor = Path(os.path.abspath(str(ME._anchor(str(here)))))  # pyright: ignore[reportPrivateUsage]
         mine = [p.slug for p in _level_pointers(here) if not p.legacy]
         for upper in _levels_above(here, anchor) if mine else []:
             held = {p.slug for p in _level_pointers(upper)}
@@ -873,23 +989,24 @@ def chain_repeats(dirs):
     return sorted(out)
 
 
-def check_tree(anchor):
+def check_tree(anchor: _StrPath) -> TreeReport:
     """Tree-wide integrity over EVERY curated level under `anchor` (SIBLINGS included) - the checks
     the chain-scoped `--check` structurally cannot make: a slug pointed at from more than one level
     (slugs are TREE-unique, so any duplicate is a violation heal never sees), a pointer whose central
     body is missing, a `[[ref]]` that resolves NOWHERE in the tree, and central bodies no level points
     at. Only levels anchored at THIS anchor count (a nested independent tree is separate). Returns a
     report dict; `duplicates`/`orphan_pointers`/`orphan_refs` are the HARD problems."""
-    anchor = ME._anchor(str(anchor))
-    anchor_res = Path(anchor).resolve()
-    unreadable = []                             # a report names what it could not check
-    levels = [lvl for lvl in _all_curated_levels(anchor, unreadable=unreadable)
-              if Path(ME._anchor(lvl)).resolve() == anchor_res]
-    slug_levels = {}                            # canonical slug -> [level dirs pointing at it]
-    orphan_pointers = []                        # (level, slug) whose central body is missing
-    all_targets = set()                         # every slug offered anywhere in the tree
-    tagged, pinned = set(), set()               # canonical slugs: renderable topic-bound / pinned
-    ref_sources = []                            # (level, source_slug, ref_slug)
+    top = ME._anchor(str(anchor))  # pyright: ignore[reportPrivateUsage]
+    anchor_res = Path(top).resolve()
+    unreadable: list[str] = []                  # a report names what it could not check
+    levels = [lvl for lvl in _all_curated_levels(top, unreadable=unreadable)
+              if Path(ME._anchor(lvl)).resolve() == anchor_res]  # pyright: ignore[reportPrivateUsage]
+    slug_levels: dict[str, list[str]] = {}      # canonical slug -> [level dirs pointing at it]
+    orphan_pointers: list[tuple[str, str]] = []  # (level, slug) whose central body is missing
+    all_targets: set[str] = set()               # every slug offered anywhere in the tree
+    tagged: set[str] = set()                    # canonical slugs: renderable topic-bound
+    pinned: set[str] = set()                    # canonical slugs: pinned or legacy somewhere
+    ref_sources: list[tuple[str, str, str]] = []  # (level, source_slug, ref_slug)
     for lvl in levels:
         try:
             _scope, entries, bodies = ME.read_store(lvl)
@@ -902,9 +1019,9 @@ def check_tree(anchor):
             all_targets.add(cslug)
             if e.pin or e.legacy:           # the engine's rule: such a fact is never placed
                 pinned.add(cslug)
-            if not e.legacy and ME._managed_topics(e.slug, bodies.get(e.slug, ""), ()) is not None:
+            if not e.legacy and ME._managed_topics(e.slug, bodies.get(e.slug, ""), ()) is not None:  # pyright: ignore[reportPrivateUsage]
                 tagged.add(cslug)
-            body_p = us.legacy_body_path(anchor, e.uuid) if e.legacy else us.body_path(anchor, e.slug)
+            body_p = _us.legacy_body_path(top, e.uuid) if e.legacy else _us.body_path(top, e.slug)
             if not body_p.is_file():
                 orphan_pointers.append((lvl, e.slug))
             cited = ME.mask_code_regions(e.hook + "\n" + bodies.get(e.slug, ""))
@@ -923,7 +1040,7 @@ def check_tree(anchor):
     # citing level's cascade - a fact citing a sibling subtree's slug, or a broad fact citing a
     # slug that lives below it. `[[refs]]` are upward-only; the chain-only `--check` catches these
     # per chain, but tree-wide `--check-tree` must too (it saw only the nowhere-resolving orphans).
-    def _reachable(ref_canon, citing_level):
+    def _reachable(ref_canon: str, citing_level: str) -> bool:
         if ref_canon in managed:
             # placed by topic: where its lines stand follows the levels' topics, not the citer,
             # and the ref resolves through the central body wherever they are
@@ -936,18 +1053,21 @@ def check_tree(anchor):
         return False
     sideways_refs = sorted(set((lvl, s, r) for (lvl, s, r) in ref_sources
                                if r in all_targets and not _reachable(r, lvl)))
-    decoys = find_decoy_anchors(anchor, unreadable=unreadable)
-    frame_only = find_frame_only_bodies(anchor, unreadable=unreadable)
-    appended = find_appended_type_damage(anchor, unreadable=unreadable)
+    decoys = find_decoy_anchors(top, unreadable=unreadable)
+    frame_only = find_frame_only_bodies(top, unreadable=unreadable)
+    appended = find_appended_type_damage(top, unreadable=unreadable)
     # With a level unreadable the render cannot be computed either; that finding already fails.
-    drift, refused = ([], "") if unreadable else render_drift(anchor)
+    drift: list[_DriftRow] = []
+    refused = ""
+    if not unreadable:
+        drift, refused = render_drift(top)
     # A body pointed at only from a level that could not be read would list as dangling, and
     # --rehome would then re-attach a fact that still has a pointer - so with anything unreadable
     # the danglers are not assessed; the unreadable finding already fails the run.
-    danglers = [] if unreadable else find_dangling_bodies(anchor, unreadable=unreadable)
+    danglers: list[str] = [] if unreadable else find_dangling_bodies(top, unreadable=unreadable)
     if unreadable:
         danglers = []                           # a store dir the listing itself could not read
-    return {"anchor": str(anchor), "levels": len(levels), "duplicates": duplicates,
+    return {"anchor": str(top), "levels": len(levels), "duplicates": duplicates,
             "render_drift": drift, "render_refused": refused,
             "orphan_pointers": sorted(orphan_pointers), "orphan_refs": orphan_refs,
             "sideways_refs": sideways_refs, "danglers": danglers,
@@ -955,7 +1075,7 @@ def check_tree(anchor):
             "frame_only_bodies": frame_only, "appended_type_damage": appended}
 
 
-def find_frame_only_bodies(anchor, unreadable=None):
+def find_frame_only_bodies(anchor: _StrPath, unreadable: list[str] | None = None) -> list[str]:
     """Slugs whose central body is its frontmatter frame and nothing else.
 
     Every other tree check passes such a fact: the pointer resolves, the body FILE exists, the slug
@@ -969,9 +1089,8 @@ def find_frame_only_bodies(anchor, unreadable=None):
 
     A body that cannot be read or is not UTF-8 raises `TreeWalkError`, unless `unreadable` is a
     list, which then receives its path: skipping it in silence reported it as not frame-only."""
-    anchor = Path(anchor)
-    out = []
-    facts = us.central_facts_dir(anchor)
+    out: list[str] = []
+    facts = _us.central_facts_dir(Path(anchor))
     if not facts.is_dir():
         return out
     flat, sharded = _store_bodies(facts, unreadable)
@@ -996,7 +1115,7 @@ def find_frame_only_bodies(anchor, unreadable=None):
 _FRONTMATTER_RX = re.compile(r"---[ \t]*\n(?:.*?\n)?---[ \t]*(?:\n|\Z)", re.S)
 
 
-def _content_after_frontmatter(raw):
+def _content_after_frontmatter(raw: str) -> str:
     """`raw` with its leading frontmatter block removed; the whole text when there is none.
     Matched to the FIRST closing delimiter, so a payload holding its own `---` rule survives."""
     m = _FRONTMATTER_RX.match(raw)
@@ -1011,16 +1130,16 @@ def _content_after_frontmatter(raw):
 _APPENDED_TYPE_RX = re.compile(r"\r?\nmetadata:\r?\n  type: (\S+)[ \t]*\Z")
 
 
-def appended_type_damage(raw):
+def appended_type_damage(raw: str) -> tuple[str, str] | None:
     """(prose, kind) when `raw` carries the appended-type damage, else None. PURE.
 
     The damaged span is the text before the first `---` line after the opening rule (or the whole
     text when there is none); it must end in the appended block, and `kind` must be one of the four
     kinds, or it is not this damage. Also found under a real frame, which a later re-type puts on
     top of a damaged body. `prose` is the text with only the appended block removed."""
-    head, m = ME._frontmatter(raw)
+    head, m = ME._frontmatter(raw)  # pyright: ignore[reportPrivateUsage]
     content = (head[m.end():] if m else head).lstrip()
-    if not _FRONTMATTER_OPEN_RE.match(content) or ME._frontmatter(content)[1] is not None:
+    if not _FRONTMATTER_OPEN_RE.match(content) or ME._frontmatter(content)[1] is not None:  # pyright: ignore[reportPrivateUsage]
         return None
     end = content.find("\n---", 3)
     front, rest = (content[:end], content[end:]) if end > 0 else (content.rstrip(), "")
@@ -1030,17 +1149,17 @@ def appended_type_damage(raw):
     return front[:t.start()] + rest, t.group(1)
 
 
-def find_appended_type_damage(anchor, unreadable=None):
+def find_appended_type_damage(anchor: _StrPath, unreadable: list[str] | None = None) -> list[str]:
     """Names of the bodies in `anchor`'s store carrying `appended_type_damage`: a flat body by its
     slug, a sharded one as `<shard>/<uuid>`. A body that cannot be read raises `TreeWalkError`,
     unless `unreadable` is a list, which then receives its path."""
-    facts = us.central_facts_dir(Path(anchor))
+    facts = _us.central_facts_dir(Path(anchor))
     if not facts.is_dir():
         return []
     flat, sharded = _store_bodies(facts, unreadable)
     items = sorted((facts / (slug + ".md"), slug) for slug in flat)
     items += sorted((facts / (rel + ".md"), rel) for rel in sharded.values())
-    out = []
+    out: list[str] = []
     for path, name in items:
         try:
             raw = ME.read_store_text(path)
@@ -1054,27 +1173,31 @@ def find_appended_type_damage(anchor, unreadable=None):
     return out
 
 
-def repair_appended_type(anchor, dry_run=False):
+def repair_appended_type(anchor: _StrPath, dry_run: bool = False) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
     """Re-frame every damaged body through the engine: the prose with the appended block removed,
     under a real frame carrying the kind (the real frame's own kind when the body has one, else the
     appended one). Title, hook and pin come from the pointer and are kept.
 
     Returns (repaired [(slug, kind)], skipped [(name, why)]). A body no pointer names, or a sharded
     one, is skipped: there is no title or hook to re-frame it with."""
-    anchor = Path(anchor)
-    owners = {}
-    for lvl in _all_curated_levels(anchor):
+    top = Path(anchor)
+    owners: dict[str, tuple[str, ME.Entry]] = {}
+    for lvl in _all_curated_levels(top):
         for e in ME.read_store(str(lvl))[1]:
             owners.setdefault(e.slug, (lvl, e))
-    repaired, skipped = [], []
-    for name in find_appended_type_damage(anchor):
+    repaired: list[tuple[str, str]] = []
+    skipped: list[tuple[str, str]] = []
+    for name in find_appended_type_damage(top):
         if _is_sharded_body_name(name) or name not in owners:
             skipped.append((name, "no pointer names this body - re-home it first (--rehome)"))
             continue
         level, entry = owners[name]
-        raw = ME.read_store_text(us.body_path(anchor, name))
-        prose, appended = appended_type_damage(raw)
-        kind = ME._body_type(raw) or appended                 # noqa: SLF001 - the engine's reader
+        raw = ME.read_store_text(_us.body_path(top, name))
+        damage = appended_type_damage(raw)
+        # the scan above read this body and found the damage; only a concurrent writer clears it
+        assert damage is not None, "%s changed since the scan found it damaged" % name
+        prose, appended = damage
+        kind = ME._body_type(raw) or appended                 # noqa: SLF001 - the engine's reader  # pyright: ignore[reportPrivateUsage]
         if not dry_run:
             ME.add_or_update_entry(str(level), title=entry.title, hook=entry.hook, body=prose,
                                    type_=kind, slug=name, allow_over_cap_hook=True,
@@ -1083,18 +1206,18 @@ def repair_appended_type(anchor, dry_run=False):
     return repaired, skipped
 
 
-def rehome_pointer(anchor, slug):
+def rehome_pointer(anchor: _StrPath, slug: str) -> us.Pointer:
     """The pointer line a re-home writes for the dangling body `slug`: its hook from the body's
     `description:`, its title from the body's `title:`. Only a body written before titles were
     kept as data has none, and then the title is derived from the slug - the stored one, when
     there is one, is the fact's own: deriving it anyway also overwrote it in the body, since every
     engine write keeps the two equal."""
-    text = ME.read_store_text(us.body_path(anchor, slug))
-    return us.Pointer(slug=slug, title=ME._body_title(text) or slug.replace("-", " "),
-                      hook=ME._body_description(text))
+    text = ME.read_store_text(_us.body_path(anchor, slug))
+    return us.Pointer(slug=slug, title=ME._body_title(text) or slug.replace("-", " "),  # pyright: ignore[reportPrivateUsage]
+                      hook=ME._body_description(text))  # pyright: ignore[reportPrivateUsage]
 
 
-def rehome_dangling_bodies(anchor, to_level=None, dry_run=False):
+def rehome_dangling_bodies(anchor: _StrPath, to_level: _StrPath | None = None, dry_run: bool = False) -> list[str]:
     """Re-attach a pointer for each dangling body at `to_level` (default: the anchor top) so it becomes
     visible + loadable again; a later dream re-levels it. The line is `rehome_pointer`'s. Returns the
     rehomed slugs.
@@ -1103,25 +1226,25 @@ def rehome_dangling_bodies(anchor, to_level=None, dry_run=False):
     sharded body with no slug to re-attach under, or it cannot be read - and the caller reports
     each one. Skipping them here, rather than raising, keeps one such body from stopping the
     re-home of every body after it."""
-    anchor = Path(anchor)
-    to_level = str(to_level or anchor)
-    blocked = {name for name, _why in unrehomable_bodies(anchor)}
-    done = []
-    for slug in find_dangling_bodies(anchor):
+    top = Path(anchor)
+    target = str(to_level or top)
+    blocked = {name for name, _why in unrehomable_bodies(top)}
+    done: list[str] = []
+    for slug in find_dangling_bodies(top):
         if slug in blocked:
             continue
-        line = rehome_pointer(anchor, slug)
+        line = rehome_pointer(top, slug)
         if not dry_run:
             # add with no body keeps the existing central body; Fix A re-adopts the dangling slug.
             # allow_over_cap_hook: a rehome MOVES a stored hook verbatim, so a legacy over-cap one
             # must travel with its fact rather than block the move.
-            ME.add_or_update_entry(to_level, title=line.title, hook=line.hook, slug=slug,
+            ME.add_or_update_entry(target, title=line.title, hook=line.hook, slug=slug,
                                    allow_over_cap_hook=True)
         done.append(slug)
     return done
 
 
-def unrehomable_bodies(anchor):
+def unrehomable_bodies(anchor: _StrPath) -> list[tuple[str, str]]:
     """[(name, why)] for each dangling body a re-home must not act on:
 
     * a pre-pivot sharded body (`<shard>/<uuid>`): it carries no slug, and making one up would
@@ -1129,24 +1252,24 @@ def unrehomable_bodies(anchor):
     * a filename that is not a valid slug, so no pointer can name it until it is renamed;
     * a body that cannot be read or is not UTF-8: re-attaching it would put a pointer in the
       always-loaded index whose hook was never read."""
-    anchor = Path(anchor)
-    out = []
-    for name in find_dangling_bodies(anchor):
+    top = Path(anchor)
+    out: list[tuple[str, str]] = []
+    for name in find_dangling_bodies(top):
         if _is_sharded_body_name(name):
             out.append((name, "a pre-pivot sharded body no pointer names; it carries no slug to "
                               "re-attach under - read it, then re-capture it with memory_engine "
                               "add, or move it to .claude-memory/.archive/"))
-        elif not us.is_valid_slug(name):
+        elif not _us.is_valid_slug(name):
             out.append((name, "its name is not a valid slug; rename the body file"))
         else:
             try:
-                ME.read_store_text(us.body_path(anchor, name))
+                ME.read_store_text(_us.body_path(top, name))
             except ME.TreeWalkError as exc:
-                out.append((name, exc.reason))
+                out.append((name, _walk_error_reason(exc)))
     return out
 
 
-def _unreadable_line(path):
+def _unreadable_line(path: str) -> str:
     """The --check-tree line for one path the check could not read: a level file, a fact body, or
     a directory. Only a FILE can be re-saved as UTF-8, so the advice follows what the path is."""
     p = Path(path)
@@ -1159,14 +1282,14 @@ def _unreadable_line(path):
     return "unreadable directory (not checked - fix its permissions): %s" % path
 
 
-def _print_report(rep):
+def _print_report(rep: ReconcileReport) -> None:
     print("curated dir: %s" % rep["dir"])
     print("  facts: %d | orphan pointers (no central body): %d" % (rep["facts"], len(rep["orphans"])))
     for slug in rep["orphans"]:
         print("    ! orphan (pointer line, no central body): %s" % slug)
 
 
-def main(argv=None):
+def main(argv: Sequence[str] | None = None) -> int:
     """The CLI; exit codes are in the module docstring.
 
     TreeWalkError and OSError are mapped to 2 HERE, once, rather than in each mode: any read or
@@ -1189,7 +1312,7 @@ def main(argv=None):
         return 2
 
 
-def _main(argv=None):
+def _main(argv: Sequence[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Reference-check / reconcile a curated memory altitude.")
     ap.add_argument("dirs", nargs="+", help="level dir(s) to reconcile, or an altitude chain for --check")
     ap.add_argument("--dry-run", action="store_true", help="report only; write nothing")
@@ -1246,7 +1369,7 @@ def _main(argv=None):
         return 2
 
     if args.check_misplaced:
-        anchor = ME._anchor(args.dirs[0])
+        anchor = ME._anchor(args.dirs[0])  # pyright: ignore[reportPrivateUsage]
         rows = find_misplaced(anchor)
         print("misplacement audit: %s" % anchor)
         for r in rows:
@@ -1264,13 +1387,13 @@ def _main(argv=None):
         return 1 if rows else 0
 
     if args.archive:
-        level = args.dirs[0]
-        found = None
-        anchor = ME._anchor(level)
+        level: str = args.dirs[0]
+        found: Mentions | None = None
+        anchor = ME._anchor(level)  # pyright: ignore[reportPrivateUsage]
         # Only a LAST pointer leaves its mentions dangling; while another level still points at
         # the slug the fact survives, and listing its mentions would claim they now name nothing.
         # a slug that is no filename owns no body; archive_entry reports it as no entry
-        others = (placed_copies(anchor, level, args.archive) if us.is_valid_slug(args.archive)
+        others = (placed_copies(anchor, level, args.archive) if _us.is_valid_slug(args.archive)
                   else [])
         if args.force and (others or not _other_levels_pointing(anchor, level, args.archive)):
             found = inbound_mentions(anchor, args.archive)
@@ -1305,7 +1428,7 @@ def _main(argv=None):
         return 1
 
     if args.check_tree:
-        rep = check_tree(ME._anchor(args.dirs[0]))
+        rep = check_tree(ME._anchor(args.dirs[0]))  # pyright: ignore[reportPrivateUsage]
         problems = 0
         print("tree integrity: %d curated level(s) under %s" % (rep["levels"], rep["anchor"]))
         for slug, lvls in sorted(rep["duplicates"].items()):
@@ -1358,7 +1481,7 @@ def _main(argv=None):
         return 1 if problems else 0
 
     if args.repair_appended_type:
-        anchor = ME._anchor(args.dirs[0])
+        anchor = ME._anchor(args.dirs[0])  # pyright: ignore[reportPrivateUsage]
         repaired, skipped = repair_appended_type(anchor, dry_run=args.dry_run)
         for slug, kind in repaired:
             print("%s: %s (type %s)" % ("would repair" if args.dry_run else "repaired", slug, kind))
@@ -1368,7 +1491,7 @@ def _main(argv=None):
         return 1 if skipped else 0
 
     if args.rehome:
-        anchor = ME._anchor(args.dirs[0])
+        anchor = ME._anchor(args.dirs[0])  # pyright: ignore[reportPrivateUsage]
         done = rehome_dangling_bodies(anchor, to_level=args.rehome_to, dry_run=args.dry_run)
         for slug in done:
             print("%s: %s" % ("would re-home" if args.dry_run else "re-homed", slug))
@@ -1377,7 +1500,7 @@ def _main(argv=None):
             # The cost every re-home to a level is reported with: the bytes its lines add to
             # that level's always-loaded block (a dangling body has no line there yet).
             target = args.rehome_to or str(anchor)
-            added = sum(ME._line_size(rehome_pointer(anchor, s)) for s in done)
+            added = sum(ME._line_size(rehome_pointer(anchor, s)) for s in done)  # pyright: ignore[reportPrivateUsage]
             print("cost: %s %d byte(s) to the always-loaded pointer block at %s%s"
                   % ("would add" if args.dry_run else "added", added, target,
                      " (the tree top, loaded by every session in the tree)"
@@ -1387,7 +1510,7 @@ def _main(argv=None):
             print("cannot re-home: %s.md - %s" % (name, why))
         # a sharded body or a non-slug name is a finding for a person (1); anything else on the
         # list is a body that could not be READ, which is not an answer but a failure (2)
-        unread = [n for n, _why in stuck if not _is_sharded_body_name(n) and us.is_valid_slug(n)]
+        unread = [n for n, _why in stuck if not _is_sharded_body_name(n) and _us.is_valid_slug(n)]
         if unread:
             return 2
         return 1 if stuck else 0
@@ -1416,7 +1539,7 @@ def _main(argv=None):
                           "a fact to a broader level loads it in more sessions, not fewer"
                           % (d, nbytes, lines))
                     warnings += 1
-        danglers = find_dangling_bodies(ME._anchor(args.dirs[0]))
+        danglers = find_dangling_bodies(ME._anchor(args.dirs[0]))  # pyright: ignore[reportPrivateUsage]
         for slug in danglers:
             print("    ~ dangling body (no pointer at any level): %s" % slug)
         print("TOTAL problems: %d" % problems)
@@ -1438,12 +1561,17 @@ def _main(argv=None):
     return 1 if total_orphans else 0
 
 
-def _reconfigure_stdout():
+def _reconfigure_stdout() -> None:
     """A cp1252 console (bare `python3` on Windows) crashed on a level path it could not encode,
     mid-report. Escape instead; guarded, since a replaced stream may not support reconfigure."""
     for stream in (sys.stdout, sys.stderr):
+        # looked up, not called through TextIO: the declared stream type has no reconfigure, and
+        # a replaced stream may lack it at run time
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
         try:
-            stream.reconfigure(errors="backslashreplace")
+            reconfigure(errors="backslashreplace")
         except (AttributeError, ValueError, OSError):
             pass
 
