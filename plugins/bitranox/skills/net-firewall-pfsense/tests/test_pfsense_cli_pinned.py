@@ -54,8 +54,11 @@ def test_the_matrix_drives_every_cmd_function_in_both_output_forms():
 @pytest.mark.parametrize(("anchor", "planted"), [
     # human output only
     ('f"  ({len(reservations)} reservations)"', 'f"  ({len(reservations)} reservation)"'),
-    # --json output only
-    ('"skipped": skipped or []}', '"skipped": skipped or [], "extra": 1}'),
+    # --json output only: the envelope every verb shares
+    ('"skipped": list(self.skipped)}', '"skipped": list(self.skipped), "extra": 1}'),
+    # --json output only: records built on this side rather than decoded from a PHP reply
+    ('"permanent": self.permanent}', '"permanent": not self.permanent}'),
+    ('out["passlist_entries"] = self.passlist.passlist_entries', 'out["passlist_entries"] = 0'),
 ])
 def test_a_planted_change_to_either_output_form_is_caught(anchor, planted, tmp_path):
     source = SCRIPT.read_text(encoding="utf-8")

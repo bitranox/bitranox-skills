@@ -73,6 +73,7 @@ from dataclasses import dataclass, asdict, replace
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
+from typing import cast
 from urllib.parse import urlparse
 
 _DTD_RE = re.compile(r"<!DOCTYPE|<!ENTITY", re.I)
@@ -229,26 +230,27 @@ def _preview(value: object) -> str:
     return json.dumps(value)[:200]
 
 
-def _object(value: object, what: str) -> dict:
+def _object(value: object, what: str) -> dict[str, object]:
     if not isinstance(value, dict):
         raise PfsenseError(f"{what} is not a JSON object: {_preview(value)}")
-    return value
+    # json.loads gives every object str keys, and each field is then checked by its own reader.
+    return cast("dict[str, object]", value)
 
 
-def _array(value: object, what: str) -> list:
+def _array(value: object, what: str) -> list[object]:
     if not isinstance(value, list):
         raise PfsenseError(f"{what} is not a JSON array: {_preview(value)}")
-    return value
+    return cast("list[object]", value)
 
 
-def _text(obj: dict, key: str, what: str) -> str:
+def _text(obj: dict[str, object], key: str, what: str) -> str:
     value = obj.get(key)
     if not isinstance(value, str):
         raise PfsenseError(f"{what} has no text field {key!r}: {_preview(obj)}")
     return value
 
 
-def _flag(obj: dict, key: str, what: str) -> bool:
+def _flag(obj: dict[str, object], key: str, what: str) -> bool:
     value = obj.get(key)
     if not isinstance(value, bool):
         raise PfsenseError(f"{what} has no true/false field {key!r}: {_preview(obj)}")
@@ -278,7 +280,7 @@ class Reservation:
     def list_from_json(cls, value: object) -> list["Reservation"]:
         return [cls.from_json(item) for item in _array(value, "the DHCP reservation list")]
 
-    def to_json(self) -> dict:
+    def to_json(self) -> dict[str, object]:
         return {"interface": self.interface, "mac": self.mac, "ip": self.ip,
                 "hostname": self.hostname, "descr": self.descr, "static_arp": self.static_arp}
 
@@ -329,9 +331,10 @@ class Override:
     def list_from_json(cls, value: object) -> list["Override"]:
         return [cls.from_json(item) for item in _array(value, "the host override list")]
 
-    def to_json(self, *, with_fqdn: bool = False) -> dict:
+    def to_json(self, *, with_fqdn: bool = False) -> dict[str, object]:
         """The object the PHP echoed; `with_fqdn` appends the name `dns rm` selected it by."""
-        out = {"host": self.host, "domain": self.domain, "ip": self.ip, "descr": self.descr}
+        out: dict[str, object] = {"host": self.host, "domain": self.domain, "ip": self.ip,
+                                  "descr": self.descr}
         if with_fqdn:
             out["fqdn"] = self.fqdn
         return out
@@ -355,7 +358,7 @@ class Interface:
                    descr=_text(obj, "descr", what), ipaddr=_text(obj, "ipaddr", what),
                    subnet=_text(obj, "subnet", what))
 
-    def to_json(self) -> dict:
+    def to_json(self) -> dict[str, object]:
         return {"name": self.name, "if": self.device, "descr": self.descr, "ipaddr": self.ipaddr,
                 "subnet": self.subnet}
 
@@ -373,7 +376,7 @@ class Package:
         obj = _object(value, what)
         return cls(name=_text(obj, "name", what), version=_text(obj, "version", what))
 
-    def to_json(self) -> dict:
+    def to_json(self) -> dict[str, object]:
         return {"name": self.name, "version": self.version}
 
 
@@ -398,7 +401,7 @@ class FirewallInfo:
                    interfaces=tuple(Interface.from_json(item) for item in interfaces),
                    packages=tuple(Package.from_json(item) for item in packages))
 
-    def to_json(self) -> dict:
+    def to_json(self) -> dict[str, object]:
         return {"version": self.version, "dhcp_backend": self.dhcp_backend, "resolver": self.resolver,
                 "interfaces": [i.to_json() for i in self.interfaces],
                 "packages": [p.to_json() for p in self.packages]}
@@ -408,7 +411,7 @@ class FirewallInfo:
 # One record per write, each holding exactly the keys its PHP echoes. `unbound` is the restart-and-
 # resolve check this side adds after the write; it is appended to the --json object last, as the
 # key the PHP never sends.
-def _optional_text(obj: dict, key: str, what: str) -> str | None:
+def _optional_text(obj: dict[str, object], key: str, what: str) -> str | None:
     if key not in obj:
         return None
     return _text(obj, key, what)
@@ -422,11 +425,11 @@ class UnboundCheck:
     resolved: str
     ip: str
 
-    def to_json(self) -> dict:
+    def to_json(self) -> dict[str, object]:
         return {"restarted": self.restarted, "resolved": self.resolved, "ip": self.ip}
 
 
-def _with_unbound(out: dict, unbound: UnboundCheck | None) -> dict:
+def _with_unbound(out: dict[str, object], unbound: UnboundCheck | None) -> dict[str, object]:
     if unbound is not None:
         out["unbound"] = unbound.to_json()
     return out
@@ -447,7 +450,7 @@ class TouchedReservation:
             items.append(cls(interface=_text(obj, "interface", what), ip=_text(obj, "ip", what)))
         return tuple(items)
 
-    def to_json(self) -> dict:
+    def to_json(self) -> dict[str, object]:
         return {"interface": self.interface, "ip": self.ip}
 
 
@@ -466,7 +469,7 @@ class ReservationRemoved:
         return cls(removed=TouchedReservation.list_from_json(obj.get("removed"), "its removed list"),
                    unbound_follows=_flag(obj, "unbound_follows", what))
 
-    def to_json(self) -> dict:
+    def to_json(self) -> dict[str, object]:
         return _with_unbound({"removed": [r.to_json() for r in self.removed],
                               "unbound_follows": self.unbound_follows}, self.unbound)
 
@@ -486,7 +489,7 @@ class ReservationRenamed:
         return cls(renamed=TouchedReservation.list_from_json(obj.get("renamed"), "its renamed list"),
                    unbound_follows=_flag(obj, "unbound_follows", what))
 
-    def to_json(self) -> dict:
+    def to_json(self) -> dict[str, object]:
         return _with_unbound({"renamed": [r.to_json() for r in self.renamed],
                               "unbound_follows": self.unbound_follows}, self.unbound)
 
@@ -502,7 +505,7 @@ class StaticArpCleared:
         obj = _object(value, "the static ARP change")
         return cls(changed=TouchedReservation.list_from_json(obj.get("changed"), "its changed list"))
 
-    def to_json(self) -> dict:
+    def to_json(self) -> dict[str, object]:
         return {"changed": [r.to_json() for r in self.changed]}
 
 
@@ -522,7 +525,7 @@ class NewReservation:
         return cls(interface=_text(obj, "interface", what), mac=_text(obj, "mac", what),
                    ip=_text(obj, "ip", what), hostname=_text(obj, "hostname", what))
 
-    def to_json(self) -> dict:
+    def to_json(self) -> dict[str, object]:
         return {"interface": self.interface, "mac": self.mac, "ip": self.ip, "hostname": self.hostname}
 
 
@@ -544,7 +547,7 @@ class ReservationAdded:
         return cls(added=NewReservation.from_json(obj["added"]), error=None,
                    unbound_follows=_flag(obj, "unbound_follows", what))
 
-    def to_json(self) -> dict:
+    def to_json(self) -> dict[str, object]:
         if self.added is None:
             return _with_unbound({"added": None, "error": self.error}, self.unbound)
         return _with_unbound({"added": self.added.to_json(), "unbound_follows": self.unbound_follows},
@@ -565,7 +568,7 @@ class NameAndAddress:
         return cls(host=_text(obj, "host", what), domain=_text(obj, "domain", what),
                    ip=_text(obj, "ip", what))
 
-    def to_json(self) -> dict:
+    def to_json(self) -> dict[str, object]:
         return {"host": self.host, "domain": self.domain, "ip": self.ip}
 
 
@@ -586,8 +589,8 @@ class OverrideAdded:
         return cls(added=NameAndAddress.from_json(obj["added"], "the added override"),
                    error=_optional_text(obj, "error", what))
 
-    def to_json(self) -> dict:
-        out: dict = {"added": None if self.added is None else self.added.to_json()}
+    def to_json(self) -> dict[str, object]:
+        out: dict[str, object] = {"added": None if self.added is None else self.added.to_json()}
         if self.error is not None:
             out["error"] = self.error
         return _with_unbound(out, self.unbound)
@@ -607,8 +610,99 @@ class OverrideRemoved:
         return cls(removed=tuple(NameAndAddress.from_json(item, f"an entry of {what}")
                                  for item in _array(obj.get("removed"), what)))
 
-    def to_json(self) -> dict:
+    def to_json(self) -> dict[str, object]:
         return _with_unbound({"removed": [r.to_json() for r in self.removed]}, self.unbound)
+
+
+# ---- typed results built on this side -----------------------------------------------------------
+# What a verb reads from shell output (arp, pfctl, the snort files) and answers with. Code reads
+# these through attributes, so a misspelled key is a type error instead of a silent default, and
+# `to_json` rebuilds the object --json has always printed, keys in the same order.
+@dataclass(frozen=True)
+class ArpEntry:
+    """One `arp -an` line. `mac` is empty for an incomplete entry; `permanent` marks a static one."""
+
+    ip: str
+    mac: str
+    interface: str
+    permanent: bool
+
+    def to_json(self) -> dict[str, object]:
+        return {"ip": self.ip, "mac": self.mac, "interface": self.interface, "permanent": self.permanent}
+
+
+@dataclass(frozen=True)
+class SnapshotSaved:
+    """The `snapshot` answer: where config.xml was saved, and its size."""
+
+    path: str
+    size: int
+
+    def to_json(self) -> dict[str, object]:
+        return {"path": self.path, "bytes": self.size}
+
+
+@dataclass(frozen=True)
+class TableCheck:
+    """The `table test` answer: which of the asked addresses the table holds."""
+
+    table: str
+    present: tuple[str, ...]
+    absent: tuple[str, ...]
+
+    def to_json(self) -> dict[str, object]:
+        return {"table": self.table, "present": list(self.present), "absent": list(self.absent)}
+
+
+@dataclass(frozen=True)
+class TableDeletion:
+    """The `table del --apply` answer: what was asked for, and what a re-read still found."""
+
+    requested: tuple[str, ...]
+    still_present: tuple[str, ...]
+
+    def to_json(self) -> dict[str, object]:
+        return {"requested": list(self.requested), "still_present": list(self.still_present)}
+
+
+@dataclass(frozen=True)
+class BlockCheck:
+    """The `snort check` answer: each target's addresses, and which of them snort2c holds.
+
+    `resolved` keeps the targets in the order given, each named once.
+    """
+
+    resolved: tuple[tuple[str, tuple[str, ...]], ...]
+    blocked: tuple[str, ...]
+    clear: tuple[str, ...]
+
+    def to_json(self) -> dict[str, object]:
+        return {"resolved": {name: list(ips) for name, ips in self.resolved},
+                "blocked": list(self.blocked), "clear": list(self.clear)}
+
+
+@dataclass(frozen=True)
+class Unblocked:
+    """The `snort unblock --apply` answer: what was asked for, and what a re-read still found."""
+
+    requested: tuple[str, ...]
+    still_blocked: tuple[str, ...]
+
+    def to_json(self) -> dict[str, object]:
+        return {"requested": list(self.requested), "still_blocked": list(self.still_blocked)}
+
+
+@dataclass(frozen=True)
+class FixSteps:
+    """The `snort fixsteps` answer: the rule it is for, the range, and the steps text."""
+
+    sig: SignatureId
+    cidr: str | None
+    steps: str
+
+    def to_json(self) -> dict[str, object]:
+        return {"gid": self.sig.gid, "sid": self.sig.sid, "gid_assumed": self.sig.gid_assumed,
+                "cidr": self.cidr, "steps": self.steps}
 
 
 # ---- target resolution --------------------------------------------------------------------------
@@ -951,24 +1045,24 @@ def normalize_mac(mac: str) -> str:
     return ":".join(cleaned[i:i + 2] for i in range(0, 12, 2))
 
 
-def parse_arp(text: str) -> list[dict]:
+def parse_arp(text: str) -> list[ArpEntry]:
     """Parse `arp -an`, marking permanent entries.
 
     A permanent entry is the fingerprint of a DHCP reservation with static ARP ticked, which is
     the fault that answers for a device on an interface that is down.
     """
-    entries = []
+    entries: list[ArpEntry] = []
     for line in text.split("\n"):
         match = _ARP_RX.search(line)
         if not match:
             continue
         mac = match.group("mac")
-        entries.append({
-            "ip": match.group("ip"),
-            "mac": "" if mac.startswith("(") else normalize_mac(mac),
-            "interface": match.group("iface"),
-            "permanent": "permanent" in match.group("rest"),
-        })
+        entries.append(ArpEntry(
+            ip=match.group("ip"),
+            mac="" if mac.startswith("(") else normalize_mac(mac),
+            interface=match.group("iface"),
+            permanent="permanent" in match.group("rest"),
+        ))
     return entries
 
 
@@ -1108,7 +1202,7 @@ def _reservations_in_pools(reservations: Sequence[Reservation], pools: Sequence[
 
 
 def doctor_findings(*, reservations: Sequence[Reservation], overrides: Sequence[Override],
-                    arp: list[dict] | None = None, resolv_conf: str | None = None,
+                    arp: Sequence[ArpEntry] | None = None, resolv_conf: str | None = None,
                     upgrade_locks: list[str] | None = None,
                     pools: Sequence[Pool] | None = None) -> list[Finding]:
     """Every audit check, as pure logic over plain data.
@@ -1164,11 +1258,11 @@ def doctor_findings(*, reservations: Sequence[Reservation], overrides: Sequence[
             if res.ip:
                 macs_for_ip.setdefault(res.ip, set()).add(res.mac)
         for entry in arp:
-            reserved_macs = macs_for_ip.get(entry["ip"])
-            if entry.get("mac") and reserved_macs and entry["mac"] not in reserved_macs:
+            reserved_macs = macs_for_ip.get(entry.ip)
+            if entry.mac and reserved_macs and entry.mac not in reserved_macs:
                 findings.append(Finding(
                     check="reservation_mac_mismatch", severity=Severity.WARN,
-                    subject=f"{entry['ip']} reserved for {', '.join(sorted(reserved_macs))}, held by {entry['mac']}",
+                    subject=f"{entry.ip} reserved for {', '.join(sorted(reserved_macs))}, held by {entry.mac}",
                     detail="the address is in use by hardware no reservation for it names. If the "
                            "reserved device reappears, DHCP hands it an address something else "
                            "already holds, which shows up as an intermittent outage that is hard "
@@ -1500,15 +1594,31 @@ echo json_encode(array("removed" => $removed));
 
 
 # ---- output -------------------------------------------------------------------------------------
-def envelope(*, command: str, data: object, ok: bool, skipped: list[str] | None = None) -> dict:
+@dataclass(frozen=True)
+class Envelope:
     """The machine-readable result envelope. `ok` means "ran without error": true for every
-    answer a command gives (exit 0 or 1), false only on exit 2. The yes/no is the exit code's."""
-    return {"ok": ok, "command": command, "data": data, "skipped": skipped or []}
+    answer a command gives (exit 0 or 1), false only on exit 2. The yes/no is the exit code's.
+
+    `data` is already JSON-ready (a record's `to_json()`, a list, a string): the envelope does not
+    know the verbs' records, it only frames them.
+    """
+
+    command: str
+    data: object
+    ok: bool
+    skipped: Sequence[str] = ()
+
+    def __post_init__(self) -> None:
+        # Held as a tuple so a caller's list mutated afterwards cannot change what is printed.
+        object.__setattr__(self, "skipped", tuple(self.skipped))
+
+    def to_json(self) -> dict[str, object]:
+        return {"ok": self.ok, "command": self.command, "data": self.data, "skipped": list(self.skipped)}
 
 
-def _emit(result: dict, as_json: bool, human: str) -> None:
+def _emit(result: Envelope, as_json: bool, human: str) -> None:
     """Data to stdout. Diagnostics never travel this path; they go to stderr."""
-    print(json.dumps(result, indent=2) if as_json else human)
+    print(json.dumps(result.to_json(), indent=2) if as_json else human)
 
 
 def _target_from_args(args) -> Target:
@@ -1737,7 +1847,7 @@ def cmd_info(args) -> int:
         lines.append(f"    {iface.name:<8} {iface.device:<12} {iface.ipaddr}/{iface.subnet}  {iface.descr}")
     pkgs = ", ".join(p.name for p in info.packages) or "none"
     lines.append(f"  packages:     {pkgs}")
-    _emit(envelope(command="info", data=info.to_json(), ok=True), args.json, "\n".join(lines))
+    _emit(Envelope(command="info", data=info.to_json(), ok=True), args.json, "\n".join(lines))
     return 0
 
 
@@ -1746,8 +1856,9 @@ def cmd_snapshot(args) -> int:
     directory = args.dir or getattr(args, "snapshot_dir", None) or default_snapshot_dir()
     path = do_snapshot(target, Path(directory), run=args.run,
                        allow_repo=getattr(args, "allow_repo_snapshot", False))
-    _emit(envelope(command="snapshot", data={"path": str(path), "bytes": path.stat().st_size}, ok=True),
-          args.json, f"  saved {path} ({path.stat().st_size} bytes)")
+    saved = SnapshotSaved(path=str(path), size=path.stat().st_size)
+    _emit(Envelope(command="snapshot", data=saved.to_json(), ok=True),
+          args.json, f"  saved {saved.path} ({saved.size} bytes)")
     return 0
 
 
@@ -1757,7 +1868,7 @@ def cmd_dhcp_list(args) -> int:
     lines = [f"  {r.ip:<16} {r.mac:<18} {'STATIC-ARP' if r.static_arp else '          '}  "
              f"{r.hostname or r.descr}" for r in reservations]
     lines.append(f"  ({len(reservations)} reservations)")
-    _emit(envelope(command="dhcp list", data=[r.to_json() for r in reservations], ok=True), args.json,
+    _emit(Envelope(command="dhcp list", data=[r.to_json() for r in reservations], ok=True), args.json,
           "\n".join(lines))
     return 0
 
@@ -1810,7 +1921,7 @@ def cmd_dhcp_add(args) -> int:
     interface = interface_for_ip(interfaces, args.ip)
     entry = NewReservation(interface=interface, mac=mac, ip=args.ip, hostname=hostname)
     if not args.apply:
-        _emit(envelope(command="dhcp add", data={"would_add": entry.to_json()}, ok=True,
+        _emit(Envelope(command="dhcp add", data={"would_add": entry.to_json()}, ok=True,
                        skipped=["--apply not given"]),
               args.json, f"  DRY RUN: would reserve {args.ip} for {mac} ({hostname}) on {interface}.  "
                          "Re-run with --apply.")
@@ -1822,7 +1933,7 @@ def cmd_dhcp_add(args) -> int:
         raise PfsenseError(result.error or "the reservation was not added")
     result, note = _restart_unbound_after_dhcp(target, result, run=args.run,
                                                change=f"the reservation {args.ip} for {mac}")
-    _emit(envelope(command="dhcp add", data=result.to_json(), ok=True), args.json,
+    _emit(Envelope(command="dhcp add", data=result.to_json(), ok=True), args.json,
           f"  reserved {args.ip} for {mac} ({hostname}) on {interface}{note}")
     return 0
 
@@ -1851,7 +1962,7 @@ def cmd_dhcp_rename(args) -> int:
     reservations = run_php(target, php_list_reservations(), parse=Reservation.list_from_json, run=args.run)
     entry = select_reservation(reservations, mac)
     if not args.apply:
-        _emit(envelope(command="dhcp rename", data={"would_rename": entry.to_json(), "to": hostname}, ok=True,
+        _emit(Envelope(command="dhcp rename", data={"would_rename": entry.to_json(), "to": hostname}, ok=True,
                        skipped=["--apply not given"]),
               args.json, f"  DRY RUN: would rename {entry.ip} {mac} from "
                          f"{entry.hostname or '(no hostname)'} to {hostname}.  Re-run with --apply.")
@@ -1863,7 +1974,7 @@ def cmd_dhcp_rename(args) -> int:
         raise PfsenseError(f"the reservation for {mac} was not renamed (it changed since it was listed)")
     result, note = _restart_unbound_after_dhcp(target, result, run=args.run,
                                                change=f"the rename of the reservation for {mac} to {hostname}")
-    _emit(envelope(command="dhcp rename", data=result.to_json(), ok=True), args.json,
+    _emit(Envelope(command="dhcp rename", data=result.to_json(), ok=True), args.json,
           f"  renamed {entry.ip} {mac} to {hostname}{note}")
     return 0
 
@@ -1874,7 +1985,7 @@ def cmd_dhcp_rm(args) -> int:
     reservations = run_php(target, php_list_reservations(), parse=Reservation.list_from_json, run=args.run)
     entry = select_reservation(reservations, mac)
     if not args.apply:
-        _emit(envelope(command="dhcp rm", data={"would_remove": entry.to_json()}, ok=True,
+        _emit(Envelope(command="dhcp rm", data={"would_remove": entry.to_json()}, ok=True,
                        skipped=["--apply not given"]),
               args.json, f"  DRY RUN: would remove {entry.ip} {entry.mac} "
                          f"({entry.hostname or entry.descr}).  Re-run with --apply.")
@@ -1886,7 +1997,7 @@ def cmd_dhcp_rm(args) -> int:
                              "(it changed since it was listed); config.xml was not written")
     result, note = _restart_unbound_after_dhcp(target, result, run=args.run,
                                                change=f"the removal of the reservation for {mac}")
-    _emit(envelope(command="dhcp rm", data=result.to_json(), ok=True), args.json,
+    _emit(Envelope(command="dhcp rm", data=result.to_json(), ok=True), args.json,
           f"  removed {len(removed)} reservation(s) for {mac}{note}")
     return 0
 
@@ -1922,12 +2033,12 @@ def cmd_dhcp_rm_static_arp(args) -> int:
     reservations = run_php(target, php_list_reservations(), parse=Reservation.list_from_json, run=args.run)
     entry = select_reservation(reservations, mac)
     if not entry.static_arp:
-        _emit(envelope(command="dhcp rm-static-arp", data={"entry": entry.to_json()}, ok=True,
+        _emit(Envelope(command="dhcp rm-static-arp", data={"entry": entry.to_json()}, ok=True,
                        skipped=["static ARP was not set"]),
               args.json, f"  {entry.ip} {mac} does not have static ARP set; nothing to do.")
         return 0
     if not args.apply:
-        _emit(envelope(command="dhcp rm-static-arp", data={"would_clear": entry.to_json()}, ok=True,
+        _emit(Envelope(command="dhcp rm-static-arp", data={"would_clear": entry.to_json()}, ok=True,
                        skipped=["--apply not given"]),
               args.json, f"  DRY RUN: would clear static ARP on {entry.ip} {mac}.  Re-run with --apply.")
         return 0
@@ -1936,7 +2047,7 @@ def cmd_dhcp_rm_static_arp(args) -> int:
     changed = result.changed
     _require_effect(changed, f"static ARP is set on the reservation for {mac}, but clearing it "
                              "changed nothing (it changed since it was listed); config.xml was not written")
-    _emit(envelope(command="dhcp rm-static-arp", data=result.to_json(), ok=True), args.json,
+    _emit(Envelope(command="dhcp rm-static-arp", data=result.to_json(), ok=True), args.json,
           f"  cleared static ARP on {len(changed)} reservation(s) for {mac}")
     return 0
 
@@ -1946,7 +2057,7 @@ def cmd_dns_list(args) -> int:
     overrides = run_php(target, php_list_overrides(), parse=Override.list_from_json, run=args.run)
     lines = [f"  {o.fqdn:<44} -> {o.ip}" for o in overrides]
     lines.append(f"  ({len(overrides)} host overrides)")
-    _emit(envelope(command="dns list", data=[o.to_json() for o in overrides], ok=True), args.json,
+    _emit(Envelope(command="dns list", data=[o.to_json() for o in overrides], ok=True), args.json,
           "\n".join(lines))
     return 0
 
@@ -1964,7 +2075,7 @@ def cmd_dns_add(args) -> int:
     host, domain = _split_name(args.name)
     ipaddress.ip_address(args.ip)
     if not args.apply:
-        _emit(envelope(command="dns add", data={"would_add": {"host": host, "domain": domain, "ip": args.ip}},
+        _emit(Envelope(command="dns add", data={"would_add": {"host": host, "domain": domain, "ip": args.ip}},
                        ok=True, skipped=["--apply not given"]),
               args.json, f"  DRY RUN: would add {host}.{domain} -> {args.ip}.  Re-run with --apply.")
         return 0
@@ -1982,7 +2093,7 @@ def cmd_dns_add(args) -> int:
     result = replace(result, unbound=restart_and_verify_unbound(
         target, name=f"{host}.{domain}", ip=args.ip, run=args.run,
         change=f"the override {host}.{domain} -> {args.ip}"))
-    _emit(envelope(command="dns add", data=result.to_json(), ok=True), args.json,
+    _emit(Envelope(command="dns add", data=result.to_json(), ok=True), args.json,
           f"  added {host}.{domain} -> {args.ip}; unbound restarted and answers it")
     return 0
 
@@ -2050,7 +2161,7 @@ def cmd_dns_rm(args) -> int:
     entry = select_one(overrides, f"{host}.{domain}", key=lambda o: o.fqdn, field="fqdn",
                        what="host override")
     if not args.apply:
-        _emit(envelope(command="dns rm", data={"would_remove": entry.to_json(with_fqdn=True)}, ok=True,
+        _emit(Envelope(command="dns rm", data={"would_remove": entry.to_json(with_fqdn=True)}, ok=True,
                        skipped=["--apply not given"]),
               args.json, f"  DRY RUN: would remove {entry.fqdn} -> {entry.ip}.  Re-run with --apply.")
         return 0
@@ -2068,7 +2179,7 @@ def cmd_dns_rm(args) -> int:
     result = replace(result, unbound=restart_and_verify_unbound(
         target, name=probe_name, ip=probe_ip, run=args.run,
         change=f"the removal of the override {entry.fqdn}"))
-    _emit(envelope(command="dns rm", data=result.to_json(), ok=True), args.json,
+    _emit(Envelope(command="dns rm", data=result.to_json(), ok=True), args.json,
           f"  removed {len(removed)} override(s) for {host}.{domain}; "
           f"unbound restarted and answers {probe_name}")
     return 0
@@ -2081,11 +2192,12 @@ def cmd_arp(args) -> int:
         raise PfsenseError(f"could not read the ARP table on {target.host}: {err.strip()[:200]}")
     entries = parse_arp(out)
     if args.permanent:
-        entries = [e for e in entries if e["permanent"]]
-    lines = [f"  {e['ip']:<16} {e['mac'] or '(incomplete)':<18} {e['interface']:<8} "
-             f"{'PERMANENT' if e['permanent'] else ''}" for e in entries]
+        entries = [e for e in entries if e.permanent]
+    lines = [f"  {e.ip:<16} {e.mac or '(incomplete)':<18} {e.interface:<8} "
+             f"{'PERMANENT' if e.permanent else ''}" for e in entries]
     lines.append(f"  ({len(entries)} entries)")
-    _emit(envelope(command="arp", data=entries, ok=True), args.json, "\n".join(lines))
+    _emit(Envelope(command="arp", data=[e.to_json() for e in entries], ok=True), args.json,
+          "\n".join(lines))
     return 0
 
 
@@ -2111,7 +2223,7 @@ def cmd_table(args) -> int:
         if rc != 0:
             raise PfsenseError(f"could not list pf tables: {err.strip()[:200]}")
         names = [line.strip() for line in out.split("\n") if line.strip()]
-        _emit(envelope(command="table list", data=names, ok=True), args.json,
+        _emit(Envelope(command="table list", data=names, ok=True), args.json,
               "\n".join(f"  {n}" for n in names) + f"\n  ({len(names)} tables)")
         return 0
 
@@ -2120,7 +2232,7 @@ def cmd_table(args) -> int:
         if rc != 0:
             raise PfsenseError(f"could not read table {args.table}: {err.strip()[:200]}")
         ips = sorted(parse_table(out))
-        _emit(envelope(command="table show", data=ips, ok=True), args.json,
+        _emit(Envelope(command="table show", data=ips, ok=True), args.json,
               "\n".join(f"  {ip}" for ip in ips) + f"\n  ({len(ips)} entries in {args.table})")
         return 0
 
@@ -2129,15 +2241,15 @@ def cmd_table(args) -> int:
         if rc != 0:
             raise PfsenseError(f"could not read table {args.table}: {err.strip()[:200]}")
         present = blocked_among(out, args.ips)
-        data = {"table": args.table, "present": present,
-                "absent": [ip for ip in args.ips if ip not in present]}
-        _emit(envelope(command="table test", data=data, ok=True), args.json,
+        check = TableCheck(table=args.table, present=tuple(present),
+                           absent=tuple(ip for ip in args.ips if ip not in present))
+        _emit(Envelope(command="table test", data=check.to_json(), ok=True), args.json,
               "\n".join(f"  {'IN ' if ip in present else 'not'}  {ip}  ({args.table})" for ip in args.ips))
         return 0 if present else 1
 
     # del
     if not args.apply:
-        _emit(envelope(command="table del", data={"would_delete": args.ips, "table": args.table},
+        _emit(Envelope(command="table del", data={"would_delete": args.ips, "table": args.table},
                        ok=True, skipped=["--apply not given"]),
               args.json, f"  DRY RUN: would delete {', '.join(args.ips)} from {args.table}.  Re-run with --apply.")
         return 0
@@ -2148,7 +2260,8 @@ def cmd_table(args) -> int:
         raise PfsenseError(f"could not re-read table {args.table} to confirm: {err.strip()[:200]}")
     still = blocked_among(out, args.ips)
     code = _removal_exit(args.ips, still, where=f"table {args.table}")
-    _emit(envelope(command="table del", data={"requested": args.ips, "still_present": still}, ok=True),
+    deletion = TableDeletion(requested=tuple(args.ips), still_present=tuple(still))
+    _emit(Envelope(command="table del", data=deletion.to_json(), ok=True),
           args.json, f"  deleted {len(args.ips) - len(still)} of {len(args.ips)} from {args.table}" +
                      (f"\n  STILL PRESENT: {', '.join(still)}" if still else ""))
     return code
@@ -2161,7 +2274,7 @@ def cmd_rules(args) -> int:
     if rc != 0:
         raise PfsenseError(f"could not read the ruleset: {err.strip()[:200]}")
     rules = [line.rstrip() for line in out.split("\n") if line.strip()]
-    _emit(envelope(command="rules", data=rules, ok=True), args.json, "\n".join(rules))
+    _emit(Envelope(command="rules", data=rules, ok=True), args.json, "\n".join(rules))
     return 0
 
 
@@ -2181,8 +2294,8 @@ def cmd_snort_check(args) -> int:
                            f"(is Snort installed?): {err.strip()[:200]}")
 
     blocked = blocked_among(table, every_ip)
-    data = {"resolved": resolved, "blocked": blocked,
-            "clear": [ip for ip in every_ip if ip not in blocked]}
+    check = BlockCheck(resolved=tuple((name, tuple(ips)) for name, ips in resolved.items()),
+                       blocked=tuple(blocked), clear=tuple(ip for ip in every_ip if ip not in blocked))
     lines = []
     for name, ips in resolved.items():
         for ip in ips:
@@ -2190,7 +2303,7 @@ def cmd_snort_check(args) -> int:
     if blocked:
         lines.append("")
         lines.append(f"Next: pfsense.py snort why {blocked[0]}   then snort fixsteps --sid <GID:SID>")
-    _emit(envelope(command="snort check", data=data, ok=True), args.json, "\n".join(lines))
+    _emit(Envelope(command="snort check", data=check.to_json(), ok=True), args.json, "\n".join(lines))
     return 1 if blocked else 0
 
 
@@ -2250,7 +2363,7 @@ def cmd_snort_why(args) -> int:
         print(f"pfsense: note: {note}", file=sys.stderr)
     any_found = any(found.values())
     data = {ip: [asdict(a) for a in alerts] for ip, alerts in found.items()}
-    _emit(envelope(command="snort why", data=data, ok=True, skipped=skipped), args.json,
+    _emit(Envelope(command="snort why", data=data, ok=True, skipped=skipped), args.json,
           "\n".join(lines))
     return 0 if any_found else 1
 
@@ -2258,7 +2371,7 @@ def cmd_snort_why(args) -> int:
 def cmd_snort_unblock(args) -> int:
     target = _target_from_args(args)
     if not args.apply:
-        _emit(envelope(command="snort unblock", data={"would_delete": args.ips}, ok=True,
+        _emit(Envelope(command="snort unblock", data={"would_delete": args.ips}, ok=True,
                        skipped=["--apply not given"]),
               args.json, f"  DRY RUN: would delete {', '.join(args.ips)} from {SNORT_TABLE}.  Re-run with --apply.")
         return 0
@@ -2269,14 +2382,14 @@ def cmd_snort_unblock(args) -> int:
         raise PfsenseError(f"could not re-read the table to confirm: {err.strip()[:200]}")
     still = blocked_among(table, args.ips)
     code = _removal_exit(args.ips, still, where=SNORT_TABLE)
-    data = {"requested": args.ips, "still_blocked": still}
+    unblocked = Unblocked(requested=tuple(args.ips), still_blocked=tuple(still))
     human = "  cleared: " + ", ".join(ip for ip in args.ips if ip not in still)
     if still:
         human += f"\n  STILL BLOCKED: {', '.join(still)}"
     human += ("\n\nThis is temporary. Clearing the table does NOT stop the rule re-adding the "
               "address on the next packet: suppress the rule too, with snort fixsteps --sid <GID:SID> "
               "(snort why prints it).")
-    _emit(envelope(command="snort unblock", data=data, ok=True), args.json, human)
+    _emit(Envelope(command="snort unblock", data=unblocked.to_json(), ok=True), args.json, human)
     return code
 
 
@@ -2308,6 +2421,9 @@ class SuppressScope:
         if target is None:
             return False
         return any(target.version == net.version and target.subnet_of(net) for net in self.networks)
+
+    def to_json(self) -> dict[str, object]:
+        return {"track": self.track, "ip": self.ip, "understood": self.understood}
 
     @property
     def label(self) -> str:
@@ -2399,7 +2515,9 @@ def _scope_verdict(scopes: list[SuppressScope], targets) -> tuple[bool, dict[str
         return False, {}, []
     if any(s.understood and s.track is None for s in scopes):
         return True, {label: ["all"] for label, _ in targets}, []
-    coverage = {label: [s.track for s in scopes if s.covers(net)] for label, net in targets}
+    # A plain statement returned above, so every covering scope here names its side.
+    coverage = {label: [s.track for s in scopes if s.covers(net) and s.track is not None]
+                for label, net in targets}
     lines = []
     for label, tracks in coverage.items():
         if tracks:
@@ -2425,6 +2543,54 @@ def _suppressed_line(sig: SignatureId, scopes: list[SuppressScope], targets, sup
     return head + ("yes" if suppressed else "NO") + f", only for {named}"
 
 
+@dataclass(frozen=True)
+class PassListCheck:
+    """Whether the `--cidr` range is a literal entry of the live instance's generated pass list."""
+
+    cidr_passlisted: bool
+    passlist_entries: int
+
+
+@dataclass(frozen=True)
+class SuppressionCheck:
+    """The `snort verify` answer: the live instance, the rule, every live suppress statement for
+    it with its scope, which statements cover each asked address, and (with --cidr) the pass list.
+
+    `coverage` keeps the asked addresses in the order given, each named once; `["all"]` means a
+    plain statement covers it. `passlist` is None when no --cidr was asked, and its keys are then
+    absent from the JSON, as they always were.
+    """
+
+    instance_dir: str
+    sig: SignatureId
+    sid_suppressed: bool
+    suppressions: tuple[SuppressScope, ...]
+    coverage: tuple[tuple[str, tuple[str, ...]], ...]
+    passlist: PassListCheck | None
+
+    def to_json(self) -> dict[str, object]:
+        out: dict[str, object] = {
+            "instance_dir": self.instance_dir, "gid": self.sig.gid, "sid": self.sig.sid,
+            "gid_assumed": self.sig.gid_assumed, "sid_suppressed": self.sid_suppressed,
+            "suppressions": [s.to_json() for s in self.suppressions],
+            "coverage": {label: list(tracks) for label, tracks in self.coverage}}
+        if self.passlist is not None:
+            out["cidr_passlisted"] = self.passlist.cidr_passlisted
+            out["passlist_entries"] = self.passlist.passlist_entries
+        return out
+
+
+def _passlist_check(target: Target, instance: str, cidr: str, *, run) -> PassListCheck:
+    """Whether `cidr` is a literal line of the GENERATED pass list.
+
+    Never grep the suppression file for this: its comments name the same addresses, so the match
+    would be vacuous and always "pass".
+    """
+    _, passlist, _ = run_remote(target, f"cat {instance}/*Whitelist* 2>/dev/null", run=run)
+    entries = {line.strip() for line in passlist.split("\n") if line.strip()}
+    return PassListCheck(cidr_passlisted=cidr in entries, passlist_entries=len(entries))
+
+
 def cmd_snort_verify(args) -> int:
     sig = parse_sid_spec(args.sid)
     targets = _verify_targets(args)
@@ -2434,32 +2600,24 @@ def cmd_snort_verify(args) -> int:
     if not instance:
         raise PfsenseError(f"snort does not appear to be running on {target.host}")
 
-    checks: dict[str, object] = {"instance_dir": instance, "gid": sig.gid, "sid": sig.sid,
-                                 "gid_assumed": sig.gid_assumed}
     # The SUPPRESSION file carries the GID:SID and the scope of each statement.
     _, supp, _ = run_remote(target, f"cat {instance}/supp* 2>/dev/null", run=args.run)
     scopes = suppress_scopes(supp, sig)
     suppressed, coverage, coverage_lines = _scope_verdict(scopes, targets)
-    checks["sid_suppressed"] = suppressed
-    checks["suppressions"] = [{"track": s.track, "ip": s.ip, "understood": s.understood} for s in scopes]
-    checks["coverage"] = coverage
+    passlist = _passlist_check(target, instance, args.cidr, run=args.run) if args.cidr else None
+    check = SuppressionCheck(
+        instance_dir=instance, sig=sig, sid_suppressed=suppressed, suppressions=tuple(scopes),
+        coverage=tuple((label, tuple(tracks)) for label, tracks in coverage.items()), passlist=passlist)
 
-    if args.cidr:
-        # The GENERATED PASS LIST only. Never grep the suppression file for this: its comments
-        # name the same addresses, so the match would be vacuous and always "pass".
-        _, passlist, _ = run_remote(target, f"cat {instance}/*Whitelist* 2>/dev/null", run=args.run)
-        entries = {line.strip() for line in passlist.split("\n") if line.strip()}
-        checks["cidr_passlisted"] = args.cidr in entries
-        checks["passlist_entries"] = len(entries)
-
-    ok = suppressed and (not args.cidr or bool(checks.get("cidr_passlisted")))
+    ok = suppressed and (passlist is None or passlist.cidr_passlisted)
     human = "\n".join(
         [f"  live instance: {instance}",
          _suppressed_line(sig, scopes, targets, suppressed) + _assumed_note(sig)]
         + coverage_lines
-        + ([f"  {args.cidr} in pass list: {'yes' if checks.get('cidr_passlisted') else 'NO'}"] if args.cidr else [])
+        + ([f"  {args.cidr} in pass list: {'yes' if passlist.cidr_passlisted else 'NO'}"]
+           if passlist is not None else [])
     )
-    _emit(envelope(command="snort verify", data=checks, ok=True), args.json, human)
+    _emit(Envelope(command="snort verify", data=check.to_json(), ok=True), args.json, human)
     return 0 if ok else 1
 
 
@@ -2524,8 +2682,8 @@ def fix_steps(*, sig: SignatureId, cidr: str | None = None) -> str:
 def cmd_snort_fixsteps(args) -> int:
     sig = parse_sid_spec(args.sid)
     steps = fix_steps(sig=sig, cidr=args.cidr)
-    data = {"gid": sig.gid, "sid": sig.sid, "gid_assumed": sig.gid_assumed, "cidr": args.cidr, "steps": steps}
-    _emit(envelope(command="snort fixsteps", data=data, ok=True), args.json, steps)
+    _emit(Envelope(command="snort fixsteps", data=FixSteps(sig=sig, cidr=args.cidr, steps=steps).to_json(),
+                   ok=True), args.json, steps)
     return 0
 
 
@@ -2584,7 +2742,7 @@ def cmd_doctor(args) -> int:
         lines.append(f"  [{finding.severity.upper():<4}] {finding.check}: {finding.subject}")
         lines.append(f"         {finding.detail}")
     lines.append(f"  ({len(warns)} to act on, {len(findings) - len(warns)} informational)")
-    _emit(envelope(command="doctor", data=[asdict(f) for f in findings], ok=True),
+    _emit(Envelope(command="doctor", data=[asdict(f) for f in findings], ok=True),
           args.json, "\n".join(lines))
     return 1 if warns else 0
 
@@ -2737,12 +2895,12 @@ def main(argv=None, *, run=_run) -> int:
         return args.func(args)
     except (PfsenseError, ValueError) as exc:
         if args.json:
-            print(json.dumps(envelope(command=command, data={"error": str(exc)}, ok=False), indent=2))
+            print(json.dumps(Envelope(command=command, data={"error": str(exc)}, ok=False).to_json(), indent=2))
         print(f"pfsense: {exc}", file=sys.stderr)
         return 2
     except (OSError, subprocess.TimeoutExpired) as exc:
         if args.json:
-            print(json.dumps(envelope(command=command, data={"error": str(exc)}, ok=False), indent=2))
+            print(json.dumps(Envelope(command=command, data={"error": str(exc)}, ok=False).to_json(), indent=2))
         print(f"pfsense: {exc}", file=sys.stderr)
         return 2
 

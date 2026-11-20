@@ -319,13 +319,13 @@ def test_normalize_mac_refuses_something_that_is_not_one():
 
 def test_parse_arp_marks_the_permanent_entry():
     entries = P.parse_arp(ARP_TEXT)
-    assert [e["ip"] for e in entries] == ["192.0.2.1", "192.0.2.30", "192.0.2.31", "192.0.2.99"]
-    assert [e["permanent"] for e in entries] == [False, True, False, False]
+    assert [e.ip for e in entries] == ["192.0.2.1", "192.0.2.30", "192.0.2.31", "192.0.2.99"]
+    assert [e.permanent for e in entries] == [False, True, False, False]
 
 
 def test_parse_arp_keeps_an_incomplete_entry_with_no_mac():
-    incomplete = [e for e in P.parse_arp(ARP_TEXT) if e["ip"] == "192.0.2.99"][0]
-    assert incomplete["mac"] == ""
+    incomplete = [e for e in P.parse_arp(ARP_TEXT) if e.ip == "192.0.2.99"][0]
+    assert incomplete.mac == ""
 
 
 def test_an_override_fqdn_handles_an_override_with_no_host_part():
@@ -1811,6 +1811,30 @@ def test_snort_verify_checks_the_cidr_is_inside_a_scoped_suppression(capsys):
     assert _verify_json("1:9", supp, "--cidr", "198.51.96.0/20", passlist="198.51.96.0/20\n") == 1
 
 
+def test_snort_verify_without_cidr_neither_reads_nor_reports_the_pass_list(capsys):
+    """The pass-list keys appear only when --cidr asked for them, and the list is not read."""
+    fake = FakeRun([("ps auxww", (0, PS_SNORT, "")), ("/supp*", (0, "suppress gen_id 1, sig_id 9\n", ""))])
+    assert P.main(["--host", "192.0.2.1", "--json", "snort", "verify", "--sid", "1:9"], run=fake) == 0
+    data = json.loads(capsys.readouterr().out)["data"]
+    assert list(data) == ["instance_dir", "gid", "sid", "gid_assumed", "sid_suppressed",
+                          "suppressions", "coverage"]
+    assert not [c for c in fake.calls if "Whitelist" in c["remote"]]
+
+
+def test_a_suppression_check_record_prints_the_pass_list_last_and_only_when_checked():
+    sig = P.SignatureId(gid=1, sid=9)
+    scope = P.SuppressScope(track=None, ip=None)
+    bare = P.SuppressionCheck(instance_dir="/opt/snort", sig=sig, sid_suppressed=True,
+                              suppressions=(scope,), coverage=(("192.0.2.7", ("all",)),), passlist=None)
+    assert bare.to_json() == {"instance_dir": "/opt/snort", "gid": 1, "sid": 9, "gid_assumed": False,
+                              "sid_suppressed": True,
+                              "suppressions": [{"track": None, "ip": None, "understood": True}],
+                              "coverage": {"192.0.2.7": ["all"]}}
+    checked = P.SuppressionCheck(**{**bare.__dict__, "passlist": P.PassListCheck(True, 3)})
+    assert list(checked.to_json())[-2:] == ["cidr_passlisted", "passlist_entries"]
+    assert checked.to_json()["passlist_entries"] == 3
+
+
 def test_snort_verify_refuses_an_ip_that_is_not_an_address():
     assert _verify_sid("125:9", SCOPED_SRC, "--ip", "192.0.2.300") == 2
 
@@ -2039,6 +2063,22 @@ def test_arp_permanent_returns_only_the_permanent_entries(capsys):
     assert P.main(["--host", "192.0.2.1", "--json", "arp", "--permanent"], run=fake) == 0
     data = json.loads(capsys.readouterr().out)["data"]
     assert [e["ip"] for e in data] == ["192.0.2.30"]
+
+
+def test_an_arp_entry_prints_the_keys_arp_json_has_always_had():
+    [entry] = [e for e in P.parse_arp(ARP_TEXT) if e.permanent]
+    assert entry.to_json() == {"ip": "192.0.2.30", "mac": entry.mac, "interface": entry.interface,
+                               "permanent": True}
+    assert list(entry.to_json()) == ["ip", "mac", "interface", "permanent"]
+
+
+def test_the_envelope_prints_its_four_keys_and_keeps_skipped_as_given():
+    skipped = ["--apply not given"]
+    env = P.Envelope(command="table del", data={"would_delete": ["192.0.2.9"]}, ok=True, skipped=skipped)
+    skipped.append("added after the envelope was built")
+    assert env.to_json() == {"ok": True, "command": "table del", "data": {"would_delete": ["192.0.2.9"]},
+                             "skipped": ["--apply not given"]}
+    assert P.Envelope(command="x", data=None, ok=False).to_json()["skipped"] == []
 
 
 # ---- cross-platform text handling ---------------------------------------------------------------
