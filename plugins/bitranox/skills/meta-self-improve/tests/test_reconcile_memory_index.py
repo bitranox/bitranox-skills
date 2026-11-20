@@ -3,6 +3,7 @@
 Builds synthetic memory dirs in tmp_path. All content ASCII.
 """
 
+import os
 from pathlib import Path
 
 import reconcile_memory_index as R
@@ -869,6 +870,26 @@ def test_repair_reframes_the_prose_with_the_appended_kind(tmp_path, capsys):
     assert R.check_tree(str(proj))["appended_type_damage"] == []
     pointer = [e for e in ME.read_store(str(proj))[1] if e.slug == slug][0]
     assert pointer.pin is True and pointer.hook == "When ruled, do ruled."
+
+
+def test_repair_leaves_a_body_another_writer_repaired_after_the_scan(tmp_path):
+    """The scan finds the damage; before the re-read, another writer rewrites the body without
+    it. The repair then has nothing to do: it neither repairs nor skips the body and writes
+    nothing, so the other writer's text stands."""
+    proj, slug, p = _damaged_fact(tmp_path, RULE_BODY)
+    healed = "---\nname: %s\ndescription: d\n---\n\nRewritten by another writer.\n" % slug
+    reads: list[str] = []
+
+    def reread_after_a_writer(path: str | os.PathLike[str]) -> str:
+        p.write_text(healed, encoding="utf-8", newline="")     # the concurrent writer
+        reads.append(str(path))
+        return ME.read_store_text(path)
+
+    level_file = (proj / "CLAUDE.local.md").read_bytes()
+    assert R.repair_appended_type(str(proj), read=reread_after_a_writer) == ([], [])
+    assert reads == [str(p)]
+    assert p.read_text(encoding="utf-8") == healed
+    assert (proj / "CLAUDE.local.md").read_bytes() == level_file
 
 
 def test_repair_on_a_clean_tree_is_a_no_op(tmp_path, capsys):
