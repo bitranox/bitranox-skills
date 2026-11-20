@@ -31,7 +31,9 @@ the transcript records real per-request usage, so the last record carrying `mess
     input_tokens + cache_creation_input_tokens + cache_read_input_tokens
 
 which is the context that request actually carried - a measurement, not a bytes/4 proxy. It also
-self-corrects after a compaction, because the next request's usage drops on its own.
+self-corrects after a compaction, because the next request's usage drops on its own. A record that
+carried no request is skipped: an API error the harness logs as a `<synthetic>` assistant record
+with every usage field 0 would otherwise read as a compaction.
 
 THE WINDOW comes from the model FAMILY, which `message.model` carries on every assistant record.
 That id never includes Claude Code's `[1m]` suffix, and it does not need to: measured across 1485
@@ -88,7 +90,8 @@ on past the rot onset - and the knob exists to move it.
 
 A REPEAT request is spaced by 10% of the window. A reading back below the save point means the
 harness compacted, so the request re-arms and the next crossing asks for a fresh checkpoint; above
-it, a repeat refreshes the checkpoint only when the harness is not compacting. A Stop yields entirely
+it, a repeat refreshes the checkpoint only when the harness is not compacting. A request earned by
+the checkpoint's own write is answered by it and stays unsaid. A Stop yields entirely
 when a post-compaction nap is already owed: the Stop gate refuses to stop on that obligation and
 stacking a second block would make the two fight over the same turn. Fail-open on every error path -
 a broken watcher must never wedge a turn.
@@ -182,44 +185,90 @@ def _env_max_context(environ) -> int:
     return value if value > 0 else 0
 
 
-def read_session(transcript_path, tail_bytes=_TAIL_BYTES):
-    """(current_tokens, family_model) from ONE tail read. IMPURE.
+# The harness logs an API error reply (a 429, an overload) as an assistant record of its own, with
+# model "<synthetic>", `isApiErrorMessage` set and every usage field 0; all 213 such records in the
+# local transcripts carried a 0 total. Read as a measurement it says the session holds 0 tokens,
+# which is exactly what a compaction looks like, so the request re-armed and the checkpoint's own
+# Write was asked again and stamped after the file, and the resume reported no checkpoint (one
+# measured miss). A real request always carries its system prompt, so a 0 total measures nothing
+# either; two such records with a real model id turned up in a 600-transcript sample.
+_SYNTHETIC_MODEL = "<synthetic>"
+_CONTEXT_LEGS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
 
-    Both come from the same records, so reading them together avoids a second pass over a
-    multi-megabyte transcript on every turn.
+
+class _Unreadable(ValueError):
+    """A usage block whose fields are not numbers; each reader keeps its own policy for it."""
+
+
+def _reading(record):
+    """(context tokens, model id) a transcript record measured, or None when it measured none. PURE.
+
+    None for anything but a real request's usage: no usage block, an API-error or `<synthetic>`
+    record, or a 0 total. Raises _Unreadable for a usage block whose fields are not numbers.
+    """
+    if not isinstance(record, dict) or record.get("isApiErrorMessage"):
+        return None
+    message = record.get("message")
+    if not isinstance(message, dict) or message.get("model") == _SYNTHETIC_MODEL:
+        return None                           # a string or list message carries no usage
+    usage = message.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    try:
+        total = sum(int(usage.get(leg) or 0) for leg in _CONTEXT_LEGS)
+    except (TypeError, ValueError) as exc:
+        raise _Unreadable(str(exc)) from None
+    return (total, message.get("model")) if total > 0 else None
+
+
+def _tail_records(transcript_path, tail_bytes):
+    """The JSON records in the transcript's last `tail_bytes`, oldest first, or None. IMPURE.
+
+    A line that does not parse is skipped: the seek can land mid-line, and that partial line is
+    dropped before the read anyway.
     """
     try:
         size = os.path.getsize(transcript_path)
         with open(transcript_path, "rb") as handle:
             if size > tail_bytes:
                 handle.seek(size - tail_bytes)
-                handle.readline()
+                handle.readline()             # drop the partial line the seek landed in
             data = handle.read()
     except (OSError, TypeError, ValueError):
+        return None
+    records = []
+    for raw in data.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            records.append(json.loads(line.decode("utf-8", "replace")))
+        except ValueError:
+            continue
+    return records
+
+
+def read_session(transcript_path, tail_bytes=_TAIL_BYTES):
+    """(current_tokens, family_model) from ONE tail read. IMPURE.
+
+    Both come from the same records, so reading them together avoids a second pass over a
+    multi-megabyte transcript on every turn. A record that measured nothing (see _reading) moves
+    neither, so an API error neither reads as 0 tokens nor names the window by `<synthetic>`.
+    """
+    records = _tail_records(transcript_path, tail_bytes)
+    if records is None:
         return None, None
     current, model = None, None
-    for raw in data.splitlines():
+    for record in records:
         try:
-            record = json.loads(raw.strip().decode("utf-8", "replace"))
-        except (ValueError, AttributeError):
+            reading = _reading(record)
+        except _Unreadable:
             continue
-        if not isinstance(record, dict):
+        if reading is None:
             continue
-        message = record.get("message")
-        if not isinstance(message, dict):
-            continue                          # a string or list message carries no usage
-        usage = message.get("usage")
-        if not isinstance(usage, dict):
-            continue
-        try:
-            total = (int(usage.get("input_tokens") or 0)
-                     + int(usage.get("cache_creation_input_tokens") or 0)
-                     + int(usage.get("cache_read_input_tokens") or 0))
-        except (TypeError, ValueError):
-            continue
-        current = total                       # the LAST one wins; the loop runs forward
-        if message.get("model"):
-            model = message["model"]
+        current = reading[0]                  # the LAST one wins; the loop runs forward
+        if reading[1]:
+            model = reading[1]
     return current, model
 
 
@@ -231,39 +280,17 @@ def context_tokens(transcript_path, tail_bytes=_TAIL_BYTES):
     handful of tokens on a session hundreds of thousands deep, because almost all of a long
     session's context arrives as a cache read.
 
-    Scans the tail BACKWARDS and stops at the first usage record, so the answer is the latest one.
+    Scans the tail BACKWARDS and stops at the first record that measured a request, so the answer
+    is the latest one; an unreadable usage block there answers None.
     """
-    try:
-        size = os.path.getsize(transcript_path)
-        with open(transcript_path, "rb") as handle:
-            if size > tail_bytes:
-                handle.seek(size - tail_bytes)
-                handle.readline()             # drop the partial line the seek landed in
-            data = handle.read()
-    except (OSError, TypeError, ValueError):
-        return None
-    for raw in reversed(data.splitlines()):
-        line = raw.strip()
-        if not line:
-            continue
+    records = _tail_records(transcript_path, tail_bytes)
+    for record in reversed(records or ()):
         try:
-            record = json.loads(line.decode("utf-8", "replace"))
-        except ValueError:
-            continue                          # a tail read can start mid-line
-        if not isinstance(record, dict):
-            continue
-        message = record.get("message")
-        if not isinstance(message, dict):
-            continue                          # a string or list message carries no usage
-        usage = message.get("usage")
-        if not isinstance(usage, dict):
-            continue
-        try:
-            return (int(usage.get("input_tokens") or 0)
-                    + int(usage.get("cache_creation_input_tokens") or 0)
-                    + int(usage.get("cache_read_input_tokens") or 0))
-        except (TypeError, ValueError):
+            reading = _reading(record)
+        except _Unreadable:
             return None
+        if reading is not None:
+            return reading[0]
     return None
 
 
@@ -612,15 +639,72 @@ def decide(event, cfg):
     window, source = resolve_window(cfg, model, os.environ)
     pct, cap = cfg.get("context_handover_pct", 70), cfg.get("context_handover_cap", 400000)
     plan_mode: bool = event.get("permission_mode") == "plan"
-    return _decide_compact(session, proj, tokens, window, source, pct, cap, plan_mode=plan_mode)
+    return _decide_compact(session, proj, tokens, window, source, pct, cap, plan_mode=plan_mode,
+                           wrote=checkpoint_write(event, plan_mode=plan_mode))
 
 
-def _decide_compact(session, proj, tokens, window, source, pct, cap, *, plan_mode: bool = False):
+# The names compact-resume hands back (its is_checkpoint_name, pinned equal by a test), kept here
+# rather than imported because that module is a hyphenated hook script, not a library.
+_CHECKPOINT_NAME = "handover.md"
+_IMPROVISED_SUFFIX = "-handover.md"
+_IMPROVISED_PREFIX = "handover-"
+_WRITE_TOOLS = frozenset({"Write", "Edit", "MultiEdit"})
+
+
+def is_checkpoint_name(name) -> bool:
+    """True for `handover.md`, `<anything>-handover.md` and `handover-<topic>.md`. PURE."""
+    name = str(name)
+    if name == _CHECKPOINT_NAME:
+        return True
+    if name.endswith(_IMPROVISED_SUFFIX) and len(name) > len(_IMPROVISED_SUFFIX):
+        return True
+    return (name.startswith(_IMPROVISED_PREFIX) and name.endswith(".md")
+            and len(name) > len(_IMPROVISED_PREFIX) + len(".md"))
+
+
+def checkpoint_write(event, *, plan_mode: bool = False):
+    """The checkpoint file the tool call behind this PostToolUse wrote, or None. PURE.
+
+    A Write, Edit or MultiEdit of a checkpoint-named file; in plan mode any of them, because the
+    plan file is the only file such a session may write and the request sends the checkpoint there.
+    PostToolUse fires only for a call that succeeded.
+    """
+    if event.get("hook_event_name") != "PostToolUse" or event.get("tool_name") not in _WRITE_TOOLS:
+        return None
+    tool_input = event.get("tool_input")
+    path = tool_input.get("file_path") if isinstance(tool_input, dict) else None
+    if not isinstance(path, str) or not path:
+        return None
+    if plan_mode or is_checkpoint_name(pathlib.PurePath(path).name):
+        return path
+    return None
+
+
+def _stamp_before(path):
+    """A checkpoint-asked stamp before `path`'s mtime, or None when it cannot be read. IMPURE.
+
+    One millisecond under the mtime, because the stamp is stored to three decimals and a value
+    rounded up past the mtime would make compact-resume reject the very file it describes.
+    """
+    try:
+        return os.path.getmtime(path) - 0.001
+    except (OSError, TypeError, ValueError):
+        return None
+
+
+def _decide_compact(session, proj, tokens, window, source, pct, cap, *, plan_mode: bool = False,
+                    wrote=None):
     """Request a checkpoint once per crossing of the save point. IMPURE.
 
     A reading back BELOW the save point after a request means the harness compacted, so the request
     re-arms and the next crossing asks for a fresh checkpoint. Above it, `due` spaces repeats by a
     tenth of the window, which refreshes a checkpoint only when the harness is not compacting.
+
+    When the call that earned the request is itself the checkpoint's write (`wrote`), that write
+    answers it: the request is latched at this level and stamped just before the file, and nothing
+    is said. Asking would stamp the moment AFTER the write, and compact-resume, which accepts only
+    a checkpoint written after the request, would then report that none was saved - measured once
+    on a first crossing after a compaction, where the session wrote handover.md on its own.
     """
     state, detail = compact_verdict(tokens, window, pct, cap, harness_window(dict(os.environ)))
     if not detail:
@@ -638,7 +722,11 @@ def _decide_compact(session, proj, tokens, window, source, pct, cap, *, plan_mod
         return None
     if not due(tokens, detail["save_at"], window, last):
         return None
+    answered_at = _stamp_before(wrote) if wrote else None
     mark_asked(session, tokens)
+    if answered_at is not None:
+        sig.mark_checkpoint_asked(session, now=answered_at)
+        return None
     sig.mark_checkpoint_asked(session)
     # Asked only here, on the rare turn that requests a save, so an ordinary turn never pays for git.
     return _save(detail, handover_tracking(proj), plan_mode=plan_mode)
