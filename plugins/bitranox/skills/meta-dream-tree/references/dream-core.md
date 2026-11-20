@@ -82,11 +82,11 @@ Read the mode first (`dream_state.py mode`; knobs in `~/.claude/.bitranox-memory
   (the bytes it adds to the top block: the UTF-8 length of its pointer line plus the newline) for
   the user's approval, and the fact stays where it is. Re-homes to every level below the top are
   applied, and so is a corroborated promotion to the top, one the gate lets through:
-  `should-promote` printed `promote`, or the fact is a user-stated concrete rule, which promotes
-  eagerly whatever that verb prints (it counts projects only). The report prints its cost for
-  information and never lists it as a proposal. Apply CLAUDE.md consolidation under the reachability
-  invariant (see Boundaries) and REPORT every file touched; route skill changes to a self-PR.
-  Mention the `dream_mode` knob (`bitranox:meta-memory-settings`) at the end.
+  `should-promote` printed `promote`, asked with `--source user` for a user-stated concrete rule.
+  The report prints its cost for information and never lists it as a proposal. Apply CLAUDE.md
+  consolidation under the reachability invariant (see Boundaries) and REPORT every file touched;
+  route skill changes to a self-PR. Mention the `dream_mode` knob (`bitranox:meta-memory-settings`)
+  at the end.
 - **`auto`**: no per-change prompts - CLAUDE.md edits as above, plus ship skill changes directly;
   a misplacement re-home to the tree top is applied and its cost printed in the report.
 - **`off`**: no nudges; a manual run consolidates PRIVATE memory only, and PROPOSES a misplacement
@@ -325,11 +325,13 @@ eagerly; a model-INFERRED generalization needs >= 2 DISTINCT PROJECTS. The gate 
 real dwell store (out of the dreamed store, so counting never bumps its mtime) that counts distinct
 projects, not sightings - a dream re-reads UNCHANGED fact bodies on every run, so counting
 sightings let one act of judgement corroborate itself.
-Record each sighting with `dream_state.py saw-promotable <slug> <ABSOLUTE path of the project the
-fact came from>` (the project defaults to the cwd, which is wrong for a fan-out reading other
-projects' stores, and a bare name keys a directory that may not exist - see below), ask
-`dream_state.py should-promote <slug>` (prints `promote` with exit 0 or `hold` with exit 1, an
-answer either way), and after an actual promotion run
+Record each sighting with
+`dream_state.py saw-promotable <slug> <ABSOLUTE path of the project the fact came from>` (the
+project defaults to the cwd, which is wrong for a fan-out reading other projects' stores, and a bare
+name keys a directory that may not exist - see below), ask `dream_state.py should-promote <slug>`,
+adding `--source user` when the fact is a user-stated concrete rule (the default,
+`--source inferred`, judges a model-inferred one), and obey the word it prints: `promote` with exit
+0 or `hold` with exit 1, an answer either way. After an actual promotion run
 `dream_state.py promoted <slug>` to clear every project's sighting at once. HOLD keeps the fact at
 the project level until a SECOND project sights it.
 
@@ -339,12 +341,13 @@ sighted it, each `sha1(os.path.abspath(project))[:16]` - hashes, not names - and
 never checks that the path exists. A bare project NAME is resolved against the cwd into
 `<cwd>/<name>`, a directory that may never have existed, and it still counts as a second project.
 So when recording, always pass the project's ABSOLUTE path, never a bare name and never the cwd
-when the fact came from elsewhere. Before acting on `promote`, resolve the slug's keys: hash the
-candidate directories (the tree's level dirs, and any project dir a sighting may have named) the
-same way and match, with a positive control (at least one key must resolve, or the resolver is
-broken). Require two keys that name real, DIFFERENT directories. A key that matches no directory
-is not corroboration, so treat the verdict as `hold`: a hold costs one more dream, a wrong promote
-a line that loads in every session under the tree top.
+when the fact came from elsewhere. Before acting on a `promote` for a model-inferred fact (a
+`--source user` verdict rests on no key), resolve the slug's keys: hash the candidate directories
+(the tree's level dirs, and any project dir a sighting may have named) the same way and match, with
+a positive control (at least one key must resolve, or the resolver is broken). Require two keys that
+name real, DIFFERENT directories. A key that matches no directory is not corroboration, so treat the
+verdict as `hold`: a hold costs one more dream, a wrong promote a line that loads in every session
+under the tree top.
 
 **The corroboration gate answers a PROMOTION question, never a MISPLACEMENT one.** Promotion asks
 "does this project-level fact generalise?", and holding it until a second project sights it is

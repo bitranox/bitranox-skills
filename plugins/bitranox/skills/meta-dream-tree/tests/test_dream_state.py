@@ -322,6 +322,53 @@ def test_promoted_clears_every_project_sighting(home, capsys):
     assert capsys.readouterr().out.strip() == "hold"
 
 
+def test_a_user_stated_rule_seen_in_one_project_promotes_with_source_user(home, capsys):
+    """The gate promotes a user-stated concrete rule eagerly, but the verb used to judge every
+    candidate as model-inferred, so it printed hold for such a rule seen in one project and the
+    skill text had to tell readers to override the printed word."""
+    D.main(["saw-promotable", "s", "/p/a"])
+    capsys.readouterr()
+    assert D.main(["should-promote", "s", "/p/a", "--source", "user"]) == 0
+    assert capsys.readouterr().out.strip() == "promote"
+    assert D.main(["should-promote", "--source=user", "never-sighted", "/p/a"]) == 0
+    assert capsys.readouterr().out.strip() == "promote"
+
+
+def test_should_promote_without_source_still_judges_a_model_inferred_candidate(home, capsys):
+    D.main(["saw-promotable", "s", "/p/a"])
+    capsys.readouterr()
+    assert D.main(["should-promote", "s", "/p/a"]) == 1
+    assert capsys.readouterr().out.strip() == "hold"
+    assert D.main(["should-promote", "s", "/p/a", "--source", "inferred"]) == 1
+    assert capsys.readouterr().out.strip() == "hold"
+    D.main(["saw-promotable", "s", "/p/b"])
+    capsys.readouterr()
+    assert D.main(["should-promote", "s", "/p/a"]) == 0
+    assert capsys.readouterr().out.strip() == "promote"
+
+
+def test_should_promote_with_source_user_stays_read_only(home, capsys):
+    D.main(["saw-promotable", "s", "/p/a"])
+    D.main(["should-promote", "s", "/p/b", "--source", "user"])
+    capsys.readouterr()
+    assert D.main(["should-promote", "s", "/p/b"]) == 1          # /p/b was not recorded
+    assert capsys.readouterr().out.strip() == "hold"
+
+
+@pytest.mark.parametrize("argv, why", [
+    (["should-promote", "s", "--source", "eager"], "--source must be one of: inferred, user"),
+    (["should-promote", "s", "--source"], "--source needs a value"),
+    (["should-promote", "s", "--source", "user", "--source", "user"], "--source given twice"),
+    (["saw-promotable", "s", "--source", "user"], "--source applies to should-promote only"),
+    (["due", "--source", "user"], "--source applies to should-promote only"),
+])
+def test_source_refuses_a_bad_value_or_another_verb(home, capsys, argv, why):
+    assert D.main(argv) == 2
+    err = capsys.readouterr().err
+    assert why in err
+    assert D.sig.promotion_dwell("/p/a", "s") == 0               # nothing recorded on a refusal
+
+
 def test_session_review_reports_which_skills_actually_ran(home, tmp_path, capsys):
     """P2: the skill-gap correlation (flag-a-skill-when-a-real-bug-slips-past-it) needs REAL
     invocation data - in a long session the early Skill calls have scrolled out of context, so

@@ -21,10 +21,13 @@ Usage (cwd defaults to the current directory):
                                           fact cannot corroborate itself. PROJ defaults to the cwd,
                                           so a fan-out reading OTHER projects' stores must pass the
                                           project the fact came FROM, not its own cwd.
-  dream_state.py should-promote  S [proj] print "promote" (exit 0) or "hold" (exit 1) for a
-                                          model-inferred candidate S (>= 2 distinct projects
-                                          corroborates; read-only, does NOT count; answers the same
-                                          from any project)
+  dream_state.py should-promote  S [proj] [--source inferred|user]
+                                          print "promote" (exit 0) or "hold" (exit 1) for
+                                          candidate S. inferred (the default): a model-inferred
+                                          generalization, which >= 2 distinct projects corroborate;
+                                          user: a user-stated concrete rule, which promotes eagerly.
+                                          Read-only, does NOT count; answers the same from any
+                                          project
   dream_state.py promoted        S [proj] clear S's sightings after it was promoted - EVERY project's,
                                           so one later sighting cannot re-fire the gate
   dream_state.py session-review  [cwd] [--structured-only | --prose]
@@ -90,6 +93,16 @@ The corroboration gate backs the docs' ">= 2 dreams" claim: it is the dwell coun
 self_improve_signals (out-of-store, so counting never bumps the store mtime). saw-promotable/
 promoted are the write verbs; should-promote is the read-only decision.
 
+Decisions:
+- should-promote takes the candidate's source (`--source inferred|user`, default inferred) and
+  passes it to self_improve_signals.should_promote. Why: the gate promotes a user-stated concrete
+  rule eagerly, but the verb judged every candidate as model-inferred, so it printed `hold` for
+  such a rule seen in one project and the dream skills had to tell readers to override the word
+  it printed. The default keeps every existing call's answer. Pinned by
+  tests/test_dream_state.py::test_a_user_stated_rule_seen_in_one_project_promotes_with_source_user
+  and ::test_should_promote_without_source_still_judges_a_model_inferred_candidate. Reopen if
+  the gate stops promoting user-stated rules eagerly.
+
 Every write verb reads its state back and exits 2 with an error on stderr when the write did not
 land (an unwritable ~/.claude/self-improve-audit, a full disk) - a success line over a failed
 write is the one output a caller cannot recover from.
@@ -125,6 +138,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from tree_support import utf8_stdio  # noqa: E402
 
 _PROMOTE_CMDS = ("saw-promotable", "should-promote", "promoted")
+# The candidate sources self_improve_signals.should_promote distinguishes; the first is the default.
+_SOURCES = ("inferred", "user")
 _KINDS = ("nap", "tree")
 # The Jev shadow sites a tree dream feeds (meta-dream-tree steps 5-7). A nap has none.
 TREE_SITES = ("dream-placement", "dream-firing", "dream-prune")
@@ -164,6 +179,7 @@ USAGE = ("usage: dream_state.py [due|done|mode|session-review|session-reviewed] 
          "       dream_state.py done [cwd] --kind nap|tree [--dream ID] [--jev-skip SITE=REASON]\n"
          "       dream_state.py nap-decline [cwd] --by WHO\n"
          "       dream_state.py [saw-promotable|should-promote|promoted] <slug> [proj]\n"
+         "       dream_state.py should-promote <slug> [proj] [--source inferred|user]\n"
          "       dream_state.py -h | --help")
 
 
@@ -561,11 +577,12 @@ def _session_reviewed(proj, named=None, prose=False, to=None):
     return 0
 
 
-def _promote_cmd(cmd, slug, proj):
-    """The three corroboration verbs; each write is read back before it is reported."""
+def _promote_cmd(cmd, slug, proj, source=_SOURCES[0]):
+    """The three corroboration verbs; each write is read back before it is reported. `source` is
+    the candidate's source for should-promote (inferred | user)."""
     if cmd == "should-promote":
         dwell = sig.promotion_dwell(proj, slug)                      # read-only, does not count
-        promote = sig.should_promote("inferred", dwell)
+        promote = sig.should_promote(source, dwell)
         print("promote" if promote else "hold")
         return 0 if promote else 1                                   # a yes/no verb: hold is no
     if cmd == "saw-promotable":
@@ -755,6 +772,36 @@ def _take_by(argv):
     return rest, by
 
 
+def _take_source(argv):
+    """(argv without --source, its value or None), or an error string."""
+    rest, source, i = [], None, 0
+    while i < len(argv):
+        flag, eq, inline = argv[i].partition("=")
+        if flag != "--source":
+            rest.append(argv[i])
+            i += 1
+            continue
+        if eq:
+            value, i = inline, i + 1
+        elif i + 1 < len(argv):
+            value, i = argv[i + 1], i + 2
+        else:
+            return "--source needs a value"
+        if source is not None:
+            return "--source given twice"
+        if value not in _SOURCES:
+            return "--source must be one of: %s" % ", ".join(_SOURCES)
+        source = value
+    return rest, source
+
+
+def _check_source(cmd, source):
+    """Why --source is refused here, or None."""
+    if source is not None and cmd != "should-promote":
+        return "--source applies to should-promote only"
+    return None
+
+
 def _check_by(cmd, by):
     """Why --by is refused here, or None."""
     if cmd != "nap-decline":
@@ -796,6 +843,10 @@ def _parse(argv):
     if isinstance(taken, str):
         return taken
     argv, done_opts["by"] = taken
+    taken = _take_source(argv)
+    if isinstance(taken, str):
+        return taken
+    argv, done_opts["source"] = taken
     taken = _take_to(argv)
     if isinstance(taken, str):
         return taken
@@ -821,7 +872,8 @@ def _parse(argv):
             return "%s takes at most one [cwd], got %d" % (cmd, len(pos))
     else:
         return "unknown command %r" % cmd
-    why = _check_done_opts(cmd, done_opts) or _check_by(cmd, done_opts["by"])
+    why = (_check_done_opts(cmd, done_opts) or _check_by(cmd, done_opts["by"])
+           or _check_source(cmd, done_opts["source"]))
     if why:
         return why
     return cmd, pos, "--structured-only" in argv, named, done_opts, "--prose" in argv
@@ -840,7 +892,8 @@ def main(argv=None):
         return 2
     cmd, pos, structured_only, named, done_opts, prose = parsed
     if cmd in _PROMOTE_CMDS:
-        return _promote_cmd(cmd, pos[0], pos[1] if len(pos) > 1 else os.getcwd())
+        return _promote_cmd(cmd, pos[0], pos[1] if len(pos) > 1 else os.getcwd(),
+                            done_opts["source"] or _SOURCES[0])
     return _proj_cmd(cmd, pos[0] if pos else os.getcwd(), structured_only, named, done_opts, prose)
 
 

@@ -31,8 +31,8 @@ siblings, is left where it is and named in the report, not routed), leaves skill
 queued (step 7), and proposes every step 4b relocate, whatever its target level, as step 4b
 does in `propose`. The mode decides only those step 4b relocates: in every mode a promotion to a
 tree top that passed step 4's gate (dream-core's corroborated promotion: `should-promote` printed
-`promote`, or a user-stated concrete rule) and a step 5 lift to a level below a top are applied,
-never proposed, and step 8 lists each as applied with its cost.
+`promote`) and a step 5 lift to a level below a top are applied, never proposed, and step 8 lists
+each as applied with its cost.
 
 ## When to run
 
@@ -143,17 +143,19 @@ Create one todo per step.
    list from the same unchanged fact bodies corroborates nothing. Name the project the fact CAME
    FROM, never your cwd, or every sighting in the fan-out collapses to one corroborator:
    `dream_state.py saw-promotable <slug> <project>` records a sighting,
-   `dream_state.py should-promote <slug>` (`promote`/`hold`), `dream_state.py promoted <slug>`
-   to clear after an applied promotion (home: `<plugin>/skills/meta-dream-tree/`; the counters are the
-   `self_improve_signals.py` dwell store, OUT of the dreamed store so a converged re-run is a no-op).
-   **VERIFY a `promote` before acting on it: the counter keys on the project PATH as given**, made
-   absolute against the cwd, with no validation that it names a real level. Spell a project
-   differently from an earlier run (a bare `alpha` where that run used the level path) and you
-   create a SECOND key for the SAME project, which the >= 2-distinct-projects gate reads as two
-   corroborators. It does not fail loudly - it returns the word you were hoping for. So open the
-   store (`~/.claude/self-improve-audit/promotion-candidates.json` maps slug -> its list of project
-   keys), confirm those keys are genuinely DIFFERENT projects, and reuse the spelling earlier runs
-   used instead of inventing one. Treat a verdict whose provenance you cannot establish as `hold`:
+   `dream_state.py should-promote <slug>` prints the verdict you obey (`promote`/`hold`; add
+   `--source user` for a user-stated concrete rule), `dream_state.py promoted <slug>` to clear after
+   an applied promotion (home: `<plugin>/skills/meta-dream-tree/`; the counters are the
+   `self_improve_signals.py` dwell store, OUT of the dreamed store so a converged re-run is a
+   no-op). **VERIFY a model-inferred `promote` before acting on it (a `--source user` verdict rests
+   on no key): the counter keys on the project PATH as given**, made absolute against the cwd, with
+   no validation that it names a real level. Spell a project differently from an earlier run (a bare
+   `alpha` where that run used the level path) and you create a SECOND key for the SAME project,
+   which the >= 2-distinct-projects gate reads as two corroborators. It does not fail loudly - it
+   returns the word you were hoping for. So open the store
+   (`~/.claude/self-improve-audit/promotion-candidates.json` maps slug -> its list of project keys),
+   confirm those keys are genuinely DIFFERENT projects, and reuse the spelling earlier runs used
+   instead of inventing one. Treat a verdict whose provenance you cannot establish as `hold`:
    holding costs one more dream, a wrong promote costs a permanently always-loaded line.
 4b. **Misplacement audit (wrong-TREE facts).** ONLY the cross-tree modes can see this: a fact
    captured while cwd was another repo lands in the WRONG tree's store, and nothing in that tree's
