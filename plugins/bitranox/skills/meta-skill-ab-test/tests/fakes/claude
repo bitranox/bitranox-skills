@@ -4,11 +4,12 @@
 --version                                   prints a version line
 plugin marketplace add <dir> --json         copies <dir> to the config dir's plugin cache
 plugin install bitranox@bitranox-skills --json   records the install
--p <prompt> ...                             replays FAKE_CLAUDE_STREAM (a stream.jsonl path) to
-                                            stdout, writes a transcript under the config dir's
+-p <prompt> ...                             writes a transcript under the config dir's
                                             projects/<cwd dashkey>/<session id>.jsonl as the real
                                             CLI does (it also records the prompt and the installed
-                                            plugin's skill dirs), and makes one commit in the cwd; then, when
+                                            plugin's skill dirs), makes one commit in the cwd, and
+                                            only then replays FAKE_CLAUDE_STREAM (a stream.jsonl
+                                            path) to stdout; then, when
                                             FAKE_CLAUDE_SCRIPT names a Python file, runs it in the
                                             cwd with stdout still open (a test's extra behaviour);
                                             with FAKE_CLAUDE_CWD_FROM_PROC set it first resolves its
@@ -77,14 +78,19 @@ def main(argv):
                 return 1
         stream = Path(os.environ["FAKE_CLAUDE_STREAM"])
         text = stream.read_text(encoding="utf-8")
-        sys.stdout.write(text)
-        sys.stdout.flush()
+        # The work and its transcript come BEFORE the stream, as in a real session, whose records
+        # are written while it works and whose last ones (a CLI notice, the result) end it. Replayed
+        # first, a stream the harness voids (a synthetic notice, a foreign model) got the session
+        # SIGTERMed while this fake was still writing, so whether an arm kept a transcript and a
+        # commit depended on which process the scheduler ran first.
         _write_transcript(cfg, text, argv[1])
         Path("arm-work.txt").write_text("done by the fake arm\n", encoding="utf-8")
         env = dict(os.environ, GIT_AUTHOR_NAME="arm", GIT_AUTHOR_EMAIL="arm@x",
                    GIT_COMMITTER_NAME="arm", GIT_COMMITTER_EMAIL="arm@x")
         subprocess.run(["git", "add", "arm-work.txt"], check=True, env=env)
         subprocess.run(["git", "commit", "-q", "-m", "Task 1: arm work"], check=True, env=env)
+        sys.stdout.write(text)
+        sys.stdout.flush()
         if os.environ.get("FAKE_CLAUDE_SCRIPT"):
             runpy.run_path(os.environ["FAKE_CLAUDE_SCRIPT"], run_name="__main__")
         return 0

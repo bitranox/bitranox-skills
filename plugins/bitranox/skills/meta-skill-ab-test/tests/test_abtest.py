@@ -653,6 +653,42 @@ def test_a_synthetic_notice_after_real_work_that_is_no_limit_does_not_pause(tmp_
     probe = _Probe("ok")
     assert T.main(_run_args(run_dir, creds, skills_repo, "--only", "C"), login_check=probe) == 0
     assert probe.calls == [] and _arm_rows(run_dir) == [(1, "C", "ran")], "the scorer voids it; the run goes on"
+    # The void stop ends the session at the notice; what the session did before it is kept.
+    res = json.loads((run_dir / "arms" / "r1-C" / "result.json").read_text(encoding="utf-8"))
+    assert (res["stop_reason"], len(res["transcripts"]), res["bundle_commits"]) == ("void", 1, 1)
+
+
+def test_the_fake_session_works_and_records_before_its_stream_ends_it(tmp_path, fake_claude_path):
+    """The fake does what a real session does before its last records: the harness may stop it there.
+
+    stdout is a pipe nobody reads and the stream outgrows its buffer, so the fake blocks inside
+    the replay: whatever it has not done by then, a harness that stops on a voiding record
+    would never see. The transcript and the commit must already be there.
+    """
+    repo = tmp_path / "ws"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True, env=L.git_env())
+    stream = _synthetic_stream(tmp_path, "x" * (1 << 20), real_work_first=True)
+    cfg = tmp_path / "cfg"
+    env = dict(L.git_env(), CLAUDE_CONFIG_DIR=str(cfg), FAKE_CLAUDE_STREAM=str(stream),
+               GIT_CONFIG_NOSYSTEM="1", HOME=str(tmp_path))
+    proc = subprocess.Popen([str(fake_claude_path / "claude"), "-p", "the task"], cwd=repo, env=env,
+                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+
+    def commits():
+        return subprocess.run(["git", "-C", str(repo), "rev-list", "--count", "--all"], capture_output=True,
+                              text=True, env=L.git_env(), check=False).stdout.strip()
+
+    try:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and proc.poll() is None and commits() != "1":
+            time.sleep(0.05)
+        assert proc.poll() is None, "the fake ended before the replay blocked: the probe proves nothing"
+        assert [p.name for p in cfg.glob("projects/*/*.jsonl")] == ["fake-synthetic.jsonl"]
+        assert commits() == "1"
+    finally:
+        proc.kill()
+        proc.communicate()
 
 
 def test_the_arm_row_is_journaled_before_the_probe_is_asked(tmp_path, scratch_repo, skills_repo, fake_claude_path, monkeypatch):
