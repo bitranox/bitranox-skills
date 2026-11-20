@@ -1617,9 +1617,19 @@ def _unannotated(fn: Callable[..., object]) -> list[str]:
 # signature here reaches each of them as "partially unknown", so no caller can be clean.
 _LOCK_API = ["memory_lock", "retry_while_shared", "is_transient_sharing_error"]
 
+# Path and switch helpers the hooks and skill scripts call across modules, for the same reason.
+_PATH_API = ["audit_file", "session_key", "session_state_path", "project_slug", "memory_dir",
+             "claude_memory_dir", "claude_md_path", "claude_local_md_path", "memory_writes_off",
+             "refuse_if_memory_writes_off"]
+
 
 @pytest.mark.parametrize("name", _LOCK_API)
 def test_the_lock_api_is_fully_annotated(name: str) -> None:
+    assert _unannotated(getattr(S, name)) == []
+
+
+@pytest.mark.parametrize("name", _PATH_API)
+def test_the_shared_path_helpers_are_fully_annotated(name: str) -> None:
     assert _unannotated(getattr(S, name)) == []
 
 

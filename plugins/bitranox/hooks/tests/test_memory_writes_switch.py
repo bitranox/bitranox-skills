@@ -35,7 +35,7 @@ import subagent_capture
     ("off", True), ("OFF", True), (" off ", True),
     ("on", False), ("0", False), ("false", False), ("", False),
 ])
-def test_memory_writes_off_reads_exactly_one_spelling(value, expected):
+def test_memory_writes_off_reads_exactly_one_spelling(value: str, expected: bool) -> None:
     assert sig.memory_writes_off({"BITRANOX_MEMORY_WRITES": value}) is expected
 
 

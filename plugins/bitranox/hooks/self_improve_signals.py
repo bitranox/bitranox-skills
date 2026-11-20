@@ -69,7 +69,7 @@ def proj_key(proj):
     return hashlib.sha1(normalized.encode("utf-8", "replace")).hexdigest()[:16]
 
 
-def audit_file(proj):
+def audit_file(proj: _StrPath | None) -> Path:
     """Where the SessionEnd audit writes candidate misses for the next SessionStart to read."""
     return claude_paths.audit_dir() / (proj_key(proj) + ".md")
 
@@ -176,7 +176,7 @@ def quoted_snippet(record):
 _SESSION_KEY_MAX = 64
 
 
-def session_key(session):
+def session_key(session: object) -> str:
     """`session` reduced to ONE safe filename component - the session-side twin of `proj_key`.
 
     `session_id` arrives on hook stdin and a dozen state files are named after it. A path built by
@@ -207,7 +207,7 @@ def session_key(session):
     return safe[:_SESSION_KEY_MAX - len(digest) - 1] + "-" + digest
 
 
-def session_state_path(session, suffix):
+def session_state_path(session: object, suffix: str) -> Path:
     """The audit-dir path of `session`'s `suffix` state file, confined to a single component.
 
     Hooks call THIS rather than joining `_audit_dir()` themselves: making the sink shared is what
@@ -221,7 +221,7 @@ def session_state_path(session, suffix):
 _DREAM_THRESHOLD_S = 24 * 3600  # do not nudge a fresh consolidation more often than this
 
 
-def project_slug(proj):
+def project_slug(proj: str) -> str:
     """Claude Code's ~/.claude/projects directory name for a project cwd.
 
     Transcribed from the CLI binary (2.1.240):
@@ -234,7 +234,7 @@ def project_slug(proj):
     return re.sub(r"[^a-zA-Z0-9]", "-", proj)
 
 
-def memory_dir(proj):
+def memory_dir(proj: str) -> Path:
     """The native Auto-memory dir for a project cwd."""
     return claude_paths.config_dir() / "projects" / project_slug(proj) / "memory"
 
@@ -265,19 +265,19 @@ CURATED_INDEX = "index.md"                    # named `index.md` (not `memory.md
                                               # confused with Claude Code's native `MEMORY.md` tier
 
 
-def claude_memory_dir(proj):
+def claude_memory_dir(proj: _StrPath) -> Path:
     """The project-local curated memory dir: `<proj>/.claude-bx-selflearning`.
     Holds `index.md` (the @imported index), `facts/<slug>.md` (lazy bodies), `state/`, `.archive/`."""
     return Path(proj) / CURATED_DIRNAME
 
 
-def claude_md_path(proj):
+def claude_md_path(proj: _StrPath) -> Path:
     """The project's TRACKED CLAUDE.md. Carries the `@import` of `index.md` only when `track_private`
     is on (memory committed with the repo); otherwise the import lives in `claude_local_md_path`."""
     return Path(proj) / "CLAUDE.md"
 
 
-def claude_local_md_path(proj):
+def claude_local_md_path(proj: _StrPath) -> Path:
     """The project's UNTRACKED `CLAUDE.local.md` - the DEFAULT home for the `@import` of `index.md`
     (track_private off). Symmetric with the gitignored store: the memory wiring never touches tracked
     git, a fresh clone has neither the wiring nor the store, and no commit is needed to set up memory."""
@@ -663,7 +663,7 @@ class MemoryWritesOff(RuntimeError):
     """
 
 
-def memory_writes_off(environ=None):
+def memory_writes_off(environ: Mapping[str, str] | None = None) -> bool:
     """True when the process runs with BITRANOX_MEMORY_WRITES=off (case-insensitive, trimmed).
 
     One spelling only: "0", "false" or a typo leave writes ON, because a switch that fails closed
@@ -673,7 +673,7 @@ def memory_writes_off(environ=None):
     return (env.get(MEMORY_WRITES_ENV) or "").strip().lower() == "off"
 
 
-def refuse_if_memory_writes_off():
+def refuse_if_memory_writes_off() -> None:
     """Raise MemoryWritesOff when the switch is set; the first statement of every write path."""
     if memory_writes_off():
         raise MemoryWritesOff(MEMORY_WRITES_OFF_LINE)
@@ -1721,7 +1721,7 @@ def discovery_roots():
     return sorted({p for p in roots if _is_dir(p)}, key=str)
 
 
-def _audit_dir():
+def _audit_dir() -> Path:
     """Machine-local scratch dir the recall/gather caches and the stores-generation marker share."""
     return claude_paths.audit_dir()
 
