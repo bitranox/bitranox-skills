@@ -47,6 +47,9 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 - The inbound-ref rename race test ends once both its renames and the citer's writes reach their
   counts. A fixed rename count alone ended before a paced citer on a slow macOS runner had written
   enough, which failed the 11.18.0 CI run.
+- The stamp-clock-nudge and proj_key tests pass on Windows. They spelled Windows paths in Bash
+  commands with backslashes, which Bash reads as escapes, and pinned a POSIX-only key; the hook and
+  proj_key were correct.
 
 ## [11.18.0]
 
