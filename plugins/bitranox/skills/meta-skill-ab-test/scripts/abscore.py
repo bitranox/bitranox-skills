@@ -23,7 +23,7 @@ import signal
 import subprocess
 import sys
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -67,8 +67,9 @@ __all__ = [
     "score_arm",
 ]
 
-# A value as json.loads gives it: what a result.json written by any harness version may hold.
-type JsonValue = None | bool | int | float | str | list[JsonValue] | dict[str, JsonValue]
+# A value as json.loads gives it (what a result.json written by any harness version may hold), or
+# as json.dumps takes it: the read-only container types let a list[str] or a dict[str, str] stand.
+type JsonValue = None | bool | int | float | str | Sequence[JsonValue] | Mapping[str, JsonValue]
 type JsonObject = dict[str, JsonValue]
 
 # A median of one reading is that reading: the check needs two other arms before it means anything.
@@ -197,7 +198,7 @@ class FloorResult:
 
 def _partial_output(exc: subprocess.TimeoutExpired) -> str:
     """Whatever the command printed before it was killed; bytes when the platform gives bytes."""
-    parts = []
+    parts: list[str] = []
     for chunk in (exc.stdout, exc.stderr):
         if isinstance(chunk, bytes):
             chunk = chunk.decode("utf-8", errors="replace")
@@ -435,10 +436,10 @@ class RecordedStep:
     recorded: JsonObject
 
     @classmethod
-    def from_json(cls, obj: JsonObject) -> RecordedStep:
+    def from_json(cls, obj: Mapping[str, JsonValue]) -> RecordedStep:
         error = obj.get("error")
         return cls(name=_as_str(obj.get("name")), rc=_as_int(obj.get("rc")),
-                   error=error if isinstance(error, str) and error else None, recorded=obj)
+                   error=error if isinstance(error, str) and error else None, recorded=dict(obj))
 
 
 @dataclass(frozen=True)
@@ -451,7 +452,7 @@ class RecordedFloor:
     @classmethod
     def from_json(cls, value: JsonValue) -> RecordedFloor:
         floor = _as_object(value)
-        steps = tuple(RecordedStep.from_json(s) for s in _as_list(floor.get("steps")) if isinstance(s, dict))
+        steps = tuple(RecordedStep.from_json(s) for s in _as_list(floor.get("steps")) if isinstance(s, Mapping))
         return cls(passed=bool(floor.get("passed")), steps=steps)
 
     def named(self, name: str) -> RecordedStep | None:
@@ -500,7 +501,7 @@ class RecordedResult:
     context_files: dict[str, str] | None
 
     @classmethod
-    def from_json(cls, obj: JsonObject) -> RecordedResult:
+    def from_json(cls, obj: Mapping[str, JsonValue]) -> RecordedResult:
         guard = obj.get("guard")
         context = obj.get("context_files")
         return cls(
@@ -539,8 +540,8 @@ def read_result(arm_dir: Path) -> RecordedResult:
         json.JSONDecodeError: result.json is not JSON.
         TypeError: result.json holds JSON that is not an object.
     """
-    obj = json.loads((arm_dir / "result.json").read_text(encoding="utf-8"))
-    if not isinstance(obj, dict):
+    obj: JsonValue = json.loads((arm_dir / "result.json").read_text(encoding="utf-8"))
+    if not isinstance(obj, Mapping):
         raise TypeError(f"{arm_dir / 'result.json'} holds a JSON {type(obj).__name__}, not an object")
     return RecordedResult.from_json(obj)
 

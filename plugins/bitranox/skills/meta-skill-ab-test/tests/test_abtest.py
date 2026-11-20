@@ -119,7 +119,7 @@ def test_a_torn_last_journal_line_is_moved_aside_and_reported(tmp_path, capsys):
     path = tmp_path / "journal.jsonl"
     path.write_text('{"step": "seal", "round": 0}\n{"step": "arm", "rou', encoding="utf-8")
     rows = T.load_journal(tmp_path)
-    assert rows == [{"step": "seal", "round": 0}]
+    assert [r.recorded for r in rows] == [{"step": "seal", "round": 0}]
     assert "torn" in capsys.readouterr().err
     assert path.read_text(encoding="utf-8") == '{"step": "seal", "round": 0}\n'
     assert (tmp_path / "journal.torn").read_text(encoding="utf-8") == '{"step": "arm", "rou\n'
@@ -393,6 +393,26 @@ def test_ctrl_c_still_writes_result_and_journal_then_reraises(tmp_path, scratch_
     assert res["stop_reason"] == "interrupted" and not (arm / "cfg").exists()
     assert not (scratch_repo / ".claude" / "worktrees" / f"abx-{run_dir.name}-r1-C").exists()
     assert _lock_is_free(run_dir), "a Ctrl-C left the run dir locked"
+
+
+def test_a_taken_snapshot_records_its_changes_and_no_skip_reason(tmp_path, scratch_repo, skills_repo, fake_claude_path,
+                                                                  monkeypatch):
+    """With a memory store over the worktree the snapshot is taken and verified: result.json then
+    carries guard_changes and no guard_skipped, which only says why no snapshot was taken."""
+    store = scratch_repo / ".claude-memory" / "facts"
+    store.mkdir(parents=True)
+    (store / "a-slug.md").write_text("body a\n", encoding="utf-8")
+    # The workpiece's CLAUDE.local.md is gitignored, so it stays in the main checkout as the level.
+    (scratch_repo / "CLAUDE.local.md").write_text("# Memory index\n- [Top](mem:a-slug) - When top, do top.\n",
+                                                  encoding="utf-8")
+    run_dir = _init_and_fill(tmp_path, scratch_repo, skills_repo)
+    env, creds = _env(fake_claude_path, tmp_path)
+    _use_env(monkeypatch, env)
+    assert T.main(["seal", str(run_dir)]) == 0
+    assert T.main(_run_args(run_dir, creds, skills_repo, "--dry-run", "--only", "C")) == 0
+    res = json.loads((run_dir / "arms" / "r1-C" / "result.json").read_text(encoding="utf-8"))
+    assert res["guard"]["taken"] is True, res["guard"]
+    assert res["guard_changes"] == [] and "guard_skipped" not in res
 
 
 def _fabricate_arm(run_dir, round_no, *, cache_read, stop_reason="finished", guard_changes=(), context_files=None):

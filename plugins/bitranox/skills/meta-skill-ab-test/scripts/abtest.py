@@ -33,12 +33,12 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from types import FrameType
-from typing import Any
+from typing import NoReturn
 
 if sys.platform != "win32":
     # flock for the run dir lock. Windows has no fcntl; the suite still imports this module there.
@@ -61,13 +61,24 @@ from _ablib import (
     sha256_file,
     utc_now,
 )
-from abprofile import SANDBOX_BWRAP_KINDS, SANDBOX_MISSING, SKELETON, Profile, ProfileError, load_profile
+from abprofile import (
+    SANDBOX_BWRAP_KINDS,
+    SANDBOX_MISSING,
+    SKELETON,
+    Profile,
+    ProfileError,
+    load_profile,
+)
+from abscore import JsonObject, JsonValue
 from abstream import OPUS_PREFIX, SYNTHETIC_REASON_PREFIX
 
 __all__ = [
     "OPUS_PREFIX",
     "WEIGHTS",
+    "ArmMeta",
+    "ArmRecord",
     "JournalError",
+    "JournalRow",
     "RunContext",
     "RunRefused",
     "build_parser",
@@ -193,6 +204,24 @@ class ArmTask:
 
 
 @dataclass(frozen=True)
+class ArmMeta:
+    """What every journal row and result.json of one arm records beside its outcome.
+
+    sandbox None is a profile sealed before the key existed; unattended_note_sha256 None is a
+    profile with no unattended_note (no note, not an empty one).
+    """
+
+    sandbox: str | None
+    task_file: str
+    task_sha256: str
+    unattended_note_sha256: str | None
+
+    def to_json(self) -> JsonObject:
+        return {"sandbox": self.sandbox, "task_file": self.task_file, "task_sha256": self.task_sha256,
+                "unattended_note_sha256": self.unattended_note_sha256}
+
+
+@dataclass(frozen=True)
 class RunContext:
     run_dir: Path
     profile: Profile
@@ -208,12 +237,12 @@ class RunContext:
     def run_id(self) -> str:
         return self.run_dir.name
 
-    def arm_meta(self, name: str) -> dict[str, Any]:
+    def arm_meta(self, name: str) -> ArmMeta:
         """What every journal row and result.json of arm `name` records beside its outcome."""
         task = self.tasks[name]
         note = self.profile.run.unattended_note
-        return {"sandbox": self.profile.run.sandbox, "task_file": task.file, "task_sha256": task.sha256,
-                "unattended_note_sha256": None if note is None else hashlib.sha256(note.encode("utf-8")).hexdigest()}
+        return ArmMeta(sandbox=self.profile.run.sandbox, task_file=task.file, task_sha256=task.sha256,
+                       unattended_note_sha256=None if note is None else hashlib.sha256(note.encode("utf-8")).hexdigest())
 
     def prompt(self, name: str) -> str:
         """Arm `name`'s task text, then the profile's unattended_note after a blank line when it has one."""
@@ -224,27 +253,240 @@ class RunContext:
         return f"{ended}\n{note}\n"
 
 
+@dataclass(frozen=True)
+class SessionOutcome:
+    """abarm.dispatch's answer: the stream account's summary plus stop_reason, process_rc, wall_s, stream.
+
+    recorded is that summary as result.json holds it; the properties are the parts abtest reads.
+    """
+
+    recorded: JsonObject
+
+    @property
+    def stop_reason(self) -> str | None:
+        value = self.recorded.get("stop_reason")
+        return value if isinstance(value, str) else None
+
+    @property
+    def void_reasons(self) -> tuple[str, ...]:
+        value = self.recorded.get("void_reasons")
+        return tuple(str(r) for r in value) if isinstance(value, list) else ()
+
+    @property
+    def wrote_assistant_messages(self) -> bool:
+        return bool(self.recorded.get("assistant_messages"))
+
+    @property
+    def total_cost_usd(self) -> JsonValue:
+        return self.recorded.get("total_cost_usd")
+
+    @property
+    def wall_s(self) -> JsonValue:
+        return self.recorded.get("wall_s")
+
+
+@dataclass(frozen=True)
+class GuardCheck:
+    """The store guard's after-check: the changes it found, and why there was nothing to check.
+
+    skipped is written only when no snapshot was taken (taken False), where it carries the
+    snapshot's own reason; a snapshot taken and verified writes no guard_skipped at all.
+    """
+
+    taken: bool
+    changes: tuple[str, ...]
+    skipped: JsonValue
+
+    def to_json(self) -> JsonObject:
+        out: JsonObject = {"guard_changes": list(self.changes)}
+        if not self.taken:
+            out["guard_skipped"] = self.skipped
+        return out
+
+
+@dataclass(frozen=True)
+class CleanupOutcome:
+    """What the cleanup of one arm did: the prune's answer (None: nothing to prune), the frozen
+    checkout's release, and every error, the salvage's first."""
+
+    prune: JsonObject | None
+    frozen_released: bool
+    errors: tuple[str, ...]
+
+    def to_json(self) -> JsonObject:
+        return {"prune": self.prune, "frozen_released": self.frozen_released, "errors": list(self.errors)}
+
+
+@dataclass(frozen=True)
+class AttemptOutcome:
+    """How _attempt filed the arm: its journal status, the set-aside attempt and the pause trigger.
+
+    set_aside None: there was no earlier attempt to set aside. pause_trigger None: the session
+    ended normally (or the arm was a dry run).
+    """
+
+    set_aside: str | None
+    status: str
+    pause_trigger: str | None
+
+
+@dataclass
+class ArmRecord:
+    """One arm's result.json, filled in as the arm gets further; None is a step it never reached.
+
+    Every None field is left out of result.json, so a reader can tell a step that never ran from
+    one that ran and found nothing (session None: the arm was a dry run or ended before its
+    session returned; guard_check None: the arm ended before the after-check).
+    """
+
+    arm: str
+    round: int
+    name: str
+    dry_run: bool
+    meta: ArmMeta
+    frozen: abarm.Frozen | None = None
+    install: JsonObject | None = None
+    worktree: JsonObject | None = None
+    linked: list[str] | None = None
+    context_files: dict[str, str] | None = None
+    guard: JsonObject | None = None
+    session: SessionOutcome | None = None
+    uncommitted: JsonObject | None = None
+    guard_check: GuardCheck | None = None
+    floor: abscore.FloorResult | None = None
+    bundle_commits: int | None = None
+    transcripts: list[str] | None = None
+    cleanup: CleanupOutcome | None = None
+    interrupted: bool = False
+    error: str | None = None
+    attempt: AttemptOutcome | None = None
+    login_probe: str | None = None
+
+    @property
+    def stop_reason(self) -> str | None:
+        """INTERRUPTED for an arm a Ctrl-C ended, else the session's; None without a session."""
+        if self.interrupted:
+            return INTERRUPTED
+        return None if self.session is None else self.session.stop_reason
+
+    def to_json(self) -> JsonObject:
+        """result.json; a step the arm never reached is left out, never written as null."""
+        out: JsonObject = {"arm": self.arm, "round": self.round, "name": self.name, "dry_run": self.dry_run,
+                           **self.meta.to_json()}
+        if self.frozen is not None:
+            out["frozen"] = {"ref": self.frozen.skills_ref, "overlay_written": list(self.frozen.overlay_written),
+                             "skill_removed": self.frozen.skill_removed, "removed": list(self.frozen.removed)}
+        for key, value in (("install", self.install), ("worktree", self.worktree), ("linked", self.linked),
+                           ("context_files", self.context_files), ("guard", self.guard)):
+            if value is not None:
+                out[key] = value
+        if self.session is not None:
+            out.update(self.session.recorded)
+        out.update(self._after_session())
+        if self.interrupted:
+            out["session_stop_reason"] = None if self.session is None else self.session.stop_reason
+            out["stop_reason"] = INTERRUPTED
+        if self.error is not None:
+            out["error"] = self.error
+        if self.attempt is not None:
+            out.update(set_aside=self.attempt.set_aside, status=self.attempt.status,
+                       pause_trigger=self.attempt.pause_trigger)
+        if self.login_probe is not None:
+            out["login_probe"] = self.login_probe
+        return out
+
+    def _after_session(self) -> JsonObject:
+        out: JsonObject = {}
+        if self.uncommitted is not None:
+            out["uncommitted"] = self.uncommitted
+        if self.guard_check is not None:
+            out.update(self.guard_check.to_json())
+        if self.floor is not None:
+            out["floor"] = self.floor.to_json()
+        for key, value in (("bundle_commits", self.bundle_commits), ("transcripts", self.transcripts)):
+            if value is not None:
+                out[key] = value
+        if self.cleanup is not None:
+            out["cleanup"] = self.cleanup.to_json()
+        return out
+
+
+@dataclass(frozen=True)
+class JournalRow:
+    """One journal.jsonl row as read back; recorded is the row's JSON, from any harness version.
+
+    A key the row lacks reads as None: a seal row from before per-arm prompts has no task_files,
+    and an arm row from before the sandbox key has no sandbox.
+    """
+
+    recorded: JsonObject
+
+    def _str(self, key: str) -> str | None:
+        value = self.recorded.get(key)
+        return value if isinstance(value, str) else None
+
+    @property
+    def step(self) -> str | None:
+        return self._str("step")
+
+    @property
+    def status(self) -> str | None:
+        return self._str("status")
+
+    @property
+    def round(self) -> JsonValue:
+        """As recorded: the harness writes an int, and a label built from it repeats what is there."""
+        return self.recorded.get("round")
+
+    @property
+    def arm(self) -> JsonValue:
+        """As recorded: the harness writes the arm name (an empty one on a run-wide row)."""
+        return self.recorded.get("arm")
+
+    @property
+    def label(self) -> str:
+        return f"r{self.round}-{self.arm}"
+
+    @property
+    def commit(self) -> str | None:
+        return self._str("commit")
+
+    @property
+    def suite_sha256(self) -> str | None:
+        return self._str("suite_sha256")
+
+    @property
+    def task_files(self) -> Mapping[str, JsonValue] | None:
+        value = self.recorded.get("task_files")
+        return value if isinstance(value, Mapping) else None
+
+    @property
+    def sandbox(self) -> str | None:
+        return self._str("sandbox")
+
+
 def _warn(text: str) -> None:
     print(f"abtest: warning: {text}", file=sys.stderr)
 
 
-def _emit(as_json: bool, command: str, data: dict[str, Any], ok: bool, text: str, skipped: list[str] | None = None) -> None:
+def _emit(as_json: bool, command: str, data: Mapping[str, JsonValue], ok: bool, text: str,
+          skipped: list[str] | None = None) -> None:
     print(envelope(command, data, ok=ok, skipped=skipped) if as_json else text)
 
 
 # --- the journal ---------------------------------------------------------------------------------
 
-def _parse_journal(path: Path) -> tuple[list[str], list[dict[str, Any]], str | None]:
+def _parse_journal(path: Path) -> tuple[list[str], list[JournalRow], str | None]:
     """(the good lines, their rows, the torn last line or None); a bad earlier line raises."""
     lines = [ln for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
-    rows: list[dict[str, Any]] = []
+    rows: list[JournalRow] = []
     for i, line in enumerate(lines):
         try:
-            row = json.loads(line)
+            row: JsonValue = json.loads(line)
         except ValueError:
             row = None
-        if isinstance(row, dict):
-            rows.append(row)
+        if isinstance(row, Mapping):
+            rows.append(JournalRow(recorded=dict(row)))
         elif i == len(lines) - 1:
             return lines[:-1], rows, line
         else:
@@ -252,7 +494,7 @@ def _parse_journal(path: Path) -> tuple[list[str], list[dict[str, Any]], str | N
     return lines, rows, None
 
 
-def load_journal(run_dir: Path) -> list[dict[str, Any]]:
+def load_journal(run_dir: Path) -> list[JournalRow]:
     """Every journal row; a torn last line (a run killed mid-append) is moved to journal.torn.
 
     The repair keeps the next append from landing on the torn fragment's line, and the fragment
@@ -275,7 +517,7 @@ def load_journal(run_dir: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def record(run_dir: Path, **row: Any) -> None:
+def record(run_dir: Path, **row: JsonValue) -> None:
     """Append one journal row stamped with `at`, on a line of its own even after a torn write."""
     path = run_dir / JOURNAL
     if _ends_mid_line(path):
@@ -296,7 +538,7 @@ def _ends_mid_line(path: Path) -> bool:
 
 
 def _sealed(run_dir: Path) -> bool:
-    return any(r.get("step") == "seal" for r in load_journal(run_dir))
+    return any(r.step == "seal" for r in load_journal(run_dir))
 
 
 def _require_sealed(run_dir: Path) -> None:
@@ -304,14 +546,13 @@ def _require_sealed(run_dir: Path) -> None:
         raise RunRefused(f"{run_dir} is not sealed; run `abtest.py seal` first")
 
 
-def _done_arms(run_dir: Path, statuses: tuple[str, ...]) -> set[tuple[object, object]]:
+def _done_arms(run_dir: Path, statuses: tuple[str, ...]) -> set[tuple[JsonValue, JsonValue]]:
     """(round, arm) of every arm row whose status is in `statuses`, from one journal read.
 
     Read once per run rather than once per scheduled arm: the schedule never names a
     (round, arm) twice, so a row the loop appends cannot change a later skip decision.
     """
-    return {(r.get("round"), r.get("arm")) for r in load_journal(run_dir)
-            if r.get("step") == "arm" and r.get("status") in statuses}
+    return {(r.round, r.arm) for r in load_journal(run_dir) if r.step == "arm" and r.status in statuses}
 
 
 def _run_dir(raw: str) -> Path:
@@ -408,7 +649,7 @@ def _read_or_empty(path: Path) -> str:
 
 
 def _seal_problems(run_dir: Path, profile: Profile) -> list[str]:
-    problems = []
+    problems: list[str] = []
     # Checked here, not only before a live run: abtest.toml is frozen at the seal, so a profile
     # sealed without the key could never run a live arm.
     if profile.run.sandbox is None:
@@ -508,7 +749,29 @@ def _task_stamp(run_dir: Path, profile: Profile) -> dict[str, dict[str, str]]:
             for name, f in ((n, profile.task_file_for(n)) for n in profile.arm_names())}
 
 
-def _commit_seal(run_dir: Path, stamp: dict[str, Any]) -> str:
+@dataclass(frozen=True)
+class SealStamp:
+    """What the seal appends to PREREG.md (sorted) and prints under --json (in this order, then the commit).
+
+    suite_sha256 None: the profile has no acceptance suite. suite_from None: the suite was read
+    from the workpiece, not from floor.suite_from.
+    """
+
+    sealed_at: str
+    suite_sha256: str | None
+    arms: list[str]
+    n: int
+    warmth_tolerance: float
+    task_files: dict[str, dict[str, str]]
+    suite_from: str | None
+
+    def to_json(self) -> JsonObject:
+        return {"sealed_at": self.sealed_at, "weights": WEIGHTS, "suite_sha256": self.suite_sha256,
+                "arms": self.arms, "n": self.n, "warmth_tolerance": self.warmth_tolerance,
+                "task_files": self.task_files, "suite_from": self.suite_from}
+
+
+def _commit_seal(run_dir: Path, stamp: SealStamp) -> str:
     """Append the stamp to PREREG.md and commit the inputs, then journal the seal with that commit.
 
     The journal row comes AFTER the commit because it names the commit (a committed file cannot
@@ -518,7 +781,7 @@ def _commit_seal(run_dir: Path, stamp: dict[str, Any]) -> str:
     prereg = run_dir / "PREREG.md"
     before = _read_text(prereg)
     with prereg.open("a", encoding="utf-8", newline="\n") as fh:
-        fh.write("\n## Sealed\n\n```json\n" + json.dumps(stamp, indent=1, sort_keys=True) + "\n```\n")
+        fh.write("\n## Sealed\n\n```json\n" + json.dumps(stamp.to_json(), indent=1, sort_keys=True) + "\n```\n")
     git(run_dir, "add", "-A")
     proc = git(run_dir, *SEAL_GIT, "commit", "-q", "-m", "seal")
     if proc.returncode != 0:
@@ -527,8 +790,8 @@ def _commit_seal(run_dir: Path, stamp: dict[str, Any]) -> str:
         shutil.rmtree(run_dir / SEALED_DIR, ignore_errors=True)
         raise RunRefused(f"seal commit failed: {proc.stderr.strip()}")
     commit = _git_out(run_dir, "rev-parse", "--verify", "-q", "HEAD").strip()
-    record(run_dir, step="seal", round=0, arm="", status="sealed", commit=commit, suite_sha256=stamp["suite_sha256"],
-           suite_from=stamp["suite_from"], task_files=stamp["task_files"])
+    record(run_dir, step="seal", round=0, arm="", status="sealed", commit=commit, suite_sha256=stamp.suite_sha256,
+           suite_from=stamp.suite_from, task_files=stamp.task_files)
     return commit
 
 
@@ -542,11 +805,12 @@ def cmd_seal(args: argparse.Namespace) -> int:
     problems = _seal_problems(run_dir, profile)
     if problems:
         raise RunRefused("; ".join(problems))
-    stamp = {"sealed_at": utc_now(), "weights": WEIGHTS, "suite_sha256": _seal_suite(run_dir, profile), "arms": profile.arm_names(),
-             "n": profile.run.n, "warmth_tolerance": profile.run.warmth_tolerance,
-             "task_files": _task_stamp(run_dir, profile), "suite_from": profile.floor.suite_from}
+    stamp = SealStamp(sealed_at=utc_now(), suite_sha256=_seal_suite(run_dir, profile), arms=profile.arm_names(),
+                      n=profile.run.n, warmth_tolerance=profile.run.warmth_tolerance,
+                      task_files=_task_stamp(run_dir, profile), suite_from=profile.floor.suite_from)
     commit = _commit_seal(run_dir, stamp)
-    _emit(args.json, "seal", dict(stamp, commit=commit), True, f"sealed {run_dir}: {len(profile.arm_names())} arms x {profile.run.n} rounds")
+    _emit(args.json, "seal", dict(stamp.to_json(), commit=commit), True,
+          f"sealed {run_dir}: {len(profile.arm_names())} arms x {profile.run.n} rounds")
     return EXIT_YES
 
 
@@ -558,14 +822,11 @@ def _paths(ctx: RunContext, label: str) -> tuple[Path, Path, str]:
     return ctx.run_dir / "arms" / label, ws, f"abx/{ctx.run_id}/{label}"
 
 
-def _guard_after(result: dict[str, Any], guard_dir: Path) -> None:
+def _guard_after(guard: JsonObject, guard_dir: Path) -> GuardCheck:
     """Verify only a snapshot that was taken: a missing manifest would read as no change."""
-    guard = result["guard"]
     if guard.get("taken"):
-        result["guard_changes"] = abguard.verify(guard_dir)
-    else:
-        result["guard_changes"] = []
-        result["guard_skipped"] = guard.get("skipped")
+        return GuardCheck(taken=True, changes=tuple(abguard.verify(guard_dir)), skipped=None)
+    return GuardCheck(taken=False, changes=(), skipped=guard.get("skipped"))
 
 
 def _session_argv(ctx: RunContext, name: str, frozen: abarm.Frozen, ws: Path, home: Path, cfg: Path) -> list[str]:
@@ -580,30 +841,30 @@ def _session_argv(ctx: RunContext, name: str, frozen: abarm.Frozen, ws: Path, ho
     return abarm.sandbox_argv(mounts, sandbox=sandbox) + argv
 
 
-def _arm_steps(ctx: RunContext, result: dict[str, Any], frozen: abarm.Frozen, label: str) -> None:
+def _arm_steps(ctx: RunContext, rec: ArmRecord, frozen: abarm.Frozen, label: str) -> None:
     p = ctx.profile
     arm_dir, ws, branch = _paths(ctx, label)
     cfg = arm_dir / "cfg"
     home = abarm.arm_home(arm_dir, p.run.home_links)
     env = abarm.arm_env(cfg, home, p.run.env_keep)
-    result["install"] = abarm.install_plugin(cfg, frozen, ctx.credentials, env)
+    rec.install = abarm.install_plugin(cfg, frozen, ctx.credentials, env)
     _ignore_worktrees(ctx)
-    result["worktree"] = abarm.make_worktree(p.workpiece.repo, p.workpiece.base, branch, ws, copy_untracked_claude_md=True)
-    result["linked"] = abarm.link_paths(p.workpiece.repo, ws, p.workpiece.link)
+    rec.worktree = abarm.make_worktree(p.workpiece.repo, p.workpiece.base, branch, ws, copy_untracked_claude_md=True)
+    rec.linked = abarm.link_paths(p.workpiece.repo, ws, p.workpiece.link)
     # Hashed at the arm's start, the moment its session loads them: score compares the arms.
-    result["context_files"] = abarm.context_files(ws)
-    result["guard"] = abguard.snapshot(ws, arm_dir / "guard")
+    rec.context_files = abarm.context_files(ws)
+    rec.guard = guard = abguard.snapshot(ws, arm_dir / "guard")
     if not ctx.dry_run:
-        result.update(abarm.dispatch(arm_dir, ws, env, _session_argv(ctx, result["name"], frozen, ws, home, cfg),
-                                     max_tokens=p.run.max_tokens, deadline_s=p.run.deadline_s,
-                                     stop_grace_s=ctx.stop_grace_s))
+        rec.session = SessionOutcome(recorded=abarm.dispatch(
+            arm_dir, ws, env, _session_argv(ctx, rec.name, frozen, ws, home, cfg), max_tokens=p.run.max_tokens,
+            deadline_s=p.run.deadline_s, stop_grace_s=ctx.stop_grace_s))
     # Right after the session, before the floor writes into the worktree (build output, the suite).
-    result["uncommitted"] = _save_uncommitted(ctx, arm_dir, ws)
-    if result["uncommitted"].get("error"):
-        _warn(f"{label}: {result['uncommitted']['error']}")
-    _guard_after(result, arm_dir / "guard")
-    result["floor"] = abscore.run_floor(ws, p, arm_dir, sealed_suite=ctx.sealed_suite).to_json()
-    result["bundle_commits"] = abarm.bundle(ws, p.workpiece.base, arm_dir / "bundle.git")
+    rec.uncommitted = uncommitted = _save_uncommitted(ctx, arm_dir, ws)
+    if uncommitted.get("error"):
+        _warn(f"{label}: {uncommitted['error']}")
+    rec.guard_check = _guard_after(guard, arm_dir / "guard")
+    rec.floor = abscore.run_floor(ws, p, arm_dir, sealed_suite=ctx.sealed_suite)
+    rec.bundle_commits = abarm.bundle(ws, p.workpiece.base, arm_dir / "bundle.git")
 
 
 def _ignore_worktrees(ctx: RunContext) -> None:
@@ -616,7 +877,7 @@ def _ignore_worktrees(ctx: RunContext) -> None:
         record(ctx.run_dir, step=EXCLUDE_STEP, round=0, arm="", status="added")
 
 
-def _save_uncommitted(ctx: RunContext, arm_dir: Path, ws: Path) -> dict[str, Any]:
+def _save_uncommitted(ctx: RunContext, arm_dir: Path, ws: Path) -> JsonObject:
     """abarm.save_uncommitted with the profile's cache paths and the harness's own CLAUDE.md copy skipped.
 
     Never raises: a save that fails is recorded as {"left_work": None, "error": ...}, because
@@ -630,30 +891,42 @@ def _save_uncommitted(ctx: RunContext, arm_dir: Path, ws: Path) -> dict[str, Any
         return {"left_work": None, "error": f"save_uncommitted: {exc}"}
 
 
-def _salvage(ctx: RunContext, result: dict[str, Any], arm_dir: Path, ws: Path) -> list[str]:
-    """Copy out what the arm's cleanup would destroy; the errors, never raised.
+@dataclass(frozen=True)
+class Salvage:
+    """What _salvage copied out: transcripts None when the copy failed, uncommitted None when the
+    arm had saved its work already or no harness worktree was left to read; and the errors."""
+
+    transcripts: list[str] | None
+    uncommitted: JsonObject | None
+    errors: tuple[str, ...]
+
+
+def _salvage(ctx: RunContext, arm_dir: Path, ws: Path, *, made_worktree: bool, saved: bool) -> Salvage:
+    """Copy out what the arm's cleanup would destroy; never raises, the errors are listed.
 
     The transcripts live in the config dir delete_cfg removes, and work left uncommitted lives in
-    the worktree prune removes. The worktree is read only when it is the harness's own (make_worktree
-    returned it, or git lists it at this arm's path): a directory git does not know is never read.
-    The uncommitted work is saved here only when the arm did not get as far as saving it itself
-    (an error or an interrupt before or during the session).
+    the worktree prune removes. The worktree is read only when it is the harness's own (made_worktree:
+    make_worktree returned it, or git lists it at this arm's path): a directory git does not know is
+    never read. The uncommitted work is saved here only when the arm did not get as far as saving it
+    itself (saved False: an error or an interrupt before or during the session).
     """
-    errors = []
+    errors: list[str] = []
+    transcripts: list[str] | None = None
     try:
-        result["transcripts"] = abarm.save_transcripts(arm_dir / "cfg", arm_dir / TRANSCRIPTS)
+        transcripts = abarm.save_transcripts(arm_dir / "cfg", arm_dir / TRANSCRIPTS)
     except OSError as exc:
         errors.append(f"save_transcripts: {exc}")
-    if "uncommitted" in result:
-        return errors
+    if saved:
+        return Salvage(transcripts=transcripts, uncommitted=None, errors=tuple(errors))
     try:
-        ours = ws.is_dir() and ("worktree" in result or _harness_worktree_left(ctx.profile.workpiece.repo, ws))
+        ours = ws.is_dir() and (made_worktree or _harness_worktree_left(ctx.profile.workpiece.repo, ws))
     except OSError as exc:
-        return [*errors, f"save_uncommitted: {exc}"]
-    if ours:
-        result["uncommitted"] = _save_uncommitted(ctx, arm_dir, ws)
-        errors += [result["uncommitted"]["error"]] if result["uncommitted"].get("error") else []
-    return errors
+        return Salvage(transcripts=transcripts, uncommitted=None, errors=(*errors, f"save_uncommitted: {exc}"))
+    uncommitted = _save_uncommitted(ctx, arm_dir, ws) if ours else None
+    error = None if uncommitted is None else uncommitted.get("error")
+    if error:
+        errors.append(str(error))
+    return Salvage(transcripts=transcripts, uncommitted=uncommitted, errors=tuple(errors))
 
 
 def _sweep_cfgs(run_dir: Path) -> list[str]:
@@ -663,7 +936,7 @@ def _sweep_cfgs(run_dir: Path) -> list[str]:
     it when its arm runs again, but `run --only V1` never visits r1-C and prune-run visits no arm
     dir at all, so run and prune-run sweep every arm dir, set-aside attempts included.
     """
-    swept = []
+    swept: list[str] = []
     for cfg in sorted((run_dir / "arms").glob("*/cfg")):
         try:
             abarm.save_transcripts(cfg, cfg.parent / TRANSCRIPTS)
@@ -692,35 +965,37 @@ def _harness_worktree_left(repo: Path, ws: Path) -> bool:
     return hooks.exists() or hooks.is_symlink() or _registered(repo, ws)
 
 
-def _cleanup(ctx: RunContext, result: dict[str, Any], frozen: abarm.Frozen | None, ws: Path) -> dict[str, Any]:
+def _cleanup(ctx: RunContext, rec: ArmRecord, ws: Path, salvage_errors: tuple[str, ...]) -> CleanupOutcome:
     """Prune the worktree this arm made and release its frozen checkout; never raises, errors are listed.
 
     The worktree is pruned when make_worktree returned it, and also when it was interrupted after
-    `worktree add` (the path is registered, or its hooks dir exists, though "worktree" is not in
-    the result yet). prune itself handles a directory that is already gone.
+    `worktree add` (the path is registered, or its hooks dir exists, though rec.worktree is not
+    set yet). prune itself handles a directory that is already gone.
     """
-    out: dict[str, Any] = {"prune": None, "frozen_released": False, "errors": []}
+    prune: JsonObject | None = None
+    released = False
+    errors = list(salvage_errors)
     repo = ctx.profile.workpiece.repo
     try:
-        if "worktree" in result or _harness_worktree_left(repo, ws):
-            out["prune"] = abarm.prune(ws, repo, ctx.profile.floor.cache_paths)
+        if rec.worktree is not None or _harness_worktree_left(repo, ws):
+            prune = abarm.prune(ws, repo, ctx.profile.floor.cache_paths)
     except (abarm.ArmError, OSError) as exc:
-        out["errors"].append(f"prune: {exc}")
+        errors.append(f"prune: {exc}")
     try:
-        if frozen is not None:
-            abarm.release_frozen(frozen, ctx.skills_repo)
-            out["frozen_released"] = True
+        if rec.frozen is not None:
+            abarm.release_frozen(rec.frozen, ctx.skills_repo)
+            released = True
     except (abarm.ArmError, OSError) as exc:
-        out["errors"].append(f"release_frozen: {exc}")
-    return out
+        errors.append(f"release_frozen: {exc}")
+    return CleanupOutcome(prune=prune, frozen_released=released, errors=tuple(errors))
 
 
-def _write_result(arm_dir: Path, result: dict[str, Any]) -> None:
-    (arm_dir / "result.json").write_text(json.dumps(result, indent=1, sort_keys=True), encoding="utf-8")
+def _write_result(arm_dir: Path, rec: ArmRecord) -> None:
+    (arm_dir / "result.json").write_text(json.dumps(rec.to_json(), indent=1, sort_keys=True), encoding="utf-8")
 
 
-def run_arm(ctx: RunContext, round_no: int, name: str) -> dict[str, Any]:
-    """One arm, start to finish; the result dict is also written to arms/r<round>-<name>/result.json.
+def run_arm(ctx: RunContext, round_no: int, name: str) -> ArmRecord:
+    """One arm, start to finish; the record is also written to arms/r<round>-<name>/result.json.
 
     result.json is written whatever happens, a Ctrl-C included (stop_reason "interrupted", which
     the scorer voids). On every path the transcripts are copied out of the config dir and any
@@ -731,31 +1006,31 @@ def run_arm(ctx: RunContext, round_no: int, name: str) -> dict[str, Any]:
     label = f"r{round_no}-{name}"
     arm_dir, ws, _ = _paths(ctx, label)
     arm_dir.mkdir(parents=True, exist_ok=True)
-    result: dict[str, Any] = {"arm": label, "round": round_no, "name": name, "dry_run": ctx.dry_run,
-                              **ctx.arm_meta(name)}
-    frozen: abarm.Frozen | None = None
+    rec = ArmRecord(arm=label, round=round_no, name=name, dry_run=ctx.dry_run, meta=ctx.arm_meta(name))
     try:
-        frozen = abarm.freeze_variant(ctx.run_dir, ctx.profile, name, ctx.skills_repo)
-        result["frozen"] = {"ref": frozen.skills_ref, "overlay_written": list(frozen.overlay_written),
-                            "skill_removed": frozen.skill_removed, "removed": list(frozen.removed)}
-        _arm_steps(ctx, result, frozen, label)
+        rec.frozen = frozen = abarm.freeze_variant(ctx.run_dir, ctx.profile, name, ctx.skills_repo)
+        _arm_steps(ctx, rec, frozen, label)
     except KeyboardInterrupt:
-        result["session_stop_reason"] = result.get("stop_reason")
-        result["stop_reason"] = INTERRUPTED
+        rec.interrupted = True
         raise
     except Exception as exc:
-        result["error"] = f"{type(exc).__name__}: {exc}"
+        rec.error = f"{type(exc).__name__}: {exc}"
         raise
     finally:
-        salvage_errors: list[str] = []
+        salvage_errors: tuple[str, ...] = ()
         try:
-            salvage_errors = _salvage(ctx, result, arm_dir, ws)
+            salvage = _salvage(ctx, arm_dir, ws, made_worktree=rec.worktree is not None,
+                               saved=rec.uncommitted is not None)
+            salvage_errors = salvage.errors
+            if salvage.transcripts is not None:
+                rec.transcripts = salvage.transcripts
+            if salvage.uncommitted is not None:
+                rec.uncommitted = salvage.uncommitted
         finally:
             abarm.delete_cfg(arm_dir / "cfg")
-        result["cleanup"] = _cleanup(ctx, result, frozen, ws)
-        result["cleanup"]["errors"][:0] = salvage_errors
-        _write_result(arm_dir, result)
-    return result
+        rec.cleanup = _cleanup(ctx, rec, ws, salvage_errors)
+        _write_result(arm_dir, rec)
+    return rec
 
 
 # --- run -----------------------------------------------------------------------------------------
@@ -779,7 +1054,7 @@ def _set_aside(ctx: RunContext, label: str) -> str | None:
     """
     arm_dir, ws, branch = _paths(ctx, label)
     repo = ctx.profile.workpiece.repo
-    for error in _salvage(ctx, {}, arm_dir, ws):
+    for error in _salvage(ctx, arm_dir, ws, made_worktree=False, saved=False).errors:
         _warn(f"{label}: {error}")
     abarm.delete_cfg(arm_dir / "cfg")
     if _harness_worktree_left(repo, ws):
@@ -815,16 +1090,16 @@ def _auth_failed_in(stream: Path) -> bool:
 
 def _carries_auth_failed(line: str) -> bool:
     try:
-        rec = json.loads(line)
+        rec: JsonValue = json.loads(line)
     except ValueError:
         return False
-    if not isinstance(rec, dict):
+    if not isinstance(rec, Mapping):
         return False
     msg = rec.get("message")
-    return rec.get("error") == AUTH_FAILED or (isinstance(msg, dict) and msg.get("error") == AUTH_FAILED)
+    return rec.get("error") == AUTH_FAILED or (isinstance(msg, Mapping) and msg.get("error") == AUTH_FAILED)
 
 
-def _pause_trigger(result: dict[str, Any], stream: Path) -> str | None:
+def _pause_trigger(session: SessionOutcome | None, stream: Path) -> str | None:
     """How the session ended if it ended the way a refused request does; None for a normal end.
 
     The CLI reports a 401 and a 429 alike, and an exhausted usage window as a synthetic notice
@@ -832,13 +1107,13 @@ def _pause_trigger(result: dict[str, Any], stream: Path) -> str | None:
     pauses instead). Only the out-of-band probe can tell the cases apart, so this names what was
     seen, never why.
     """
-    synthetic = [str(r)[len(SYNTHETIC_REASON_PREFIX):].lower() for r in result.get("void_reasons") or []
-                 if str(r).startswith(SYNTHETIC_REASON_PREFIX)]
+    reasons = () if session is None else session.void_reasons
+    synthetic = [r[len(SYNTHETIC_REASON_PREFIX):].lower() for r in reasons if r.startswith(SYNTHETIC_REASON_PREFIX)]
     if any(m in text for text in synthetic for m in LOGIN_MARKS) or _auth_failed_in(stream):
         return PAUSE_LOGIN
     if any(m in text for text in synthetic for m in LIMIT_MARKS):
         return PAUSE_LIMIT
-    if synthetic and not result.get("assistant_messages"):
+    if synthetic and not (session is not None and session.wrote_assistant_messages):
         return PAUSE_SYNTHETIC_ONLY
     return None
 
@@ -870,20 +1145,20 @@ def _schedule(profile: Profile, only: str | None) -> Iterator[tuple[int, str]]:
         yield from ((round_no, name) for name in order if not only or name == only)
 
 
-def _attempt(ctx: RunContext, round_no: int, name: str) -> dict[str, Any]:
+def _attempt(ctx: RunContext, round_no: int, name: str) -> ArmRecord:
     """Set aside an unfinished earlier attempt, run the arm, journal a row however it ends.
 
     The row is written right after run_arm returns (only the pause classification, a read of the
     stream, runs in between), before the cleanup warnings and the login probe, so a kill there
     never makes a paid arm run twice. Its status is dry, ran, or paused
-    (result["pause_trigger"] names what the session showed). An arm whose run_arm raises gets an
+    (its attempt.pause_trigger names what the session showed). An arm whose run_arm raises gets an
     interrupted or error row and runs again on resume; when it raised after the session was
     dispatched (a floor or bundle step), that rerun pays for the session again.
     """
     aside = _set_aside(ctx, f"r{round_no}-{name}")
-    meta = ctx.arm_meta(name)
+    meta = ctx.arm_meta(name).to_json()
     try:
-        result = run_arm(ctx, round_no, name)
+        rec = run_arm(ctx, round_no, name)
     except KeyboardInterrupt:
         record(ctx.run_dir, step="arm", round=round_no, arm=name, status=INTERRUPTED, set_aside=aside, **meta)
         raise
@@ -891,22 +1166,22 @@ def _attempt(ctx: RunContext, round_no: int, name: str) -> dict[str, Any]:
         record(ctx.run_dir, step="arm", round=round_no, arm=name, status="error", error=str(exc)[:500], set_aside=aside,
                **meta)
         raise
-    trigger = None if ctx.dry_run else _pause_trigger(result, ctx.run_dir / "arms" / result["arm"] / "stream.jsonl")
+    trigger = None if ctx.dry_run else _pause_trigger(rec.session, ctx.run_dir / "arms" / rec.arm / "stream.jsonl")
     status = "dry" if ctx.dry_run else ("paused" if trigger else "ran")
-    record(ctx.run_dir, step="arm", round=round_no, arm=name, status=status, stop_reason=result.get("stop_reason"),
+    record(ctx.run_dir, step="arm", round=round_no, arm=name, status=status, stop_reason=rec.stop_reason,
            set_aside=aside, pause_trigger=trigger, **meta)
-    result.update(set_aside=aside, status=status, pause_trigger=trigger)
-    return result
+    rec.attempt = AttemptOutcome(set_aside=aside, status=status, pause_trigger=trigger)
+    return rec
 
 
-def _pause(ctx: RunContext, args: argparse.Namespace, round_no: int, name: str, result: dict[str, Any]) -> str:
+def _pause(ctx: RunContext, args: argparse.Namespace, rec: ArmRecord, trigger: str | None) -> str:
     """Ask the probe about a paused arm, record its word; the message for the user."""
-    label = f"r{round_no}-{name}"
+    label = rec.arm
     word = args.login_check(ctx.credentials)
-    result["login_probe"] = word
-    _write_result(ctx.run_dir / "arms" / label, result)
-    record(ctx.run_dir, step="pause", round=round_no, arm=name, status=word, pause_trigger=result["pause_trigger"])
-    return (f"paused after {label}: the session ended with {result['pause_trigger']} and the out-of-band probe "
+    rec.login_probe = word
+    _write_result(ctx.run_dir / "arms" / label, rec)
+    record(ctx.run_dir, step="pause", round=rec.round, arm=rec.name, status=word, pause_trigger=trigger)
+    return (f"paused after {label}: the session ended with {trigger} and the out-of-band probe "
             f"answered {word}; run the same command again to resume (the attempt is set aside and {label} runs again)")
 
 
@@ -929,29 +1204,36 @@ def _pause_before(ctx: RunContext, round_no: int, name: str) -> str:
             "ordinary call refreshes it only in its last few minutes), then run the same command again to resume")
 
 
-def _cleanup_warnings(result: dict[str, Any]) -> None:
-    for err in (result.get("cleanup") or {}).get("errors") or []:
-        _warn(f"{result.get('arm')}: {err}")
+def _cleanup_warnings(rec: ArmRecord) -> None:
+    for err in () if rec.cleanup is None else rec.cleanup.errors:
+        _warn(f"{rec.arm}: {err}")
 
 
-def _seal_row(run_dir: Path) -> dict[str, Any]:
-    """The seal journal row, its commit verified to exist in the run dir's repository."""
-    rows = [r for r in load_journal(run_dir) if r.get("step") == "seal"]
-    row = rows[-1] if rows else {}
-    commit = row.get("commit")
-    if not isinstance(commit, str) or git(run_dir, "cat-file", "-e", f"{commit}^{{commit}}").returncode != 0:
+@dataclass(frozen=True)
+class SealRow:
+    """The seal journal row whose commit exists in the run dir's repository."""
+
+    commit: str
+    row: JournalRow
+
+
+def _seal_row(run_dir: Path) -> SealRow:
+    """The last seal journal row, its commit verified to exist in the run dir's repository."""
+    rows = [r for r in load_journal(run_dir) if r.step == "seal"]
+    commit = rows[-1].commit if rows else None
+    if commit is None or git(run_dir, "cat-file", "-e", f"{commit}^{{commit}}").returncode != 0:
         raise RunRefused(f"the seal record in {run_dir / JOURNAL} names no commit of {run_dir}; "
                          "the seal cannot be checked, so the run is refused")
-    return row
+    return SealRow(commit=commit, row=rows[-1])
 
 
-def _sealed_suite(run_dir: Path, profile: Profile, row: dict[str, Any]) -> abscore.SealedSuite | None:
+def _sealed_suite(run_dir: Path, profile: Profile, row: JournalRow) -> abscore.SealedSuite | None:
     """The sealed suite copy, refused when its sha256 differs from the one the seal recorded."""
     if profile.floor.suite is None:
         return None
-    sha = row.get("suite_sha256")
+    sha = row.suite_sha256
     path = run_dir / SEALED_DIR / profile.floor.suite
-    if not isinstance(sha, str) or not path.is_file() or sha256_file(path) != sha:
+    if sha is None or not path.is_file() or sha256_file(path) != sha:
         raise RunRefused(f"the sealed suite {path} is missing or differs from the sha256 the seal recorded "
                          f"({sha}); the acceptance suite is frozen at the seal")
     return abscore.SealedSuite(path=path, sha256=sha)
@@ -998,27 +1280,27 @@ def _require_seal_intact(run_dir: Path, profile: Profile) -> abscore.SealedSuite
     files, variants/ and sealed/; PREREG.md may grow by committed amendments, never be rewritten.
     The sealed suite copy must still hash to the sha256 the seal recorded (design S1).
     """
-    row = _seal_row(run_dir)
+    seal = _seal_row(run_dir)
     frozen = ["abtest.toml", *profile.task_files(), "variants", SEALED_DIR]
     _refuse_uncommitted(run_dir, [*frozen, "PREREG.md", ".gitignore"])
-    _refuse_changed_since_seal(run_dir, row["commit"], frozen)
-    _refuse_task_drift(run_dir, profile, row)
-    return _sealed_suite(run_dir, profile, row)
+    _refuse_changed_since_seal(run_dir, seal.commit, frozen)
+    _refuse_task_drift(run_dir, profile, seal.row)
+    return _sealed_suite(run_dir, profile, seal.row)
 
 
-def _refuse_task_drift(run_dir: Path, profile: Profile, row: dict[str, Any]) -> None:
+def _refuse_task_drift(run_dir: Path, profile: Profile, row: JournalRow) -> None:
     """Refuse an arm prompt whose file or sha256 differs from what the seal row recorded for that arm.
 
     A seal row from before per-arm prompts records none; git (above) then guards the task file alone.
     """
-    sealed = row.get("task_files")
-    if not isinstance(sealed, dict):
+    sealed = row.task_files
+    if sealed is None:
         return
     for name in profile.arm_names():
         f = profile.task_file_for(name)
         path = run_dir / f
         want = sealed.get(name)
-        got = {"file": f, "sha256": sha256_file(path) if path.is_file() else None}
+        got: JsonObject = {"file": f, "sha256": sha256_file(path) if path.is_file() else None}
         if want != got:
             raise RunRefused(f"the prompt of arm {name} ({f}) differs from the seal ({want}); "
                              "every arm's task file is frozen at the seal")
@@ -1095,6 +1377,13 @@ def _sigterm_as_interrupt() -> Iterator[None]:
         signal.signal(signal.SIGTERM, signal.SIG_DFL if previous is None else previous)
 
 
+def _filed(rec: ArmRecord) -> tuple[str, str | None]:
+    """(status, pause_trigger) _attempt filed the arm under; _attempt always sets them."""
+    if rec.attempt is None:
+        raise RuntimeError(f"{rec.arm}: run_arm returned without _attempt filing it")
+    return rec.attempt.status, rec.attempt.pause_trigger
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     run_dir = _run_dir(args.run_dir)
     _require_sealed(run_dir)
@@ -1113,7 +1402,7 @@ def _run_locked(args: argparse.Namespace, run_dir: Path) -> int:
     for cfg in _sweep_cfgs(run_dir):
         _warn(f"deleted the config dir a killed arm left at {cfg} (it held a credentials copy); "
               "its transcripts are kept beside it")
-    done: list[dict[str, Any]] = []
+    done: list[JsonObject] = []
     skipped: list[str] = []
     already = _done_arms(run_dir, DONE_DRY if ctx.dry_run else DONE_LIVE)
     for round_no, name in _schedule(ctx.profile, args.only):
@@ -1125,16 +1414,18 @@ def _run_locked(args: argparse.Namespace, run_dir: Path) -> int:
             _emit(args.json, "run", {"done": done, "paused_at": f"r{round_no}-{name}", "pause_trigger": PAUSE_EXPIRY,
                                      "message": message}, False, message, skipped)
             return EXIT_NO
-        result = _attempt(ctx, round_no, name)
-        _cleanup_warnings(result)
-        if result["status"] == "paused":
-            message = _pause(ctx, args, round_no, name, result)
-            _emit(args.json, "run", {"done": done, "paused_at": result["arm"], "login_probe": result["login_probe"],
-                                     "pause_trigger": result["pause_trigger"], "message": message}, False, message, skipped)
+        rec = _attempt(ctx, round_no, name)
+        _cleanup_warnings(rec)
+        status, trigger = _filed(rec)
+        if status == "paused":
+            message = _pause(ctx, args, rec, trigger)
+            _emit(args.json, "run", {"done": done, "paused_at": rec.arm, "login_probe": rec.login_probe,
+                                     "pause_trigger": trigger, "message": message}, False, message, skipped)
             return EXIT_NO
-        status = result["status"]
-        done.append({"arm": result["arm"], "status": status, "cost_usd": result.get("total_cost_usd"),
-                     "wall_s": result.get("wall_s"), "floor_passed": result["floor"]["passed"]})
+        session = rec.session
+        done.append({"arm": rec.arm, "status": status, "cost_usd": None if session is None else session.total_cost_usd,
+                     "wall_s": None if session is None else session.wall_s,
+                     "floor_passed": None if rec.floor is None else rec.floor.passed})
     text = "\n".join(f"{d['arm']}: {d['status']} cost={d['cost_usd']} floor={d['floor_passed']}" for d in done)
     _emit(args.json, "run", {"done": done}, True, text or "nothing to run", skipped)
     return EXIT_YES
@@ -1146,10 +1437,10 @@ def _finished(run_dir: Path) -> dict[str, abscore.RecordedResult]:
     """{label: result.json} of every arm the journal says ran or dry-ran, in journal order."""
     out: dict[str, abscore.RecordedResult] = {}
     for row in load_journal(run_dir):
-        if row.get("step") != "arm" or row.get("status") not in DONE_DRY:
+        if row.step != "arm" or row.status not in DONE_DRY:
             continue
-        label = f"r{row.get('round')}-{row.get('arm')}"
-        arm_dir = run_dir / "arms" / label
+        arm_dir = run_dir / "arms" / row.label
+        label = row.label
         if (arm_dir / "result.json").is_file():
             out[label] = abscore.read_result(arm_dir)
     return out
@@ -1306,7 +1597,7 @@ def _restore_exclude(run_dir: Path, repo: Path, errors: list[str]) -> str:
     "removed", or "kept" while a harness worktree (abx-*) of any run is still under
     .claude/worktrees/, which would otherwise show up as untracked in the real checkout.
     """
-    rows = [r.get("status") for r in load_journal(run_dir) if r.get("step") == EXCLUDE_STEP]
+    rows = [r.status for r in load_journal(run_dir) if r.step == EXCLUDE_STEP]
     if not rows or rows[-1] != "added":
         return "not_added"
     worktrees = repo / ".claude" / "worktrees"
@@ -1323,8 +1614,7 @@ def _restore_exclude(run_dir: Path, repo: Path, errors: list[str]) -> str:
 
 def _sandboxes(run_dir: Path) -> dict[str, str | None]:
     """{label: sandbox} of every arm the journal says ran live, the last row per label winning."""
-    return {f"r{r.get('round')}-{r.get('arm')}": r.get("sandbox") for r in load_journal(run_dir)
-            if r.get("step") == "arm" and r.get("status") in DONE_LIVE}
+    return {r.label: r.sandbox for r in load_journal(run_dir) if r.step == "arm" and r.status in DONE_LIVE}
 
 
 def _bundle_branches(repo: Path, run_dir: Path, refs: list[str]) -> str | None:
@@ -1362,7 +1652,7 @@ def cmd_prune_run(args: argparse.Namespace) -> int:
     profile = load_profile(run_dir / "abtest.toml")
     repo, run_id = profile.workpiece.repo, run_dir.name
     cfg_removed = _sweep_cfgs(run_dir)
-    errors = []
+    errors: list[str] = []
     for ws in _arm_worktrees(profile, run_id):
         if not _harness_worktree_left(repo, ws):
             continue
@@ -1401,7 +1691,7 @@ def cmd_prune_run(args: argparse.Namespace) -> int:
 # --- the command line ----------------------------------------------------------------------------
 
 class _Parser(argparse.ArgumentParser):
-    def error(self, message: str) -> Any:  # argparse's own exit would print no JSON envelope
+    def error(self, message: str) -> NoReturn:  # argparse's own exit would print no JSON envelope
         raise UsageError(f"{self.prog}: {message}")
 
 

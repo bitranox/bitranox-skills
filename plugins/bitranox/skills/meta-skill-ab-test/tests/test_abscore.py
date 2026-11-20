@@ -653,8 +653,9 @@ def test_a_recorded_result_keeps_an_absent_key_apart_from_an_empty_one():
 
 
 def test_a_cache_read_is_repeated_as_written_and_read_as_a_count_only_when_it_is_one():
-    reads = {11000: 11000, 11000.0: 11000, 11000.5: None, True: None, None: None}
-    for written, count in reads.items():
+    # Pairs, not a dict: 11000 and 11000.0 are one dict key.
+    reads = [(11000, 11000), (11000.0, 11000), (11000.5, None), (True, None), (None, None)]
+    for written, count in reads:
         rec = S.RecordedResult.from_json({"first_cache_read": written})
         assert (rec.first_cache_read, rec.cache_read) == (written, count), written
         assert type(rec.first_cache_read) is type(written), "written back unchanged: 11000.0 stays a float"
