@@ -1396,6 +1396,34 @@ def test_ensure_gitignored_asks_git_whether_a_pattern_is_already_ignored(home, t
     assert exclude.read_bytes() == before
 
 
+@pytest.mark.skipif(os.name == "nt", reason="the counting git stand-in is a POSIX shell script")
+def test_ensure_gitignored_asks_git_once_per_level_and_pattern_in_a_process(home, tmp_path,
+                                                                        monkeypatch):
+    """Every add re-checks its level's private files, and each check spawned git twice under the
+    level lock (about 250 ms an add on Windows, most of a bulk add loop's hold time). A pattern git
+    ignored once is remembered, so the next add of the process asks git nothing."""
+    import shlex
+    import shutil
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    real, log = shutil.which("git"), tmp_path / "git-calls.log"
+    shim = tmp_path / "bin" / "git"
+    shim.parent.mkdir()
+    shim.write_text(f'#!/bin/sh\necho "$*" >> {shlex.quote(str(log))}\n'
+                    f'exec {shlex.quote(str(real))} "$@"\n', encoding="utf-8")
+    shim.chmod(0o755)
+    monkeypatch.setenv("PATH", str(shim.parent) + os.pathsep + os.environ.get("PATH", ""))
+    assert S.ensure_gitignored(str(repo), "CLAUDE.local.md") is True       # writes the exclude
+    asked = len(log.read_text(encoding="utf-8").splitlines())
+    assert asked >= 2                                # the first call did ask git
+    assert S.ensure_gitignored(str(repo), "CLAUDE.local.md") is True
+    assert len(log.read_text(encoding="utf-8").splitlines()) == asked     # no git at all
+    assert S.ensure_gitignored(str(repo), "CLAUDE.local.md", S.CURATED_DIRNAME + "/") is True
+    later = log.read_text(encoding="utf-8").splitlines()[asked:]
+    assert any(S.CURATED_DIRNAME in c for c in later)                     # the new one is asked
+    assert not any("CLAUDE.local.md" in c for c in later)                 # the known one is not
+
+
 def test_ensure_gitignored_in_a_linked_worktree_uses_the_shared_exclude(home, tmp_path):
     """A linked worktree has no info/ of its own; git reads the main checkout's exclude file."""
     import subprocess

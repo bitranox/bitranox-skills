@@ -2284,6 +2284,8 @@ def ensure_level(proj: _StrPath, scope_default: str = "", _locked: bool = False)
             _write_if_changed(md_path, _strip_scope_block(md))
         if us.INDEX_BEGIN not in text or want_scope != scope:
             us.write_if_changed(local, us.upsert_pointer_block(text, want_scope, pointers))
+
+    def _ignore() -> None:
         if not sig.load_config().get("track_private"):     # keep local wiring + central store unpushed
             for where, pattern in ((proj, "CLAUDE.local.md"),
                                    (str(anchor_dir(proj)), us.STORE_DIRNAME + "/")):
@@ -2295,9 +2297,11 @@ def ensure_level(proj: _StrPath, scope_default: str = "", _locked: bool = False)
 
     if _locked:
         _do()
+        _ignore()
     else:
         with sig.memory_lock(sig.claude_local_md_path(proj)):
             _do()
+        _ignore()      # git writes only its own exclude file: no reason to hold the level lock
 
 
 def _is_excluded_level(proj: _StrPath) -> bool:

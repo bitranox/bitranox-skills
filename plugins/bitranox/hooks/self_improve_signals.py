@@ -333,6 +333,13 @@ def _git_in(proj: _StrPath, *args: str) -> tuple[int, str] | None:
 
 _EXCLUDE_HEADER = "# bitranox curated memory (local; CLAUDE.local.md @imports it)"
 
+# (absolute dir, pattern) pairs this process already saw git ignore. Every add re-checks its
+# level's two private files, and each check spawns git twice under the level lock: about 250 ms
+# per add on Windows, which is most of a bulk add loop's hold time. A pattern does not stop being
+# ignored during one short-lived hook or CLI process, and a long-lived one re-checks after a
+# restart; `track_private` is still read on every call.
+_IGNORED_HERE: set[tuple[str, str]] = set()
+
 
 def ensure_gitignored(proj: _StrPath, *patterns: str) -> bool:
     """Best-effort: on a git repo, make sure git ignores each `pattern`. Honors `track_private`
@@ -357,8 +364,15 @@ def ensure_gitignored(proj: _StrPath, *patterns: str) -> bool:
 
     The file is decoded with surrogateescape and written back the same way, so a byte in another
     encoding survives the rewrite instead of raising (UnicodeDecodeError is not an OSError, and
-    escaped every fail-open handler here); the file's own line ending is kept."""
+    escaped every fail-open handler here); the file's own line ending is kept.
+
+    A pattern found ignored (or written) is remembered for the rest of the process
+    (`_IGNORED_HERE`), so a loop of adds asks git once per level and pattern, not on every add."""
     if load_config().get("track_private"):
+        return True
+    here = str(Path(proj).absolute())
+    patterns = tuple(p for p in patterns if (here, p) not in _IGNORED_HERE)
+    if not patterns:
         return True
     top = _git_in(proj, "rev-parse", "--show-toplevel")
     if top is None:
@@ -372,6 +386,8 @@ def ensure_gitignored(proj: _StrPath, *patterns: str) -> bool:
             return False
         if asked[0] == 1:
             add.append(pattern)
+        else:
+            _IGNORED_HERE.add((here, pattern))
     if not add:
         return True
     where = _git_in(proj, "rev-parse", "--git-path", "info/exclude")
@@ -391,6 +407,7 @@ def ensure_gitignored(proj: _StrPath, *patterns: str) -> bool:
         exclude.write_bytes(text.encode("utf-8", "surrogateescape"))
     except OSError:
         return False
+    _IGNORED_HERE.update((here, pattern) for pattern in add)
     return True
 
 
