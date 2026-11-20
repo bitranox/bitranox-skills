@@ -30,6 +30,35 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.13.7]
+
+### Fixed
+
+- net-rotating-proxies fetch: the probe no longer asks a proxy that already answered while others have not been asked. It used to pick at random with replacement, which could leave an honest proxy unasked (about 1 in 1300 runs of the mixed-pool test), and the probe then ended on a tie. `ProxyPool.acquire` takes a keyword-only `exclude` set. A proxy that only failed (a cut, a spent budget) can still be asked again.
+- On Windows, every guard and nudge now reads a Git Bash drive path (`cd /c/temp`, `git -C /d/x`, `make -C /c/repo`, `--hook-file /c/...`) as that drive. Before, all but compact-resume read it as a folder named `c` at the current drive's root (`C:\c\temp`). The PowerShell tool keeps the current-drive reading.
+- `store_manifest.py backup` refuses an `--out` that holds another tree's backup, or a `manifest.json` it cannot read (exit 2). It used to clear it, destroying that tree's only restore source.
+- The backup copies exactly the levels its manifest walk read. A directory that became unreadable between two walks no longer drops out of the copies.
+- The empty-scope refusal names the next step, and the tree and crosstree dreams say what follows it.
+- meta-context-watcher: the done-check `git log` templates start at 00:00 of the raised date; a bare date meant that day at the current time and dropped its earlier commits.
+- coding-python-performance-review tests: the growth tests time each arm on user CPU time with equal windows at least 10 clock steps long, so they also work with Windows' 15.625 ms CPU clocks.
+- Seven test regexes no longer rescan a long run from every start.
+
+### Added
+
+- New hook withheld-report-nudge (PostToolUse on Task/Agent): when a dispatched agent's hand-back was withheld, it quotes the report from the agent's own transcript beside the Agent result.
+- coding-python-performance-review: `find_uncompiled_regex.py` reports two more quadratic regex shapes, a repeated group before a required suffix and a repeat reached past an optional prefix. Its report now opens with how many regex call sites it examined, and it exits 2 when that number is 0.
+
+### Changed
+
+- A manual crosstree or crosstree-deep run under `dream_mode` off consolidates private memory only: no CLAUDE.md edit, contributions stay queued, relocates are proposed. The deep dream gains a Mode section.
+- The crosstree report lists each promotion to a tree top with its byte cost, and the skill bodies say "tree top" instead of "global".
+- `dedup_scan` walks the tree with store_manifest's walker, and an unreadable directory is reported with its error.
+- meta-context-watcher: the done check for a backlog item whose fix lands in other repos runs in each target repo against `origin/<default branch>`. A no-hit in the backlog's own repo is no answer for it, and a `git grep` miss counts as "gone" only when `git cat-file` finds the file.
+- process-agents-dispatching-parallel: an agent dispatched with a name has its own dispatches' hand-backs refused even while it waits. The skill now says where the report is and not to re-dispatch for it.
+- `shell_text` decides the drive reading in one place, `reads_msys_drives(tool_name, os_name)`. `directory_change`, `git_verb_dir` and `git_segment_dir` follow it by default, and the new `resolve_path` turns a command-text path into a host path. A guard test refuses a hand-rolled `is_rooted` plus join, an explicit `msys_drives` opt-out, and direct `msys_drive_path` calls outside an allow-list.
+- open_work `add_item`/`close_item`, memory_engine `backfill_titles`/`lint_tree`/`set_fact_topics`/`render_topics`, and `migrate_to_slug_store.migrate` return typed records instead of string-keyed dicts; their CLI and `--json` output is unchanged.
+- `corpus_prompts` yields one typed `Prompt` record, which `classifier_eval` shares for pinned replays; `guard_replay` carries each recorded call as a typed `Call`. Their `--json` output and the `--firings` file are byte-identical.
+
 ## [11.13.6]
 
 ### Changed
