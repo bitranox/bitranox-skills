@@ -2261,12 +2261,21 @@ def backfill_titles(proj: str | os.PathLike[str]) -> BackfillReport:
     unframed body is left alone and counted, and a missing body is counted, never fabricated.
 
     Separate from `heal`, which SessionStart runs on every start and which never opens a body: a
-    back-fill reads every body of the tree and writes most of them once, a one-off for stores
-    written before titles were kept as data. Returns a BackfillReport; `untitled` is a framed
-    body whose pointer has an empty link text, so there is no title to copy (kept apart from
-    `unframed`, which would report a frame that is there as absent). A slug pointed at from two
-    levels is filled from the first level the walk meets, and each body is read and written under the lock of that first
-    level only: an engine write to the same slug through another level holds that level's lock.
+    back-fill reads every body of the tree and writes most of them once, for stores written before
+    titles were kept as data (render names it for a body found without one). Returns a
+    BackfillReport; `untitled` is a framed body whose pointer has an empty link text, so there is
+    no title to copy (kept apart from `unframed`, which would report a frame that is there as
+    absent). A slug with lines at several levels (placed by topic, or a duplicate) is filled from
+    the first level the walk meets.
+
+    Each fact is read and written under the lock of EVERY level that carries a line of it, taken
+    in walk order, and under the placement lock first when its body is bound to a topic: each of
+    those levels is a route an `add` writes the body through, and a back-fill holding only the
+    first one's lock wrote the prose it had read back over prose an `add` through another level
+    wrote meanwhile. The locks are held for one fact at a time, so a level's other facts stay
+    writable while the back-fill walks it. Which levels carry a slug is read once, before the
+    first write; a line a `move` adds at a new level after that read is not among them.
+
     Raises TreeWalkError (exit 2 on the CLI) when a level or a body cannot be read: a back-fill
     that skipped part of the tree would read as done. Missing is decided by the read itself, never
     by a `Path.is_file()` pre-check, which answers False for a body it cannot stat (EACCES) and
@@ -2276,36 +2285,48 @@ def backfill_titles(proj: str | os.PathLike[str]) -> BackfillReport:
     sig.refuse_if_memory_writes_off()
     anchor = _anchor(proj)
     rep = BackfillReport()
-    seen: set[str] = set()
+    # slug -> (the title at the first level met, every level carrying a line, in walk order).
+    # One entry per fact of the tree, as the `seen` set it replaces held.
+    carriers: dict[str, tuple[str, list[str]]] = {}
     for level in curated_levels_under(anchor):
-        with sig.memory_lock(sig.claude_local_md_path(level)):
-            text = read_store_text(sig.claude_local_md_path(level))
-            for ptr in us.parse_pointer_index(text)[1]:
-                if ptr.legacy:                       # not added to `seen`: a slug's legacy line
-                    if ptr.slug not in rep.legacy:       # at one level never hides its migrated
-                        rep.legacy.append(ptr.slug)      # line at another from the back-fill
-                    continue
-                if ptr.slug in seen:
-                    continue
-                seen.add(ptr.slug)
-                raw = read_store_text(us.body_path(anchor, ptr.slug))   # "" only when absent
-                if raw == "":
-                    rep.missing.append(ptr.slug)
-                    continue
-                body = raw.rstrip("\n")
-                if _body_title(body):
-                    rep.kept += 1
-                    continue
-                if _frontmatter(body)[1] is None:
-                    rep.unframed.append(ptr.slug)
-                    continue
-                filled = _with_title(body, ptr.title)
-                if filled == body:
-                    rep.untitled.append(ptr.slug)
-                    continue
-                us.put_body(str(anchor), ptr.slug, filled)
-                rep.filled.append(ptr.slug)
+        for ptr in us.parse_pointer_index(read_store_text(sig.claude_local_md_path(level)))[1]:
+            if ptr.legacy:                           # a slug's legacy line at one level never
+                if ptr.slug not in rep.legacy:       # hides its migrated line at another from
+                    rep.legacy.append(ptr.slug)      # the back-fill
+                continue
+            if ptr.slug not in carriers:
+                carriers[ptr.slug] = (ptr.title, [level])
+            elif level not in carriers[ptr.slug][1]:   # two lines at one level: one lock
+                carriers[ptr.slug][1].append(level)
+    for slug, (title, levels) in carriers.items():
+        with _placement_lock_if_bound(anchor, slug, "backfill-titles"), \
+                contextlib.ExitStack() as held:
+            for level in levels:
+                held.enter_context(sig.memory_lock(sig.claude_local_md_path(level)))
+            _backfill_one(anchor, slug, title, rep)
     return rep
+
+
+def _backfill_one(anchor, slug, title, rep):
+    """`backfill_titles` for one fact, under the locks its caller holds: fill `title` into the body
+    when it has a frame and no title, and count the outcome in `rep`."""
+    raw = read_store_text(us.body_path(anchor, slug))   # "" only when absent
+    if raw == "":
+        rep.missing.append(slug)
+        return
+    body = raw.rstrip("\n")
+    if _body_title(body):
+        rep.kept += 1
+        return
+    if _frontmatter(body)[1] is None:
+        rep.unframed.append(slug)
+        return
+    filled = _with_title(body, title)
+    if filled == body:
+        rep.untitled.append(slug)
+        return
+    us.put_body(str(anchor), slug, filled)
+    rep.filled.append(slug)
 
 
 def _heal_one_level(level, report):
