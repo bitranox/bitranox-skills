@@ -125,6 +125,7 @@ import os
 import re
 import sys
 import time
+from collections.abc import Mapping
 from pathlib import Path
 
 # self_improve_signals lives in the plugin's hooks dir: skills/meta-dream -> skills -> bitranox -> hooks
@@ -355,6 +356,13 @@ def _render_offer(proj, others):
     return lines
 
 
+def _text_of(record: Mapping[str, object], key: str) -> str:
+    """`record[key]` when it is text, else "": a state file read back as JSON can hold any value
+    there (a hand edit, a damaged write), and a path or session id must never be one."""
+    value = record.get(key)
+    return value if isinstance(value, str) else ""
+
+
 def _review_target(proj):
     """The transcript this review must read: the OWED one first, else the current session's.
 
@@ -367,7 +375,7 @@ def _review_target(proj):
     Raises OSError when the owed transcript exists but cannot be read: falling back then would
     review (and mark) the live session while the compacted stretch stays unread. A transcript owed
     by a session that is still running is not this review's: that session's own nap consumes it."""
-    owed = (sig.nap_owed_info(proj) or {}).get("transcript_path") or ""
+    owed = _text_of(sig.nap_owed_info(proj), "transcript_path")
     if (owed and os.path.exists(owed)
             and not sig.nap_owed_by_live_peer(proj, sig.calling_session_id())):
         if sig.unreviewed_transcript_part(proj, _REVIEWER, owed, REVIEW_CHUNK_BYTES).text:
@@ -428,8 +436,8 @@ def _session_review(proj, structured_only=False, named=None, prose=False):
     # The transcript basename IS the session id, so a SELF-LOCATED transcript (no meta recorded)
     # still recovers the subagent-learning and touched-path inputs, which are keyed by session id.
     # A transcript that is not the live session's is keyed by its OWN id, never the recorded one.
-    session = (Path(path).stem if path and path != meta.get("transcript_path")
-               else meta.get("session_id") or (Path(path).stem if path else ""))
+    session = (Path(path).stem if path and path != _text_of(meta, "transcript_path")
+               else _text_of(meta, "session_id") or (Path(path).stem if path else ""))
     subs = sig.read_subagent_learnings(session) if session else []
     touched = sig.subject_levels(sig.read_touched_paths(session), proj) if session else []
     skills = sig.skills_invoked(text)
@@ -451,7 +459,7 @@ def _session_review(proj, structured_only=False, named=None, prose=False):
         return 1 if path else 2
 
     live = sig.resolve_transcript(proj)
-    owed_path = (sig.nap_owed_info(proj) or {}).get("transcript_path") or ""
+    owed_path = _text_of(sig.nap_owed_info(proj), "transcript_path")
     print(_render_review(subs, touched, skills, text, offset, proj, structured_only,
                          path=path, owed=path != live and (not named or path == owed_path),
                          start=start, total=size, named=bool(named) and path != live,

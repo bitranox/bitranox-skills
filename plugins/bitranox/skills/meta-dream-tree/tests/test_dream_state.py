@@ -1,4 +1,5 @@
 """Tests for dream_state.py (meta-dream cadence-marker CLI). ASCII only."""
+import json
 import os
 import subprocess
 import sys
@@ -157,6 +158,20 @@ def test_session_review_ignores_an_owed_transcript_that_is_gone(home, tmp_path, 
     proj = "/p/x"
     _session(home, proj, tmp_path, '{"type":"user","message":{"content":"the NEW turn"}}\n')
     D.sig.mark_nap_owed(proj, session_id="sid-old", transcript_path=str(tmp_path / "gone.jsonl"))
+    assert D.main(["session-review", proj]) == 0
+    assert "the NEW turn" in capsys.readouterr().out
+
+
+def test_session_review_reads_a_non_string_owed_transcript_as_none_owed(home, tmp_path, capsys):
+    # The marker is JSON on disk, so a damaged one can hold any value where the path goes: a list
+    # there made os.path.exists raise TypeError and the whole review died.
+    proj = "/p/x"
+    _session(home, proj, tmp_path, '{"type":"user","message":{"content":"the NEW turn"}}\n')
+    D.sig.mark_nap_owed(proj, session_id="sid-old", transcript_path=str(tmp_path / "x.jsonl"))
+    marker = D.sig.nap_owed_file(proj)
+    data = json.loads(marker.read_text(encoding="utf-8"))
+    data["transcript_path"] = ["not", "a", "path"]
+    marker.write_text(json.dumps(data), encoding="utf-8")
     assert D.main(["session-review", proj]) == 0
     assert "the NEW turn" in capsys.readouterr().out
 

@@ -230,8 +230,10 @@ def _nap_owed_hint(proj, session_id="", loaded=frozenset()):
         if not _sig.nap_owed_blocks(proj, session_id):
             return ""
         info = _sig.nap_owed_info(proj)
-        owed_session = info.get("session_id") or ""
-        owed_transcript = info.get("transcript_path") or ""
+        # A damaged state file can hold any JSON value here: read it as absent, never let a
+        # non-string reach the "+" below, whose TypeError the except would turn into no block.
+        owed_session = sid if isinstance(sid := info.get("session_id"), str) else ""
+        owed_transcript = tp if isinstance(tp := info.get("transcript_path"), str) else ""
         foreign = bool(owed_session) and bool(session_id) and owed_session != session_id
         run_nap = _run_skill("meta-dream-nap", loaded,
                              'run the nap (Skill tool, name "meta-dream-nap")')

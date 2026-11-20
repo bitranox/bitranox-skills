@@ -7,11 +7,14 @@ drain. Always returns 0 and never emits a decision (a subagent must never be blo
 
 All content ASCII.
 """
+import inspect
 import io
 import json
 import os
 import subprocess
 import sys
+from collections.abc import Mapping, Sequence
+from pathlib import Path
 
 import pytest
 
@@ -35,7 +38,9 @@ def _transcript(tmp_path, name, msgs):
     return str(p)
 
 
-def _event(tmp_path, agent_msgs=(), main_msgs=(), final=None, session="s1"):
+def _event(tmp_path: Path, agent_msgs: Sequence[tuple[str, str]] = (),
+           main_msgs: Sequence[tuple[str, str]] = (), final: str | None = None,
+           session: str = "s1") -> dict[str, str]:
     ev = {"hook_event_name": "SubagentStop", "session_id": session,
           "agent_id": "a1", "agent_type": "general-purpose",
           "agent_transcript_path": _transcript(tmp_path, "agent.jsonl", agent_msgs or [("user", "go")]),
@@ -43,6 +48,18 @@ def _event(tmp_path, agent_msgs=(), main_msgs=(), final=None, session="s1"):
     if final is not None:
         ev["last_assistant_message"] = final
     return ev
+
+
+def _snippet(rec: Mapping[str, object]) -> str:
+    """A buffered record's snippet, asserted to be text: the buffer is JSON on disk."""
+    snippet = rec["snippet"]
+    assert isinstance(snippet, str), snippet
+    return snippet
+
+
+def _snippets(session: str = "s1") -> list[str]:
+    """Every buffered snippet for `session`, oldest first."""
+    return [_snippet(g) for g in S.read_subagent_learnings(session)]
 
 
 def _run(monkeypatch, event):
@@ -55,7 +72,7 @@ def test_buffers_a_signal_found_in_the_subagent_transcript(tmp_path, monkeypatch
     assert _run(monkeypatch, ev) == 0
     got = S.read_subagent_learnings("s1")
     assert len(got) == 1
-    assert got[0]["agent_type"] == "general-purpose" and "stale venv" in got[0]["snippet"]
+    assert got[0]["agent_type"] == "general-purpose" and "stale venv" in _snippet(got[0])
 
 
 def test_ignores_signals_in_the_dispatch_prompt_user_message(tmp_path, monkeypatch):
@@ -87,7 +104,7 @@ def test_uses_last_assistant_message_when_present(tmp_path, monkeypatch):
                 final="it turns out the flag is --check-tree, not --check")
     _run(monkeypatch, ev)
     got = S.read_subagent_learnings("s1")
-    assert len(got) == 1 and "check-tree" in got[0]["snippet"]
+    assert len(got) == 1 and "check-tree" in _snippet(got[0])
 
 
 def test_final_message_does_not_duplicate_the_same_finding(tmp_path, monkeypatch):
@@ -98,7 +115,7 @@ def test_final_message_does_not_duplicate_the_same_finding(tmp_path, monkeypatch
                 final="it turns out the flag is --check-tree")
     _run(monkeypatch, ev)
     got = S.read_subagent_learnings("s1")
-    assert len(got) == 1, "near-duplicate finding buffered twice: %r" % [g["snippet"] for g in got]
+    assert len(got) == 1, "near-duplicate finding buffered twice: %r" % [_snippet(g) for g in got]
 
 
 def test_no_signal_buffers_nothing(tmp_path, monkeypatch):
@@ -136,8 +153,8 @@ def test_a_learning_stated_after_the_snippet_cap_is_kept_in_the_snippet(tmp_path
     _run(monkeypatch, _event(tmp_path, agent_msgs=[("assistant", text)]))
     got = S.read_subagent_learnings("s1")
     assert len(got) == 1
-    assert "I was wrong earlier" in got[0]["snippet"], got[0]["snippet"]
-    assert len(got[0]["snippet"]) <= C._SNIPPET
+    assert "I was wrong earlier" in _snippet(got[0]), _snippet(got[0])
+    assert len(_snippet(got[0])) <= C._SNIPPET
 
 
 def test_a_learning_at_the_start_still_opens_the_snippet(tmp_path, monkeypatch):
@@ -145,7 +162,7 @@ def test_a_learning_at_the_start_still_opens_the_snippet(tmp_path, monkeypatch):
     text = "I was wrong earlier: the flag is --check-tree. " + _PREAMBLE
     _run(monkeypatch, _event(tmp_path, agent_msgs=[("assistant", text)]))
     got = S.read_subagent_learnings("s1")
-    assert len(got) == 1 and got[0]["snippet"].startswith("I was wrong earlier")
+    assert len(got) == 1 and _snippet(got[0]).startswith("I was wrong earlier")
 
 
 def test_two_findings_sharing_a_long_opening_are_both_buffered(tmp_path, monkeypatch):
@@ -154,7 +171,7 @@ def test_two_findings_sharing_a_long_opening_are_both_buffered(tmp_path, monkeyp
     first = _PREAMBLE + "I was wrong - the real cause is the stale venv."
     second = _PREAMBLE + "I was wrong - the lock file was never regenerated."
     _run(monkeypatch, _event(tmp_path, agent_msgs=[("assistant", first), ("assistant", second)]))
-    snippets = [g["snippet"] for g in S.read_subagent_learnings("s1")]
+    snippets = _snippets()
     assert len(snippets) == 2, snippets
     assert any("stale venv" in s for s in snippets) and any("lock file" in s for s in snippets)
 
@@ -185,7 +202,7 @@ def test_a_real_assistant_record_with_a_list_of_blocks_is_scanned(tmp_path, monk
     path = _raw_transcript(tmp_path, [json.dumps(rec)])
     _run(monkeypatch, _raw_event(path))
     got = S.read_subagent_learnings("s1")
-    assert len(got) == 1 and "stale venv" in got[0]["snippet"]
+    assert len(got) == 1 and "stale venv" in _snippet(got[0])
 
 
 def test_malformed_lines_and_other_record_types_are_skipped_not_fatal(tmp_path, monkeypatch):
@@ -197,7 +214,7 @@ def test_malformed_lines_and_other_record_types_are_skipped_not_fatal(tmp_path, 
     ]
     _run(monkeypatch, _raw_event(_raw_transcript(tmp_path, lines)))
     got = S.read_subagent_learnings("s1")
-    assert [("stale venv" in g["snippet"]) for g in got] == [True]
+    assert [("stale venv" in _snippet(g)) for g in got] == [True]
 
 
 def test_a_record_whose_message_is_not_a_dict_does_not_lose_the_scan(tmp_path, monkeypatch):
@@ -208,7 +225,7 @@ def test_a_record_whose_message_is_not_a_dict_does_not_lose_the_scan(tmp_path, m
                          "message": {"content": "I was wrong - the real cause is the stale venv"}})]
     _run(monkeypatch, _raw_event(_raw_transcript(tmp_path, lines),
                                  final="it turns out the flag is --check-tree"))
-    snippets = [g["snippet"] for g in S.read_subagent_learnings("s1")]
+    snippets = _snippets()
     assert len(snippets) == 2, snippets
 
 
@@ -304,8 +321,9 @@ def test_an_unquoted_admission_beside_a_quoted_one_is_still_buffered(tmp_path, m
     ev = _event(tmp_path, agent_msgs=[("assistant", text)], final=text)
     _run(monkeypatch, ev)
     got = S.read_subagent_learnings("s1")
-    assert len(got) == 1 and "strict" in got[0]["matched"]
-    assert "I was wrong" in got[0]["snippet"]
+    matched = got[0]["matched"]
+    assert len(got) == 1 and isinstance(matched, list) and "strict" in matched
+    assert "I was wrong" in _snippet(got[0])
 
 
 # ---- one read of the subagent transcript per hook call ------------------------------------------
@@ -338,7 +356,7 @@ def test_the_default_mode_reads_the_subagent_transcript_once_with_the_shadow_on(
     S.save_config({"classifier_backend": "jev", "classifier_subagent_signal": "shadow"})
     ev = _event(tmp_path, agent_msgs=[("assistant", "I was wrong - the real cause is the stale venv")])
     proc = subprocess.run(
-        [sys.executable, "-c", _COUNT_OPENS, C.__file__, ev["agent_transcript_path"]],
+        [sys.executable, "-c", _COUNT_OPENS, inspect.getfile(C), ev["agent_transcript_path"]],
         input=json.dumps(ev), capture_output=True, text=True, encoding="utf-8", timeout=60,
         env={**os.environ, "HOME": str(_home), "USERPROFILE": str(_home)}, check=False)
     assert proc.returncode == 0, proc.stderr

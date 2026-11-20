@@ -2,6 +2,7 @@
 import json
 import os
 import subprocess
+from collections.abc import Mapping
 
 import pytest
 
@@ -653,6 +654,13 @@ _SID_A = "aaaaaaaa-1111-2222-3333-444444444444"
 _SID_B = "bbbbbbbb-1111-2222-3333-444444444444"
 
 
+def _first_claim(where: str) -> Mapping[str, object]:
+    """The claim on the queue's first entry, asserted to be a record."""
+    claim = S.read_contributions(where)[0]["claim"]
+    assert isinstance(claim, dict), claim
+    return claim
+
+
 def _claim_cli(monkeypatch, sid, *extra):
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", sid)
     return Q.main(["claim", "--match", "the gap", *extra, "/p/cl"])
@@ -665,7 +673,7 @@ def test_a_claim_held_by_another_session_refuses_a_second_claim(monkeypatch, cap
     assert _claim_cli(monkeypatch, _SID_B) == 1
     out = capsys.readouterr()
     assert "aaaaaaaa" in out.out + out.err                    # the refusal names the holder
-    assert S.read_contributions("/p/cl")[0]["claim"]["session"] == _SID_A    # A keeps it
+    assert _first_claim("/p/cl")["session"] == _SID_A    # A keeps it
 
 
 def test_the_holder_may_claim_again_to_extend(monkeypatch):
@@ -676,15 +684,15 @@ def test_the_holder_may_claim_again_to_extend(monkeypatch):
     assert S.claim_state(S.read_contributions("/p/cl")[0]) == "live"
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", _SID_A)
     assert Q.main(["claim", "--match", "the gap", "--hours", "2", "/p/cl"]) == 0
-    claim = S.read_contributions("/p/cl")[0]["claim"]
-    assert claim["until"] > started + 1.5 * 3600              # restarted from now, for 2h
+    until = _first_claim("/p/cl")["until"]
+    assert isinstance(until, (int, float)) and until > started + 1.5 * 3600   # from now, for 2h
 
 
 def test_an_expired_claim_does_not_block_another_session(monkeypatch):
     Q.main(["add", "--what", "the gap", "/p/cl"])
     S.claim_contribution("/p/cl", "the gap", _SID_A, hours=1, now=1000.0)   # expired long ago
     assert _claim_cli(monkeypatch, _SID_B) == 0
-    assert S.read_contributions("/p/cl")[0]["claim"]["session"] == _SID_B
+    assert _first_claim("/p/cl")["session"] == _SID_B
 
 
 def test_list_marks_a_live_claim_and_an_expired_one(monkeypatch, capsys):
@@ -718,6 +726,27 @@ def test_release_of_an_unclaimed_entry_is_not_an_error(capsys):
     assert "not claimed" in capsys.readouterr().out
 
 
+def _rewrite_first_record(where, **fields):
+    """Overwrite fields of the queue's first record on disk, as a hand edit or damaged write does."""
+    path = S.contrib_file(where)
+    lines = path.read_text(encoding="utf-8").splitlines()
+    rec = json.loads(lines[0])
+    rec.update(fields)
+    lines[0] = json.dumps(rec)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_release_of_a_claim_that_is_not_a_record_names_it_and_removes_it(capsys):
+    # The queue is JSON on disk: a damaged claim can be any value. `.get` on it raised
+    # AttributeError and the release died with a traceback, the claim still in place.
+    Q.main(["add", "--what", "the gap", "/p/cl"])
+    _rewrite_first_record("/p/cl", claim="garbage")
+    capsys.readouterr()
+    assert Q.main(["release", "--match", "the gap", "/p/cl"]) == 0
+    assert "released" in capsys.readouterr().out
+    assert "claim" not in S.read_contributions("/p/cl")[0]
+
+
 def test_claim_without_a_session_id_or_by_is_refused(monkeypatch, capsys):
     Q.main(["add", "--what", "the gap", "/p/cl"])
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
@@ -730,7 +759,7 @@ def test_claim_by_name_works_without_a_session_id(monkeypatch):
     Q.main(["add", "--what", "the gap", "/p/cl"])
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
     assert Q.main(["claim", "--match", "the gap", "--by", "nightly-sweep", "/p/cl"]) == 0
-    assert S.read_contributions("/p/cl")[0]["claim"]["session"] == "nightly-sweep"
+    assert _first_claim("/p/cl")["session"] == "nightly-sweep"
 
 
 def test_claim_refuses_an_ambiguous_or_missing_match(monkeypatch, capsys):
@@ -783,6 +812,18 @@ def test_queues_names_no_claim_count_when_nothing_is_claimed(tmp_path, capsys):
     assert Q.main(["queues"]) == 0
     row = next(line for line in capsys.readouterr().out.splitlines() if str(where) in line)
     assert "  1 open  %s" % where in row            # no claim field between count and path
+
+
+def test_queues_reads_a_project_stamp_that_is_not_text_as_unknown(tmp_path, capsys):
+    # A list where the project path goes reached os.path.isdir, which raised TypeError, and an
+    # int there would be read as a file descriptor: the whole listing died on one damaged record.
+    where = tmp_path / "stamped"
+    where.mkdir()
+    Q.main(["add", "--what", "a gap", str(where)])
+    _rewrite_first_record(str(where), proj=["not", "a", "path"])
+    capsys.readouterr()
+    assert Q.main(["queues"]) == 0
+    assert "1 open" in capsys.readouterr().out
 
 
 # ---- a queue belongs to the repo, whichever checkout or subdirectory the entry came from ---------

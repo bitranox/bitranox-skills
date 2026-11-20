@@ -73,6 +73,7 @@ import re
 import sys
 import tempfile
 import time
+from collections.abc import Mapping
 from pathlib import Path
 
 # self_improve_signals is the shared state layer, in the plugin's hooks dir
@@ -121,7 +122,7 @@ def _home_note(path):
     """Why a queue's path is not where new entries go, or "": a key made from a worktree or a
     subdirectory before queues were keyed by repo, or a temp dir nothing will come back to."""
     home = sig.queue_home(path)
-    if os.path.abspath(home) != os.path.abspath(path):
+    if home is not None and os.path.abspath(home) != os.path.abspath(path):
         return "  (inside %s: new entries go to that repo's queue)" % home
     try:
         temp = tempfile.gettempdir()
@@ -141,7 +142,7 @@ def _queue_rows(qdir):
         except OSError as exc:
             rows.append((key, None, 0, "(unreadable: %s)" % exc))
             continue
-        path = next((r.get("proj") for r in recs if r.get("proj")), "")
+        path = next((p for r in recs if isinstance(p := r.get("proj"), str) and p), "")
         if not path:
             path = _resolve_from_session(qdir, key)
         if not path:
@@ -241,13 +242,20 @@ def _claim_hours(text):
     return hours if math.isfinite(hours) and hours > 0 else None
 
 
+def _minutes_left(claim: Mapping[str, object]) -> float:
+    """Minutes until a held claim's `until`, or 0 when the stored value is not a number."""
+    until = claim.get("until")
+    return (until - time.time()) / 60 if isinstance(until, (int, float)) else 0.0
+
+
 def _claim_verb(args, proj):
     """The `claim` and `release` verbs. Exit 0 done; 1 another session holds a live claim; 2 a
     selector that names no single entry, a bad --hours, no holder, or a store error."""
     try:
         if args.cmd == "release":
             held = sig.release_contribution(proj, args.match)
-            print("released: claim by %s removed" % sig.claim_holder(held.get("session")) if held
+            holder = held.get("session") if isinstance(held, Mapping) else held
+            print("released: claim by %s removed" % sig.claim_holder(holder) if held
                   else "not claimed: nothing to release")
             return 0
         holder = args.by.strip() or os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
@@ -265,7 +273,7 @@ def _claim_verb(args, proj):
         claim = exc.claim
         print("! held: claimed by %s (cwd %s) for another %dm - leave it, or ask that session"
               % (sig.claim_holder(claim.get("session")), claim.get("cwd") or "?",
-                 (claim["until"] - time.time()) / 60), file=sys.stderr)
+                 _minutes_left(claim)), file=sys.stderr)
         return 1
     except IndexError as exc:
         print("! refused: %s" % exc, file=sys.stderr)
