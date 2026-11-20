@@ -149,9 +149,9 @@ def test_a_retitle_keeps_prose_another_session_wrote_while_it_ran(tmp_path):
     def session_b_writes(_frame):
         E.add_or_update_entry(proj, "Old title", "When x, do y.", body="Prose two.", slug=slug)
 
-    profile, fired = _on_first_call("add_pointer", "uuid_store.py", session_b_writes)
+    profile, fired = _on_first_call("_line_growth_refusal", "memory_engine.py", session_b_writes)
     rep = _run_profiled(profile, lambda: E.retitle_entry(proj, slug, "New title"))
-    assert fired, "the observer never saw add_pointer: the interleaving was not exercised"
+    assert fired, "the observer never saw the cap check: the interleaving was not exercised"
     assert rep.retitled is True
     body = _body(anchor, slug)
     assert "Prose two." in body, body

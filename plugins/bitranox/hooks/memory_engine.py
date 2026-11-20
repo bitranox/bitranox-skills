@@ -2826,20 +2826,23 @@ def _retitle_entry(level, slug, to_title):
     if rep.refused:
         return rep
 
-    us.add_pointer(str(lvl), slug=slug, title=title, hook=entry.hook,
-                   pin=entry.pin)
-    rep.levels.append(str(lvl))
-    # The body is re-read under the level lock rather than taken from `entry`: that copy was read
-    # unlocked, and an `add` on the same slug in another session (which rewrites the body under
-    # this lock) can land between that read and this write - writing the stale copy back loses its
-    # prose. The lock is non-reentrant, so it is taken only after `add_pointer` released its own.
+    # The pointer line and the body's `title:` are written in ONE hold of the level lock, the hold
+    # an `add` writes both under. Taken as two holds (add_pointer's own, then one for the body), an
+    # `add` of the same slug from another session landed between them: its title went into the
+    # line, this one into the body, and the two disagreed until the next write. Both are re-read
+    # under the lock rather than taken from `entry`, which was read unlocked: writing that stale
+    # copy back would undo the other session's write (its prose, in the body's case).
     with sig.memory_lock(sig.claude_local_md_path(str(lvl))):
+        rep.refused = _retitle_line_locked(lvl, slug, title, refuse_pinned=True)
+        if rep.refused:
+            return rep
         current = read_store_text(us.body_path(anchor, slug)).rstrip("\n")
         retitled_body = _with_title(current, title)
         # `current and` is belt-and-braces: `_with_title("")` returns "", so an absent body
         # (read as "") already compares equal and gets no file, which keeps a dangler dangling.
         if current and retitled_body != current:
             us.put_body(str(anchor), slug, retitled_body)
+    rep.levels.append(str(lvl))
 
     # A slug carried by more than one level is a pre-existing violation, but leaving the OTHER
     # pointers on the old title is not neutral: `move_entry` and `relocate_entry` both refuse when
@@ -2858,8 +2861,11 @@ def _retitle_entry(level, slug, to_title):
             rep.warnings.append("slug was ALSO pointed at from %s as an unmigrated legacy "
                                 "pointer - left alone; migrate it, then retitle there" % other)
             continue
-        us.add_pointer(str(other), slug=slug, title=title, hook=dup.hook,
-                       pin=dup.pin)
+        # Under that level's own lock, title only: `dup` was read unlocked, and writing its hook
+        # back would undo an `add` there in between, or put back a line a `move` dropped.
+        with sig.memory_lock(sig.claude_local_md_path(str(other))):
+            if _retitle_line_locked(other, slug, title, refuse_pinned=False):
+                continue
         rep.levels.append(str(other))
         if placed:
             continue                                 # placed by topic: one line per level, by design
@@ -2868,6 +2874,29 @@ def _retitle_entry(level, slug, to_title):
 
     rep.retitled = True
     return rep
+
+
+def _retitle_line_locked(level, slug, title, refuse_pinned):
+    """Set the title of `slug`'s pointer line at `level`, whose lock the CALLER holds; the hook and
+    the pin stay as the file holds them now. Returns None when written, else why not, writing
+    nothing: the line is gone or legacy (a `move`, `rename` or migration got there first, and a
+    retitle never puts a line back), or, with `refuse_pinned`, the fact was pinned meanwhile.
+
+    `us.add_pointer` takes the lock itself, and the lock is not reentrant, so a writer that must
+    keep the line and the body in one hold cannot call it."""
+    local = sig.claude_local_md_path(str(level))
+    text = read_store_text(local)
+    scope, pointers = us.parse_pointer_index(text)
+    ptr = next((p for p in pointers if p.slug == slug), None)
+    if ptr is None or ptr.legacy:
+        return ("slug %r left %s while it was being retitled (a concurrent move, rename or "
+                "migration); nothing was written" % (slug, level))
+    if refuse_pinned and ptr.pin:
+        return ("fact was pinned while it was being retitled - use `amend-pinned --proj %s "
+                "--slug %s --title ...`" % (level, slug))
+    ptr.title = title
+    us.write_if_changed(local, us.upsert_pointer_block(text, scope, pointers))
+    return None
 
 
 def _other_level_pointing_in(anchor, level, slug):
