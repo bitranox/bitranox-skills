@@ -34,8 +34,19 @@ import uuid_store as us
 
 HOOKS = Path(E.__file__).resolve().parent
 
+# The longest pause, in seconds, a worker takes after each of its writes. The level lock is an
+# O_EXCL create polled every 50 ms, so a worker that takes it again the moment it lets go leaves
+# a waiting verb no gap to land in: on a slow runner (macOS CI) the verb's 5 s wait ran out. A
+# real session pauses between its writes; this keeps the adds landing many times per verb.
+_PACE = 0.005
+
+
+def _script(path, source):
+    """Write a worker's source to `path`, its PACE set to `_PACE`."""
+    path.write_text(source.replace("PACE", repr(_PACE)), encoding="utf-8")
+
 _UPDATER = r'''
-import json, sys, time
+import json, random, sys, time
 from pathlib import Path
 hooks, level, slug, ready, deadline = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], float(sys.argv[5])
 sys.path.insert(0, hooks)
@@ -56,6 +67,7 @@ while time.time() < deadline:
     updated = n
     if n == 1:
         Path(ready).write_text("x", encoding="utf-8")
+    time.sleep(random.uniform(0.0, PACE))
 print(json.dumps({"updated": updated, "ended": ended}))
 '''
 
@@ -102,7 +114,7 @@ def _race(tmp, level, slug, verb):
     once, and return the updater's report."""
     ready = tmp / "ready"
     worker = tmp / "updater.py"
-    worker.write_text(_UPDATER, encoding="utf-8")
+    _script(worker, _UPDATER)
     proc = subprocess.Popen([sys.executable, str(worker), str(HOOKS), level, slug, str(ready),
                              repr(time.time() + 20.0)],
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding="utf-8")
@@ -186,28 +198,30 @@ def test_rename_carries_the_last_concurrent_update(tmp_path):
 
 
 _CITER = r'''
-import json, sys, time
-hooks, level, deadline = sys.argv[1], sys.argv[2], float(sys.argv[3])
+import json, os, random, sys, time
+hooks, level, stop, deadline = sys.argv[1], sys.argv[2], sys.argv[3], float(sys.argv[4])
 sys.path.insert(0, hooks)
 import memory_engine as E
 n = 0
-while time.time() < deadline:
+while not os.path.exists(stop) and time.time() < deadline:
     n += 1
     E.add_or_update_entry(level, "Citer", "When racing %d, see [[fact]] and [[renamed]]." % n,
                           body="prose %d cites [[fact]] and [[renamed]]." % n, slug="citer")
+    time.sleep(random.uniform(0.0, PACE))
 print(json.dumps({"role": "citer", "done": n}))
 '''
 
 _OBSERVER = r'''
-import json, re, sys, time
+import json, os, re, sys, time
 from pathlib import Path
-hooks, root, level, deadline = sys.argv[1], sys.argv[2], sys.argv[3], float(sys.argv[4])
+hooks, root, level, stop, deadline = (sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4],
+                                      float(sys.argv[5]))
 sys.path.insert(0, hooks)
 import uuid_store as us
 num = re.compile(r"(\d+)")
 seen = {"hook": 0, "body": 0}
 samples = drops = 0
-while time.time() < deadline:
+while not os.path.exists(stop) and time.time() < deadline:
     try:
         text = Path(level, "CLAUDE.local.md").read_text(encoding="utf-8")
         body = us.body_path(root, "citer").read_text(encoding="utf-8")
@@ -225,6 +239,9 @@ while time.time() < deadline:
     time.sleep(0.0002)
 print(json.dumps({"role": "observer", "samples": samples, "drops": drops}))
 '''
+
+
+RENAMES = 12
 
 
 def test_the_inbound_ref_rewrite_never_writes_back_an_older_citer(tmp_path):
@@ -246,26 +263,31 @@ def test_the_inbound_ref_rewrite_never_writes_back_an_older_citer(tmp_path):
     E.add_or_update_entry(proj, "Citer", "When racing 0, see [[fact]] and [[renamed]].",
                           body="prose 0 cites [[fact]] and [[renamed]].", slug="citer")
     citer, observer = tmp_path / "citer.py", tmp_path / "observer.py"
-    citer.write_text(_CITER, encoding="utf-8")
-    observer.write_text(_OBSERVER, encoding="utf-8")
-    stop = time.time() + 4.0
-    procs = [subprocess.Popen([sys.executable, str(citer), str(HOOKS), proj, repr(stop)],
+    _script(citer, _CITER)
+    _script(observer, _OBSERVER)
+    stop = tmp_path / "stop"
+    deadline = time.time() + 120.0              # a safety net only: the renames end the run
+    procs = [subprocess.Popen([sys.executable, str(citer), str(HOOKS), proj, str(stop),
+                               repr(deadline)],
                               # it warns on stderr for each ref to the name the fact does not
                               # have now: a pipe nobody reads fills, and the citer then stalls
                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                               encoding="utf-8"),
              subprocess.Popen([sys.executable, str(observer), str(HOOKS), str(root), proj,
-                               repr(stop)],
+                               str(stop), repr(deadline)],
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding="utf-8")]
     renames, rewrote, names = 0, 0, ("fact", "renamed")
     try:
         time.sleep(0.5)                              # both workers imported and running
-        while time.time() < stop - 0.3:
+        # A fixed count, not a clock: a 4 s window held 9 renames on a slow macOS runner.
+        while renames < RENAMES:
             rep = E.rename_entry(proj, names[renames % 2], names[(renames + 1) % 2])
             assert rep.renamed, rep.refused
             rewrote += {r.citer for r in rep.refs_rewritten} == {"citer"}
             renames += 1
             time.sleep(random.uniform(0.0, 0.005))
+        time.sleep(0.3)                              # the observer samples after the last one
+        stop.write_text("x", encoding="utf-8")
         results = {}
         for proc in procs:
             out, err = proc.communicate(timeout=60)
@@ -277,7 +299,7 @@ def test_the_inbound_ref_rewrite_never_writes_back_an_older_citer(tmp_path):
             if proc.poll() is None:
                 proc.kill()
                 proc.communicate()
-    assert renames >= 10 and rewrote == renames, (renames, rewrote)
+    assert rewrote == renames, (renames, rewrote)
     assert results["citer"]["done"] >= 20, results
     assert results["observer"]["samples"] >= 200, results
     assert results["observer"]["drops"] == 0, (renames, results)

@@ -30,6 +30,16 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.17.1]
+
+### Fixed
+
+- The memory engine's writer-race tests no longer fail on a slow runner. Their worker processes
+  took the level lock again the moment they let it go, so on macOS CI the verb under test waited
+  out its 5 s lock timeout; each worker now pauses briefly after every write, as a real session
+  does. The inbound-ref rewrite test runs a fixed 12 renames instead of what fits in 4 seconds.
+  The tests still fail on the engine before 11.17.0's fix.
+
 ## [11.17.0]
 
 ### Added
