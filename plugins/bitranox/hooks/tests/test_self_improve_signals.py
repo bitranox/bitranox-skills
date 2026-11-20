@@ -2521,8 +2521,11 @@ def test_has_any_facts_does_not_count_the_index_or_an_unreadable_entry(home):
 
 def test_proj_key_reads_a_bytes_path_as_the_same_project():
     """The docstring promises a non-string argument is coerced, never raised on: a bytes path
-    raised AttributeError (bytes has no .encode)."""
-    assert S.proj_key(b"/opt/project-x") == S.proj_key("/opt/project-x") == "528c04d3cbe1a627"
+    raised AttributeError (bytes has no .encode). The path is absolute on this host (C:\\opt\\...
+    on Windows); the historical key of the POSIX spelling is pinned in
+    test_proj_key_is_stable_for_an_already_absolute_path."""
+    path = os.path.abspath("/opt/project-x")
+    assert S.proj_key(os.fsencode(path)) == S.proj_key(path)
 
 
 @pytest.mark.parametrize("raw", ["/opt/one-root", 5, {"a": "/opt/x"}], ids=["str", "int", "object"])
