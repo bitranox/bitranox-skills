@@ -3908,6 +3908,16 @@ def test_version_sync_fires_on_a_pyproject_that_is_not_valid_toml(tmp_path):
     assert any("not valid TOML" in f for f in failures)
 
 
+def _versions_across_origin(root):
+    """(origin/master's plugin.json version, the checkout's), or None with no origin/master: what
+    a fixture below must show before its check means anything."""
+    rc, old_blob, _ = RG._git(root, "show", "origin/master:" + PJ_REL)
+    if rc != 0:
+        return None
+    new = json.loads((root / PJ_REL).read_text(encoding="utf-8")).get("version")
+    return json.loads(old_blob).get("version"), new
+
+
 def test_changelog_fires_on_an_undocumented_version_with_no_bump(tmp_path):
     """The discriminating case against the diff-shaped predecessor.
 
@@ -3918,7 +3928,7 @@ def test_changelog_fires_on_an_undocumented_version_with_no_bump(tmp_path):
     """
     git_repo_with_origin(tmp_path, {PJ_REL: '{"version": "1.0.0"}\n',
                                     "CHANGELOG.md": "# Changelog\n\n## [0.9.0]\n"})
-    assert RG._plugin_version_pair(tmp_path) == ("1.0.0", "1.0.0"), "fixture must show NO bump"
+    assert _versions_across_origin(tmp_path) == ("1.0.0", "1.0.0"), "fixture must show NO bump"
     assert any("1.0.0" in f for f in RG.check_changelog_current_version(tmp_path))
 
 
@@ -3937,7 +3947,7 @@ def test_changelog_needs_no_origin_master(tmp_path):
     pass on a tree that is actually undocumented.
     """
     git_repo(tmp_path, {PJ_REL: '{"version": "2.0.0"}\n', "CHANGELOG.md": "# Changelog\n"})
-    assert RG._plugin_version_pair(tmp_path) is None, "fixture must have no origin/master"
+    assert _versions_across_origin(tmp_path) is None, "fixture must have no origin/master"
     assert any("2.0.0" in f for f in RG.check_changelog_current_version(tmp_path))
 
 

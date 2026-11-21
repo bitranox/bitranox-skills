@@ -90,7 +90,9 @@ import tomllib
 import traceback
 import xml.etree.ElementTree as ET
 import sys
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 _HOOKS_DIR = Path(__file__).resolve().parent
 if str(_HOOKS_DIR) not in sys.path:
@@ -408,31 +410,6 @@ def check_duplicate_basenames(root):
 
 
 CHANGELOG_NAME = "CHANGELOG.md"
-
-
-def _plugin_version_pair(root):
-    """`(old, new)` plugin.json version across origin/master, or None when undecidable.
-
-    None means "cannot answer" - no origin/master to compare against, or a manifest that will
-    not parse on either side - and every caller treats that as skip-do-not-block, which is the
-    gate's standing rule: being unable to read something is not evidence of a violation.
-    """
-    rc, _, _ = _git(root, "rev-parse", "--verify", "origin/master")
-    if rc != 0:
-        return None
-    pj_rel = "plugins/bitranox/.claude-plugin/plugin.json"
-    try:
-        new_v = json.loads((root / pj_rel).read_text(encoding="utf-8")).get("version")
-    except Exception:  # noqa: BLE001
-        return None
-    rc, old_blob, _ = _git(root, "show", f"origin/master:{pj_rel}")
-    if rc != 0:
-        return None
-    try:
-        old_v = json.loads(old_blob).get("version")
-    except Exception:  # noqa: BLE001
-        return None
-    return old_v, new_v
 
 
 _PLUGIN_DIR = "plugins/bitranox"
@@ -1759,8 +1736,9 @@ def _shipped_skill_mds(root, stage):
     contents = _read_blobs(root, blobs)
     if contents is None:
         return None
-    return {_SKILL_MD_RX.match(rel).group(1): data
-            for (_sha, rel), data in zip(blobs, contents, strict=True)}
+    # Every listed path matched when ``keep`` selected it; the match is taken again for its name.
+    return {m.group(1): data for (_sha, rel), data in zip(blobs, contents, strict=True)
+            if (m := _SKILL_MD_RX.match(rel))}
 
 
 def frontmatter_failures(root, stage=None):
@@ -2038,6 +2016,11 @@ class CommitSelection:
 
     def __repr__(self):
         return "CommitSelection(%r, %r, %r)" % (self.mode, self.pathspecs, self.where)
+
+
+#: What a gated command ships from the side being committed: `STAGE_INDEX`, `STAGE_HEAD`, or a
+#: commit that takes its own files (`CommitSelection`).
+type Stage = str | CommitSelection
 
 
 def _is_commit(stage):
@@ -2415,8 +2398,8 @@ def _unstaged_message(name, skill_dir, differing, stage):
             % (name, ", ".join(differing[:6]), _UNSTAGED_MARK, skill_dir, remedy))
 
 
-def mirror_failures(root, names, committing=None, stage=STAGE_INDEX, notices=None, twins=None,
-                    mirrors=None, log=None):
+def mirror_failures(root, names, committing=None, stage: Stage = STAGE_INDEX, notices=None,
+                    twins=None, mirrors=None, log=None):
     """Return a failure per mirrored skill in ``names`` whose twin has drifted.
 
     A mirrored skill is a DIRECTORY. Several pairs ship `references/` and `scripts/` beside their
@@ -2485,7 +2468,9 @@ def mirror_failures(root, names, committing=None, stage=STAGE_INDEX, notices=Non
                 if committing == "marketplace" else False)
         if held:
             continue
-        if lenient and _matches_uncommitted_other_side(committing, here_dir, twin_dir, mine_files, their_files):
+        # ``lenient`` is only ever True with ``notices`` given; the test states it for the reader.
+        if lenient and notices is not None and _matches_uncommitted_other_side(
+                committing, here_dir, twin_dir, mine_files, their_files):
             other = twin_dir if committing == "marketplace" else here_dir
             notices.append(
                 "skills/%s matches its twin only through uncommitted text at %s, so this commit is "
@@ -2593,9 +2578,11 @@ def _twin_held_in_tool_worktree(name, twin_dir, mine_files, lenient, notices):
                                "marketplace change is published." % (name, other))
             return True
         if lenient and not _mirror_differences(mine_files, mirror_files(other))[0]:
-            notices.append("skills/%s matches its twin only through uncommitted text at %s, so "
-                           "this commit is allowed; commit that side next - a push from either "
-                           "repo is refused until both sides are committed." % (name, other))
+            if notices is not None:
+                notices.append("skills/%s matches its twin only through uncommitted text at %s, "
+                               "so this commit is allowed; commit that side next - a push from "
+                               "either repo is refused until both sides are committed."
+                               % (name, other))
             return True
     return False
 
@@ -2612,7 +2599,7 @@ def _index_changes(root, env=None):
     return _git_paths(root, "diff", "--cached", "--name-only", "--no-renames", "HEAD", env=env)
 
 
-def _pushed_changes(root, published="origin/master"):
+def _pushed_changes(root, published: str | None = "origin/master"):
     """(rc, paths) the commits since ``published`` change; rc non-zero when there is no such ref."""
     if not published or _git(root, "rev-parse", "--verify", "-q", published)[0]:
         return 1, []
@@ -2635,7 +2622,8 @@ def _commit_changes(root, stage):
     return rc_i or rc_w, staged + unstaged
 
 
-def check_skill_mirrors(root, stage=STAGE_INDEX, notices=None, publishes=False, mirrors=None):
+def check_skill_mirrors(root, stage: Stage = STAGE_INDEX, notices=None, publishes=False,
+                        mirrors=None):
     """Gate the mirrored twin of every skill this change ships a change to.
 
     Scoped to what the change SHIPS, like the review and description checks:
@@ -2660,7 +2648,7 @@ def check_skill_mirrors(root, stage=STAGE_INDEX, notices=None, publishes=False, 
                            notices=notices, mirrors=mirrors)
 
 
-def _shipped_changes(root, stage, publishes, published="origin/master"):
+def _shipped_changes(root, stage, publishes, published: str | None = "origin/master"):
     """(rc, repo-relative paths) a gated command at ``stage`` ships; rc non-zero when git cannot say.
 
     A commit counts the files its own selection changes against HEAD (`_commit_changes`); a push
@@ -2871,8 +2859,9 @@ def _twin_decision_failures(name, here_dir, twin_files, log=None):
     findings = skill_decisions.check_ledger(lambda: _ledger_lines(ledger),
                                             skill_decisions.corpus_text(files))
     notes = "".join("\n  " + note for note in stale_ref_notes([here_dir])) if findings else ""
-    for finding in findings if log else ():
-        log(_refusal_record(name, finding.entry_id, _finding_problem(finding)))
+    if log:
+        for finding in findings:
+            log(_refusal_record(name, finding.entry_id, _finding_problem(finding)))
     return [_decision_message(name, finding, shown, where) + notes for finding in findings]
 
 
@@ -2894,7 +2883,7 @@ def _skills_with_a_ledger(root, names, base):
     return [name for name, rel in rels.items() if rel in found or (root / rel).is_file()]
 
 
-def check_skill_decisions(root, stage=STAGE_INDEX, *, log=None):
+def check_skill_decisions(root, stage: Stage = STAGE_INDEX, *, log=None):
     """Refuse a commit or push whose SHIPPED text of a touched skill breaks its decision ledger.
 
     A refusal is a live rule anchor gone from the skill's Markdown, a ledger line present at the
@@ -3563,8 +3552,9 @@ class GateParts:
         self.which = which or shutil.which
 
 
-def run_checks(root, ci, full_pytest=None, run_pytest=True, baseline=0, mirror_at=STAGE_INDEX,
-               notices=None, publishes=False, is_installed=None, parts=None):
+def run_checks(root, ci, full_pytest=None, run_pytest=True, baseline=0,
+               mirror_at: Stage = STAGE_INDEX, notices=None, publishes=False, is_installed=None,
+               parts=None):
     """`ci` picks the CHECK SET (CI omits the maintainer-only ones); `full_pytest` picks the pytest
     SCOPE and defaults to `ci`. They are separate axes because a pre-push is BOTH: the maintainer
     (so version-bump, skill-review and mirrors apply) and the last gate before CI (so it runs the
@@ -3654,8 +3644,8 @@ def _tool_repo_touched(root, stage, publishes, twins):
     return {name for name, twin in twins.items() if any(path.is_relative_to(twin) for path in shipped)}
 
 
-def gate_tool_repo_mirror(root, stage=STAGE_INDEX, guessed=False, publishes=False, mirrors=None,
-                          log=None):
+def gate_tool_repo_mirror(root, stage: Stage = STAGE_INDEX, guessed=False, publishes=False,
+                          mirrors=None, log=None):
     """Check the mirror of a skill edited in its OWN repo, before it is committed or pushed.
 
     `main` has already read the event and confirmed it is a gated command, and `root` is the
@@ -3896,7 +3886,12 @@ def main(parts=None):
 
     hook_mode = not (ci or pre_push or mirrors)
     # A git pre-push hook pushes commits, so it reads HEAD; hook mode reads what its command ships.
-    stage, publishes = STAGE_HEAD, False
+    stage: Stage = STAGE_HEAD
+    publishes = False
+    # Bound for every mode: only hook mode reads a command, and the branches that use these are
+    # reached in hook mode alone.
+    event: Mapping[str, Any] = {}
+    command = ""
     if hook_mode:
         # A real git pre-push hook receives REF LINES on stdin, never a Claude Code event, so only
         # hook mode parses it - read that way, a pre-push would fail the parse and pass by accident
