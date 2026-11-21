@@ -1182,28 +1182,33 @@ def repair_appended_type(anchor: _StrPath, dry_run: bool = False, *,
                          ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
     """Re-frame every damaged body through the engine: the prose with the appended block removed,
     under a real frame carrying the kind (the real frame's own kind when the body has one, else the
-    appended one). Title, hook and pin come from the pointer and are kept.
+    appended one). Title, hook and pin come from the pointer and are kept: the write is the
+    engine's update-only upsert (`must_exist`), which reads the title and hook under the level
+    lock it writes under. Passing the title and hook read at the start of this walk wrote them
+    back over a retitle or a hook change that landed in between.
 
     Returns (repaired [(slug, kind)], skipped [(name, why)]). A body no pointer names, or a sharded
-    one, is skipped: there is no title or hook to re-frame it with. A body whose damage is gone
-    when it is read again (a writer changed it after the scan) needs no repair: it is neither
-    repaired nor skipped, and nothing is written for it.
+    one, is skipped: there is no title or hook to re-frame it with. So is a fact whose line left
+    its level after the walk read it (moved or archived): the update-only write refuses it rather
+    than create it anew. A body whose damage is gone when it is read again (a writer changed it
+    after the scan) needs no repair: it is neither repaired nor skipped, and nothing is written
+    for it.
 
     `read` is the seam the body is re-read through (the engine's `read_store_text` when omitted),
     resolved at call time."""
     reread = read or ME.read_store_text
     top = Path(anchor)
-    owners: dict[str, tuple[str, ME.Entry]] = {}
+    owners: dict[str, str] = {}
     for lvl in _all_curated_levels(top):
         for e in ME.read_store(str(lvl))[1]:
-            owners.setdefault(e.slug, (lvl, e))
+            owners.setdefault(e.slug, lvl)
     repaired: list[tuple[str, str]] = []
     skipped: list[tuple[str, str]] = []
     for name in find_appended_type_damage(top):
         if _is_sharded_body_name(name) or name not in owners:
             skipped.append((name, "no pointer names this body - re-home it first (--rehome)"))
             continue
-        level, entry = owners[name]
+        level = owners[name]
         raw = reread(us.body_path(top, name))
         damage = appended_type_damage(raw)
         if damage is None:                       # repaired or rewritten since the scan: no damage
@@ -1211,9 +1216,15 @@ def repair_appended_type(anchor: _StrPath, dry_run: bool = False, *,
         prose, appended = damage
         kind = ME.body_type(raw) or appended
         if not dry_run:
-            ME.add_or_update_entry(str(level), title=entry.title, hook=entry.hook, body=prose,
-                                   type_=kind, slug=name, allow_over_cap_hook=True,
-                                   allow_pinned_overwrite=True)
+            try:
+                # An empty title and hook with must_exist keep the ones stored when the level
+                # lock is taken, so a retitle or hook change since the walk above stands.
+                ME.upsert_entry(str(level), title="", hook="", body=prose, type_=kind, slug=name,
+                                allow_pinned_overwrite=True, must_exist=True)
+            except ME.UnknownSlug:
+                skipped.append((name, "its pointer left %s after the scan - run the repair again"
+                                % level))
+                continue
         repaired.append((name, kind))
     return repaired, skipped
 
