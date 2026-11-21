@@ -16,7 +16,8 @@ Two duties, both computed here for decision-claim-guard.py and the backlog_add b
    marker that resolves there exactly as the review-log rule resolves it (decision_claims). A
    bare paraphrase is refused; a quote the user never typed is refused, naming the nearest
    message the user did type. With no transcript and no decision log readable, a quote passes
-   unverified.
+   unchecked, and `concerns` says so: the reader learns the quote was never compared with
+   anything (user decision 2026-11-21: let it through, with a notice; never a refusal).
 2. Critical review (`concerns`). An entry that passes but reaches past its own evidence - a
    widening phrase ("as is", "everything", "alles") the quote does not contain, or an iron-rule
    area (secrets, a public push or release, a force push, deleting data or history, AI
@@ -316,6 +317,7 @@ class Verdict:
     problem: str | None = None         # "paraphrase" | "unheard-quote" | "marker-miss" | "bad-term"
     detail: str = ""
     evidence: str = ""                 # the user's words that passed the claim
+    unchecked: bool = False            # passed with nothing readable to check the quote against
 
 
 def judge(entry: Entry, logs: list[Path], words: WordSource) -> Verdict:
@@ -331,7 +333,7 @@ def judge(entry: Entry, logs: list[Path], words: WordSource) -> Verdict:
         return Verdict(entry, evidence=plan)
     quotes = quoted_spans(entry.text)
     if quotes and not words.readable:
-        return Verdict(entry, evidence=quotes[0])
+        return Verdict(entry, evidence=quotes[0], unchecked=True)
     for quote in quotes:
         if words.locate(quote) is not None:
             return Verdict(entry, evidence=quote)
@@ -355,6 +357,9 @@ def concerns(verdict: Verdict) -> list[str]:
     """Duty 2: how a passing claim reaches past its evidence, one sentence each."""
     claim, evidence = _claim_text(verdict.entry), _canon(verdict.evidence)
     out = []
+    if verdict.unchecked:
+        out.append("passed unchecked: its quote %r could not be checked, because neither the session "
+                   "transcript nor a decision log (USER-DECISIONS.jsonl) was readable" % verdict.evidence)
     widened = sorted({m.group(0).lower() for m in _WIDEN.finditer(claim)
                       if not _WIDEN.search(evidence) or m.group(0).lower() not in evidence})
     if widened:

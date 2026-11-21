@@ -116,10 +116,12 @@ Decisions:
       USER-DECISIONS.jsonl answer; on a miss the project's earlier transcripts are searched (64 MiB,
       newest first). Why: a teammate or task message reads like the user and is not; handovers cite
       approvals from the session before. With no transcript and no decision log readable a quote
-      passes unverified. Pinned by: tests/test_approval_claim_guard.py::test_a_quote_only_a_teammate_sent_is_not_the_users_words,
+      passes unchecked, with an advisory saying so (user decision 2026-11-21: let it through with a
+      notice, not a refusal). Pinned by: tests/test_approval_claim_guard.py::test_a_quote_only_a_teammate_sent_is_not_the_users_words,
       tests/test_approval_claim_guard.py::test_a_quote_typed_in_an_earlier_session_of_the_project_passes,
       tests/test_approval_claim_guard.py::test_an_unchosen_ask_user_question_option_is_not_the_users_words,
-      tests/test_approval_claim_guard.py::test_a_quote_passes_unverified_when_no_transcript_is_readable
+      tests/test_approval_claim_guard.py::test_an_unchecked_quote_passes_with_a_notice_naming_both_missing_sources,
+      tests/test_approval_claim_guard.py::test_backlog_add_passes_an_unchecked_quote_with_the_notice
     - A plan approved in plan mode (ExitPlanMode's success result) counts when the entry names the
       plan's file. Why: the approval is a click, so there are no words to quote. Pinned by:
       tests/test_approval_claim_guard.py::test_a_plan_approved_in_plan_mode_passes_when_the_entry_names_its_file,

@@ -30,6 +30,12 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.20.2]
+
+### Changed
+
+- The approval-claim check now says when it could not check a quote. With neither the session transcript nor a decision log (USER-DECISIONS.jsonl) readable, a quoted approval still passes, but decision-claim-guard (backlog, handover, commit message) and `backlog_add` now add an advisory: "passed unchecked: its quote ... could not be checked, because neither the session transcript nor a decision log (USER-DECISIONS.jsonl) was readable". A quote that was checked carries no such notice, and a bare paraphrase is refused as before.
+
 ## [11.20.1]
 
 ### Fixed
