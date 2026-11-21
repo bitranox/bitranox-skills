@@ -16,9 +16,14 @@ ended Windows runs below the counts with no title differing (on one loaded CPU: 
 after each write, as a real session does, for up to a little more than one 50 ms poll of a lock
 wait: an add that took the lock again within 5 ms left the retitle's 5 s wait no gap.
 
-The pacing costs the race detection power: against the two-hold retitle it caught the gap in 4
-of 6 runs. test_every_take_of_a_lock_by_retitle_finds_the_titles_equal checks the same property
-with no timing in it and caught it in every run.
+The observer takes the lock again the moment it lets go, so it is queued for the lock whenever
+a writer holds it. memory_lock serves its waiters in arrival order, so a two-hold retitle that
+lets go after its line write finds the observer ahead of its own second take, and the observer
+reads the line retitled and the body not. The same queue keeps that observer from starving the
+writers: its every take after the first lines up behind them. With a pause between its holds
+instead (it stayed away 60 ms in every 120), the observer missed the gap: under load, the
+two-hold retitle survived 1 of 3 runs. test_every_take_of_a_lock_by_retitle_finds_the_titles_equal
+checks the same property with no timing in it.
 All content ASCII.
 """
 
@@ -35,13 +40,6 @@ HOOKS = Path(E.__file__).resolve().parent
 
 # The longest pause, in seconds, a writer takes after each write (see the module docstring).
 _PACE = 0.06
-
-# The observer polls the lock fast and comes back to it almost at once, so it is waiting when a
-# writer lets go (the gap a two-hold retitle leaves is short). Once every _GAP_EVERY seconds it
-# stays away for _GAP seconds, longer than the 50 ms a writer's lock wait polls at: back every time
-# without that, it held the lock so often that a retitle's 5 s wait ran out on one loaded CPU.
-# Spaced by the clock, not by a count of holds: a hold took 25 ms there and 0.5 ms unloaded.
-_LOOK, _GAP, _GAP_EVERY = 0.0003, 0.06, 0.06
 
 # Each writer's and the observer's count the run must reach before the workers are stopped;
 # both multiples of 10, the step a worker reports its count in.
@@ -65,7 +63,6 @@ def titles():
     return ptr.title, E.body_title(body)
 
 done = differ = 0
-next_gap = time.time() + GAP_EVERY
 while not os.path.exists(stop) and time.time() < deadline:
     if role == "retitle":
         done += bool(E.retitle_entry(proj, "fact", "A%d" % done).retitled)
@@ -78,12 +75,7 @@ while not os.path.exists(stop) and time.time() < deadline:
         with sig.memory_lock(sig.claude_local_md_path(proj), timeout=30, poll=0.0002):
             line_title, body_title = titles()
         done += 1
-        differ += line_title != body_title
-        if time.time() >= next_gap:
-            time.sleep(GAP)
-            next_gap = time.time() + GAP_EVERY
-        else:
-            time.sleep(LOOK)
+        differ += line_title != body_title       # and straight back into the queue
     if done % 10 == 0:                           # both counts the test waits for end in 0
         try:
             Path(count).write_text(str(done), encoding="utf-8")
@@ -123,8 +115,7 @@ def test_no_hold_of_the_level_lock_sees_the_line_and_body_titles_differ(tmp_path
     anchor, proj = _tree(tmp_path)
     worker = tmp_path / "worker.py"
     source = _WORKER
-    for name, value in (("GAP_EVERY", _GAP_EVERY), ("PACE", _PACE), ("LOOK", _LOOK), ("GAP", _GAP)):
-        source = source.replace(name, repr(value))
+    source = source.replace("PACE", repr(_PACE))
     worker.write_text(source, encoding="utf-8")
     stop = tmp_path / "stop"
     deadline = time.time() + 120.0                  # a safety net only: the counts end the run
