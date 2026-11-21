@@ -5,6 +5,10 @@ The repair walks every level for the pointer of each damaged body, then re-reads
 writes. A retitle (or a hook change) landing between that walk and the write was undone when the
 walk's title and hook were passed to the write. Each test drives the other writer in a real second
 process.
+
+The new body is derived from the repair's own read of the body, so a body amend landing between
+that read and the write was overwritten too: the write now refuses a body that changed since the
+read (`expect_body`), and the repair reads again.
 """
 
 from __future__ import annotations
@@ -117,6 +121,57 @@ def test_a_fact_whose_line_left_after_the_walk_is_skipped_not_created_anew(tmp_p
     assert [name for name, _why in skipped] == [slug]
     assert "left" in skipped[0][1] and "run the repair again" in skipped[0][1]
     assert slug not in {e.slug for e in ME.read_store(level)[1]}
+
+
+def test_a_body_amend_between_the_read_and_the_write_is_kept(tmp_path):
+    """The other process amends the body after the repair read it and before it writes. The
+    repair's new body is derived from that read, so writing it would put the old prose back over
+    the amend: the write refuses a body that changed since the read, the repair reads again,
+    finds no damage left, and writes nothing."""
+    level = _tree(tmp_path)
+    slug = ME.add_or_update_entry(level, "Ruled", "When ruled, do ruled.", body="placeholder")
+    p = _damage(level, slug)
+    calls: list[str] = []
+
+    def read_then_an_amend(path: str | os.PathLike[str]) -> str:
+        raw = ME.read_store_text(path)
+        if not calls:
+            _run_engine("E.upsert_entry(LEVEL, '', '', body='AMENDED PROSE kept by the repair.', "
+                        f"slug={slug!r}, must_exist=True)", level)
+        calls.append(raw)
+        return raw
+
+    repaired, skipped = R.repair_appended_type(level, read=read_then_an_amend)
+    text = p.read_text(encoding="utf-8")
+    assert "AMENDED PROSE kept by the repair." in text, text
+    assert "More prose below." not in text, text
+    assert (repaired, skipped) == ([], [])
+    assert len(calls) == 2                   # read again once, after the write refused the first
+    assert R.appended_type_damage(text) is None
+
+
+def test_a_body_that_keeps_changing_is_skipped_after_a_bounded_number_of_reads(tmp_path):
+    """A body rewritten (still damaged) between every read and its write: the repair gives up
+    after its last attempt, reports the fact as skipped, and the last rewrite stands."""
+    level = _tree(tmp_path)
+    slug = ME.add_or_update_entry(level, "Ruled", "When ruled, do ruled.", body="placeholder")
+    p = _damage(level, slug)
+    calls: list[str] = []
+
+    def read_then_a_rewrite(path: str | os.PathLike[str]) -> str:
+        raw = ME.read_store_text(path)
+        calls.append(raw)
+        with ME.sig.memory_lock(ME.sig.claude_local_md_path(level)):
+            p.write_text(_old_retype(RULE_BODY + f"Rewrite {len(calls)}.\n", "feedback")
+                         + "\n", encoding="utf-8", newline="")
+        return raw
+
+    repaired, skipped = R.repair_appended_type(level, read=read_then_a_rewrite)
+    assert repaired == []
+    assert [name for name, _why in skipped] == [slug]
+    assert "kept changing" in skipped[0][1] and "run the repair again" in skipped[0][1]
+    assert len(calls) == R.REPAIR_ATTEMPTS
+    assert f"Rewrite {len(calls)}." in p.read_text(encoding="utf-8")
 
 
 _RETITLER = r'''
