@@ -126,6 +126,20 @@ class TestCli:
         assert proc.returncode == 2
         assert '"ok": false' in proc.stdout, "a --json run must still emit JSON when it fails"
 
+    def test_runs_unchanged_under_python_oo(self, tmp_path):
+        """`python -OO` strips docstrings, and the parser took its description from __doc__: under
+        -OO every run, --help included, died on None.splitlines() before reading an argument."""
+        lvl = _level(
+            tmp_path,
+            "- [T](mem:thing-blocked-by-x) - When X, know the blocker is SUPERSEDED, it works.")
+        runs = [subprocess.run([sys.executable, *flags, str(TOOL), *args], capture_output=True,
+                               text=True, encoding="utf-8", errors="replace")
+                for flags in ([], ["-OO"]) for args in (["--help"], ["scan", "--level", str(lvl)])]
+        plain_help, plain_scan, oo_help, oo_scan = runs
+        assert oo_help.returncode == 0 and "usage:" in oo_help.stdout, oo_help.stderr
+        assert (oo_scan.returncode, oo_scan.stdout) == (plain_scan.returncode, plain_scan.stdout)
+        assert plain_scan.returncode == 1 and plain_help.returncode == 0
+
 
 class TestSelfContradictionPrecision:
     """Measured false positives from the live chain, 2026-08-21: 5 of 5 flagged entries were

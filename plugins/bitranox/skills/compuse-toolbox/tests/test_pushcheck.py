@@ -848,3 +848,11 @@ def test_scan_diff_prepares_the_denylist_once_however_many_lines_are_added():
 def test_scan_diff_still_finds_a_denylist_term_after_folding_once():
     found = PC.scan_diff(_added_diff(3).replace("line 1", "line STRASSE 1"), ["  Strasse "])
     assert [(f.kind, f.line) for f in found] == [("denylist", 2)]
+
+
+def test_help_works_under_python_oo():
+    """`python -OO` strips docstrings, and the parser took its description from __doc__: every
+    run died on None.splitlines() before reading an argument."""
+    proc = subprocess.run([sys.executable, "-OO", str(TOOL), "--help"], capture_output=True,
+                          text=True, encoding="utf-8", errors="replace")
+    assert proc.returncode == 0 and "usage:" in proc.stdout, proc.stdout + proc.stderr

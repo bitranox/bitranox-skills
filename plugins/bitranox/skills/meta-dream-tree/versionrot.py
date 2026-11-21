@@ -627,7 +627,8 @@ def _levels(args: argparse.Namespace) -> list[Path] | str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
+    # `python -OO` strips docstrings: "" has no first line to take, so the fallback is a word.
+    ap = argparse.ArgumentParser(description=(__doc__ or "versionrot").splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     sc = sub.add_parser("scan", help="list facts naming a superseded version")
     sc.add_argument("--level", action="append", default=[], type=Path,

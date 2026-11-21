@@ -10,6 +10,7 @@ A fact like "fixed in bmk 3.13.0" stays correct as a sentence and wrong as a les
 
 import ast
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -441,3 +442,11 @@ def test_every_name_taken_from_statusrot_is_its_public_api() -> None:
     taken = _names_imported_from(source, "statusrot")
     assert taken, "versionrot no longer imports from statusrot; this test has nothing to check"
     assert taken <= set(statusrot.__all__), sorted(taken - set(statusrot.__all__))
+
+
+def test_help_works_under_python_oo() -> None:
+    """`python -OO` strips docstrings: the old fallback `(__doc__ or "")` had no first line to
+    take, so every run died with an IndexError before reading an argument."""
+    proc = subprocess.run([sys.executable, "-OO", versionrot.__file__, "--help"],
+                          capture_output=True, text=True, encoding="utf-8", errors="replace")
+    assert proc.returncode == 0 and "usage:" in proc.stdout, proc.stdout + proc.stderr

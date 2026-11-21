@@ -666,7 +666,9 @@ def _emit(as_json: bool, verdict: Verdict) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = EnvelopeArgumentParser(description=__doc__.splitlines()[0], envelope_command="pushcheck")
+    # `or`: `python -OO` strips docstrings, and __doc__ is then None.
+    p = EnvelopeArgumentParser(description=(__doc__ or "pushcheck").splitlines()[0],
+                               envelope_command="pushcheck")
     p.add_argument("--repo", default=".", help="the repository to check (default: cwd)")
     p.add_argument("--remote", default="origin", help="remote whose URL names the repo")
     p.add_argument("--range", dest="rev_range", default=None,

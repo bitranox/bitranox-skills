@@ -628,7 +628,9 @@ def _add_level_args(p: argparse.ArgumentParser) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = EnvelopeArgumentParser(description=__doc__.splitlines()[0], envelope_command="statusrot")
+    # `or`: `python -OO` strips docstrings, and __doc__ is then None.
+    ap = EnvelopeArgumentParser(description=(__doc__ or "statusrot").splitlines()[0],
+                                envelope_command="statusrot")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sc = sub.add_parser("scan", help="scan memory levels for status claims")
     _add_level_args(sc)
