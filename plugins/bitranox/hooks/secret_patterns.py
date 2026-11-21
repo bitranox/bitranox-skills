@@ -40,6 +40,7 @@ Pure standard library.
 import base64
 import binascii
 import re
+from collections.abc import Callable, Iterator, Sequence
 
 __all__ = [
     "FLATTENED_PRIVATE_KEY_RX",
@@ -56,7 +57,7 @@ __all__ = [
 REDACTED = "[REDACTED]"
 
 # High-signal token formats (gitleaks/trufflehog family), low false-positive by construction.
-TOKEN_PATTERNS = [
+TOKEN_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     # Personal (ghp_), OAuth (gho_), user-to-server (ghu_) and refresh (ghr_) tokens share a
     # shape: the prefix and 36+ alphanumerics.
     (re.compile(r"gh[pour]_[A-Za-z0-9]{36,}"), "GitHub token"),
@@ -319,7 +320,7 @@ _SWITCH_VALUES = frozenset({
 _CREDENTIAL_CLASS_RX = re.compile(r"^[A-Z][A-Za-z0-9]*[a-z0-9]Credentials?$")
 
 
-def _key_material(body):
+def _key_material(body: str) -> int:
     """Count the base64 characters in the whole base64 lines of an unterminated block's body."""
     total = 0
     for line in _KEY_LINE_SPLIT_RX.split(body):
@@ -329,7 +330,7 @@ def _key_material(body):
     return total
 
 
-def _is_real_body(body):
+def _is_real_body(body: str) -> bool:
     """A complete block's body is real key material unless it is elided ("...") or too short.
 
     A body with a "..." truncation marker or too little base64 is an illustrative example (a
@@ -338,12 +339,12 @@ def _is_real_body(body):
     return "..." not in body and len(_NOT_BASE64_RX.sub("", body)) > _MIN_KEY_MATERIAL
 
 
-def _mask_complete_blocks(text):
+def _mask_complete_blocks(text: str) -> str:
     """Overwrite every complete block with filler of the same length, keeping offsets valid."""
     return PRIVATE_KEY_RX.sub(lambda m: "#" * len(m.group(0)), text)
 
 
-def real_private_key_blocks(text):
+def real_private_key_blocks(text: str) -> Iterator[re.Match[str]]:
     """Yield each private key block that carries real key material.
 
     Complete blocks come first; a BEGIN line with no END (a truncated key, on its own lines or
@@ -365,14 +366,14 @@ def real_private_key_blocks(text):
             yield m
 
 
-def find_secret_labels(text):
+def find_secret_labels(text: str) -> list[str]:
     """Return the label of every known token format present in `text` (a label per format)."""
     return list(dict.fromkeys(label for rx, label in TOKEN_PATTERNS if rx.search(text)))
 
 
-def _name_words(name):
+def _name_words(name: str) -> list[str]:
     """Split a variable or label name into lowercase words at separators and camelCase humps."""
-    words = []
+    words: list[str] = []
     for part in _NAME_SEPARATOR_RX.split(name):
         if part.isupper() or not any(c.isalpha() for c in part):
             words.append(part.lower())
@@ -381,7 +382,7 @@ def _name_words(name):
     return [w for w in words if w]
 
 
-def _secret_words(name):
+def _secret_words(name: str) -> list[str]:
     """The secret words `name` carries, in order; empty when it names no secret.
 
     Empty too when its last word names something about a secret (`_NON_SECRET_TAILS`), and for a
@@ -395,7 +396,7 @@ def _secret_words(name):
     words = _name_words(name)
     if not words or _is_about_a_secret(words):
         return []
-    found = []
+    found: list[str] = []
     for i, word in enumerate(words):
         following = words[i + 1] if i + 1 < len(words) else ""
         if word == "pass" and following in _PASS_MODES:
@@ -412,7 +413,7 @@ def _secret_words(name):
     return found
 
 
-def _is_about_a_secret(words):
+def _is_about_a_secret(words: Sequence[str]) -> bool:
     """True when the name's last word names something ABOUT a secret (`API_KEY_ID`), except the
     Vault `secret_id`, which is the credential itself."""
     if words[-1] not in _NON_SECRET_TAILS:
@@ -420,7 +421,7 @@ def _is_about_a_secret(words):
     return not (words[-1] in _ID_TAILS and len(words) > 1 and words[-2] == "secret")
 
 
-def _reads_as_a_slug(variable, words, found):
+def _reads_as_a_slug(variable: str, words: Sequence[str], found: Sequence[str]) -> bool:
     """True for a name long enough to be a slug or a sentence rather than a variable; an
     all-capitals environment name is a variable however many words it has.
 
@@ -432,7 +433,7 @@ def _reads_as_a_slug(variable, words, found):
     return len(words) >= _SLUG_WORDS and not _ENV_NAME_RX.fullmatch(variable)
 
 
-def _is_attribute_reference(core):
+def _is_attribute_reference(core: str) -> bool:
     """True for `receiver.attr` where the receiver is code and the attribute names a secret."""
     if not _DOTTED_REFERENCE_RX.match(core):
         return False
@@ -440,7 +441,7 @@ def _is_attribute_reference(core):
     return receiver.lower() in _CODE_RECEIVERS and bool(_secret_words(attribute))
 
 
-def _cannot_be_a_secret(value):
+def _cannot_be_a_secret(value: str) -> bool:
     """True for a value in one of the closed classes above, which no credential belongs to.
 
     An unquoted value runs to the next whitespace, so it may carry the prose punctuation after
@@ -456,7 +457,7 @@ def _cannot_be_a_secret(value):
     return False
 
 
-def _opens_inside_the_names_literal(m):
+def _opens_inside_the_names_literal(m: re.Match[str]) -> bool:
     """True when the value's opening quote is really the CLOSING quote of a string literal the
     name itself sits in (`"PASS: " if ok else "FAIL: "`): the "value" is then the code between
     two literals, not a secret."""
@@ -468,20 +469,20 @@ def _opens_inside_the_names_literal(m):
             and text[end:end + 1] not in "\"'\\")
 
 
-def _is_a_count(value, found):
+def _is_a_count(value: str, found: Sequence[str]) -> bool:
     """A short number after a name whose only secret word is "token" is a count."""
     value = value.rstrip(_PROSE_TRAILING)
     return (value.isdigit() and len(value) <= _MAX_COUNT_DIGITS
             and all(w.endswith("token") for w in found))
 
 
-def _is_an_nsswitch_source(m):
+def _is_an_nsswitch_source(m: re.Match[str]) -> bool:
     """`passwd: files systemd` in nsswitch.conf lists where the passwd database lives."""
     return (m.group("name") == "passwd" and not m.group("q")
             and m.group("val") in _NSSWITCH_SOURCES)
 
 
-def _redact_named_value(m):
+def _redact_named_value(m: re.Match[str]) -> str | None:
     """Replace the value of a secret-named assignment; None to leave the match alone.
 
     A short number after a name whose only secret word is "token" is a count (`max_token: 800`,
@@ -499,7 +500,7 @@ def _redact_named_value(m):
     return m.group("pre") + REDACTED + m.group("post")
 
 
-def _redact_flag_value(m):
+def _redact_flag_value(m: re.Match[str]) -> str | None:
     """Replace the argument of a secret-named long option; None for a switch taking no value.
 
     The option must END in its secret word (`--password`, `--api-key`, not `--password-stdin`)
@@ -517,7 +518,7 @@ def _redact_flag_value(m):
     return _redact_named_value(m)
 
 
-def _redact_cli_password(m):
+def _redact_cli_password(m: re.Match[str]) -> str | None:
     """Replace the `-p` password of sshpass or a mysql-family client; None for a reference."""
     value = m.group("val")
     core = value[1:-1] if value[:1] in "'\"" and len(value) > 1 else value
@@ -526,12 +527,12 @@ def _redact_cli_password(m):
     return m.group("pre") + REDACTED
 
 
-def _redact_cookies(m):
+def _redact_cookies(m: re.Match[str]) -> str | None:
     """Replace every cookie value in a Cookie / Set-Cookie header but an attribute's, a
     placeholder's (`session=<x>`) or one that cannot be a secret (`session=...`)."""
     changed = False
 
-    def _pair(p):
+    def _pair(p: re.Match[str]) -> str:
         nonlocal changed
         name, value = p.group(1), p.group(2)
         if name[:-1].lower() in _COOKIE_ATTRIBUTES or value.startswith(REDACTED):
@@ -545,7 +546,7 @@ def _redact_cookies(m):
     return m.group(1) + header if changed else None
 
 
-def _redact_group_2(m):
+def _redact_group_2(m: re.Match[str]) -> str | None:
     """Keep group 1 (the label, name or scheme) and anything after group 2; drop group 2.
 
     Returns None when group 2 already starts with the marker, so a value an earlier pass
@@ -557,7 +558,7 @@ def _redact_group_2(m):
     return m.group(1) + REDACTED + tail
 
 
-def _redact_basic(m):
+def _redact_basic(m: re.Match[str]) -> str | None:
     """Replace a `Basic` credential; None unless the value decodes to `user:password`."""
     token = m.group(2)
     if token.startswith(REDACTED):
@@ -574,7 +575,10 @@ def _redact_basic(m):
 # The value rules, in redaction order: each is a regex and a builder that returns the
 # replacement, or None to leave that match alone. redact() applies them and holds_a_credential()
 # asks the same builders, so a rule can never be in one and missing from the other.
-_VALUE_RULES = (
+#: One value rule: the regex that finds candidates and the builder that decides each one.
+type _ValueRule = tuple[re.Pattern[str], Callable[[re.Match[str]], str | None]]
+
+_VALUE_RULES: tuple[_ValueRule, ...] = (
     (_URL_USERINFO_RX, _redact_group_2),
     (_BEARER_RX, _redact_group_2),
     (_AUTH_TOKEN_RX, _redact_group_2),
@@ -587,14 +591,14 @@ _VALUE_RULES = (
 )
 
 
-def holds_a_credential(text):
+def holds_a_credential(text: str) -> bool:
     """True when `text` carries a secret VALUE rather than merely discussing one."""
     if find_secret_labels(text) or next(real_private_key_blocks(text), None):
         return True
     return any(build(m) is not None for rx, build in _VALUE_RULES for m in rx.finditer(text))
 
 
-def redact(text, extra_literals=()):
+def redact(text: str, extra_literals: Sequence[str] = ()) -> tuple[str, int]:
     """Replace every secret value in `text` with `[REDACTED]`; return (text, count).
 
     Everything around a secret is kept - the label, the variable name, the URL's host, a quoted
@@ -606,10 +610,10 @@ def redact(text, extra_literals=()):
     """
     count = 0
 
-    def _sub(rx, build, s):
+    def _sub(rx: re.Pattern[str], build: Callable[[re.Match[str]], str | None], s: str) -> str:
         # `build(m)` returns the replacement, or None to leave that match alone; only a real
         # replacement counts, so one secret matched by two passes is counted once.
-        def _repl(m):
+        def _repl(m: re.Match[str]) -> str:
             nonlocal count
             out = build(m)
             if out is None:
