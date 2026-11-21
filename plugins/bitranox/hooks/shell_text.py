@@ -73,7 +73,7 @@ import re
 import sys
 from pathlib import PurePosixPath, PureWindowsPath
 from collections.abc import Callable, Container, Iterable, Iterator, Mapping, Sequence
-from typing import Final, Literal, Self, TypeGuard
+from typing import IO, Final, Literal, Self, TypeGuard
 
 # The delimiter of a heredoc is a whole shell WORD, not an identifier: bash accepts `<<\EOF`,
 # `<<'END-OF'`, `<<END.X`, `<<E"O"F` and `<<1`, and takes the word after quote removal as the
@@ -1784,12 +1784,12 @@ _GATE_SCAN_LIMIT = 16
 _GROUP_OPENERS = frozenset({"(", "{", "!"})
 
 
-def _is_assignment_word(word):
+def _is_assignment_word(word: str) -> bool:
     name, sep, _value = word.partition("=")
     return bool(sep) and name.replace("_", "a").isalnum() and not name[:1].isdigit()
 
 
-def program_word_at(words, tool_name: str | None = "Bash"):
+def program_word_at(words: Sequence[str], tool_name: str | None = "Bash") -> int | None:
     """Index of the word a statement RUNS, past assignments and launchers; None when there is none.
 
     `python -m X` runs X. `python -c ...` runs code, never a gate by name, so it answers None.
@@ -1822,7 +1822,7 @@ def program_word_at(words, tool_name: str | None = "Bash"):
     return None
 
 
-def runs_a_gate(command, tool_name: str | None = "Bash"):
+def runs_a_gate(command: str | None, tool_name: str | None = "Bash") -> bool:
     """True when a statement of `command` RUNS a recognised gate (or the gate.py jig) as its program.
 
     A gate that is only text - inside a heredoc body or quotes, or an argument of another program
@@ -1839,7 +1839,8 @@ def runs_a_gate(command, tool_name: str | None = "Bash"):
     return False
 
 
-def gate_program_in(text, tool_name: str | None = "Bash", pattern=GATE_RE, start=0, end=None):
+def gate_program_in(text: str, tool_name: str | None = "Bash", pattern: re.Pattern[str] = GATE_RE,
+                    start: int = 0, end: int | None = None) -> re.Match[str] | None:
     """The `pattern` match at the PROGRAM word of the statement `text[start:end]`, else None.
 
     One pipeline element or one statement, already split by the caller. The match is taken where
@@ -1871,7 +1872,7 @@ def gate_program_in(text, tool_name: str | None = "Bash", pattern=GATE_RE, start
     return pattern.match(text, name_at, end)
 
 
-def is_gated_command(command, tool_name: str | None = None):
+def is_gated_command(command: str | None, tool_name: str | None = None) -> bool:
     """True when a statement in `command` is a git commit, a git push, or a gh pr create.
 
     Heredoc bodies are dropped first, then each remaining statement is matched anchored at its
@@ -1898,7 +1899,7 @@ def is_gated_command(command, tool_name: str | None = None):
     return False
 
 
-def opens_a_pr(command, tool_name: str | None = None):
+def opens_a_pr(command: str | None, tool_name: str | None = None) -> bool:
     """True when a statement in `command` is a `gh pr create` - the PR half of is_gated_command.
 
     Segmented and anchored exactly like is_gated_command, so the two cannot disagree about what a
@@ -2673,7 +2674,7 @@ def _cut_by_substitution(text: str, at: int, segment: str) -> bool:
     return _RUNS_SUBSTITUTION.match(text, at + len(segment)) is not None
 
 
-def _deciding_program_index(tokens, tool_name: str | None):
+def _deciding_program_index(tokens: Sequence[str], tool_name: str | None) -> int | None:
     """Index of the token that decides what this statement DOES, or None.
 
     Two things sit in front of it and neither changes the answer: leading `VAR=value` environment
@@ -2820,7 +2821,7 @@ def deny_reason(message: str) -> str:
     return message.rstrip("\n") + "\n" + WHOLE_CALL_REFUSED
 
 
-def refuse(message: str, stream=None) -> int:
+def refuse(message: str, stream: IO[str] | None = None) -> int:
     """Write a guard's refusal plus the whole-call footer, and return the PreToolUse block code.
 
     Args:
