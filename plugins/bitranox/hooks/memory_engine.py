@@ -2609,6 +2609,10 @@ def relocate_entry(from_level: _StrPath, to_level: _StrPath, slug: str, force: b
     A cross-tree copy drops the body's frontmatter `topics:` line (topics are tagged against one
     tree's closed list) and says so in `notes`; a same-tree move leaves the body untouched. A fact
     placed by topic is refused across trees: its other lines would stay behind in the source tree.
+    In a source tree with a topic list the cross-tree half, checks and writes, runs under that
+    tree's placement lock (`placement_lock_if_listed`), raising PlacementLockBusy past its wait:
+    read without it, a set-topics binding the fact after that read met a relocate that carried
+    the fact out of the tree the binding places it in. A same-tree call takes it in `move_entry`.
     A target level whose path below its anchor crosses a directory the level walk prunes is
     refused (see `NonLevelDir`), and a cross-tree line that would leave the target's block past
     MAX_RENDER_BLOCK_BYTES is refused as `move` refuses it (see `_move_cap_refusal`); both before
@@ -2632,6 +2636,19 @@ def relocate_entry(from_level: _StrPath, to_level: _StrPath, slug: str, force: b
         rep.relocated, rep.refused, rep.warnings = m.moved, m.refused, m.warnings
         return rep
     rep.cross_tree = True
+    # The placed-by-topic decision below must stay true until the writes are done, so the whole
+    # cross-tree half holds the source tree's placement lock: taken here, before any level lock,
+    # as every holder takes it (the lock order above `placement_lock`). Only the source tree's:
+    # the copy lands without a topics line, so nothing in the target tree places it.
+    with placement_lock_if_listed(a_from, "relocate"):
+        return _relocate_across(rep, src, dst, a_from, a_to, force)
+
+
+def _relocate_across(rep: RelocateReport, src: Path, dst: Path, a_from: Path, a_to: Path,
+                     force: bool) -> RelocateReport:
+    """The cross-tree half of `relocate_entry`, filling `rep`; its caller holds the source tree's
+    placement lock when that tree has a topic list."""
+    slug = rep.slug
     if not us.is_valid_slug(slug):
         rep.refused = str(InvalidSlug(slug))
         return rep
