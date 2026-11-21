@@ -1,5 +1,6 @@
 """No git subprocess runs while a level lock is held, for the callers that set a level up under
-their own hold of its lock: `add` (upsert_entry), `heal` (_heal_level) and `set-scope`.
+their own hold of its lock: `add` (upsert_entry), `heal` (_heal_level) and `set-scope`; nor while
+an `add` of a fact bound to a topic holds the tree's placement lock.
 
 ensure_level asks git whether the level's private files are ignored. Its unlocked path asks
 after releasing the lock; the callers that already held the lock asked under it, so the first
@@ -22,6 +23,7 @@ from pathlib import Path
 import memory_engine as E
 import pytest
 import self_improve_signals as sig
+import topic_store
 import uuid_store as us
 
 pytestmark = pytest.mark.skipif(os.name == "nt",
@@ -70,13 +72,13 @@ def _recording_git(tmp_path):
     return shim.parent
 
 
-def _run_watched(tmp_path, level, args):
-    """Run the engine CLI with the recording git first on PATH, watching `level`'s lock; return
-    the logged calls."""
+def _run_watched(tmp_path, level, args, watched=None):
+    """Run the engine CLI with the recording git first on PATH, watching `watched` (default:
+    `level`'s lock file); return the logged calls."""
     log = tmp_path / ("git-calls-%d.log" % len(list(tmp_path.glob("git-calls-*.log"))))
     env = dict(os.environ)
     env["PATH"] = str(_recording_git(tmp_path)) + os.pathsep + env.get("PATH", "")
-    env["WATCHED_LOCK"] = str(sig.claude_local_md_path(level)) + ".lock"
+    env["WATCHED_LOCK"] = str(watched or str(sig.claude_local_md_path(level)) + ".lock")
     env["GIT_CALL_LOG"] = str(log)
     done = subprocess.run([sys.executable, str(ENGINE), *map(str, args)], env=env,
                           capture_output=True, text=True, encoding="utf-8", timeout=120)
@@ -133,3 +135,22 @@ def test_the_recording_git_sees_a_held_lock(tmp_path, tree):
     subprocess.run(["git", "-C", str(level), "check-ignore", "-q", "--no-index", "x"], env=env,
                    check=False)
     assert log.read_text(encoding="utf-8").splitlines()[0].startswith("held ")
+
+
+def test_an_add_of_a_bound_fact_asks_git_before_it_takes_the_placement_lock(tmp_path, tree):
+    """An add of a fact bound to a topic holds the tree's placement lock (every render and
+    set-topics waits on it) from its placed checks to its write: git is asked before that too."""
+    topic_store.save_list(tree, {"python": "Python code", "rust": "Rust code"}, "jev")
+    py = _new_level(tree, "py")
+    assert E.main(["set-scope", "--proj", str(py), "--scope", "WHAT: py\nSTACK: python"]) == 0
+    E.set_level_topics(str(py), ("python",))
+    E.add_or_update_entry(str(tree), title="T bound", hook=HOOK, body="body", slug="feedback-bound")
+    E.set_fact_topics(str(tree), {"feedback-bound": ("python",)})
+    E.render_topics(str(tree))
+    assert "feedback-bound" in sig.claude_local_md_path(py).read_text(encoding="utf-8")
+    calls = _run_watched(tmp_path, py, ["add", "--proj", py, "--title", "T bound", "--hook",
+                                        HOOK + " Changed.", "--slug", "feedback-bound"],
+                         watched=E.placement_lock_path(tree))
+    _assert_git_asked_only_outside_the_lock(calls)
+    assert "Changed." in sig.claude_local_md_path(py).read_text(encoding="utf-8")
+

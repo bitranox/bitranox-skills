@@ -1069,17 +1069,21 @@ def upsert_entry(proj: _StrPath, title: str, hook: str | None, body: str = "", t
     # the refusal writes nothing at all.
     if _body_topics_line(body) is not None and not us.body_path(anchor, slug).is_file():
         raise TopicsOnCreate(slug)
+    # git first: below, a bound fact's write holds the placement lock, then the level lock.
+    asked = _ask_git_first(proj)
     # A write to a fact bound to a topic holds the tree's placement lock from here on, so the
     # placed decision below and every line it rewrites see no render or set-topics half done.
     with _placement_lock_if_bound(anchor, slug, "add"):
-        return _upsert_checked(proj, anchor, slug, title, hook, body, type_, pin, scope_default,
+        return _upsert_checked(asked, anchor, slug, title, hook, body, type_, pin, scope_default,
                                allow_pinned_overwrite, skill, must_exist)
 
 
-def _upsert_checked(proj: str, anchor: _StrPath, slug: str, title: str, hook: str, body: str, type_: str | None, pin: bool, scope_default: str,
+def _upsert_checked(asked: _GitAsked, anchor: _StrPath, slug: str, title: str, hook: str, body: str, type_: str | None, pin: bool, scope_default: str,
                     allow_pinned_overwrite: bool, skill: str | None, must_exist: bool) -> tuple[str, bool]:
     """The writing half of `upsert_entry`, from the placed-by-topic checks on: its caller has
-    validated every argument and holds the placement lock when the fact is bound."""
+    validated every argument, asked git about the level (`asked`, whose level is the write's)
+    and holds the placement lock when the fact is bound."""
+    proj = asked.level
     # A fact placed by topic (see `_placed_slugs`) has a line at each level its topics place it
     # at. Checked here, before the level is scaffolded, so each refusal writes nothing: it is not
     # pinned (a pinned fact is never placed by topic), and it is written from a level that holds
@@ -1095,7 +1099,7 @@ def _upsert_checked(proj: str, anchor: _StrPath, slug: str, title: str, hook: st
         raise PlacedElsewhere(slug, [level for level, _ptr in copies])
     store_dir = us.central_facts_dir(anchor).parent   # the `.claude-memory` store dir for this tree
     store_existed = store_dir.exists()
-    with _hold_level_for_setup(proj) as held:
+    with _hold_level_for_setup(asked) as held:
         # An amend decides "this level holds the fact" here, under the lock: decided on an
         # earlier read, a fact moved or archived since was created anew (or its dangling body
         # adopted) by a verb that never creates.
@@ -2261,6 +2265,14 @@ def _move_cap_refusal(src: _StrPath, dst: _StrPath, plan: Sequence[tuple[str, tu
 
 
 @dataclass(frozen=True)
+class _GitAsked:
+    """What `_ask_git_first` returns: git was asked about `level`'s private files. Only
+    `_hold_level_for_setup` takes one, so the level lock that setup holds is taken after it."""
+
+    level: str
+
+
+@dataclass(frozen=True)
 class _HeldLevel:
     """What `_hold_level_for_setup` yields: `level`'s lock is held, and git was already asked
     about the level's private files before it was taken. `ensure_level(..., _held=...)` takes
@@ -2270,25 +2282,31 @@ class _HeldLevel:
     level: str
 
 
-@contextlib.contextmanager
-def _hold_level_for_setup(proj: _StrPath) -> Generator[_HeldLevel]:
-    """Hold `proj`'s level lock for a caller that sets the level up under it (`ensure_level`
-    with `_held`): git is asked whether the level's private files are ignored FIRST, then the
-    lock is taken. Every git call is a subprocess (about 250 ms for the first check of a process
-    on Windows, cached per process after it), and under the lock every other writer of the level
-    waits it out. Skipped when ensure_level is going to refuse anyway (writes off, an excluded
-    level), so a refused call still asks git nothing."""
+def _ask_git_first(proj: _StrPath) -> _GitAsked:
+    """Ask git whether `proj`'s private files are ignored, BEFORE the caller takes any lock
+    (the placement lock as well as the level lock): every git call is a subprocess (about 250 ms
+    for the first check of a process on Windows, cached per process after it), and under a lock
+    every other writer waits it out. Skipped when ensure_level is going to refuse anyway (writes
+    off, an excluded level), so a refused call still asks git nothing."""
     proj = os.path.abspath(str(proj))
     if not sig.memory_writes_off() and not _is_excluded_level(proj):
         _ignore_level_private(proj)
-    with sig.memory_lock(sig.claude_local_md_path(proj)):
-        yield _HeldLevel(proj)
+    return _GitAsked(proj)
+
+
+@contextlib.contextmanager
+def _hold_level_for_setup(asked: _GitAsked) -> Generator[_HeldLevel]:
+    """Hold the level lock of `asked.level` for a caller that sets the level up under it
+    (`ensure_level` with `_held`). It takes the `_GitAsked` of `_ask_git_first`, so git has
+    been asked before this lock, and before any lock the caller took ahead of it."""
+    with sig.memory_lock(sig.claude_local_md_path(asked.level)):
+        yield _HeldLevel(asked.level)
 
 
 def _ignore_level_private(proj: str) -> None:
     """Best-effort: make git ignore `proj`'s `CLAUDE.local.md` and its anchor's store when
     `track_private` is off, warning on stderr for a pattern git could not confirm. Runs git:
-    never call it while holding a level lock (see `_hold_level_for_setup`)."""
+    never call it while holding a lock (see `_ask_git_first`)."""
     if sig.load_config().get("track_private"):     # the user wants memory committed
         return
     for where, pattern in ((proj, "CLAUDE.local.md"),
@@ -2311,7 +2329,7 @@ def ensure_level(proj: _StrPath, scope_default: str = "", _held: _HeldLevel | No
 
     git runs outside the level lock: after releasing it here, or, for a caller that holds the
     lock already and passes the `_HeldLevel` it got from `_hold_level_for_setup`, before that
-    caller took it (`_held` must name this level; another level's raises ValueError).
+    caller took it (`_ask_git_first`) (`_held` must name this level; another level's raises ValueError).
 
     REFUSES an excluded altitude (home, the system temp dir, the filesystem root): those dirs are
     never a memory level, and scaffolding them turns e.g. all of /tmp into a fake knowledge tree
@@ -2428,7 +2446,7 @@ def _heal_level(proj: _StrPath, report: HealReport) -> None:
     """Repair one altitude in place (locked): ensure the CLAUDE.md marker + the CLAUDE.local.md pointer
     block + scope exist, and re-render the pointer block to canonical (heals a malformed SCOPE block or
     drifted grammar). Idempotent + mtime-neutral."""
-    with _hold_level_for_setup(proj) as held:
+    with _hold_level_for_setup(_ask_git_first(proj)) as held:
         made = _ensure_claude_md(proj)
         if made:
             report.healed.append(made)
@@ -5727,7 +5745,7 @@ def _main(argv: Sequence[str] | None = None) -> int:
         # CURRENT descriptor - its pointer block's, else the legacy CLAUDE.md block ensure_level
         # would harvest, else none - before ensure_level writes anything, so a refused call leaves
         # no level behind and no legacy block moved.
-        with _hold_level_for_setup(args.proj) as held:
+        with _hold_level_for_setup(_ask_git_first(args.proj)) as held:
             current, stored_in = _current_scope(args.proj)
             try:
                 scope_keeping_topics(current, scope.strip(), stored_in=stored_in)
