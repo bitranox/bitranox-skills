@@ -30,13 +30,13 @@ def _run_oo(tmp_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
                           encoding="utf-8", env=env, cwd=str(tmp_path))
 
 
-def test_help_works_under_oo(tmp_path):
+def test_help_works_under_oo(tmp_path: Path) -> None:
     r = _run_oo(tmp_path, "--help")
     assert r.returncode == 0, r.stderr
     assert r.stdout.startswith("usage: ref_map.py"), r.stdout
 
 
-def test_a_ref_map_runs_under_oo(tmp_path):
+def test_a_ref_map_runs_under_oo(tmp_path: Path) -> None:
     root = tmp_path / "tree"
     root.mkdir()
     (root / "CLAUDE.md").write_text("x\n", encoding="utf-8")

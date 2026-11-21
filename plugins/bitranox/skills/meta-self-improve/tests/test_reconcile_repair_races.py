@@ -66,7 +66,7 @@ def _run_engine(code: str, level: str) -> None:
     assert r.returncode == 0, r.stderr
 
 
-def test_a_retitle_between_the_walk_and_the_write_is_kept(tmp_path):
+def test_a_retitle_between_the_walk_and_the_write_is_kept(tmp_path: Path) -> None:
     """The other process retitles the fact after the repair's walk read the pointer and before it
     writes (the body re-read is that moment). The repaired fact keeps the new title, in the
     pointer line and in the body's `title:`."""
@@ -85,7 +85,7 @@ def test_a_retitle_between_the_walk_and_the_write_is_kept(tmp_path):
     assert R.appended_type_damage(p.read_text(encoding="utf-8")) is None
 
 
-def test_a_hook_change_between_the_walk_and_the_write_is_kept(tmp_path):
+def test_a_hook_change_between_the_walk_and_the_write_is_kept(tmp_path: Path) -> None:
     """The same window for the hook: a concurrent update of the hook alone stands."""
     level = _tree(tmp_path)
     slug = ME.add_or_update_entry(level, "Ruled", "When ruled, do ruled.", body="placeholder")
@@ -101,7 +101,7 @@ def test_a_hook_change_between_the_walk_and_the_write_is_kept(tmp_path):
     assert ME.body_description(p.read_text(encoding="utf-8")) == "When ruled anew, do it anew."
 
 
-def test_a_fact_whose_line_left_after_the_walk_is_skipped_not_created_anew(tmp_path):
+def test_a_fact_whose_line_left_after_the_walk_is_skipped_not_created_anew(tmp_path: Path) -> None:
     """A fact archived (its line dropped) after the walk read it: the update-only write refuses
     it, the repair reports it as skipped, and no line comes back."""
     level = _tree(tmp_path)
@@ -158,7 +158,7 @@ def _progress(path: Path) -> int:
         return 0
 
 
-def test_repairs_racing_a_retitler_never_undo_a_title(tmp_path):
+def test_repairs_racing_a_retitler_never_undo_a_title(tmp_path: Path) -> None:
     """A real process retitles the fact in a loop and reads each title back; this one damages the
     body and repairs it, over and over. The retitler must never read a title older than the one
     it just wrote."""

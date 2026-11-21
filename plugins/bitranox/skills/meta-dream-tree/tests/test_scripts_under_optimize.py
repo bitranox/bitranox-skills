@@ -48,14 +48,14 @@ def _run_oo(tmp_path: Path, script: str, *args: str) -> subprocess.CompletedProc
 
 @pytest.mark.parametrize("script", ["dedup_scan.py", "factedit.py", "store_manifest.py",
                                     "topic_tagging.py"])
-def test_help_works_under_oo(tmp_path, script):
+def test_help_works_under_oo(tmp_path: Path, script: str) -> None:
     r = _run_oo(tmp_path, script, "--help")
     assert r.returncode == 0, r.stderr
     assert r.stdout.startswith("usage: %s" % script), r.stdout
     assert "AttributeError" not in r.stderr
 
 
-def test_dedup_scan_runs_under_oo(tmp_path):
+def test_dedup_scan_runs_under_oo(tmp_path: Path) -> None:
     root = _tree(tmp_path)
     r = _run_oo(tmp_path, "dedup_scan.py", "--from", str(root), "--json")
     assert r.returncode in (0, 1), r.stderr
@@ -63,14 +63,14 @@ def test_dedup_scan_runs_under_oo(tmp_path):
     assert envelope["command"] == "dedup_scan", envelope
 
 
-def test_factedit_show_runs_under_oo(tmp_path):
+def test_factedit_show_runs_under_oo(tmp_path: Path) -> None:
     root = _tree(tmp_path)
     r = _run_oo(tmp_path, "factedit.py", "show", "--slug", "alpha-rule", "--from", str(root))
     assert r.returncode == 0, r.stderr
     assert "When alpha, do alpha." in r.stdout
 
 
-def test_store_manifest_backup_and_verify_run_under_oo(tmp_path):
+def test_store_manifest_backup_and_verify_run_under_oo(tmp_path: Path) -> None:
     root = _tree(tmp_path)
     out = tmp_path / "backup"
     r = _run_oo(tmp_path, "store_manifest.py", "backup", "--from", str(root), "--out", str(out))
@@ -80,7 +80,7 @@ def test_store_manifest_backup_and_verify_run_under_oo(tmp_path):
     assert r.returncode == 0, r.stdout + r.stderr
 
 
-def test_topic_tagging_items_runs_under_oo(tmp_path):
+def test_topic_tagging_items_runs_under_oo(tmp_path: Path) -> None:
     root = _tree(tmp_path)
     topic_store.save_list(root, {"python": "Python code and its tooling"}, "jev")
     out = tmp_path / "items.jsonl"
