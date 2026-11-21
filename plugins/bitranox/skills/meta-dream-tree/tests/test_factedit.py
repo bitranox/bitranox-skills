@@ -15,6 +15,7 @@ a set of predicates, not a borrowed grammar that can silently disagree with the 
 """
 
 import ast
+import dataclasses
 import json
 import os
 import re
@@ -35,26 +36,27 @@ TOOL = Path(FE.__file__).resolve()
 
 # ---- the engine surface: injected rules for pure judging, the real modules for parsing ---------
 
-def fake_rules(**over) -> FE.EngineRules:
+def fake_rules(**over: object) -> FE.EngineRules:
     """An EngineRules with the shipped 350/500 numbers and simple stand-in predicates.
 
-    Only for judge_hook, which is pure given its rules. Nothing here parses a pointer.
+    Only for judge_hook, which is pure given its rules. Nothing here parses a pointer. The base
+    is built by keyword rather than spread from a dict, so each stand-in is checked against its
+    field's type; `over` then replaces fields by name, refusing one that does not exist.
     """
-    def parse_index(text):
+    def parse_index(text: str) -> tuple[str, list[object]]:
         return "", []
 
-    base = {
-        "soft_max": 350, "hard_max": 500, "escalate_at": 2,
-        "over_soft": lambda h: len(h) > 350,
-        "over_hard": lambda h: len(h.strip()) > 500,
-        "missing_trigger": lambda h: not h.lower().startswith("when"),
-        "advise": lambda h, b: [],
-        "recurrence": lambda b: None,
-        "parse_index": parse_index,
-        "engine_path": Path("/fake/memory_engine.py"),
-    }
-    base.update(over)
-    return FE.EngineRules(**base)
+    rules = FE.EngineRules(
+        soft_max=350, hard_max=500, escalate_at=2,
+        over_soft=lambda h: len(h) > 350,
+        over_hard=lambda h: len(h.strip()) > 500,
+        missing_trigger=lambda h: not h.lower().startswith("when"),
+        advise=lambda h, b: [],
+        recurrence=lambda b: None,
+        parse_index=parse_index,
+        engine_path=Path("/fake/memory_engine.py"),
+    )
+    return dataclasses.replace(rules, **over)
 
 
 # The parser modules are COPIED from the installed engine, never re-implemented here. uuid_store

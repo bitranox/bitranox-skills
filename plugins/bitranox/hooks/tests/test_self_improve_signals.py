@@ -196,7 +196,8 @@ def test_collapsed_offset_lands_on_the_same_character(text):
     collapsed = " ".join(text.split())
     for i, ch in enumerate(text):
         if not ch.isspace():
-            assert collapsed[S.collapsed_offset(text, i)] == ch
+            offset = S.collapsed_offset(text, i)
+            assert offset is not None and collapsed[offset] == ch
 
 
 def test_asst_said_offset_skips_a_quoted_admission_inside_a_fenced_block():
@@ -305,7 +306,9 @@ def test_dream_due_off_mode_never(home):
 
 def test_mark_dream_done_writes_timestamp_and_signature(home):
     assert S.mark_dream_done("/p/x", now=123.0) is True
-    ts, sig = S._read_dream_record("/p/x")
+    record = S._read_dream_record("/p/x")
+    assert record is not None
+    ts, sig = record
     assert ts == 123.0 and isinstance(sig, str)   # new format: JSON {ts, sig}
 
 
@@ -632,7 +635,8 @@ def test_contribution_queue_roundtrips_and_is_per_project(home):
     S.add_contribution("/p/x", {"what": "rehome over-promotes", "target": "hook:reconcile"})
     got = S.read_contributions("/p/x")
     assert len(got) == 2 and got[0]["target"] == "skill:meta-self-improve"
-    assert got[0]["ts"] > 0                                   # stamped for age/ordering
+    stamped = got[0]["ts"]
+    assert isinstance(stamped, (int, float)) and stamped > 0  # stamped for age/ordering
     assert S.read_contributions("/p/other") == []
 
 
@@ -662,6 +666,16 @@ def _queued_and_closed(proj, *whats):
     return f, raw
 
 
+def _closed_whats(proj: str) -> list[str]:
+    """The `what` of every closed intent, each checked to be the str the queue stores."""
+    whats: list[str] = []
+    for row in S.read_closed(proj):
+        what = row["what"]
+        assert isinstance(what, str), row
+        whats.append(what)
+    return whats
+
+
 def test_a_drain_retried_after_a_partial_failure_tombstones_each_intent_once(home):
     """The documented recovery for a drain that died after its tombstones: re-run it. That
     appended a second tombstone per entry, and the duplicates ate the closed set's cap."""
@@ -671,7 +685,7 @@ def test_a_drain_retried_after_a_partial_failure_tombstones_each_intent_once(hom
     f.write_bytes(raw)                                         # the unlink that "failed"
     assert [r["what"] for r in S.drain_contributions(proj)] == ["a", "b"]
     assert S.read_contributions(proj) == []
-    assert sorted(r["what"] for r in S.read_closed(proj)) == ["a", "b"]
+    assert sorted(_closed_whats(proj)) == ["a", "b"]
 
 
 def test_a_single_close_retried_after_a_partial_failure_tombstones_once(home):
@@ -692,7 +706,7 @@ def test_duplicate_tombstones_do_not_push_older_intents_out_of_the_cap(home):
     S.drain_contributions(proj, max_items=3)
     f.write_bytes(raw)
     S.drain_contributions(proj, max_items=3)
-    assert sorted(r["what"] for r in S.read_closed(proj)) == ["a", "b", "old"]
+    assert sorted(_closed_whats(proj)) == ["a", "b", "old"]
 
 
 def test_contribution_queue_dedups_the_same_intent(home):
@@ -2282,7 +2296,9 @@ def test_resolve_anchor_of_a_relative_path_matches_its_absolute_twin(tmp_path, m
     tree, proj = _tree_with_project(tmp_path)
     assert S.resolve_anchor(str(proj)) == tree
     monkeypatch.chdir(proj)
-    assert Path(S.resolve_anchor(".")).resolve() == Path(S.resolve_anchor(str(proj))).resolve()
+    relative, absolute = S.resolve_anchor("."), S.resolve_anchor(str(proj))
+    assert relative is not None and absolute is not None
+    assert Path(relative).resolve() == Path(absolute).resolve()
 
 
 def test_nearest_level_finds_the_level_of_a_relative_path(tmp_path, monkeypatch):
@@ -2292,7 +2308,8 @@ def test_nearest_level_finds_the_level_of_a_relative_path(tmp_path, monkeypatch)
         got = S.nearest_level(rel)
         assert got is not None and Path(got).resolve() == proj.resolve(), (rel, got)
     monkeypatch.chdir(tree)
-    assert Path(S.nearest_level("proj/pkg/mod.py")).resolve() == proj.resolve()
+    level = S.nearest_level("proj/pkg/mod.py")
+    assert level is not None and Path(level).resolve() == proj.resolve()
 
 
 def test_nearest_level_absolute_path_and_no_level(tmp_path):
@@ -2360,6 +2377,7 @@ def test_tool_signal_offset_points_into_the_collapsed_block_at_the_live_signal()
              "  output   line\n\n" + "bash: pct: command not found")
     collapsed = " ".join(block.split())
     off = S.tool_signal_offset(block)
+    assert off is not None
     assert collapsed[off:].startswith("command not found") and off > collapsed.index("bash: pct")
     assert S.tool_signal_offset("all good\nnothing to see") is None
     # Agrees with the counting predicate: a fixture-only signal counts nothing and has no offset.
@@ -2417,6 +2435,7 @@ def test_the_premise_check_refusal_is_not_a_tool_signal():
     as a `hook error:` tool result and read as a learning, twice a session plus the audit's flag."""
     spec = importlib.util.spec_from_file_location(
         "_mm_nudge_for_signal_test", Path(__file__).resolve().parent.parent / "missing-mechanism-nudge.py")
+    assert spec is not None and spec.loader is not None
     nudge = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(nudge)
     block = "PreToolUse:AskUserQuestion hook error: " + nudge.QUESTION_REFUSAL

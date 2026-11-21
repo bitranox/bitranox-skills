@@ -16,6 +16,7 @@ import sys
 import tracemalloc
 from datetime import datetime, timedelta, UTC
 from pathlib import Path
+from typing import TypedDict
 
 import pytest
 
@@ -625,16 +626,43 @@ def test_the_current_month_survives_even_when_it_alone_is_over_the_cap(
 # ---- report ---------------------------------------------------------------------------------
 
 
+class _ShadowRow(TypedDict):
+    """One audit row as jev_shadow writes it, so the fixture can merge two rows' answers."""
+
+    ts: str
+    run_id: str
+    site: str
+    site_version: int
+    questions_sha: str
+    plugin_version: str
+    jev_judge_version: str
+    model: str
+    cwd: str
+    git_head: str | None
+    item_id: str
+    state: dict[str, str]
+    redactions: int
+    jev: dict[str, dict[str, float | None]] | None
+    jev_reason: str | None
+    agent: dict[str, bool] | None
+    agent_note: str | None
+    agree: dict[str, bool | None]
+    latency_ms: int
+    input_tokens: int
+    cost_usd: float
+
+
 def _rec(
-    item, agent, jev_value, *, site="dream-prune", qid="untestable_negative", cost=0.001
-):
+    item: str, agent: bool | None, jev_value: float | None, *, site: str = "dream-prune",
+    qid: str = "untestable_negative", cost: float = 0.001,
+) -> _ShadowRow:
     jev = (
         None
         if jev_value is None
         else {qid: {"value": jev_value, "probabilities": None, "confidence": None}}
     )
-    agree = {
-        qid: None if agent is None or jev is None else (agent == (jev_value >= 0.5))
+    agree: dict[str, bool | None] = {
+        qid: None if agent is None or jev_value is None else (agent == (jev_value >= 0.5))
     }
     return {
         "ts": "2026-10-01T10:00:00+00:00",
@@ -671,8 +699,12 @@ def _two_question_fixture(home):
     for i in range(6):
         r1 = _rec(f"i{i}", i < 5, 0.9)
         r2 = _rec(f"i{i}", q2_agent[i], q2_values[i], qid="unlabelled_unsolved")
-        r1["jev"].update(r2["jev"])
-        r1["agent"].update(r2["agent"])
+        jev, other_jev, agent, other_agent = r1["jev"], r2["jev"], r1["agent"], r2["agent"]
+        # every row here has a Jev value and an agent answer; an absent one is a broken fixture
+        assert jev is not None and other_jev is not None
+        assert agent is not None and other_agent is not None
+        jev.update(other_jev)
+        agent.update(other_agent)
         r1["agree"].update(r2["agree"])
         recs.append(r1)
     write_jsonl(d / "jev-skill-shadow-2026-10.jsonl", recs)
