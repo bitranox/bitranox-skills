@@ -71,7 +71,7 @@ import os
 import re
 import sys
 from pathlib import PurePosixPath, PureWindowsPath
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from typing import Final, Self, TypeGuard
 
 # The delimiter of a heredoc is a whole shell WORD, not an identifier: bash accepts `<<\EOF`,
@@ -93,39 +93,46 @@ from typing import Final, Self, TypeGuard
 # _VIEW_SLOTS inputs plus their results, all of them strings the hook already holds or derives.
 _VIEW_SLOTS = 4
 _VIEW_MIN_CHARS = 4096
-_VIEWS = []
+#: The `cache_clear` of every kept view, so `clear_view_caches` can forget them all.
+_VIEWS: list[Callable[[], None]] = []
 
 
-def _whole_command_view(fn):
-    """Keep `fn`'s results for its last _VIEW_SLOTS large `command` arguments (see above)."""
+def _whole_command_view[**P, R](fn: Callable[P, R]) -> Callable[P, R]:
+    """Keep `fn`'s results for its last _VIEW_SLOTS large `command` arguments (see above).
+
+    The command is `fn`'s first argument, passed by position or as `command=`; the decorated
+    function keeps `fn`'s own signature, so a typed view of this module sees it unchanged.
+    """
     cached = functools.lru_cache(maxsize=_VIEW_SLOTS)(fn)
-    _VIEWS.append(cached)
+    _VIEWS.append(cached.cache_clear)
 
     @functools.wraps(fn)
-    def cached_view(command, *args, **kwargs):
+    def cached_view(*args: P.args, **kwargs: P.kwargs) -> R:
+        command = args[0] if args else kwargs.get("command")
         if type(command) is str and len(command) >= _VIEW_MIN_CHARS:
-            return cached(command, *args, **kwargs)
-        return fn(command, *args, **kwargs)
+            return cached(*args, **kwargs)
+        return fn(*args, **kwargs)
 
     return cached_view
 
 
-def clear_view_caches():
+def clear_view_caches() -> None:
     """Forget every kept whole-command view (a test asking for the cost of a fresh derivation)."""
-    for cached in _VIEWS:
-        cached.cache_clear()
+    for cache_clear in _VIEWS:
+        cache_clear()
 
 
 _HEREDOC_WORD = r"""(?:[^\s;&|()<>'"\\`]|\\.|'[^'\n]*'|"(?:[^"\\\n]|\\.)*")+"""
 HEREDOC_OPEN = re.compile(r"(?<!<)<<(?!<)-?[ \t]*(" + _HEREDOC_WORD + ")")
 
 
-def heredoc_delimiter(opener) -> str:
+def heredoc_delimiter(opener: re.Match[str]) -> str:
     """The delimiter a `HEREDOC_OPEN` match names: its word after bash's quote removal.
 
     `<<'EOF'`, `<<"EOF"`, `<<\\EOF` and `<<E"O"F` all end at a line reading `EOF`.
     """
-    word, out, i = opener.group(1), [], 0
+    word, i = opener.group(1), 0
+    out: list[str] = []
     while i < len(word):
         ch = word[i]
         if ch == "\\" and i + 1 < len(word):
@@ -149,7 +156,7 @@ def heredoc_delimiter(opener) -> str:
     return "".join(out)
 
 
-def heredoc_is_quoted(opener) -> bool:
+def heredoc_is_quoted(opener: re.Match[str]) -> bool:
     """True when ANY part of the delimiter word is quoted, which makes the body literal: bash then
     expands nothing in it, while a bare `<<EOF` body still runs its substitutions."""
     return any(ch in opener.group(1) for ch in "'\"\\")
@@ -1940,7 +1947,11 @@ def strip_leading_cd(command: str) -> str:
     return command
 
 
-def iter_heredocs(command: str) -> Iterator[tuple[int, re.Match[str], tuple[int, int]]]:
+#: One heredoc as `iter_heredocs` yields it: (opener line, opener match, body line range).
+type _Heredoc = tuple[int, re.Match[str], tuple[int, int]]
+
+
+def iter_heredocs(command: str) -> Iterator[_Heredoc]:
     """Yield (line, opener, body) for every heredoc the shell would open in `command`.
 
     `line` is the opener's index in `command.split("\\n")`, `opener` its `HEREDOC_OPEN` match on
@@ -1973,7 +1984,7 @@ def iter_heredocs(command: str) -> Iterator[tuple[int, re.Match[str], tuple[int,
 
 
 @_whole_command_view
-def _heredocs(command):
+def _heredocs(command: str) -> tuple[_Heredoc, ...]:
     """`iter_heredocs` as a tuple, so a large command is scanned once however many ask."""
     return tuple(_HeredocScan(command).run())
 
@@ -1983,7 +1994,7 @@ class _HeredocScan:
     substitution or subshell, a backtick, `"` for a double-quoted string - plus the openers still
     waiting for the newline that starts their bodies."""
 
-    def __init__(self, text):
+    def __init__(self, text: str) -> None:
         self.text = text
         self.lines = text.split("\n")
         self.starts = [0]
@@ -1995,7 +2006,7 @@ class _HeredocScan:
         self.escaped_end = -1
         self.parens: dict[int, int] | None = None
 
-    def run(self) -> Iterator[tuple[int, re.Match[str], tuple[int, int]]]:
+    def run(self) -> Iterator[_Heredoc]:
         i, size = 0, len(self.text)
         while i < size:
             found, i = self._step(i)
@@ -2003,10 +2014,10 @@ class _HeredocScan:
         for at, opener in self.pending:                # unterminated: runs to the last line
             yield at, opener, (len(self.lines), len(self.lines))
 
-    def _line_of(self, offset):
+    def _line_of(self, offset: int) -> int:
         return bisect.bisect_right(self.starts, offset) - 1
 
-    def _step(self, i):
+    def _step(self, i: int) -> tuple[Sequence[_Heredoc], int]:
         """(heredocs completed here, next offset) for the character at `i`."""
         text, ch = self.text, self.text[i]
         in_double = bool(self.stack) and self.stack[-1] == '"'
@@ -2032,7 +2043,7 @@ class _HeredocScan:
             return (), i + 1
         return self._code(i)
 
-    def _toggle(self, ch, in_double):
+    def _toggle(self, ch: str, in_double: bool) -> None:
         """Open or close a backtick substitution or a double-quoted string at a `ch` of that kind."""
         if ch == '"':
             if in_double:
@@ -2046,7 +2057,7 @@ class _HeredocScan:
             self.stack.append("`")
             self.backticks += 1
 
-    def _code(self, i):
+    def _code(self, i: int) -> tuple[Sequence[_Heredoc], int]:
         """The step for a character in live code, outside any double-quoted string."""
         text, ch = self.text, self.text[i]
         if ch == "'":
@@ -2069,7 +2080,7 @@ class _HeredocScan:
             return self._opener(i)
         return (), i + 1
 
-    def _opener(self, i):
+    def _opener(self, i: int) -> tuple[Sequence[_Heredoc], int]:
         """Queue the heredoc whose `<<` is at `i`, if it is one; a here-string `<<<` is not."""
         if self.text.startswith("<<<", i):
             return (), i + 3
@@ -2080,13 +2091,14 @@ class _HeredocScan:
         self.pending.append((at, opener))
         return (), self.starts[at] + opener.end()
 
-    def _bodies(self, newline):
+    def _bodies(self, newline: int) -> tuple[list[_Heredoc], int]:
         """Skip the bodies of every queued opener, which start after the `newline` at this offset.
 
         The terminator is the first line that is exactly the delimiter; bash allows leading
         whitespace with the `<<-` form, so the comparison is made on the stripped line.
         """
-        line, found = self._line_of(newline) + 1, []
+        line = self._line_of(newline) + 1
+        found: list[_Heredoc] = []
         for at, opener in self.pending:
             delimiter, end = heredoc_delimiter(opener), line
             while end < len(self.lines) and self.lines[end].strip() != delimiter:
@@ -2096,18 +2108,20 @@ class _HeredocScan:
         self.pending = []
         return found, len(self.text) if line >= len(self.lines) else self.starts[line]
 
-    def _paren_run_end(self, start):
+    def _paren_run_end(self, start: int) -> int:
         """Offset just past the `)` that balances the `(` at `start`, counted without regard to
         quoting; an unbalanced one runs to the end of its line only, so a stray `((` cannot hide
         every opener after it. The pairs are matched once for the whole text, which keeps a run of
         unclosed `((` linear rather than rescanning the rest of the command for each."""
         if self.parens is None:
-            self.parens, opened = {}, []
+            parens: dict[int, int] = {}
+            opened: list[int] = []
             for index, char in enumerate(self.text):
                 if char == "(":
                     opened.append(index)
                 elif char == ")" and opened:
-                    self.parens[opened.pop()] = index
+                    parens[opened.pop()] = index
+            self.parens = parens
         close = self.parens.get(start)
         if close is not None:
             return close + 1
@@ -2115,7 +2129,7 @@ class _HeredocScan:
         return len(self.text) if newline == -1 else newline
 
 
-def find_heredoc_opener(line: str):
+def find_heredoc_opener(line: str) -> re.Match[str] | None:
     """The `HEREDOC_OPEN` match for the first `<<` on `line` that opens a heredoc, or None."""
     for _at, opener, _body in iter_heredocs(line):
         return opener
@@ -2123,7 +2137,7 @@ def find_heredoc_opener(line: str):
 
 
 @_whole_command_view
-def _split_heredocs(command: str):
+def _split_heredocs(command: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """(command lines, body lines) for `command`, split at every heredoc the shell would open.
 
     One scanner for both readings of a command: a body is DATA when judging what runs, and it is
@@ -2180,7 +2194,7 @@ def blank_heredoc_bodies(command: str) -> str:
 
 
 @_whole_command_view
-def _blanked_heredocs(command):
+def _blanked_heredocs(command: str) -> str:
     """The body of `blank_heredoc_bodies`, kept for the last few large commands."""
     lines = command.split("\n")
     for _at, _opener, (start, end) in iter_heredocs(command):
