@@ -128,10 +128,15 @@ export const register: Register = (on) => {
       // On Windows a bare "bash" can resolve to the WSL stub; Claude Code's own Git Bash setting wins.
       const bash = (await $.env.get("CLAUDE_CODE_GIT_BASH_PATH")) || "bash";
       const root = $.plugin.root;
+      // The bridge inherits the claude process's environment, which carries no
+      // CLAUDE_CODE_SESSION_ID (only Bash-tool children get it), so backlog_add's approval check
+      // could not find the transcript. The id goes beside the input, which is the model's to fill.
+      // An id that cannot be read goes as "": the bridge then judges without the transcript.
+      const sessionId = await $.session.id().catch(() => "");
       try {
         const run = await $.process.run(
           [bash, `${root}/hooks/run-python.sh`, `${root}/hooks/mod_bridge.py`],
-          { stdin: JSON.stringify({ tool: spec.name, input }), timeoutMs: TIMEOUT_MS },
+          { stdin: JSON.stringify({ tool: spec.name, input, session_id: sessionId }), timeoutMs: TIMEOUT_MS },
         );
         return relay(spec.name, run);
       } catch (err) {

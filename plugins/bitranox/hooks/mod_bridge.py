@@ -45,6 +45,27 @@ REFUSALS = (ow.BacklogError, BadInput, ApprovalClaimRefused, *ME.ADD_REFUSALS, M
 
 
 @dataclass(frozen=True)
+class Caller:
+    """Who the call came from: the session's working directory and its session id ("" unknown).
+
+    The session id comes from the request, beside the tool's input (`Request.session_id`), never
+    from the input itself: the input is the model's to fill.
+    """
+
+    cwd: Path
+    session_id: str
+
+
+@dataclass(frozen=True)
+class Request:
+    """One parsed request: the tool, the model's input, and the session id the mod passed."""
+
+    tool: str
+    input: dict
+    session_id: str
+
+
+@dataclass(frozen=True)
 class MemoryAdded:
     """What memory_add reports: `to_data` is the envelope's `data`, keys in the order relayed."""
 
@@ -71,8 +92,8 @@ class ContribQueued:
         return {"queued": False, "reason": self.reason}
 
 
-def _backlog_list(inp, cwd):
-    path = ow.backlog_path(cwd)
+def _backlog_list(inp, caller):
+    path = ow.backlog_path(caller.cwd)
     state = inp.get("state", "open")
     data = {"path": str(path), "items": [it.to_data() for it in ow.list_items(path, state=state)]}
     if not path.is_file():
@@ -110,19 +131,21 @@ def _refuse_a_second_backlog(path, inp):
             "backlog here" % (path.parent, enclosing))
 
 
-def _approval_advice(inp, cwd):
+def _approval_advice(inp, caller):
     """Refuse an approval claim without the user's words; return the advisory for one with them.
 
     The tool writes OPEN-WORK.md itself, and Claude Code runs no PreToolUse hook for a mod's tool
     (probed on CLI 2.1.329: a settings hook matching the tool name never fired while a Bash hook
     in the same settings did), so decision-claim-guard cannot see this write: the rule is applied
-    here. The bridge gets no transcript_path; the transcript is found by CLAUDE_CODE_SESSION_ID.
+    here. The bridge gets no transcript_path; the transcript is found by the session id the mod
+    passes on stdin (`$.session.id()`), since the claude process the bridge inherits its
+    environment from carries no CLAUDE_CODE_SESSION_ID (only its Bash-tool children do).
     """
     text = "\n".join(str(inp.get(k) or "") for k in ("what", "open", "next"))
     if not AC.APPROVAL.search(text):
         return None
-    logs = decision_logs(cwd)
-    words = AC.WordSource(AC.transcript_for_session(sig.calling_session_id()), logs)
+    logs = decision_logs(caller.cwd)
+    words = AC.WordSource(AC.transcript_for_session(caller.session_id), logs)
     verdict = AC.judge(Entry(1, tuple(text.splitlines())), logs, words)
     if verdict.problem is not None:
         raise ApprovalClaimRefused(AC.explain(verdict, logs, "backlog_add"))
@@ -130,15 +153,15 @@ def _approval_advice(inp, cwd):
     return AC.advice_text(verdict, found, "backlog_add") if found else None
 
 
-def _backlog_add(inp, cwd):
-    advice = _approval_advice(inp, cwd)
-    path = ow.backlog_path(cwd)
+def _backlog_add(inp, caller):
+    advice = _approval_advice(inp, caller)
+    path = ow.backlog_path(caller.cwd)
     created = not path.is_file()
     if created:
         _refuse_a_second_backlog(path, inp)
     data = _where(ow.add_item(path, inp.get("rank"), inp.get("origin"), inp.get("what"),
                               inp.get("size"), inp.get("open"), inp.get("next"),
-                              raised=inp.get("raised")).to_data(), path, cwd)
+                              raised=inp.get("raised")).to_data(), path, caller.cwd)
     if created:
         data["created"] = True
     if advice:
@@ -146,9 +169,9 @@ def _backlog_add(inp, cwd):
     return data
 
 
-def _backlog_close(inp, cwd):
-    path = ow.backlog_path(cwd)
-    return _where(ow.close_item(path, inp.get("rank"), inp.get("reason")).to_data(), path, cwd)
+def _backlog_close(inp, caller):
+    path = ow.backlog_path(caller.cwd)
+    return _where(ow.close_item(path, inp.get("rank"), inp.get("reason")).to_data(), path, caller.cwd)
 
 
 def _optional_text(inp, name):
@@ -176,8 +199,8 @@ def _level(inp, cwd):
     return Path(value)
 
 
-def _memory_add(inp, cwd):
-    level = _level(inp, cwd)
+def _memory_add(inp, caller):
+    level = _level(inp, caller.cwd)
     if not level.is_dir():
         raise BadInput("level is not a directory: %s" % level)
     type_ = inp.get("type")
@@ -190,12 +213,12 @@ def _memory_add(inp, cwd):
                        warnings=advice).to_data()
 
 
-def _contrib_add(inp, cwd):
+def _contrib_add(inp, caller):
     # the CLI queues the text as given, so the same text dedupes to the same key either way
     what = ow.require_one_line(inp.get("what"), "what")
     target = ow.require_one_line(inp.get("target"), "target")
     why = ow.require_one_line(inp.get("why"), "why")
-    proj = str(cwd)
+    proj = str(caller.cwd)
     queued = sig.add_contribution(proj, {"what": what, "target": target, "why": why,
                                          "source": "mod:contrib_add"}, strict=True)
     if queued:
@@ -218,7 +241,18 @@ def _request(raw):
         raise BadRequest("the request must be {\"tool\": <name>, \"input\": {...}}", known)
     if known is None:
         raise BadRequest("unknown tool %r; known: %s" % (tool, ", ".join(sorted(TOOLS))))
-    return known, req.get("input", {})
+    return Request(known, req.get("input", {}), _session_id(req))
+
+
+def _session_id(req):
+    """The calling session's id: the mod's `session_id` when it sent a non-empty string, else the
+    environment's (a Bash-tool child running the bridge by hand carries CLAUDE_CODE_SESSION_ID).
+
+    A malformed id is passed on as given: transcript_for_session refuses anything that is not an
+    id, so it finds no transcript and the approval check judges the claim without one.
+    """
+    sid = req.get("session_id")
+    return sid if isinstance(sid, str) and sid else sig.calling_session_id()
 
 
 def _decode(raw):
@@ -244,14 +278,15 @@ def _internal(tool, exc):
 
 def main():
     try:
-        tool, inp = _request(_decode(sys.stdin.buffer.read()))
+        req = _request(_decode(sys.stdin.buffer.read()))
     except BadRequest as exc:
         return _emit({"ok": False, "tool": exc.tool,
                       "error": {"kind": "BadRequest", "message": str(exc)}}, 2)
     except Exception as exc:  # noqa: BLE001 - the relay must always get an envelope
         return _internal(None, exc)
+    tool = req.tool
     try:
-        data = TOOLS[tool](inp, Path(os.getcwd()))
+        data = TOOLS[tool](req.input, Caller(Path(os.getcwd()), req.session_id))
     except REFUSALS as exc:
         return _emit({"ok": False, "tool": tool,
                       "error": {"kind": type(exc).__name__, "message": str(exc)}}, 1)

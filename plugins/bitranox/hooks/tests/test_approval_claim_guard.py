@@ -432,8 +432,77 @@ def test_backlog_add_accepts_a_real_quote_and_carries_the_advisory(repo, bridge_
 def test_backlog_add_refuses_a_fabricated_quote_found_through_the_session_id(repo, bridge_env):
     rc, out = _bridge(repo, bridge_env, {**_BRIDGE_ITEM, "open": 'the user approved it ("ship all of it")'})
     assert (rc, out["ok"]) == (1, False), out
-    assert (rc, out["error"]["kind"]) == (1, "ApprovalClaimRefused"), out
+    assert (rc, out.get("error", {}).get("kind")) == (1, "ApprovalClaimRefused"), out
     assert "never typed" in out["error"]["message"]
+
+
+# The claude process itself does not carry CLAUDE_CODE_SESSION_ID (only its Bash-tool children do),
+# so the mod hands the bridge the session id on stdin, beside the tool's input. The fixture lays a
+# decision log in the repo: with neither a transcript nor a log readable a quote passes unverified
+# by design, so a lost session id would pass for the wrong reason. With the log readable and no
+# transcript found, a typed quote is refused as never typed: the false refusal seen live.
+
+
+@pytest.fixture
+def no_session_env(tmp_path, transcript, repo):
+    _log(repo)
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    return _env(tmp_path, HOME=str(home), USERPROFILE=str(home))
+
+
+def _bridge_request(cwd, env, request):
+    p = subprocess.run([sys.executable, str(_BRIDGE)], input=json.dumps(request).encode("utf-8"),
+                       capture_output=True, cwd=cwd, env=env, check=False)
+    return p.returncode, json.loads(p.stdout.decode("ascii"))
+
+
+_TYPED_CLAIM = {**_BRIDGE_ITEM, "open": 'the user approved the release as is ("%s")' % _TYPED}
+
+
+def test_backlog_add_finds_the_typed_quote_through_the_session_id_on_stdin(repo, no_session_env):
+    assert "CLAUDE_CODE_SESSION_ID" not in no_session_env
+    request = {"tool": "backlog_add", "input": _TYPED_CLAIM, "session_id": "sess-1"}
+    rc, out = _bridge_request(repo, no_session_env, request)
+    assert (rc, out["ok"]) == (0, True), out
+    assert (repo / "OPEN-WORK.md").is_file()
+
+
+def test_the_stdin_session_id_wins_over_a_different_env_one(repo, no_session_env):
+    env = {**no_session_env, "CLAUDE_CODE_SESSION_ID": "sess-other"}
+    request = {"tool": "backlog_add", "input": _TYPED_CLAIM, "session_id": "sess-1"}
+    rc, out = _bridge_request(repo, env, request)
+    assert (rc, out["ok"]) == (0, True), out
+
+
+def test_backlog_add_with_a_session_id_neither_way_refuses_a_typed_quote(repo, no_session_env):
+    rc, out = _bridge_request(repo, no_session_env, {"tool": "backlog_add", "input": _TYPED_CLAIM})
+    assert (rc, out.get("error", {}).get("kind")) == (1, "ApprovalClaimRefused"), out
+    assert "never typed" in out["error"]["message"]
+    assert not (repo / "OPEN-WORK.md").exists()
+
+
+@pytest.mark.parametrize("sid", ["*", "../-x/sess-1", "sess-1\n", "", 7, None, ["sess-1"]])
+def test_a_malformed_stdin_session_id_finds_no_transcript_and_refuses(repo, no_session_env, sid):
+    request = {"tool": "backlog_add", "input": _TYPED_CLAIM, "session_id": sid}
+    rc, out = _bridge_request(repo, no_session_env, request)
+    assert (rc, out.get("error", {}).get("kind")) == (1, "ApprovalClaimRefused"), out
+    assert not (repo / "OPEN-WORK.md").exists()
+
+
+def test_a_bare_paraphrase_is_refused_with_no_session_id_either_way(repo, no_session_env):
+    item = {**_BRIDGE_ITEM, "open": "the user approved the release as is"}
+    rc, out = _bridge_request(repo, no_session_env, {"tool": "backlog_add", "input": item})
+    assert (rc, out.get("error", {}).get("kind")) == (1, "ApprovalClaimRefused"), out
+    assert "quote the user's own words" in out["error"]["message"]
+    assert not (repo / "OPEN-WORK.md").exists()
+
+
+def test_a_session_id_inside_the_tool_input_is_not_trusted(repo, no_session_env):
+    # The input is the model's to fill; only the mod, outside it, may name the session.
+    request = {"tool": "backlog_add", "input": {**_TYPED_CLAIM, "session_id": "sess-1"}}
+    rc, out = _bridge_request(repo, no_session_env, request)
+    assert (rc, out.get("error", {}).get("kind")) == (1, "ApprovalClaimRefused"), out
 
 
 def test_a_quoted_span_without_a_word_is_no_quote():

@@ -30,6 +30,16 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.20.1]
+
+### Fixed
+
+- `backlog_add` now finds the calling session's transcript, so an approval claim quoting words the user typed is accepted instead of refused as "never typed". The claude process carries no `CLAUDE_CODE_SESSION_ID` (only its Bash-tool children do), so the bridge the mod starts never had one; the mod now passes `$.session.id()` to the bridge on stdin, beside the tool's input. An id the model writes into the input is ignored, and with no id either way the check judges without a transcript as before.
+
+### Changed
+
+- The mod's own tests type-check clean under `claude plugin validate` (from 8 warnings): each reads its one bridge run through a helper that asserts it exists.
+
 ## [11.20.0]
 
 ### Fixed

@@ -143,9 +143,13 @@ Decisions:
       tests/test_approval_claim_guard.py::test_a_commit_message_file_with_a_paraphrase_is_refused_without_echoing_it
     - The backlog_add tool is judged in mod_bridge.py. Why: probed 2026-11-20 on CLI 2.1.329, a
       settings PreToolUse/PostToolUse hook matching mcp__bitranox__backlog_list never fired while a
-      Bash hook in the same settings did. The bridge finds the transcript by CLAUDE_CODE_SESSION_ID;
-      whether the mod process inherits it was not measured, and without it a quote passes
-      unverified. Pinned by: tests/test_approval_claim_guard.py::test_backlog_add_refuses_a_bare_paraphrase
+      Bash hook in the same settings did. The bridge finds the transcript by the session id the
+      mod passes on stdin beside the input (`$.session.id()`). Why: the claude process carries no
+      CLAUDE_CODE_SESSION_ID (only its Bash-tool children do; measured 2026-11-21), so the bridge
+      it starts never had one, and with a decision log readable but no transcript a quote the user
+      typed was refused as never typed. Pinned by:
+      tests/test_approval_claim_guard.py::test_backlog_add_refuses_a_bare_paraphrase,
+      tests/test_approval_claim_guard.py::test_backlog_add_finds_the_typed_quote_through_the_session_id_on_stdin
     - A shell command's OPEN-WORK.md and handover.md candidates come from their own function,
       `approval_candidates`, and `candidates` keeps finding review logs only; `shell_candidates`
       joins the two for the Bash snapshot and judge. A path the command names goes through
