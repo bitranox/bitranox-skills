@@ -19,13 +19,14 @@ already used; `harness_checks` separately reports a delimiter glued to a value a
 header, for a consumer that reads a third-party skill or command file rather than linting one.
 Pure standard library; ASCII.
 """
+import os
 import re
 from pathlib import Path
 
 __all__ = ["description", "field", "frontmatter_block", "name", "read_frontmatter", "read_text",
            "scalar_text", "split_frontmatter"]
 
-_FIELD_RX = {}
+_FIELD_RX: dict[str, re.Pattern[str]] = {}
 # A YAML block-scalar header: `|` or `>`, an optional chomping sign and indentation digit in
 # either order, then the end of the header.
 _BLOCK_HEADER = re.compile(r"^[|>](?:[1-9][+-]?|[+-][1-9]?)?(?:\s+|$)")
@@ -35,7 +36,7 @@ _BLOCK_HEADER = re.compile(r"^[|>](?:[1-9][+-]?|[+-][1-9]?)?(?:\s+|$)")
 _COMMENT_RX = re.compile(r"(?:^|(?<=[ \t]))#.*")
 
 
-def _field_rx(key):
+def _field_rx(key: str) -> re.Pattern[str]:
     rx = _FIELD_RX.get(key)
     if rx is None:
         # Continuation lines are indented; empty lines between two of them belong to the value
@@ -46,7 +47,7 @@ def _field_rx(key):
     return rx
 
 
-def split_frontmatter(text):
+def split_frontmatter(text: str) -> tuple[str | None, str]:
     """(front-matter block, body) of a SKILL.md's contents. With no block the first is None and
     the body is the whole text; a block that never closes leaves an empty body."""
     text = text.lstrip("\ufeff")
@@ -56,12 +57,12 @@ def split_frontmatter(text):
     return parts[1], parts[2] if len(parts) > 2 else ""
 
 
-def frontmatter_block(text):
+def frontmatter_block(text: str) -> str | None:
     """The front-matter text of a SKILL.md's contents, or None when it opens with none."""
     return split_frontmatter(text)[0]
 
 
-def read_text(path):
+def read_text(path: str | os.PathLike[str]) -> str | None:
     """The contents of the file at `path` decoded as every reader here decodes it, or None."""
     try:
         data = Path(path).read_bytes()
@@ -70,20 +71,20 @@ def read_text(path):
     return data.decode("utf-8-sig", errors="replace")
 
 
-def read_frontmatter(path):
+def read_frontmatter(path: str | os.PathLike[str]) -> str | None:
     """The front-matter text of the SKILL.md at `path`, or None (no block, or unreadable)."""
     text = read_text(path)
     return None if text is None else frontmatter_block(text)
 
 
-def _is_plain_scalar(raw):
+def _is_plain_scalar(raw: str) -> bool:
     """True unless `raw` (the captured, still multi-line value) opens as a quoted or block-scalar
     YAML value - the only two forms where a `#` is literal text rather than a comment."""
     first = raw.split("\n", 1)[0]
     return first[:1] not in ("'", '"') and _BLOCK_HEADER.match(first) is None
 
 
-def _drop_comment(line):
+def _drop_comment(line: str) -> str:
     """`line` with a YAML plain-scalar comment (see `_COMMENT_RX`) cut off; unchanged without
     one. A continuation line that is ONLY a comment (once its indentation is consumed by the same
     match) is left holding just that indentation, which `field`'s whitespace collapse then drops
@@ -92,7 +93,7 @@ def _drop_comment(line):
     return line[:m.start()] if m else line
 
 
-def field(block, key):
+def field(block: str | None, key: str) -> str | None:
     """`key`'s value in a front-matter block, collapsed to one line; None when absent or empty.
 
     A plain (unquoted, non-block) value has any `# comment` cut off first - a trailing one on its
@@ -111,7 +112,7 @@ def field(block, key):
     return value or None
 
 
-def scalar_text(value):
+def scalar_text(value: str | None) -> str | None:
     """The text a `field` value means as a YAML scalar: a block-scalar header (`>-`, `|`) dropped,
     one pair of enclosing quotes removed with their escapes undone. None stays None, and so does a
     value that is only a header.
@@ -132,11 +133,11 @@ def scalar_text(value):
     return value
 
 
-def description(path):
+def description(path: str | os.PathLike[str]) -> str | None:
     """The `description:` of the SKILL.md at `path`, or None."""
     return field(read_frontmatter(path), "description")
 
 
-def name(path):
+def name(path: str | os.PathLike[str]) -> str | None:
     """The `name:` of the SKILL.md at `path`, or None."""
     return field(read_frontmatter(path), "name")
