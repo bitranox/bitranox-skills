@@ -30,6 +30,33 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.20.0]
+
+### Fixed
+
+- reconcile `--repair-appended-type` no longer undoes a change that lands during its walk: the title and hook are read under the engine's lock, a body amend between its read and its write is kept (the repair re-reads, up to three times, then reports the fact as skipped), and a fact whose line left its level after the walk is reported as skipped instead of being written anew.
+- On Windows, a reader holding an old body open longer than the archive's 1 s wait no longer lets the next `add` of the old slug bring a renamed or relocated fact back. The verb records the retirement in `.retiring/`; the next `add` archives the body first, or refuses with "retired fact ... could not be archived yet" (exit 2, nothing written) while it is still held. `heal` finishes such retirements and reports one it still cannot finish. An `add` racing a retirement of the same slug no longer fails when the record or body vanishes, and never archives a newer body.
+- A cross-tree `relocate` decides whether the fact is placed by topic under the source tree's placement lock, and holds it through its writes, so a concurrent `set-topics` can no longer let it carry a placed fact out of its tree.
+- `add`, `heal` and `set-scope` ask git about a level's private files before taking the level lock, and an `add` of a fact bound to a topic before taking the placement lock. A level outside any git repo asks git once per process instead of on every call.
+- compact-resume: an event whose `cwd` or `transcript_path` is not a string is read as having none, instead of ending the hook silently and losing the checkpoint the session saved.
+- dedup_scan, factedit, store_manifest, topic_tagging, ref_map, statusrot, versionrot, pushcheck, bump_version, skill_decisions, strip_typographic_tells, grep_all, raisesmatch, reformat_tables, audit_local, hookdoc_stamp and jig_probe run under `python -OO`: each crashed reading the docstring `-OO` strips (strip_typographic_tells even at import, versionrot with IndexError). dream_state `--help` no longer prints "None" there.
+- mem_levels raises the original ImportError when the memory engine is missing, instead of an AttributeError on None.
+- The retitle race test keeps its observer queued for the lock, so it catches a retitle split over two lock holds under load.
+
+### Changed
+
+- compact-resume.py, repo-gate.py and classifier.py pass pyright strict with 0 errors (from 116, 2508 and 574). Their calls into unannotated sibling modules go through Protocol views that pyright checks against each module. classifier's `choice_pick` keeps the winner's type, and classifier_eval.py, skill-router.py and test_classifier_sites.py no longer carry real-kind strict errors.
+- shell_text's public readers carry full annotations; `tool_name` is typed `str | None` (None is legal) and `is_shell_tool` narrows to `str`.
+- Three helpers reached from other modules are public and listed in `__all__`: `pushcheck.changed_lines`, `statusrot.read_level`, `audit_responsive.apply_routes`. migrate_memory's per-store report is a typed record; stdout/stderr `reconfigure` calls narrow the stream type first.
+
+### Added
+
+- `memory_engine.upsert_entry(..., expect_body=<raw>)` refuses a write derived from a body that changed since it was read, with the new `BodyChanged` error. `finish_retirements(anchor)` is public.
+
+### Removed
+
+- The dead repo-gate helper `_plugin_version_pair`.
+
 ## [11.19.1]
 
 ### Fixed
