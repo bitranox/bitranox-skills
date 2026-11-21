@@ -475,12 +475,15 @@ check the fixture's pairing before suspecting it.
   no event exists or can be planted, is in `references/silent-test-defeaters.md`, with the one test
   where the latency IS the property (a wake-up from another thread, "A cross-thread wake-up test
   awaits only the thing being woken"). Code that has its own timeout is driven by injecting its
-  clock, not by waiting it out. A PRECONDITION state the test needs at a moment (a task still in
-  flight, a file not yet written) comes from an event the run emits too, never from making one delay
-  outlast another: a slower runner loses that race and the arm goes red for a non-defect. When such
-  an arm fails, check first that its precondition HELD (print the event order) before reading
-  anything the system did as a defect, in a commit message or anywhere else: what a system does
-  under an unmet precondition is not evidence about the property the arm tests.
+  clock, not by waiting it out. A stress worker's short random pause after each write it made under
+  a lock shapes the load and decides no verdict, so it is not a timer this rule forbids (reference
+  entry "A stress worker must leave a gap after each write that took the lock"). A PRECONDITION
+  state the test needs at a moment (a task still in flight, a file not yet written) comes from an
+  event the run emits too, never from making one delay outlast another: a slower runner loses that
+  race and the arm goes red for a non-defect. When such an arm fails, check first that its
+  precondition HELD (print the event order) before reading anything the system did as a defect, in a
+  commit message or anywhere else: what a system does under an unmet precondition is not evidence
+  about the property the arm tests.
 - **Never a zero or near-zero deadline, timeout or age.** `deadline=0.0` checked with
   `monotonic() - started > 0.0` races the clock tick instead of testing the code. On Windows with
   Python 3.12 or older, `time.monotonic()` advances in steps of about 15.6 ms (3.13 and later use a
@@ -948,7 +951,8 @@ absolute time budget or a growth ratio), or tests environment isolation - or bef
 path is untested or accept a surviving mutation. Read it too when code in a unit suite could reach a
 real host or a user-facing service (ssh, a keyring, a session bus), a test guards a secret its own
 failure output could print, a test spawns a nested test runner or several writers appending to one
-file, asserts only a real tool's verdict, relies on `tests/conftest.py` fixtures reaching `src/`
+file, runs stress workers against a lock, fails in a multi-process race on one CI cell only,
+asserts only a real tool's verdict, relies on `tests/conftest.py` fixtures reaching `src/`
 doctests or on fixtures ported from a template, isolates the suite in an autouse fixture (an
 override or fallback knob it sets, a file it plants), feeds a FIFO from a writer thread, or derives
 its input from a constant you are about to mutate. Read it too when a test proves an input was

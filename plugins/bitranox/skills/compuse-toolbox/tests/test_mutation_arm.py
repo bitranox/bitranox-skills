@@ -1421,6 +1421,74 @@ def test_the_test_with_cmd_refusal_says_what_to_do(tmp_path):
     assert "drop --test" in proc.stderr + proc.stdout
 
 
+# A check that also needs a variable set: without it, it fails for a reason the mutant never
+# caused, so a KILLED arm that names this line ran without the variable.
+ENV_CHECK = '''\
+import os, sys
+sys.path.insert(0, ".")
+if os.environ.get("MUTARM_PROBE") != "on":
+    print("MUTARM_PROBE not set")
+    raise SystemExit(4)
+from src import classify
+if classify(0) != "zero":
+    print("CHECK zero-case FAILED")
+    raise SystemExit(3)
+'''
+
+
+def _env_cmd_project(tmp_path):
+    p = make_project(tmp_path)
+    (p / "check.py").write_text(ENV_CHECK, encoding="utf-8")
+    (p / "old.txt").write_text('return "zero"', encoding="utf-8")
+    (p / "new.txt").write_text('return "ZERO"', encoding="utf-8")
+    return p
+
+
+def test_leading_assignments_in_cmd_reach_the_arm_as_environment(tmp_path):
+    """`--cmd 'CARGO_TARGET_DIR=/x cargo test'` is how a shell user writes it; it must run."""
+    p = _env_cmd_project(tmp_path)
+    proc = run(p, "--mutate", "src.py", "old.txt", "new.txt",
+               "--cmd", f'MUTARM_PROBE=on "{sys.executable}" check.py', "--json")
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    data = json.loads(proc.stdout)["data"]
+    assert data["verdict"] == "killed"
+    assert "CHECK zero-case FAILED" in data["output_tail"]
+    assert (p / "src.py").read_text(encoding="utf-8") == SOURCE
+
+
+def test_leading_assignments_in_cmd_reach_the_battery_baseline(tmp_path):
+    p = _env_cmd_project(tmp_path)
+    spec = tmp_path / "battery.json"
+    spec.write_text(json.dumps({"arms": [
+        {"label": "zero", "file": "src.py", "old": 'return "zero"', "new": 'return "ZERO"'},
+    ]}), encoding="utf-8", newline="")
+    proc = run(p, "--battery", str(spec),
+               "--cmd", f'MUTARM_PROBE=on "{sys.executable}" check.py', "--json")
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    data = json.loads(proc.stdout)["data"]
+    assert data["baseline"]["green"] and data["final_baseline"]["green"]
+    assert "CHECK zero-case FAILED" in data["arms"][0]["output_tail"]
+
+
+def test_a_cmd_of_only_assignments_is_refused_naming_the_missing_program(tmp_path):
+    p = _env_cmd_project(tmp_path)
+    proc = run(p, "--mutate", "src.py", "old.txt", "new.txt", "--cmd", "MUTARM_PROBE=on")
+    assert proc.returncode == 2
+    assert "no program after" in proc.stderr + proc.stdout
+    assert (p / "src.py").read_text(encoding="utf-8") == SOURCE
+
+
+def test_split_env_assignments_takes_only_the_leading_name_value_tokens():
+    env, argv = M.split_env_assignments(["A=1", "B_2=x=y", "cargo", "C=2", "--", "D=3"])
+    assert env == {"A": "1", "B_2": "x=y"}
+    assert argv == ["cargo", "C=2", "--", "D=3"]
+
+
+@pytest.mark.parametrize("token", ["=x", "1A=x", "./a=b", "A-B=x", "plain"])
+def test_a_token_that_is_not_a_shell_assignment_starts_the_program(token):
+    assert M.split_env_assignments([token, "x"]) == ({}, [token, "x"])
+
+
 def test_a_battery_whose_arms_all_carry_tests_needs_no_top_level_list(tmp_path):
     p = make_project(tmp_path)
     spec = tmp_path / "battery.json"

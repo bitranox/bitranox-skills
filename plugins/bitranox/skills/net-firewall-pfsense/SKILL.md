@@ -23,6 +23,33 @@ is not the site's backup folder. Where the site keeps one, copy the file there o
 `config-<host>-<YYYYmmddHHMMSS>.xml`. A backup folder inside the site's git repo is accepted when
 the repo ignores it and tracks nothing in it; the rule and the warning it can print are below.
 
+### A routing change with only `config.xml` to fall back on
+
+A gateway or routing change on a box reached only over the network, with no console and no
+hypervisor snapshot, can cut the one path back in. Arm a dead-man guard ON the firewall first; it
+restores the old config unless you confirm in time:
+
+```sh
+cp /conf/config.xml /conf/pre_change.xml
+daemon -f -p /tmp/guard.pid sh -c 'sleep 600; [ -f /tmp/change_ok ] || { cp /conf/pre_change.xml /conf/config.xml; rm -f /tmp/config.cache; /etc/rc.reload_all; }'
+```
+
+1. Run the edit and its apply detached as well (`daemon -f -o /tmp/change.log <command>`), so a
+   dropped ssh session cannot stop it halfway.
+2. Verify from outside: the remote path in, a LAN host's internet, gateway status, services.
+3. Confirm with `touch /tmp/change_ok` FIRST, then end the guard early with
+   `pkill -P "$(cat /tmp/guard.pid)" sleep`: the shell runs its test, finds the file and exits.
+   Killing the `sleep` before the file exists runs the rollback at once. `-p` records the `sh`,
+   so killing that pid instead leaves the `sleep` running as an orphan (parent 1).
+
+The rollback branch is a config restore plus a full reload and is untested on a live box; keep the
+change small enough that it is not the only plan. Before removing a gateway or an interface, walk
+the whole `config.xml` for its name with an XML parser, not only `gateways/`: the default gateway
+can be a gateway group (`gateways/defaultgw4`, `gateways/gateway_group`), firewall rules and static
+routes name gateways (`filter/rule` and `staticroutes/route`, each in `gateway`), the system DNS
+servers carry gateway bindings (`system/dns1gw` and up), and packages keep interface lists
+(miniupnpd `iface_array`).
+
 ## Diagnose first
 
 | Symptom                                                                   | Look at                                             |
@@ -36,6 +63,8 @@ the repo ignores it and tracks nothing in it; the rule and the warning it can pr
 | A name resolves to the wrong address                                      | `dns list`                                          |
 | A dummynet limiter is on a rule but shapes nothing                        | `references/limiters.md`                            |
 | A host should give way to others, with no fixed cap                       | the ALTQ section of `references/limiters.md`        |
+| Every connection of every host drops at once while the line is full       | `system/gw_down_kill_states`, see Traps             |
+| A shaper is set, yet latency under load still rises                       | measure the line, `references/limiters.md`          |
 
 **The first row is the one that gets missed.** Every instinct points at firewall rules, aliases,
 policy routing and gateways, and none of them is it.
@@ -149,6 +178,38 @@ EOF: the call hangs until the command timeout and leaves `pfSsh.php` processes b
 whether the change applied; read the state back. Feeding a script to the `php` CLI on stdin, as
 `pfsense.py` does, exits normally.
 
+**Start a daemon from an ssh session detached.** A playback or `php` script run over ssh that
+starts daemons (`setup_gateways_monitor()`, `svc start dpinger`) has hung until the command
+timeout, and the dpinger processes it started were gone once the session ended: no gateway
+monitoring for minutes. Detach the call (`daemon -f -o <log> <command>`, a `php -f` script the
+same way) and then check on the box that the daemons run:
+
+```sh
+daemon -f -o /tmp/svc.log pfSsh.php playback svc start dpinger
+pgrep -x dpinger
+```
+
+**A gateway alarm can flush every state on the box.** With State Killing on Gateway Failure set to
+"Flush all states" (`system/gw_down_kill_states` = `all`), each dpinger alarm (by default latency
+over 500 ms or loss over 20%) runs `pfctl -Fs`, which cuts every connection of every host, and
+`/etc/rc.gateway_alarm` also reloads the filter and VPNs. A saturated line raises such alarms, so
+it reads as "everyone reconnects when one host fills the line"; `system.log` says
+`GW States: One or more gateways is down, flushing all states`. Read the setting before any
+line-saturation test. On a single WAN nothing can fail over: set it to "Do not kill states"
+(`none`, System > Advanced > Miscellaneous) and tick "Disable Gateway Monitoring Action" on the
+gateway (`action_disable`, System > Routing > Gateways), so dpinger keeps monitoring and graphing
+but runs no alarm script and the state-kill loop skips the gateway.
+
+Read the value before carrying that fix to another box. In 2.8.1 (`filter.inc`) an empty value
+kills nothing on an alarm, so a box where it is empty needs no change for this: only `all` flushes
+everything, and `down`, set globally or on the gateway itself, kills the states policy-routed
+through that gateway. A PPP link going down takes
+another path (`/etc/rc.kill_states`) that flushes the interface's states whenever the element
+exists, even empty. A failover gateway group breaks open connections when it switches members
+whatever this says, because their NAT is bound to the old WAN address. A gateway with no dpinger
+process or socket has no address on its interface or has monitoring off (a failover port with no
+carrier gets none), which is not the same as a monitor that failed.
+
 **After `services_unbound_configure()`, restart unbound and check that it answers.** It has left
 unbound stopped (observed: `unbound-checkconf` clean, every lookup timing out, and running the
 reconfigure again did not bring it back). `dns add` and `dns rm` with `--apply` do this
@@ -230,8 +291,8 @@ sites still answer. Public DNS records at the registrar sit outside the firewall
 pfBlockerNG, certificate and acme renewal, and traffic shaping in general are inspection-shaped
 and change between releases. Drive them from the GUI or `pfSsh.php playback`, and take a
 `snapshot` first. The shaping this skill does cover is a dummynet limiter and a low-priority ALTQ
-queue: read `references/limiters.md` before attaching either, or when a limiter is on a rule but
-shapes nothing.
+queue: read `references/limiters.md` before attaching either or choosing its rate, or when a
+limiter is on a rule but shapes nothing.
 
 If you edited `config.xml` out of band rather than through the config API, the running config is
 stale until `rm -f /tmp/config.cache && /etc/rc.filter_configure_sync`. That reloads the filter

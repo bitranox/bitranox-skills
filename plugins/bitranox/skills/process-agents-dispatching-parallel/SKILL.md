@@ -92,6 +92,13 @@ the agents happen to miss each other. Decide the split BEFORE dispatching:
   reshaping a constructor) is a shared file in disguise: forbid signature changes in the first
   agent's brief, or send the second agent the new API before you merge its output, and re-run the
   second agent's tests in the real tree after merging.
+- A module one agent TYPES while others declare a checked view of it in their callers (a Protocol
+  over its functions) is the same seam, and only the type checker tests it. Name each caller file
+  and branch in the module owner's brief, and have the owner run the strict checker on copies of
+  every caller's view, taken from those branches, against its final module, and once more against
+  a copy of the module with one wrong return type planted, as the control that must go red, before
+  you integrate. Measured: the cross-check found an inferred `object | None` against a view's
+  `str | None` that would have failed the merged tree's check.
 - Tell each agent that other agents are editing the rest of the tree concurrently, and that a
   needed change in someone else's file is to be REPORTED, not made. Say it in those words, or a
   helpful agent reaches across "just this once". The hand-off is a feature: in one measured run
@@ -277,6 +284,15 @@ When agents return:
   hand-back has been READ. Say "all in" only when none is unticked, and name the total and the
   last one ticked. Hand-backs arriving in a burst make the count an impression, and a
   still-running agent gets announced as finished while its findings are yet to come.
+- After you SendMessage more work to an agent that already reported, its next idle notification
+  can still be the FIRST round's: it was sent before your message arrived. Tick that agent off only
+  on a report that covers the added items; a notification naming only first-round work is the
+  earlier round's, however late it arrives. Measured: three extended fixers each sent a
+  first-round notification minutes after the extension went out.
+- Handing an agent's open items to a DIFFERENT agent moves their ownership: in the same step, tell
+  the first agent those items are no longer its own, or stop it. An agent that reported done can
+  keep working on the open items its report listed, and two writers then edit one item. Measured:
+  a fixer whose open items went to another agent was found with uncommitted edits for one of them.
 - Read each summary
 - Verify fixes don't conflict
 - Run full test suite
@@ -315,7 +331,10 @@ undoes the picks). Then, per branch:
    `git cherry-pick -n A B`, then one commit. For a red commit already made, add the repair as a
    fix commit and fold it in with a scripted rebase, `GIT_SEQUENCE_EDITOR` writing the todo (pick,
    fixup, `exec git commit --amend -F <msg-file>`), with the backup taken just before it and its
-   diff run just after.
+   diff run just after. Where the repo's commit gate refuses every commit that does not bump the
+   version, no fix commit can be made: stop the rebase on the commit to repair instead
+   (`GIT_SEQUENCE_EDITOR` turning its `pick` into `edit`), make the repair, `git add` it, and run
+   `git rebase --continue`, which folds the staged repair into that commit.
 4. **A range cherry-pick stopped on a conflict resumes the WHOLE range** with
    `git cherry-pick --continue` once you resolve it. Re-running the range instead re-applies the
    commits already picked and stops on one that is now empty.
@@ -324,11 +343,16 @@ undoes the picks). Then, per branch:
    rebase replays the old base commits too.
 
 Branches green alone can be red together: one branch's test relies on something another branch
-changed, or a new keyword argument breaks a test double another branch added. Run the whole suite
-on the merged tree before the release gate, and fold each fix into the commit that caused it
-before you push. Before calling a fixer's commit "not landed", note that `git cherry` misses work
-that landed with changed context or squashed; bitranox:git-worktrees Step 4 (`landed.py`) checks
-by content.
+changed, or a new keyword argument breaks a test double another branch added. A RENAME is the
+sharpest case: one branch renames names while a sibling from the same base adds new uses of the
+old ones, both picks apply cleanly, and the merged tree fails only when the new use runs (an
+`AttributeError` at test time). After landing a rename, grep the whole merged tree for every old
+name before the gate (`git grep -nw <old name>`), and fold each hit into the rename commit, the
+one that left the old name unresolved (item 3 above, for a gate that refuses a fix commit). Run
+the whole suite on the merged tree before the release gate, and fold each fix into the commit that
+caused it before you push. Before calling a fixer's commit "not landed", note that `git cherry`
+misses work that landed with changed context or squashed; bitranox:git-worktrees Step 4
+(`landed.py`) checks by content.
 
 **An agent that stopped mid-task left no report, so the places its brief told it to write are
 the record.** That holds however it stopped: it hit a session or usage limit, you stopped it, or

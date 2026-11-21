@@ -260,6 +260,12 @@ mirror trap sits in the tests: a fixture that interpolates `str(tmp_path)` into 
 only on the Windows cell, because the Bash split correctly eats the backslashes and the hook resolves
 nothing. Pass `path.as_posix()` (`C:/Users/...`, what a Git Bash user types) and leave the hook alone.
 
+Quote that path in the command too (`'"%s"' % path.as_posix()`), since a temp path can hold a space.
+Pair every pass test of a guard that reads a file with its liveness twin: a test that builds the
+command and the path the same way, with a payload the guard must refuse (two test functions are
+fine). A guard that cannot read the file fails open, so its pass test goes green on exactly the cell
+where the path broke, while only the refusal twin turns red.
+
 **A guard about FILE WRITES must match the shell too.** `cat > f <<'EOF'`, `tee f`, a `>` redirect, or
 `python - <<'EOF'` opening a file all write without touching `Write` or `Edit`, and in one measured transcript
 corpus about half of the writes that carried a decision went that way. The tool a write arrives through is the

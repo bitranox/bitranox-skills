@@ -132,6 +132,16 @@ A **plugin-bundled** server gets a scoped segment: `mcp__plugin_<plugin-name>_<s
 written against the bare server key never fires. For plugin `my-plugin` bundling server key `db`, the matcher is
 `mcp__plugin_my-plugin_db__.*`.
 
+**A tool a plugin MOD registers (`$.tool.register`, shown to the model as `mcp__<plugin>__<name>`)
+gets no `PreToolUse` or `PostToolUse` event at all**, whatever the matcher. Measured on CLI 2.1.329
+and again on 2.1.330: a settings hook with matcher `Bash|mcp__bitranox__backlog_list|mcp__.*` fired
+before and after a Bash call and never for the mod tool `mcp__bitranox__backlog_list` the same turn
+called successfully. So a guard that must also cover a mod tool applies its rule inside the mod: in
+the tool's handler, or in the code the handler calls. Its event-shaped inputs are gone there too
+(see "Plugin mod subprocesses" in `io-contract.md`). Re-probe after a CLI upgrade: a scratch
+settings file whose hook appends `tool_name` to a file, one headless turn that calls the mod tool
+and a Bash command, and the transcript as proof the mod tool really ran.
+
 ## Hook handler fields
 
 Five handler types:

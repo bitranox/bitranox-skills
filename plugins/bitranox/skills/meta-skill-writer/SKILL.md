@@ -1673,6 +1673,15 @@ green says nothing about the prose beside it. Copy every concrete example value 
 an object name, a sample output line) from output produced in this session, never from recall: a
 probe answers its question whether or not the example exists in the data.
 
+**Never write text that tells the reader to override a tool the skill names; fix the tool.** When
+the right answer needs an input the tool cannot take, a sentence such as "ignore what the check
+prints and do X" leaves every other caller of that tool (other skills, hooks, scripts) acting on the
+wrong output, and teaches readers to distrust it. Give the tool the missing input (a flag, an
+option) in the same release (for a tool another repo owns, ship its fix first and the text after),
+then let the text say to pass it and obey the tool's word. Example: a promotion check that could not
+tell who sourced a candidate answered no for one the user had asked for; the fix was a
+`--source user` option on the check, not a skill line overriding it.
+
 **Before you ship, list every case the edit decides beyond the reported defect.** A fix for one
 defect usually settles neighbouring cases too: a new exception, a "the user's own X stays as is"
 clause, a default for an input nobody mentioned. Write each one down, and for every case the user

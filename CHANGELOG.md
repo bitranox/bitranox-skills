@@ -30,6 +30,23 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.22.0]
+
+### Added
+
+- `compuse-toolbox`: `mutation_arm.py --cmd` accepts leading `NAME=value` tokens and runs the baseline and every arm with them in the environment, so a gate that needs an environment variable no longer needs a wrapper script.
+- `net-firewall-pfsense`: a trap for "Flush all states" on gateway failure (`gw_down_kill_states`): how to turn it off on a single-WAN box, why an empty value needs no change, and what a missing dpinger means. A trap for starting daemons such as dpinger from ssh: run them detached with `daemon -f` and check them with `pgrep`. A dead-man guard recipe for a remote gateway or routing change with no console and no snapshot, with the `config.xml` places that name a gateway.
+- `net-firewall-pfsense` `references/limiters.md`: measure the line from the firewall before choosing a shaper rate; dummynet FQ-CoDel is fair per connection only, so a per-host share needs WF2Q+ and a masked child queue.
+
+### Changed
+
+- `process-agents-dispatching-parallel`: after landing a rename branch, grep for the old names before the gate and fold the hits in (a rebase edit stop where the gate refuses unbumped commits). Handing one agent's open items to another means telling or stopping the first. After a SendMessage extension, an idle notification can still report the first round. The module owner cross-checks every Protocol view with the strict type checker, using a planted wrong return type as the control.
+- `process-test-design`: stress workers pause after each write that took the lock, the loop ends on an operation count, and workers stop on a stop file. A failing stress test reads each worker's stderr first, one file per worker, printed in the assertion.
+- `meta-skill-writer`: skill text never tells the reader to override a tool it names; give the tool the input instead.
+- `meta-context-watcher`: `backlog_list` reads an item's first line only, so read the continuation lines before calling a field missing.
+- `compuse-ssh`: `ssh host 'cd DIR && nohup CMD >log ... &'` hangs because `&` backgrounds the whole list; group the command with `{ ... & }` or redirect the subshell.
+- `meta-claude-hooks`: a tool a mod registers gets no PreToolUse or PostToolUse event, so the mod applies the rule itself (with a re-probe recipe). A mod's `$.process.run` subprocess has no `CLAUDE_CODE_SESSION_ID`, so pass `$.session.id()`. Hook tests quote their `as_posix()` path and pair each pass test with a refusal twin.
+
 ## [11.21.1]
 
 ### Fixed

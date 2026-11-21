@@ -37,6 +37,15 @@ test fixtures: a guard that built only the Task path refuses every agent of a Wo
 CLI upgrade, since the event shape and the layout are harness behaviour, not a contract; and after fixing a guard,
 reload plugins before a fan-out that needs it, because a running session keeps the hooks it started with.
 
+**Plugin mod subprocesses: the session id is not in their environment.** A process a mod starts with
+`$.process.run` inherits the `claude` process's environment, and that carries no
+`CLAUDE_CODE_SESSION_ID`: only Bash-tool children get it (checked by name in `/proc/<pid>/environ`
+on CLI 2.1.330, with `HOME` as the control). A mod tool call also brings no `transcript_path`. Code
+there that looks the session up through the variable gets nothing (`os.environ.get` returns `None`,
+indexing raises `KeyError`), and code written to degrade then judges without the transcript,
+silently. Pass `$.session.id()` to the subprocess explicitly (a stdin field or an env entry), and
+test that code with the variable unset.
+
 Do not read the transcript for the current turn's final assistant text; it may not be there yet. Use
 `last_assistant_message` on `Stop` and `SubagentStop`. For the person's side and for sibling calls, see
 "Reading the transcript a hook is handed" below.

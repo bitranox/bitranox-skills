@@ -80,6 +80,8 @@ run as it is, in place of `--test`: exit 0 is SURVIVED, a non-zero exit KILLED w
 line as the reason, and a mutant that did not build (`error[E...]`, `could not compile`, `make:
 ***`) or a command that could not run (126/127) INCONCLUSIVE - an unbuildable mutant is not a test
 noticing it. The command's own summary is not parsed, so read the reason before believing a kill.
+Leading `NAME=value` tokens (`--cmd "CARGO_TARGET_DIR=/x cargo test"`) are the environment of the
+baseline and every arm, as a shell reads them for one command; nothing in them is expanded.
 `--battery` with `--cmd` needs no `tests` in the spec. A killed or inconclusive `--cmd` arm prints
 the end of its output (`output_tail` in `--json`), and `--log-dir DIR` keeps each arm's whole output,
 since the reason alone is one line and cannot tell a failed check from a crash. Every restore writes the original bytes back
@@ -149,6 +151,12 @@ Decisions:
   copying --mutate's FILE form (`"mutate": [[file, old, new]]`) otherwise learned only "lacks
   file, old, new". Pinned by
   test_a_battery_arm_written_like_the_mutate_flag_is_refused_with_the_shape.
+- Leading `NAME=value` tokens of a `--cmd` are taken as variables rather than refused with "export
+  it first": that is how a shell user writes the command, and a cargo arm in a worktree needs its
+  own CARGO_TARGET_DIR. Only leading tokens count, as in a shell, and the program is looked up on
+  the PATH they set. Pinned by test_leading_assignments_in_cmd_reach_the_arm_as_environment,
+  test_leading_assignments_in_cmd_reach_the_battery_baseline and
+  test_split_env_assignments_takes_only_the_leading_name_value_tokens.
 """
 from __future__ import annotations
 
@@ -289,17 +297,44 @@ def split_command(command: str) -> list[str]:
     return _windows_argv(command)
 
 
+#: A shell variable assignment: a NAME of letters, digits and underscores not starting with a digit.
+_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+
+
+def split_env_assignments(argv):
+    """`(env, rest)`: the leading `NAME=value` tokens of `argv` as a dict, and the argv after them.
+
+    A shell reads `CARGO_TARGET_DIR=/x cargo test` as a variable for that one command, and that is
+    how a `--cmd` gets written (a cargo arm in a worktree needs its own CARGO_TARGET_DIR). Split
+    without a shell, the assignment was taken for the program and refused as "no such program".
+    Only LEADING tokens count, as in a shell: `cargo test X=1` passes `X=1` to cargo. Nothing is
+    expanded: `$HOME` in a value stays those five characters.
+    """
+    env = {}
+    tokens = list(argv)
+    while tokens and _ASSIGNMENT.match(tokens[0]):
+        name, _, value = tokens.pop(0).partition("=")
+        env[name] = value
+    return env, tokens
+
+
 def command_runner(command, *, which=shutil.which):
     """`(argv, "--cmd")` for a non-pytest arm command (`cargo test -p x`), split without a shell.
 
-    Refused when the program cannot be found, before any mutation, for the reason given in
-    :func:`resolve_runner`.
+    Leading `NAME=value` tokens stay in argv and become the arm's environment when it runs
+    (:func:`split_env_assignments`); the program after them is looked up on the PATH the arm will
+    see. Refused when there is no program or it cannot be found, before any mutation, for the
+    reason given in :func:`resolve_runner`.
     """
     argv = split_command(command)
     if not argv:
         raise RunnerError("--cmd is empty")
-    if which(argv[0]) is None and not Path(argv[0]).is_file():
-        raise RunnerError(f"--cmd {argv[0]}: no such program")
+    env, program = split_env_assignments(argv)
+    if not program:
+        raise RunnerError(f"--cmd {command}: no program after the variable assignments")
+    path = env.get("PATH", os.environ.get("PATH"))
+    if which(program[0], path=path) is None and not Path(program[0]).is_file():
+        raise RunnerError(f"--cmd {program[0]}: no such program")
     return argv, "--cmd"
 
 
@@ -961,8 +996,13 @@ def _run_pytest(runner, nodeid, timeout):
 
 
 def _run_command(argv, timeout):
-    """(returncode, merged output) of a ``--cmd`` arm; returncode None at the timeout."""
-    return _run_bounded(argv, timeout)
+    """(returncode, merged output) of a ``--cmd`` arm; returncode None at the timeout.
+
+    Its leading `NAME=value` tokens are the arm's environment, so the baseline and every arm of a
+    battery run under the same variables.
+    """
+    env, program = split_env_assignments(argv)
+    return _run_bounded(program, timeout, env=env)
 
 
 #: Seconds to collect a killed tree's output. A grandchild that escaped the kill can still hold
@@ -970,7 +1010,7 @@ def _run_command(argv, timeout):
 _DRAIN_S = 10
 
 
-def _run_bounded(argv, timeout):
+def _run_bounded(argv, timeout, env=None):
     """(returncode, merged output) of `argv`; returncode None when it hit `timeout`.
 
     The arm runs as a process TREE (cargo, uv and pytest start children), and killing only the
@@ -978,14 +1018,15 @@ def _run_bounded(argv, timeout):
     the inherited pipes open, so collecting the output hung until it exited and the mutated
     source stayed on disk the whole time. So the whole tree is killed: its own process group on
     POSIX, `taskkill /T` on Windows. Any interruption (Ctrl-C included) kills the tree too, since
-    a child in its own session no longer receives the terminal's SIGINT.
+    a child in its own session no longer receives the terminal's SIGINT. `env` holds variables
+    set for this run only, on top of the real environment.
     """
     proc = subprocess.Popen(
         argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8",
         errors="replace", start_new_session=os.name != "nt",
         # Merged onto the real environment, never a fresh dict: on Windows a child without
         # SystemRoot loses Winsock and dies with EMPTY output.
-        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+        env={**os.environ, **(env or {}), "PYTHONDONTWRITEBYTECODE": "1"})
     try:
         out, err = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -1077,7 +1118,8 @@ def _parse(argv):
     runner.add_argument("--cmd", default=None, metavar="COMMAND",
                         help="a NON-pytest arm, e.g. \"cargo test -p crate\", split without a shell "
                              "and run as it is: exit 0 survived, a failure killed, a mutant that "
-                             "does not build (or a command that cannot run) inconclusive. Replaces "
+                             "does not build (or a command that cannot run) inconclusive. Leading "
+                             "NAME=value tokens set the arm's environment. Replaces "
                              "--test; with --battery the spec needs no tests")
     ap.add_argument("--json", action="store_true", help="machine-readable envelope")
     return ap.parse_args(argv)

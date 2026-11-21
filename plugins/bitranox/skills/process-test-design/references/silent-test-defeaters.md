@@ -14,7 +14,8 @@ or an exclusion, judges an artifact, compares against a git ref, guards against 
 environment isolation - or when you are about to claim a code path is untested, or a mutation
 survives. Also when a unit suite's code can reach a real host or a user-facing service, a test
 guards a secret it might print, a test spawns a nested test runner or several writers to one file,
-asserts a real tool's verdict, relies on conftest fixtures reaching `src/` doctests or on fixtures
+runs stress workers against a lock, fails in a multi-process race on one CI cell, asserts a real
+tool's verdict, relies on conftest fixtures reaching `src/` doctests or on fixtures
 ported from a template, isolates the suite in an autouse fixture (an override or fallback knob it
 sets, a file it plants), feeds a FIFO from a writer thread, times a cost ratio or a growth ratio,
 or verifies a fix for a rare flake. Also when a test proves an input was refused before any side
@@ -696,6 +697,39 @@ boolean verdict prints `assert False` when it fails, because `capsys` or `capfd`
 the tool said. A failure that happens only in CI then cannot be diagnosed from the log and costs a
 commit and a CI cycle just to see the reason. Carry the reason in the assertion message:
 `assert ok, stream.getvalue()`, `assert proc.returncode == 0, proc.stderr`.
+
+### A multi-process race test's cause is in the crashed worker's stderr
+
+When a race test with several worker processes fails on one CI cell only, read each WORKER's
+stderr before reasoning from the assertion. The assertion shows the symptom (a count short, a
+deadline reached); a crashed worker's traceback names the exact call that failed, such as an
+`open()` or a rename refused with a sharing violation on Windows (`Errno 13`) that nothing
+retries. Measured: a Windows-only failure read `updated=306, ended=deadline` and passed for a
+timing flake until the updater's traceback named an unretried `open()`. So the test sends each
+worker's stderr to a file of its own, never to `DEVNULL` and never to a pipe nobody reads until the
+end (a worker that fills the pipe blocks, which reads as one more stall), and puts every worker's
+stderr in the assertion message, as in the entry above.
+
+### A stress worker must leave a gap after each write that took the lock
+
+A race test runs stress workers that take a lock beside the code under test. A worker that takes the
+lock again the moment it lets go leaves a POLLING waiter (a lock file created with `O_EXCL` and
+retried every 50 ms) no gap to get in, so on a slow runner the code under test times out and the
+test reports the lock's fairness and the runner's speed instead of the property it checks. Make each
+worker pause briefly and at random after every write that took the lock
+(`time.sleep(random.uniform(0.0, 0.005))`), as a real writer pauses between writes. The pause shapes
+the load and decides no verdict, so it is not a timer the test waits on (the "No timer in a test"
+rule in SKILL.md). End the test's main loop on a fixed operation COUNT, never on what fits in a
+wall-clock window (a 4 s window held 9 renames where the test required 10), and stop the workers
+with a stop file the test writes once the count is done, each worker loop carrying an iteration cap
+that never binds while the stop file works, and every worker killed in a `finally`. The code under
+test keeps its real lock wait: across processes there is no clock to inject, and the contention is
+what the test checks. Prove the fix with the starvation recipe in SKILL.md ("Reproducing a flake"):
+the old test must go red under starvation for the same reason as in CI (the control), the new one
+green, and the defect the test exists for must still fail it (`mutation_arm.py --revert FILE REV` to
+the pre-fix source; home: `skills/compuse-toolbox/scripts/`). Measured: pinned to one cpu beside
+three busy loops, the old tests failed 4 of 4 in 2 of 2 runs, the paced ones passed 3 of 3, and all
+four still failed on the pre-fix code.
 
 ## Tests that must not reach the outside, or leak into it
 

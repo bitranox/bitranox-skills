@@ -97,7 +97,9 @@ Upstream, for detail beyond these files: <https://code.claude.com/docs/en/hooks.
 2. **Can that event block at all?** Roughly half cannot. Check the exit-code-2 table in `references/io-contract.md`.
 3. **Does it take a matcher, and will yours be read as an exact string or as a regex?** Any character outside
    letters, digits, `_`, `-`, space, `,` and `|` makes it an **unanchored** regex, so `Edit.*` also matches
-   `NotebookEdit`.
+   `NotebookEdit`. No matcher reaches a tool a plugin mod registers: it gets no tool event at all,
+   so a guard must also apply its rule inside the mod (`references/configuration.md`, "Matching MCP
+   tools").
 4. **Which handler type, and does that event support it?** `prompt` works on 13 events and `agent` on 12 only;
    `SessionStart` and `Setup` take just `command` and `mcp_tool`, and `Setup` always skips its `mcp_tool` hooks.
 5. **How does it answer?** `exit 2`, or exit 0 with JSON. Not both by accident.

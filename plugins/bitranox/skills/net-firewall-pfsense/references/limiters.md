@@ -4,6 +4,24 @@ Observed on pfSense 2.8.1. Shaping code changes between releases, so re-check ea
 another version before relying on it. Each limiter trap here fails silently: the rule looks right
 and nothing is shaped.
 
+## Measure the line before choosing a rate
+
+A shaper only helps where the queue forms on the firewall. Set at or above the real line rate (the
+sold rate is often higher), it never fills, the queue forms in the provider's buffer, and per-host
+or per-class fairness on the firewall does nothing while latency under load still climbs.
+
+Measure from the firewall itself: a few parallel downloads and uploads for about 20 s (stream an
+upload with `curl -T -`, never `--data-binary @-`, which reads all of stdin into memory first),
+with a ping running alongside. The firewall's own downloads arrive on WAN and never cross a LAN
+limiter or LAN ALTQ queue; its uploads do leave through any WAN ALTQ queue, so a WAN limit below
+the line caps that figure. Repeat from a LAN host to see what the shapers do.
+
+- Ping stays at its idle value under load in both places: no shaper is needed, and one would only
+  cost throughput. Measured on one line: 408/54 Mbit, 7 ms idle and loaded.
+- Ping rises: set the shaper below the measured rate and lower it until loaded ping stays near
+  idle. Measured on another: sold as about 25 Mbit, measured 22.1/21.4, ping 11 ms idle and 39 ms
+  loaded with shapers at 23/24; a shaper at 21/20 kept ping at idle values.
+
 ## A limiter on a rule with a gateway: reported ignored, not proven
 
 The report is that pfSense ignores a limiter on a rule that carries a per-rule gateway (policy
@@ -36,6 +54,24 @@ loads. Set every parameter in each limiter's `<queue>` element, for example:
 <param_fq_codel_limit>10240</param_fq_codel_limit>
 <param_fq_codel_flows>1024</param_fq_codel_flows>
 ```
+
+## FQ-CoDel is fair per connection, not per host
+
+Dummynet's FQ-CoDel hashes each packet's raw 5-tuple into a flow queue
+(`fq_codel_classify_flow` in `dn_sched_fq_codel.c`) and ignores the limiter's mask, so a host with
+eight connections gets eight shares. A mask on the pipe instead gives each host its own pipe at the
+full rate: a cap per host, not a fair share of one line.
+
+For a share per host, use a WF2Q+ limiter with a child queue masked on the host address
+(`dstaddress` /32 for download, `srcaddress` /32 for upload) and name the child queue on the rule;
+pfSense then emits `dnqueue(in,out)` instead of `dnpipe`. A child queue's CoDel target and
+interval defaults come from the `net.inet.ip.dummynet.codel.*` sysctls, with the same empty-value
+risk as above, so write them explicitly. Expect a cost. Measured on a line of about 22 Mbit, it
+evened a TCP split (one download against a host running twelve: 10.9 to 9.3 Mbit, against 14.0 to
+9.5 without it) by lowering the total, cost a lone host about 3 Mbit, and left a single download
+2.7 to 6.6 Mbit against eight QUIC flows. On a VM with `kern.hz=100` dummynet releases packets in
+10 ms batches under load. pfSense has no CAKE; one site put CAKE on the hypervisor in front of
+the firewall's LAN interface instead.
 
 ## Where limiters live in config.xml
 
