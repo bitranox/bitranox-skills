@@ -65,7 +65,7 @@ def _archive(anchor):
 
 
 def _record(anchor):
-    return us.central_facts_dir(anchor).parent / E.RETIRING_DIRNAME / "old-slug"
+    return E._retiring_record(anchor, "old-slug")
 
 
 class _ReadOnlyArchive:
@@ -203,3 +203,67 @@ def test_a_reader_holding_the_old_body_past_the_wait_does_not_bring_the_old_fact
     assert (slug, created) == ("old-slug", True)
     assert "OLD PROSE" not in body.read_text(encoding="utf-8")
     assert "OLD PROSE" in _archived_prose(anchor)[0]
+
+
+_FINISHER = r'''
+import json, os, sys
+from pathlib import Path
+hooks, anchor, progress, stop = sys.argv[1:5]
+sys.path.insert(0, hooks)
+import memory_engine as E
+n, held = 0, []
+while not os.path.exists(stop):
+    try:
+        E._finish_retirement(anchor, "old-slug")
+    except E.RetiredBodyHeld as exc:
+        held.append(str(exc))
+    n += 1
+    if n % 50 == 0:
+        Path(progress).write_text(str(n), encoding="utf-8")
+print(json.dumps({"finishes": n, "held": held[:3], "held_count": len(held)}))
+'''
+
+RETIREMENTS = 400
+"""How many retirements race the finisher: counted, not timed."""
+
+
+def _count(path):
+    try:
+        return int(path.read_text(encoding="utf-8") or 0)
+    except (OSError, ValueError):
+        return 0
+
+
+def test_an_add_racing_a_retirement_never_fails_on_the_record_or_body_vanishing(tmp_path):
+    """A rename or relocate writes the record, archives the body and removes the record, while
+    another session's add of the same slug finishes the retirement on its own. Each can take the
+    record or the body away between the other's existence check and its read; that is a
+    retirement finished, never an error. A real process runs the add's step in a loop while this
+    one retires a fresh body of the slug over and over."""
+    import subprocess
+    anchor, _proj = _tree(tmp_path / "tree")
+    hooks = str(Path(E.__file__).resolve().parent)
+    worker, progress, stop = tmp_path / "finisher.py", tmp_path / "progress", tmp_path / "stop"
+    worker.write_text(_FINISHER, encoding="utf-8")
+    proc = subprocess.Popen([sys.executable, str(worker), hooks, anchor, str(progress), str(stop)],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding="utf-8")
+    try:
+        while _count(progress) < 50:
+            assert proc.poll() is None, proc.communicate()
+            time.sleep(0.002)
+        for i in range(RETIREMENTS):
+            us.put_body(anchor, "old-slug", "body %d" % i)
+            assert E._retire_body(anchor, "old-slug", "renamed to new-slug") is None
+            if proc.poll() is not None:
+                break
+        stop.write_text("x", encoding="utf-8")
+        out, err = proc.communicate(timeout=60)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.communicate()
+    assert proc.returncode == 0, err
+    res = json.loads(out.strip().splitlines()[-1])
+    assert res["finishes"] >= 50 and res["held_count"] == 0, res
+    assert not us.body_path(anchor, "old-slug").exists() and not _record(anchor).exists()
+    assert len(list(_archive(anchor).glob("old-slug*.md"))) == RETIREMENTS

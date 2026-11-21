@@ -2796,13 +2796,34 @@ RETIRING_DIRNAME = ".retiring"
 
 
 def _retiring_record(anchor: _StrPath, slug: str) -> Path:
-    """`<store>/.retiring/<slug>`: present while `slug`'s retired body may still sit in `facts/`."""
-    return us.central_facts_dir(anchor).parent / RETIRING_DIRNAME / slug
+    """`<store>/.retiring/<slug>.json`: present while `slug`'s retired body may sit in `facts/`."""
+    return us.central_facts_dir(anchor).parent / RETIRING_DIRNAME / (slug + ".json")
 
 
-def _body_digest(body: Path) -> str:
-    """sha256 of the body file's bytes; read with the store's retry while Windows refuses it."""
-    return hashlib.sha256(sig.retry_while_shared(body.read_bytes)).hexdigest()
+def _retiring_lock(anchor: _StrPath, slug: str) -> Path:
+    """What `sig.memory_lock` locks for `slug`'s retirement: `<store>/.retiring/locks/<slug>`.
+    A dir of its own, so a lock file is never read as a record."""
+    return us.central_facts_dir(anchor).parent / RETIRING_DIRNAME / "locks" / slug
+
+
+def _body_digest(body: Path) -> str | None:
+    """sha256 of the body file's bytes, read with the store's retry while Windows refuses it;
+    None when the body is gone."""
+    try:
+        return hashlib.sha256(sig.retry_while_shared(body.read_bytes)).hexdigest()
+    except FileNotFoundError:
+        return None
+
+
+def _write_retiring_record(record: Path, digest: str, why: str) -> str:
+    """Write `record`; '' when written, else why not (what the caller's failure text adds)."""
+    try:
+        record.parent.mkdir(parents=True, exist_ok=True)
+        us.write_if_changed(record, json.dumps({"sha256": digest, "why": why}) + "\n")
+    except OSError as exc:
+        return ("; its retirement record could not be written either (%s), so the next add of "
+                "the slug adopts it as that fact's body" % exc)
+    return ""
 
 
 def _retire_body(anchor: _StrPath, slug: str, why: str) -> str | None:
@@ -2813,20 +2834,35 @@ def _retire_body(anchor: _StrPath, slug: str, why: str) -> str | None:
     once the body is gone, so there is no moment at which a retired body sits in `facts/` with
     nothing saying so. While it stays (on Windows a reader holding the body open past the
     archive's wait refuses the rename), the next `add` of the slug finishes the archive before
-    it reads the body (`_finish_retirement`) instead of adopting the old fact as a dangling body."""
-    body = us.body_path(anchor, slug)
-    record = _retiring_record(anchor, slug)
-    if not body.is_file():
+    it reads the body (`_finish_retirement`) instead of adopting the old fact as a dangling body.
+
+    Every step on the record and the body runs under the slug's retirement lock, which
+    `_finish_retirement` takes too: without it a finisher that had matched the record against
+    the old body could rename a NEW body of the slug, written once another add finished the
+    retirement first. It is the innermost lock (the verbs hold level locks when they call this;
+    nothing holding it takes another), so it adds no cycle."""
+    try:
+        with sig.memory_lock(_retiring_lock(anchor, slug)):
+            return _retire_body_locked(anchor, slug, why)
+    except TimeoutError as exc:
+        # A finisher holds it for at most one archive's wait. Past ours, the body is still
+        # recorded, unlocked, so no add adopts it.
+        digest = _body_digest(us.body_path(anchor, slug))
+        if digest is None:
+            return None
+        return "archive skipped: %s%s" % (exc, _write_retiring_record(
+            _retiring_record(anchor, slug), digest, why))
+
+
+def _retire_body_locked(anchor: _StrPath, slug: str, why: str) -> str | None:
+    """`_retire_body` for a caller that holds the slug's retirement lock."""
+    body, record = us.body_path(anchor, slug), _retiring_record(anchor, slug)
+    digest = _body_digest(body)
+    if digest is None:
         with contextlib.suppress(OSError):
             record.unlink(missing_ok=True)
         return None
-    unrecorded = ""
-    try:
-        record.parent.mkdir(parents=True, exist_ok=True)
-        us.write_if_changed(record, json.dumps({"sha256": _body_digest(body), "why": why}) + "\n")
-    except OSError as exc:
-        unrecorded = ("; its retirement record could not be written either (%s), so the next "
-                      "add of %s adopts it as that fact's body" % (exc, slug))
+    unrecorded = _write_retiring_record(record, digest, why)
     try:
         archive = us.central_facts_dir(anchor).parent / ".archive"
         archive.mkdir(parents=True, exist_ok=True)
@@ -2834,7 +2870,7 @@ def _retire_body(anchor: _StrPath, slug: str, why: str) -> str | None:
         # `add`'s placement check, a recall) is waited out: Windows refuses to rename an open file.
         sig.retry_while_shared(body.rename, us.free_archive_path(archive, slug + ".md"))
     except OSError as exc:
-        if body.is_file():                   # gone meanwhile: an `add` finished it first
+        if _body_digest(body) == digest:     # this body is still there: not archived
             return "archive failed: %s%s" % (exc, unrecorded)
     with contextlib.suppress(OSError):
         record.unlink(missing_ok=True)
@@ -2846,24 +2882,59 @@ def _finish_retirement(anchor: _StrPath, slug: str) -> None:
     a record of it. A record whose digest no longer matches the body is stale (the slug was
     reused since) and is dropped, leaving the body alone. Raises RetiredBodyHeld when the body
     still cannot be archived, and for a record it cannot read (it then cannot tell the old fact
-    from a new one)."""
+    from a new one). Runs under the slug's retirement lock (see `_retire_body`)."""
     record = _retiring_record(anchor, slug)
     if not record.is_file():
         return
+    with sig.memory_lock(_retiring_lock(anchor, slug)):
+        failure = _finish_retirement_locked(anchor, slug)
+    if failure is not None:
+        raise RetiredBodyHeld(slug, record, failure)
+
+
+def _finish_retirement_locked(anchor: _StrPath, slug: str) -> str | None:
+    """The step of `_finish_retirement` under the lock: None when nothing is left to do (no
+    record, a stale one, the body archived now), else why the body is still in `facts/`."""
+    record = _retiring_record(anchor, slug)
     try:
-        data = json.loads(record.read_text(encoding="utf-8"))
+        data = json.loads(sig.retry_while_shared(record.read_bytes).decode("utf-8"))
         digest, why = str(data["sha256"]), str(data["why"])
+    except FileNotFoundError:
+        return None                          # finished since the caller looked
     except (OSError, ValueError, KeyError, TypeError) as exc:
-        raise RetiredBodyHeld(slug, record, "the record cannot be read: %s; delete it if %s is "
-                              "the live fact" % (exc, us.body_path(anchor, slug))) from None
-    body = us.body_path(anchor, slug)
-    if body.is_file() and _body_digest(body) != digest:
+        return ("the record cannot be read: %s; delete it if %s is the live fact"
+                % (exc, us.body_path(anchor, slug)))
+    now = _body_digest(us.body_path(anchor, slug))
+    if now is not None and now != digest:
         with contextlib.suppress(OSError):
             record.unlink(missing_ok=True)
-        return
-    failure = _retire_body(anchor, slug, why)
-    if failure is not None:
-        raise RetiredBodyHeld(slug, record, "%s; %s" % (why, failure))
+        return None
+    failure = _retire_body_locked(anchor, slug, why)
+    return None if failure is None else "%s; %s" % (why, failure)
+
+
+def finish_retirements(anchor: _StrPath) -> tuple[list[str], list[tuple[str, str]]]:
+    """Finish every retirement `anchor`'s store records (see `_retire_body`): (the slugs whose
+    record is now gone: body archived, or the record stale, [(slug, why its body is still in
+    facts/)]). heal calls it; an `add` finishes only its own slug's. Holds one record at a time."""
+    done: list[str] = []
+    held: list[tuple[str, str]] = []
+    folder = us.central_facts_dir(anchor).parent / RETIRING_DIRNAME
+    try:
+        names = sorted(e.name for e in os.scandir(folder) if e.is_file())
+    except OSError:
+        return done, held
+    for name in names:
+        slug = name.removesuffix(".json")
+        if slug == name or not us.is_valid_slug(slug):
+            continue
+        with sig.memory_lock(_retiring_lock(anchor, slug)):
+            failure = _finish_retirement_locked(anchor, slug)
+        if failure is None:
+            done.append(slug)
+        else:
+            held.append((slug, failure))
+    return done, held
 
 
 def _relocate_line_refusal(dst_entry: Entry | us.Pointer | None, entry: Entry | us.Pointer) -> str | None:
