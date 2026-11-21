@@ -22,7 +22,9 @@ failure path exits 0 so a broken hook never disrupts session shutdown or a compa
 import json
 import os
 import sys
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Literal
 
 import transcript_turns
 from self_improve_signals import (asst_said_offset, audit_file, broad_matches, inert_snippet,
@@ -52,7 +54,7 @@ _MOMENTS = {
 _DEFAULT_MOMENT = ("The previous session contained", "Skills invoked last session: ")
 
 
-def _text(content):
+def _text(content: object) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -65,7 +67,7 @@ def _text(content):
 _TOOL_INPUT_FIELDS = ("command", "description", "file_path", "skill")
 
 
-def _tool_blocks(content):
+def _tool_blocks(content: object) -> list[str]:
     """Text of each tool_use input field and each tool_result output - what _text() cannot see.
 
     A tooling learning often exists ONLY here: the model runs a flag that does not exist and the
@@ -75,7 +77,7 @@ def _tool_blocks(content):
     """
     if not isinstance(content, list):
         return []
-    out = []
+    out: list[str] = []
     for b in content:
         if not isinstance(b, dict):
             continue
@@ -94,7 +96,7 @@ def _tool_blocks(content):
     return [block for block in out if block.strip()]
 
 
-def _read_tail(transcript_path):
+def _read_tail(transcript_path: str | os.PathLike[str]) -> bytes:
     """The transcript's last _MAX_BYTES, from the first whole line on; b"" when it cannot be read.
 
     One read per event: the candidates and the skill tally both take these bytes, so the tail
@@ -110,7 +112,12 @@ def _read_tail(transcript_path):
         return b""
 
 
-def _iter_messages(data):
+# One message of the tail: its prose under its own role, or its tool blocks under "tool". The
+# role is the discriminant, so a consumer that tests it gets the payload's type with it.
+Message = tuple[Literal["user", "assistant"], str] | tuple[Literal["tool"], list[str]]
+
+
+def _iter_messages(data: bytes) -> Iterator[Message]:
     """Yield (role, text) per message of the tail bytes `data` for the prose roles, then
     ("tool", [block, ...]) if it has any.
 
@@ -127,14 +134,15 @@ def _iter_messages(data):
             continue
         kind = obj.get("type")
         if kind in ("user", "assistant"):
+            role: Literal["user", "assistant"] = "user" if kind == "user" else "assistant"
             content = obj.get("message", {}).get("content")
-            yield kind, _text(content)
+            yield role, _text(content)
             blocks = _tool_blocks(content)
             if blocks:
                 yield "tool", blocks
 
 
-def _tool_signal(blocks):
+def _tool_signal(blocks: list[str]) -> tuple[list[str], str]:
     """(matched, the first block that matched) over one message's tool blocks; ([], "") if none.
 
     There is no strict counterpart: the gate never looks at tool blocks, so every tool signal is by
@@ -142,7 +150,8 @@ def _tool_signal(blocks):
     a time and by REGION within it: a pytest run up to its timed summary, a test file's diff hunk,
     a heredoc body, a numbered file listing.
     """
-    matched, shown = set(), ""
+    matched: set[str] = set()
+    shown = ""
     for block in blocks:
         hits = tool_matches_outside_fixtures(block)
         if hits:
@@ -151,7 +160,7 @@ def _tool_signal(blocks):
     return sorted(matched), shown
 
 
-def _signal_offset(role, text):
+def _signal_offset(role: str, text: str) -> int | None:
     """Where in the whitespace-collapsed `text` the signal that made it a candidate sits, for
     `inert_snippet(..., around=)`; None quotes the head.
 
@@ -165,26 +174,27 @@ def _signal_offset(role, text):
     return user_signal_offset(" ".join(str(text or "").split()))
 
 
-def _strict_hit(role, text):
+def _strict_hit(role: str, text: str) -> bool:
     """Whether the Stop gate's strict patterns fire on this message, read the way the gate reads
     it: the user's words whole, the assistant's with QUOTED spans blanked (`unquoted`). A quoted
     admission did not fire the gate, so counting it as caught hid the turn from this audit."""
     return strict_user_hit(text) if role == "user" else strict_asst_hit(unquoted(text))
 
 
-def find_candidates(transcript_path):
+def find_candidates(transcript_path: str | os.PathLike[str]) -> list[dict[str, object]]:
     """Return candidate-miss dicts: a broad/tool match the strict gate did NOT catch."""
     return _candidates_in(_read_tail(transcript_path))
 
 
-def _candidates_in(data):
+def _candidates_in(data: bytes) -> list[dict[str, object]]:
     """find_candidates over the already-read tail bytes `data`."""
-    candidates = []
-    for role, payload in _iter_messages(data):
-        if role == "tool":
-            matched, text = _tool_signal(payload)
+    candidates: list[dict[str, object]] = []
+    for message in _iter_messages(data):
+        role = message[0]
+        if message[0] == "tool":
+            matched, text = _tool_signal(message[1])
         else:
-            text = payload
+            text = message[1]
             # Invoking a skill injects its whole SKILL.md as a type="user" message, so the prose
             # scan would read shipped documentation as the user's own words and report the skill
             # to itself as a missed signal, every session. Same shape as the tool branch's test-data
