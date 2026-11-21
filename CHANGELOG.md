@@ -30,6 +30,23 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.21.0]
+
+### Fixed
+
+- Hooks no longer crash, or quietly judge nothing, when a field of their stdin event has the wrong type (a string `tool_input`, a list `command`, a non-bool `stop_hook_active`). Every hook that reads an event field narrows the event when it arrives: a wrong-typed field reads as absent, and a payload that is not a JSON object is ignored. Guards that used to raise on such a payload now skip it.
+- The session-start self-heal names each retired fact body it could not archive ("retired body still in facts/, not archived: ..."), as `memory_engine.py heal` already did.
+
+### Changed
+
+- `shell_text` is fully annotated: strict pyright reports 0 errors on it (970 before), and every hook that imports it reads typed answers. A replay of 40,000 recorded commands plus 20,000 random strings through every public reader gave identical output.
+- The shared hook helpers `harness_checks`, `secret_patterns`, `skill_frontmatter` and `transcript_turns` declare every parameter and return type (0 strict errors, from 663, 244, 80 and 257). The classifier, the commit gate and compact-resume call them and `shell_text` directly, without the Protocol views that restated their signatures.
+- `self-improve-audit` and `raw-char-arg-nudge` type the transcript messages and tool inputs they walk.
+
+### Added
+
+- `hooks/hook_event.py`: TypedDicts and narrowing parse functions for the PreToolUse, PostToolUse, PostToolUseFailure, PostToolBatch, Stop and UserPromptSubmit events, plus the fields common to every event.
+
 ## [11.20.3]
 
 ### Changed
