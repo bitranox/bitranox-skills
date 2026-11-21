@@ -472,7 +472,7 @@ def _positive_int(raw: str) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = EnvelopeArgumentParser(description=__doc__.splitlines()[0], envelope_command="dedup_scan")
+    p = EnvelopeArgumentParser(description=(__doc__ or "dedup_scan").splitlines()[0], envelope_command="dedup_scan")
     p.add_argument("--from", dest="start", default=".", help="a dir inside the tree")
     p.add_argument("--scope", choices=["tree", "chain"], default="tree",
                    help="tree = every fact in the tree; chain = only the facts the levels from "

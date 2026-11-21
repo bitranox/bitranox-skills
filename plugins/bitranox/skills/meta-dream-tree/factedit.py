@@ -1337,7 +1337,7 @@ def _add_target(p: argparse.ArgumentParser, *, slug_required: bool = True) -> No
 
 
 def build_parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap = argparse.ArgumentParser(description=(__doc__ or "factedit").splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     sh = sub.add_parser("show", help="read a fact: its hook, its body, and how the engine reads it")

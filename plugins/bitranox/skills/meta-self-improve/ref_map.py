@@ -351,7 +351,7 @@ def render(entries, out) -> None:
 def main(argv=None, out=None, err=None) -> int:
     out = out or sys.stdout
     err = err or sys.stderr
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "ref_map").splitlines()[0])
     parser.add_argument("slugs", nargs="*", help="slugs to map (dashes or underscores)")
     parser.add_argument("--moves", default=None, metavar="FILE",
                         help='judge a planned batch: JSON lines {"slug", "to"[, "from"]}')

@@ -319,7 +319,7 @@ def _run(args):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap = argparse.ArgumentParser(description=(__doc__ or "topic_tagging").splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     q = sub.add_parser("questions", help="one yes/no question per topic of the tree's list")
     q.add_argument("--from", dest="start", required=True, help="any dir of the tree")

@@ -724,7 +724,7 @@ def _render_diff(d: Diff) -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = EnvelopeArgumentParser(description=__doc__.splitlines()[0],
+    p = EnvelopeArgumentParser(description=(__doc__ or "store_manifest").splitlines()[0],
                                envelope_command="store_manifest")
     sub = p.add_subparsers(dest="cmd", required=True)
 
