@@ -31,6 +31,7 @@ Pure standard library; cross-platform (pathlib, UTF-8, the O_EXCL lock in self_i
 
 import argparse
 import contextlib
+import hashlib
 import json
 import os
 import re
@@ -439,6 +440,21 @@ class EmptyBody(ValueError):
         super().__init__("%r is new and its body is empty; a frame-only fact ships a hook with "
                          "nothing behind it. Pass --body/--body-file with the fact plus its "
                          "**Why:** and **How to apply:** lines" % slug)
+
+
+class RetiredBodyHeld(OSError):
+    """Raised by an `add` of a slug whose body a rename or relocate retired but could not archive
+    (on Windows, a reader held it open past the archive's wait). That body is the OLD fact: adopted
+    as this slug's body, the old fact would come back under its old name. Only a message
+    (strerror None), so the CLI prints it as `! error: <message>` and exits 2; nothing is written."""
+
+    def __init__(self, slug: str, record: Path, why: str) -> None:
+        super().__init__(
+            "%s is the slug of a retired fact whose body could not be archived yet (%s); the "
+            "retirement record is %s. Another process still holds that body open: run the add "
+            "again once it lets go, and the body is archived first. Nothing was written"
+            % (slug, why, record))
+        self.slug, self.record = slug, record
 
 
 class TopicsOnCreate(ValueError):
@@ -995,7 +1011,9 @@ def upsert_entry(proj: _StrPath, title: str, hook: str | None, body: str = "", t
     raises `NonLevelDir`. All three before any write. A slug whose pointer another level of the
     tree holds (a sibling, an ancestor or a child of the owner), while this level holds none,
     raises `SlugOwnedElsewhere` naming the owning level(s), before any write; a body no level
-    points at is adopted. A fact whose body is bound to a topic is
+    points at is adopted, except one a rename or relocate retired and could not archive (its
+    record in `.retiring/`, see `_retire_body`): that body is archived first, and while it still
+    cannot be, RetiredBodyHeld is raised before any write. A fact whose body is bound to a topic is
     decided and written under the tree's placement lock (`_placement_lock_if_bound`), so its
     lines change with no render or set-topics half done; PlacementLockBusy when it stays held.
 
@@ -1034,6 +1052,9 @@ def upsert_entry(proj: _StrPath, title: str, hook: str | None, body: str = "", t
     pruned = _pruned_part(anchor, proj)
     if pruned is not None:
         raise NonLevelDir(proj, *pruned)
+    # A body a rename or relocate retired but could not archive is the OLD fact: archived here,
+    # before any check below reads it as this slug's body, or RetiredBodyHeld while still held.
+    _finish_retirement(anchor, slug)
     # An empty body is the documented UPDATE path ("keep the stored one"), but on a CREATE there is
     # nothing to keep: it writes the frontmatter frame and stops, leaving a convincing always-loaded
     # hook with nothing behind it. Nothing downstream reports that - heal normalizes grammar, --check
@@ -2757,18 +2778,10 @@ def _relocate_across(rep: RelocateReport, src: Path, dst: Path, a_from: Path, a_
             archive_warning = ("source body kept: another level in the source tree still points "
                                "at it")
         else:
-            try:
-                archive = us.central_facts_dir(a_from).parent / ".archive"
-                archive.mkdir(parents=True, exist_ok=True)
-                if src_body.is_file():
-                    # Another session's unlocked read of the body (an `add`'s placement check,
-                    # a recall) holds it open for a moment, and Windows refuses to rename an open
-                    # file. Left in place, the body is one no level points at, and the next `add`
-                    # of the slug in this tree adopts it back.
-                    sig.retry_while_shared(src_body.rename,
-                                           us.free_archive_path(archive, slug + ".md"))
-            except OSError as exc:
-                archive_warning = "source body left in place (archive failed: %s)" % exc
+            failure = _retire_body(a_from, slug, "relocated to %s" % dst)
+            if failure is not None:
+                archive_warning = ("source body left in place, recorded as retired: the next add "
+                                   "of %s in this tree archives it first (%s)" % (slug, failure))
     if dropped_topics:
         rep.notes.append("dropped the topics: line of %s - topics are tagged against one tree's "
                          "list; tag it in the target tree with set-topics" % slug)
@@ -2776,6 +2789,81 @@ def _relocate_across(rep: RelocateReport, src: Path, dst: Path, a_from: Path, a_
         rep.warnings.append(archive_warning)
     rep.relocated = True
     return rep
+
+
+RETIRING_DIRNAME = ".retiring"
+"""The store subdir holding one record per retired body not yet archived (see `_retire_body`)."""
+
+
+def _retiring_record(anchor: _StrPath, slug: str) -> Path:
+    """`<store>/.retiring/<slug>`: present while `slug`'s retired body may still sit in `facts/`."""
+    return us.central_facts_dir(anchor).parent / RETIRING_DIRNAME / slug
+
+
+def _body_digest(body: Path) -> str:
+    """sha256 of the body file's bytes; read with the store's retry while Windows refuses it."""
+    return hashlib.sha256(sig.retry_while_shared(body.read_bytes)).hexdigest()
+
+
+def _retire_body(anchor: _StrPath, slug: str, why: str) -> str | None:
+    """Move `slug`'s body, which no level points at any more, into `<store>/.archive/`. Returns
+    None when it is archived (or already gone), else why it is still in `facts/`.
+
+    A record naming the body (its sha256) and `why` is written to `.retiring/` FIRST and removed
+    once the body is gone, so there is no moment at which a retired body sits in `facts/` with
+    nothing saying so. While it stays (on Windows a reader holding the body open past the
+    archive's wait refuses the rename), the next `add` of the slug finishes the archive before
+    it reads the body (`_finish_retirement`) instead of adopting the old fact as a dangling body."""
+    body = us.body_path(anchor, slug)
+    record = _retiring_record(anchor, slug)
+    if not body.is_file():
+        with contextlib.suppress(OSError):
+            record.unlink(missing_ok=True)
+        return None
+    unrecorded = ""
+    try:
+        record.parent.mkdir(parents=True, exist_ok=True)
+        us.write_if_changed(record, json.dumps({"sha256": _body_digest(body), "why": why}) + "\n")
+    except OSError as exc:
+        unrecorded = ("; its retirement record could not be written either (%s), so the next "
+                      "add of %s adopts it as that fact's body" % (exc, slug))
+    try:
+        archive = us.central_facts_dir(anchor).parent / ".archive"
+        archive.mkdir(parents=True, exist_ok=True)
+        # A reader holding the body open for a moment (another session's unlocked read: an
+        # `add`'s placement check, a recall) is waited out: Windows refuses to rename an open file.
+        sig.retry_while_shared(body.rename, us.free_archive_path(archive, slug + ".md"))
+    except OSError as exc:
+        if body.is_file():                   # gone meanwhile: an `add` finished it first
+            return "archive failed: %s%s" % (exc, unrecorded)
+    with contextlib.suppress(OSError):
+        record.unlink(missing_ok=True)
+    return None
+
+
+def _finish_retirement(anchor: _StrPath, slug: str) -> None:
+    """Archive `slug`'s retired body before an `add` of `slug` reads it, when `_retire_body` left
+    a record of it. A record whose digest no longer matches the body is stale (the slug was
+    reused since) and is dropped, leaving the body alone. Raises RetiredBodyHeld when the body
+    still cannot be archived, and for a record it cannot read (it then cannot tell the old fact
+    from a new one)."""
+    record = _retiring_record(anchor, slug)
+    if not record.is_file():
+        return
+    try:
+        data = json.loads(record.read_text(encoding="utf-8"))
+        digest, why = str(data["sha256"]), str(data["why"])
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise RetiredBodyHeld(slug, record, "the record cannot be read: %s; delete it if %s is "
+                              "the live fact" % (exc, us.body_path(anchor, slug))) from None
+    body = us.body_path(anchor, slug)
+    if body.is_file() and _body_digest(body) != digest:
+        with contextlib.suppress(OSError):
+            record.unlink(missing_ok=True)
+        return
+    failure = _retire_body(anchor, slug, why)
+    if failure is not None:
+        raise RetiredBodyHeld(slug, record, "%s; %s" % (why, failure))
 
 
 def _relocate_line_refusal(dst_entry: Entry | us.Pointer | None, entry: Entry | us.Pointer) -> str | None:
@@ -3111,16 +3199,10 @@ def _rename_locked(anchor: _StrPath, lvl: Path, *, others: Sequence[str], slug: 
         warnings.append("old body kept: %s took a line of %s while it was being renamed - "
                         "rename it there too" % (", ".join(late), slug))
         return None
-    try:
-        if src_body.is_file():
-            archive = us.central_facts_dir(anchor).parent / ".archive"
-            archive.mkdir(parents=True, exist_ok=True)
-            # Waits out a reader holding the body open, as relocate's archive does: left in
-            # place, the next `add` of the old slug adopts it and the fact answers to that name
-            # again.
-            sig.retry_while_shared(src_body.rename, us.free_archive_path(archive, slug + ".md"))
-    except OSError as exc:
-        warnings.append("old body left in place (archive failed: %s)" % exc)
+    failure = _retire_body(anchor, slug, "renamed to %s" % to_slug)
+    if failure is not None:
+        warnings.append("old body left in place, recorded as retired: the next add of %s "
+                        "archives it first (%s)" % (slug, failure))
     return None
 
 
