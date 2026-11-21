@@ -48,7 +48,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from datetime import date, datetime, timedelta, UTC
 from pathlib import Path
-from typing import Any, Protocol, Self, SupportsIndex, SupportsInt, TypeIs
+from typing import Any, Self, SupportsIndex, SupportsInt, TypeIs
 from urllib.parse import urlparse
 
 _HOOKS_DIR = Path(__file__).resolve().parent
@@ -67,31 +67,6 @@ type StrPath = str | os.PathLike[str]
 type JsonObject = Mapping[str, Any]
 #: One state a question set is asked over, and the questions: an item of `ask_many`.
 type AskItem = tuple[Mapping[str, object], Sequence[Question]]
-
-
-# Typed views of the sibling modules this module calls, which carry no annotations themselves.
-# Each module object is passed as its Protocol (not a cast), so pyright checks the module against
-# it, and a call still resolves on the live module.
-class _SecretPatterns(Protocol):
-    def redact(self, text: str, extra_literals: Sequence[str] = ...) -> tuple[str, int]: ...
-
-
-class _TranscriptTurns(Protocol):
-    def excerpt(self, text: str | None, cap: int) -> str: ...
-
-
-class _SkillFrontmatter(Protocol):
-    def description(self, path: Path) -> str | None: ...
-
-
-def _typed_views(secrets: _SecretPatterns, turns: _TranscriptTurns, frontmatter: _SkillFrontmatter
-                 ) -> tuple[_SecretPatterns, _TranscriptTurns, _SkillFrontmatter]:
-    """The modules unchanged, typed as their views (a parameter, because pyright narrows an
-    annotated module-level name to the module assigned to it)."""
-    return secrets, turns, frontmatter
-
-
-_secrets, _turns, _frontmatter = _typed_views(secret_patterns, transcript_turns, skill_frontmatter)
 
 
 def _is_json_object(value: object) -> TypeIs[dict[str, Any]]:
@@ -542,7 +517,7 @@ def prepare_state(fields: Mapping[str, object], key: str | None = None,
     total = 0
     literals = [key] if key else []
     for name, value in fields.items():
-        text, n = _secrets.redact(str(value or ""), extra_literals=literals)
+        text, n = secret_patterns.redact(str(value or ""), extra_literals=literals)
         total += n
         if len(text) > cap:
             half = cap // 2
@@ -585,7 +560,7 @@ PREVIOUS_FIELD = "previous_assistant_message"
 def with_previous(fields: Mapping[str, object], previous: str | None) -> dict[str, object]:
     """`fields` plus the trimmed previous reply, first; unchanged when there is none (the first
     prompt of a session), so no question is asked about an empty field."""
-    text = _turns.excerpt(previous, PREVIOUS_CAP)
+    text = transcript_turns.excerpt(previous, PREVIOUS_CAP)
     return {PREVIOUS_FIELD: text, **fields} if text else dict(fields)
 
 
@@ -632,7 +607,7 @@ def load_skill_descriptions(skills_dir: StrPath | None = None) -> dict[str, str]
     skills_dir = Path(skills_dir) if skills_dir else _HOOKS_DIR.parent / "skills"
     out: dict[str, str] = {}
     for md in sorted(skills_dir.glob("*/SKILL.md")):
-        desc = _frontmatter.description(md)
+        desc = skill_frontmatter.description(md)
         if desc:
             out[md.parent.name] = desc
     return out

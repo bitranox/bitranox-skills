@@ -130,23 +130,6 @@ class _ShellText(Protocol):
     def refuse(self, message: str, stream: IO[str] | None = None) -> int: ...
 
 
-class _HarnessChecks(Protocol):
-    def packages_missing_tests(self, packages: Iterable[Path]) -> list[Path]: ...
-    def frontmatter_description(self, path: str | os.PathLike[str]) -> str | None: ...
-    def cso_failures_for(self, label: str, description: str) -> list[str]: ...
-    def frontmatter_problems(self, skills_dir: str | os.PathLike[str]) -> list[str]: ...
-
-
-class _SecretPatterns(Protocol):
-    def find_secret_labels(self, text: str) -> list[str]: ...
-    def real_private_key_blocks(self, text: str) -> Iterator[re.Match[str]]: ...
-
-
-class _SkillFrontmatter(Protocol):
-    def frontmatter_block(self, text: str) -> str | None: ...
-    def field(self, block: str | None, key: str) -> str | None: ...
-
-
 def _is_json_object(value: object) -> TypeIs[dict[str, Any]]:
     """True for a decoded JSON object; its keys are str by JSON's own grammar."""
     return isinstance(value, dict)
@@ -156,19 +139,17 @@ def _is_tuple(value: object) -> TypeIs[tuple[object, ...]]:
     return isinstance(value, tuple)
 
 
-def _typed_views(shell: _ShellText, checks: _HarnessChecks, secrets: _SecretPatterns,
-                 frontmatter: _SkillFrontmatter
-                 ) -> tuple[_ShellText, _HarnessChecks, _SecretPatterns, _SkillFrontmatter]:
-    """The modules unchanged, typed as their views.
+def _typed_views(shell: _ShellText) -> _ShellText:
+    """The module unchanged, typed as its view.
 
-    Passed as parameters rather than assigned to annotated names because pyright narrows an
+    Passed as a parameter rather than assigned to an annotated name because pyright narrows an
     annotated module-level name to the assigned module, which would leave the re-export below
     Unknown; a parameter is checked against the Protocol and returns as it.
     """
-    return shell, checks, secrets, frontmatter
+    return shell
 
 
-_shell, _hc, _secrets, _frontmatter = _typed_views(shell_text, hc, secret_patterns, skill_frontmatter)
+_shell = _typed_views(shell_text)
 
 is_gated_command = _shell.is_gated_command
 
@@ -293,7 +274,7 @@ def _packages(root: Path) -> list[Path]:
 
 
 def check_tests_exist(root: Path) -> list[str]:
-    missing = [p.relative_to(root).as_posix() for p in _hc.packages_missing_tests(_packages(root))]
+    missing = [p.relative_to(root).as_posix() for p in hc.packages_missing_tests(_packages(root))]
     if missing:
         return ["These packages ship .py but have no tests/test_*.py:"] + [f"  {m}" for m in missing]
     return []
@@ -929,9 +910,9 @@ def check_secrets(root: Path) -> list[str]:
         text = raw.decode("utf-8", "replace")
         # The credential formats and the real-key-block rule live in secret_patterns, shared
         # with recall and the classifier's egress redaction.
-        for label in _secrets.find_secret_labels(text):
+        for label in secret_patterns.find_secret_labels(text):
             findings.append(f"  {rel}: possible {label}")
-        if next(_secrets.real_private_key_blocks(text), None):
+        if next(secret_patterns.real_private_key_blocks(text), None):
             findings.append(f"  {rel}: embedded private key")
         low = text.lower()
         for orig, term in deny:
@@ -1811,7 +1792,7 @@ def _shipped_description(root: Path, name: str, stage: Stage) -> str | None:
     if data is None:
         return None
     text = data.decode("utf-8-sig", errors="replace")
-    return _frontmatter.field(_frontmatter.frontmatter_block(text), "description")
+    return skill_frontmatter.field(skill_frontmatter.frontmatter_block(text), "description")
 
 
 def cso_failures(root: Path, changed: Iterable[str], stage: Stage | None = None) -> list[str]:
@@ -1831,7 +1812,7 @@ def cso_failures(root: Path, changed: Iterable[str], stage: Stage | None = None)
         desc = _shipped_description(root, m.group(1), stage)
         if desc is None:
             continue
-        fails.extend(_hc.cso_failures_for("skills/%s" % m.group(1), desc))
+        fails.extend(hc.cso_failures_for("skills/%s" % m.group(1), desc))
     return fails
 
 
@@ -1870,13 +1851,13 @@ def frontmatter_failures(root: Path, stage: Stage | None = None) -> list[str]:
     read a path, run unchanged. Where git cannot say what ships, the working tree is swept."""
     shipped = _shipped_skill_mds(root, STAGE_INDEX if stage is None else stage)
     if shipped is None:
-        return _hc.frontmatter_problems(root / _SKILLS_DIR)
+        return hc.frontmatter_problems(root / _SKILLS_DIR)
     with tempfile.TemporaryDirectory(prefix="repo-gate-frontmatter-") as scratch:
         for name, data in shipped.items():
             skill = Path(scratch) / name
             skill.mkdir()
             (skill / "SKILL.md").write_bytes(data)
-        return _hc.frontmatter_problems(scratch)
+        return hc.frontmatter_problems(scratch)
 
 
 def check_frontmatter(root: Path, stage: Stage | None = None) -> list[str]:
@@ -3574,7 +3555,7 @@ def _description(path: Path) -> str:
 
     The same reader as the CSO lint and the builders (`hc.frontmatter_description`), so a twin is
     matched on the description those ship rather than on a looser first-line guess."""
-    return _hc.frontmatter_description(path) or ""
+    return hc.frontmatter_description(path) or ""
 
 
 def _in_main_checkout(path: Path, public: Path) -> Path | None:
