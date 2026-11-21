@@ -14,15 +14,21 @@ import traceback
 from dataclasses import dataclass
 from pathlib import Path
 
+import approval_claims as AC
 import memory_engine as ME
 import open_work as ow
 import self_improve_signals as sig
+from decision_claims import Entry, decision_logs
 
 MEMORY_TYPES = (None, "user", "feedback", "project", "reference")
 
 
 class BadInput(ValueError):
     """A tool input the bridge refuses before calling anything."""
+
+
+class ApprovalClaimRefused(ValueError):
+    """A backlog item claiming a user approval without the user's words (see approval_claims)."""
 
 
 class BadRequest(ValueError):
@@ -35,7 +41,7 @@ class BadRequest(ValueError):
 
 
 # ME.ADD_REFUSALS is what the CLI `add` reports as a refusal; taken whole so the two cannot drift.
-REFUSALS = (ow.BacklogError, BadInput, *ME.ADD_REFUSALS, ME.ExcludedLevel, sig.MemoryWritesOff)
+REFUSALS = (ow.BacklogError, BadInput, ApprovalClaimRefused, *ME.ADD_REFUSALS, ME.ExcludedLevel, sig.MemoryWritesOff)
 
 
 @dataclass(frozen=True)
@@ -104,7 +110,28 @@ def _refuse_a_second_backlog(path, inp):
             "backlog here" % (path.parent, enclosing))
 
 
+def _approval_advice(inp, cwd):
+    """Refuse an approval claim without the user's words; return the advisory for one with them.
+
+    The tool writes OPEN-WORK.md itself, and Claude Code runs no PreToolUse hook for a mod's tool
+    (probed on CLI 2.1.329: a settings hook matching the tool name never fired while a Bash hook
+    in the same settings did), so decision-claim-guard cannot see this write: the rule is applied
+    here. The bridge gets no transcript_path; the transcript is found by CLAUDE_CODE_SESSION_ID.
+    """
+    text = "\n".join(str(inp.get(k) or "") for k in ("what", "open", "next"))
+    if not AC.APPROVAL.search(text):
+        return None
+    logs = decision_logs(cwd)
+    words = AC.WordSource(AC.transcript_for_session(sig.calling_session_id()), logs)
+    verdict = AC.judge(Entry(1, tuple(text.splitlines())), logs, words)
+    if verdict.problem is not None:
+        raise ApprovalClaimRefused(AC.explain(verdict, logs, "backlog_add"))
+    found = AC.concerns(verdict)
+    return AC.advice_text(verdict, found, "backlog_add") if found else None
+
+
 def _backlog_add(inp, cwd):
+    advice = _approval_advice(inp, cwd)
     path = ow.backlog_path(cwd)
     created = not path.is_file()
     if created:
@@ -114,6 +141,8 @@ def _backlog_add(inp, cwd):
                               raised=inp.get("raised")).to_data(), path, cwd)
     if created:
         data["created"] = True
+    if advice:
+        data["advice"] = advice
     return data
 
 

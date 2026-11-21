@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Guard a review-log claim that something is NOT the user's decision: it must name a checked term.
+"""Guard written claims about the user's answers: "not a user decision" and "the user approved".
 
 Registered on PreToolUse(Write|Edit|MultiEdit), PreToolUse(Bash|PowerShell) and
 PostToolUse(Bash|PowerShell|Monitor).
@@ -32,6 +32,23 @@ script will write, so the Bash path works on disk: PreToolUse snapshots each can
 names), and PostToolUse judges the lines the command added against that snapshot, then stores the
 new state. A line is judged once: the snapshot is the record of what has been judged, so an old
 entry, accepted or not, is never reported again.
+
+The approval rule. The same file has a second duty for OPEN-WORK.md, any handover.md and the
+messages of a git command (`-m`, `-F` file, a stdin heredoc, read through commit-tell-sweep.py,
+which owns that parsing). Text added there that claims the USER approved something
+(approval_claims.APPROVAL: "the user approved / agreed / accepted / said yes", "user-approved",
+"as the user approved", "der Benutzer hat ... freigegeben / zugestimmt", "vom Benutzer
+freigegeben") passes only when the same entry carries the user's own words in quotes, found in a
+message the person typed (task notifications, teammate and peer messages excluded), a chosen
+AskUserQuestion answer in the transcript or in USER-DECISIONS.jsonl, or names the file of a plan the
+user approved in plan mode; or a `decision-check: "<term>"` marker that resolves in
+USER-DECISIONS.jsonl (decision_claims, shared with the review-log rule). A bare paraphrase is
+refused, and so is a quote the user never typed, naming the nearest message the user did type. A
+claim that passes but reaches past its evidence (a widening word such as "as is" or "everything"
+the quote lacks, or an iron-rule area it does not name) gets an advisory, never a block. A commit
+message from a -F file is reported by line, never quoted back: this runs before the call is
+approved. The backlog_add tool writes OPEN-WORK.md itself, outside every hook, so mod_bridge.py
+applies the same rule (approval_claims) there.
 
 Decisions:
     - Trigger phrases are claims that a property is NOT the user's decision; "(my reading)", "my
@@ -83,6 +100,62 @@ Decisions:
       covers every case seen; reading the transcript per write costs more. Reopen if: a session
       launched in an umbrella writes a nested repository's review log and slips through.
 
+    - The approval rule's triggers are the requested phrase list and its German forms only; the
+      passive "approved by the user" and "with the user's go" were tried and left out. Why: replayed
+      2026-11-20 over 7,418 real writes to the watched files (3,875 commit -F, 461 commit -m, 2,130
+      handover, 745 OPEN-WORK, 207 backlog_add; deduped by tool_use id), the wider list refused
+      56 (0.75%), mostly plan approvals and prospective "only with the user's go"; the list as
+      shipped refuses 38 (0.51%, about 1 in 195), 33 bare paraphrases and 5 quotes the user never
+      typed, against 0 of 7,211 for the pre-change guard. KNOWN GAP: "pushed with the user's go"
+      (7 of those 56, each a real push claim) passes unchecked. Reopen if: a false claim recurs in
+      a passive or "go" phrasing. Pinned by:
+      tests/test_approval_claim_guard.py::test_approval_phrases_trigger,
+      tests/test_approval_claim_guard.py::test_passive_and_go_forms_are_deliberately_no_triggers
+    - A quote passes only when the user typed it (transcript_turns.human_text), chose it
+      (an AskUserQuestion answer: chosen label and description), or it is in a chosen
+      USER-DECISIONS.jsonl answer; on a miss the project's earlier transcripts are searched (64 MiB,
+      newest first). Why: a teammate or task message reads like the user and is not; handovers cite
+      approvals from the session before. With no transcript and no decision log readable a quote
+      passes unverified. Pinned by: tests/test_approval_claim_guard.py::test_a_quote_only_a_teammate_sent_is_not_the_users_words,
+      tests/test_approval_claim_guard.py::test_a_quote_typed_in_an_earlier_session_of_the_project_passes,
+      tests/test_approval_claim_guard.py::test_an_unchosen_ask_user_question_option_is_not_the_users_words,
+      tests/test_approval_claim_guard.py::test_a_quote_passes_unverified_when_no_transcript_is_readable
+    - A plan approved in plan mode (ExitPlanMode's success result) counts when the entry names the
+      plan's file. Why: the approval is a click, so there are no words to quote. Pinned by:
+      tests/test_approval_claim_guard.py::test_a_plan_approved_in_plan_mode_passes_when_the_entry_names_its_file,
+      tests/test_approval_claim_guard.py::test_a_plan_the_user_rejected_in_plan_mode_does_not_pass
+    - MY READING, NOT A USER DECISION (the user asked for duty 2 in these words, umlauts written as ASCII: "das soll aber auch
+      Benutzerangaben kritisch pruefen - wenn diese schaedlich sind, darauf hinweisen und den
+      Benutzer eine Empfehlung aussprechen, mit Begruendung"; how it is built was not put to the
+      user): duty 2 is ADVISORY (additionalContext), never a block, and fires only when the claim
+      outside its quotes holds a widening word (approval_claims._WIDEN) or an iron-rule area
+      (approval_claims._IRON: secrets or credentials, a public push or release, a force push,
+      deleting data or history, AI attribution) that the evidence does not itself name. An area the
+      user's own words name raises nothing. Why: the user named the claim's scope; a block on what
+      the user said would override the user. Replayed: 1 advisory in 7,418 writes (9 in the wider
+      draft). Reopen if: the user rules otherwise. Pinned by:
+      tests/test_approval_claim_guard.py::test_a_claim_reaching_past_its_quote_gets_an_advisory_not_a_block,
+      tests/test_approval_claim_guard.py::test_a_claim_touching_an_iron_rule_area_the_quote_never_named_gets_an_advisory,
+      tests/test_approval_claim_guard.py::test_a_claim_naming_only_what_the_quote_names_gets_no_advisory
+    - Commit messages are judged at PreToolUse Bash (the `git commit -F` / `-m` call), not when the
+      message file is written. Why: a message file has no fixed name, so only the commit call says a
+      file is one; the commit is refused before it runs. Pinned by:
+      tests/test_approval_claim_guard.py::test_a_commit_message_file_with_a_paraphrase_is_refused_without_echoing_it
+    - The backlog_add tool is judged in mod_bridge.py. Why: probed 2026-11-20 on CLI 2.1.329, a
+      settings PreToolUse/PostToolUse hook matching mcp__bitranox__backlog_list never fired while a
+      Bash hook in the same settings did. The bridge finds the transcript by CLAUDE_CODE_SESSION_ID;
+      whether the mod process inherits it was not measured, and without it a quote passes
+      unverified. Pinned by: tests/test_approval_claim_guard.py::test_backlog_add_refuses_a_bare_paraphrase
+    - A shell command's OPEN-WORK.md and handover.md candidates come from their own function,
+      `approval_candidates`, and `candidates` keeps finding review logs only; `shell_candidates`
+      joins the two for the Bash snapshot and judge. A path the command names goes through
+      shell_text.msys_drive_path_for_tool first, so on Windows Git Bash's `/c/...` is drive C and
+      a mount (`/tmp/...`) names no candidate. Why: the review-log reader is changed by other work
+      on its own schedule; keeping the approval files out of it keeps the two from colliding.
+      Pinned by: tests/test_approval_claim_guard.py::test_review_log_candidates_stay_review_logs_only,
+      tests/test_approval_claim_guard.py::test_a_git_bash_drive_path_to_a_handover_is_read_as_its_drive,
+      tests/test_approval_claim_guard.py::test_a_git_bash_mount_path_to_a_backlog_names_no_candidate
+
 Fails open: any error allows the write (exit 0). A PreToolUse refusal is exit 2 through
 shell_text.refuse (reason and the whole-call footer on stderr); a PostToolUse refusal is exit 0
 with {"decision": "block", "reason": ...} on stdout, because the command already ran and the
@@ -94,71 +167,38 @@ from __future__ import annotations
 import collections
 import dataclasses
 import hashlib
+import importlib.util
 import json
 import os
 import re
 import sys
 from pathlib import Path
 
+import approval_claims
 import claude_paths
 import shell_text
-from self_improve_signals import main_checkout_root
+from decision_claims import (MARKER, TRIGGER, Entry, decision_logs, entries, find_hits,
+                             iter_records, marker_terms, triggered_entries)
+from decision_claims import counts as _counts
 
 __all__ = ["TRIGGER", "MARKER", "entries", "judge", "main"]
 
 REVIEW_NAME = "EXECUTION-USER-REVIEW.md"
-LOG_NAME = "USER-DECISIONS.jsonl"
 _STATE_DIR = "decision-claim-guard"
 _WRITE_TOOLS = frozenset({"Write", "Edit", "MultiEdit"})
 _SHELL_TOOLS = frozenset({"Bash", "PowerShell"})
 _POST_TOOLS = frozenset({"Bash", "PowerShell", "Monitor"})
-_MAX_BYTES = 16 * 1024 * 1024          # a review log beyond this is not judged at all
-_MIN_TERM = 3
-_QUOTE_MAX = 400
+_MAX_BYTES = 16 * 1024 * 1024          # a watched file beyond this is not judged at all
 _HEAD_MAX = 100
 _RECENT = 8
 _SHOWN = 3
 
-_APOS = "['" + chr(0x2019) + "]"          # straight and typographic apostrophe
-TRIGGER = re.compile(
-    r"\bnot\s+(?:a|the)\s+user(?:" + _APOS + r"s)?\s+decision\b"
-    r"|\bno\s+user\s+decision\b"
-    r"|\bmy\s+own\s+wording\b"
-    r"|\bnot\s+the\s+user" + _APOS + r"s\b"
-    r"|\buser\s+never\s+decided\b"
-    r"|\bnot\s+decided\s+by\s+the\s+user\b",
-    re.IGNORECASE,
-)
-_LDQ, _RDQ = chr(0x201C), chr(0x201D)              # typographic double quotes
-MARKER = re.compile(r"decision-check:\s*[\"" + _LDQ + r"]([^\"" + _RDQ + r"\n]*)[\"" + _RDQ + r"]",
-                    re.IGNORECASE)
-_ENTRY_START = re.compile(r"^(?:[-*+]\s|\d+[.)]\s|#{1,6}\s)")
-_FENCE = re.compile(r"^\s*(?:```|~~~)")
-_SENTENCE = re.compile(r"(?<=[.!?;])\s+")
 _PATH_IN_TEXT = re.compile(r"[^\s'\"`;|&<>()=]*" + re.escape(REVIEW_NAME), re.IGNORECASE)
-_SPACE = re.compile(r"\s+")
-
-
-@dataclasses.dataclass(frozen=True)
-class Entry:
-    """One review-log entry: its first line number (1-based) and its lines."""
-
-    start: int
-    lines: tuple[str, ...]
-
-    @property
-    def text(self) -> str:
-        return "\n".join(self.lines)
-
-
-@dataclasses.dataclass(frozen=True)
-class Hit:
-    """A chosen option of a recorded answer whose text holds a marker term."""
-
-    term: str
-    header: str
-    label: str
-    sentence: str
+_APPROVAL_NAMES = ("OPEN-WORK.md", "handover.md")
+_APPROVAL_PATH_IN_TEXT = re.compile(
+    r"[^\s'\"`;|&<>()=]*(?:" + "|".join(re.escape(n) for n in _APPROVAL_NAMES) + ")", re.IGNORECASE)
+_COMMIT_SWEEP = "commit-tell-sweep.py"
+_GIT_MESSAGE = re.compile(r"\bgit\b[\s\S]*(?:\s-\w*[mF]|--message|--file)")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -170,125 +210,13 @@ class Problem:
     detail: str
 
 
-def entries(text: str) -> list[Entry]:
-    """Split a review log into entries at each top-level list item or heading, outside fences."""
-    out, current, start, fenced = [], [], 1, False
-    for number, line in enumerate(text.splitlines(), 1):
-        if _FENCE.match(line):
-            fenced = not fenced
-        elif not fenced and _ENTRY_START.match(line) and current:
-            out.append(Entry(start, tuple(current)))
-            current, start = [], number
-        current.append(line)
-    if current:
-        out.append(Entry(start, tuple(current)))
-    return out
-
-
-def _line_key(line: str) -> str:
-    return hashlib.sha1(line.rstrip().encode("utf-8", "surrogatepass")).hexdigest()[:12]
-
-
-def _counts(text: str) -> collections.Counter[str]:
-    return collections.Counter(_line_key(line) for line in text.splitlines())
-
-
-def triggered_entries(text: str, before: collections.Counter[str]) -> list[Entry]:
-    """Entries of `text` where a trigger phrase touches a line `before` did not hold. PURE."""
-    excess = _counts(text) - before
-    hit = []
-    for entry in entries(text):
-        added = []
-        for line in entry.lines:
-            key = _line_key(line)
-            fresh = excess[key] > 0
-            if fresh:
-                excess[key] -= 1
-            added.append(fresh)
-        if any(added) and _trigger_on_added(entry, added):
-            hit.append(entry)
-    return hit
-
-
-def _trigger_on_added(entry: Entry, added: list[bool]) -> bool:
-    """True when a trigger match overlaps an added line (a match may wrap across lines)."""
-    joined, owner = "", []
-    for index, line in enumerate(entry.lines):
-        piece = line + " "
-        joined += piece
-        owner.extend([index] * len(piece))
-    for match in TRIGGER.finditer(joined):
-        if any(added[owner[i]] for i in range(match.start(), max(match.start() + 1, match.end()))):
-            return True
-    return False
-
-
-def _norm(text: str) -> str:
-    return _SPACE.sub(" ", text).strip().lower()
-
-
-def _chosen_texts(record: dict) -> list[tuple[str, str, str]]:
-    """(header, label, text) for each piece of a record the user chose or typed."""
-    header = str(record.get("header") or record.get("question") or "")
-    chosen = record.get("chosen")
-    options = record.get("chosen_options")
-    if not isinstance(options, list):
-        options = [o for o in record.get("options") or []
-                   if isinstance(o, dict) and o.get("label") == chosen]
-    out = []
-    for option in options:
-        if isinstance(option, dict):
-            label = str(option.get("label") or "")
-            out.append((header, label, label))
-            out.append((header, label, str(option.get("description") or "")))
-    if not out and isinstance(chosen, str):
-        out.append((header, chosen[:80], chosen))          # free text or a plan-rejection remark
-    annotation = record.get("annotation")
-    notes = annotation.get("notes") if isinstance(annotation, dict) else None
-    if isinstance(notes, str) and notes:
-        out.append((header, "notes", notes))
-    return out
-
-
-def _iter_records(logs: list[Path]):
-    for log in logs:
-        try:
-            with open(log, encoding="utf-8", errors="replace") as handle:
-                for raw in handle:
-                    try:
-                        record = json.loads(raw)
-                    except ValueError:
-                        continue
-                    if isinstance(record, dict):
-                        yield record
-        except OSError:
-            continue
-
-
-def find_hits(term: str, logs: list[Path]) -> list[Hit]:
-    """Every chosen option (or typed answer) in `logs` whose text holds `term`."""
-    want, hits = _norm(term), []
-    for record in _iter_records(logs):
-        for header, label, text in _chosen_texts(record):
-            if want not in _norm(text):
-                continue
-            sentence = next((s for s in _SENTENCE.split(text) if want in _norm(s)), text)
-            hits.append(Hit(term, header, label, sentence.strip()[:_QUOTE_MAX]))
-    return hits
-
-
 def judge(entry: Entry, logs: list[Path]) -> Problem | None:
     """The reason `entry` is refused, or None when its markers check out. PURE but for `logs`."""
-    terms = MARKER.findall(entry.text)
+    terms, bad = marker_terms(entry)
     if not terms:
         return Problem(entry, "no-marker", "")
-    outside = _norm(MARKER.sub(" ", entry.text))
-    for term in terms:
-        if len(term.strip()) < _MIN_TERM:
-            return Problem(entry, "bad-term", "the term %r is shorter than %d characters" % (term, _MIN_TERM))
-        if _norm(term) not in outside:
-            return Problem(entry, "bad-term",
-                           "the term %r does not occur in the entry outside the marker" % term)
+    if bad is not None:
+        return Problem(entry, "bad-term", bad)
     for term in terms:
         hits = find_hits(term, logs)[::-1]             # the most recent answer first
         if hits:
@@ -297,22 +225,9 @@ def judge(entry: Entry, logs: list[Path]) -> Problem | None:
     return None
 
 
-def decision_logs(*dirs: Path | None) -> list[Path]:
-    """USER-DECISIONS.jsonl at the main checkout root of each dir's repository, existing, unique."""
-    out = []
-    for directory in dirs:
-        if directory is None or not directory.is_dir():
-            continue
-        root = main_checkout_root(directory)
-        log = root / LOG_NAME if root is not None else None
-        if log is not None and log.is_file() and log not in out:
-            out.append(log)
-    return out
-
-
 def _recent(logs: list[Path]) -> list[str]:
     tail = collections.deque(maxlen=_RECENT)
-    for record in _iter_records(logs):
+    for record in iter_records(logs):
         tail.append("%s: %s" % (record.get("header") or record.get("question"), record.get("chosen")))
     return list(tail)
 
@@ -394,25 +309,103 @@ def _proposed(tool_input: dict, current: str, tool: str) -> tuple[str, str]:
     return _apply_edits(current, [e for e in edits or [] if isinstance(e, dict)])
 
 
-def on_write(event: dict) -> str | None:
+@dataclasses.dataclass(frozen=True)
+class Outcome:
+    """What one hook run found: a refusal to show the model, an advisory, or neither."""
+
+    refusal: str | None = None
+    advice: str | None = None
+
+
+def _event_cwd(event: dict) -> Path | None:
+    return Path(event["cwd"]) if isinstance(event.get("cwd"), str) else None
+
+
+def _words(event: dict, logs: list[Path]) -> approval_claims.WordSource:
+    raw = event.get("transcript_path")
+    return approval_claims.WordSource(Path(raw) if isinstance(raw, str) and raw else None, logs)
+
+
+def judge_approvals(flagged: list[Entry], logs: list[Path], words: approval_claims.WordSource,
+                    where: str, echo: bool = True) -> Outcome:
+    """Duty 1 (refuse) and duty 2 (advise) for each entry holding an approval claim."""
+    refusals, advice = [], []
+    for entry in flagged:
+        verdict = approval_claims.judge(entry, logs, words)
+        if verdict.problem is not None:
+            refusals.append(approval_claims.explain(verdict, logs, where, echo))
+            continue
+        found = approval_claims.concerns(verdict)
+        if found:
+            advice.append(approval_claims.advice_text(verdict, found, where, echo))
+    return Outcome("\n\n".join(refusals) or None, "\n\n".join(advice) or None)
+
+
+def _judge_review(text: str, before: collections.Counter[str], path: Path, cwd: Path | None) -> list[str]:
+    flagged = triggered_entries(text, before)
+    logs = decision_logs(path.parent, cwd) if flagged else []
+    problems = [p for p in (judge(e, logs) for e in flagged) if p is not None] if logs else []
+    return [explain(p, logs, str(path)) for p in problems]
+
+
+def _judge_target(text: str, before: collections.Counter[str], path: Path, event: dict) -> Outcome:
+    flagged = triggered_entries(text, before, approval_claims.APPROVAL)
+    if not flagged:
+        return Outcome()
+    logs = decision_logs(path.parent, _event_cwd(event))
+    return judge_approvals(flagged, logs, _words(event, logs), str(path))
+
+
+def on_write(event: dict) -> Outcome:
     tool_input = event.get("tool_input") or {}
     raw = tool_input.get("file_path")
-    if not isinstance(raw, str) or not _is_review(raw):
-        return None
+    if not isinstance(raw, str) or not (_is_review(raw) or approval_claims.is_target(raw)):
+        return Outcome()
     path = _resolve(raw, event.get("cwd"))
     current = _read(path)
     if current is None:
-        return None
+        return Outcome()
     before, after = _proposed(tool_input, current, event.get("tool_name"))
-    flagged = triggered_entries(after, _counts(before))
-    if not flagged:
-        return None
-    cwd = Path(event["cwd"]) if isinstance(event.get("cwd"), str) else None
-    logs = decision_logs(path.parent, cwd)
-    if not logs:
-        return None
-    problems = [p for p in (judge(e, logs) for e in flagged) if p is not None]
-    return "\n\n".join(explain(p, logs, str(path)) for p in problems) or None
+    if not _is_review(raw):
+        return _judge_target(after, _counts(before), path, event)
+    return Outcome("\n\n".join(_judge_review(after, _counts(before), path, _event_cwd(event))) or None)
+
+
+# ---- git commit messages (PreToolUse Bash) ----------------------------------------------------
+
+
+def _commit_sweep():
+    """commit-tell-sweep.py, loaded once: it owns reading a git command's messages (-m, -F, stdin)."""
+    name = "_dcg_commit_tell_sweep"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name(_COMMIT_SWEEP))
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module                     # registered before exec, as a dataclass needs
+        spec.loader.exec_module(module)
+    return sys.modules[name]
+
+
+def on_commit(event: dict) -> Outcome:
+    """Judge the approval claims in the messages a git command passes inline or by -F file."""
+    command = (event.get("tool_input") or {}).get("command")
+    if not isinstance(command, str) or not _GIT_MESSAGE.search(command):
+        return Outcome()                               # cheap test before splitting the command
+    sweep = _commit_sweep()
+    tool = event.get("tool_name") or "Bash"
+    written, _unread = sweep.same_command_messages(command, tool)
+    refusals, advice = [], []
+    logs: list[Path] | None = None
+    for message in sweep._messages(command, tool) + written:
+        if not approval_claims.APPROVAL.search(message.text):
+            continue
+        if logs is None:
+            logs = decision_logs(_event_cwd(event))
+        entry = Entry(1, tuple(message.text.splitlines()))
+        where = "commit message file %s" % message.path if message.path else "commit message"
+        found = judge_approvals([entry], logs, _words(event, logs), where, echo=not message.from_file)
+        refusals += [found.refusal] if found.refusal else []
+        advice += [found.advice] if found.advice else []
+    return Outcome("\n\n".join(refusals) or None, "\n\n".join(advice) or None)
 
 
 # ---- Bash / PowerShell / Monitor (PreToolUse snapshot, PostToolUse judge) ---------------------
@@ -468,6 +461,33 @@ def candidates(event: dict, *, os_name: str = os.name) -> list[Path]:
     return unique[:8]
 
 
+def approval_candidates(event: dict, *, os_name: str = os.name) -> list[Path]:
+    """Backlogs and handovers a shell command may have written: at the work roots and any it names.
+
+    Kept apart from `candidates` (the review-log reader) so the two rules can change separately.
+    A path the command names is a word of its shell, so it is read the way that shell reads it
+    before `_resolve` places it: on Windows Git Bash reads `/c/repo/...` as drive C and `/tmp/...`
+    through its mount table, where pathlib alone would name a file the command never wrote.
+    `os_name` is a parameter so tests reach the Windows reading on any host.
+    """
+    raw_cwd = event.get("cwd")
+    cwd = Path(raw_cwd) if isinstance(raw_cwd, str) and raw_cwd else None
+    found = [root / name for root in (_work_roots(cwd) if cwd else []) for name in _APPROVAL_NAMES]
+    command = (event.get("tool_input") or {}).get("command")
+    if isinstance(command, str) and any(n.lower() in command.lower() for n in _APPROVAL_NAMES):
+        tool = event.get("tool_name") if isinstance(event.get("tool_name"), str) else "Bash"
+        for m in _APPROVAL_PATH_IN_TEXT.finditer(command):
+            word = shell_text.msys_drive_path_for_tool(m.group(0), tool, os_name)
+            if word is not None:
+                found.append(_resolve(word, raw_cwd))
+    return list(dict.fromkeys(found))[:8]
+
+
+def shell_candidates(event: dict) -> list[Path]:
+    """Every watched file a shell command may have written: review logs, then approval files."""
+    return list(dict.fromkeys(candidates(event) + approval_candidates(event)))
+
+
 def _state_path(path: Path) -> Path:
     key = hashlib.sha1(str(path).encode("utf-8", "surrogatepass")).hexdigest()[:16]
     return claude_paths.audit_dir() / _STATE_DIR / (key + ".json")
@@ -503,7 +523,7 @@ def _save_state(path: Path, signature: list[int] | None, text: str) -> None:
 
 def on_shell_pre(event: dict) -> None:
     """Record each candidate log as it is before the command runs (re-read only when it changed)."""
-    for path in candidates(event):
+    for path in shell_candidates(event):
         signature = _signature(path)
         state = _load_state(path)
         if state is not None and state.get("sig") == signature:
@@ -513,11 +533,11 @@ def on_shell_pre(event: dict) -> None:
             _save_state(path, signature, text)
 
 
-def on_shell_post(event: dict) -> str | None:
-    """Judge the lines the command added to each candidate log; store the new state either way."""
-    cwd = Path(event["cwd"]) if isinstance(event.get("cwd"), str) else None
-    messages = []
-    for path in candidates(event):
+def on_shell_post(event: dict) -> Outcome:
+    """Judge the lines the command added to each candidate file; store the new state either way."""
+    cwd = _event_cwd(event)
+    messages, advice = [], []
+    for path in shell_candidates(event):
         signature = _signature(path)
         state = _load_state(path)
         if signature is None or (state is not None and state.get("sig") == signature):
@@ -529,17 +549,17 @@ def on_shell_post(event: dict) -> str | None:
         if state is None:
             continue                                   # never snapshotted: seed, do not judge
         before = collections.Counter(state.get("lines") or {})
-        flagged = triggered_entries(text, before)
-        logs = decision_logs(path.parent, cwd) if flagged else []
-        for entry in flagged if logs else []:
-            problem = judge(entry, logs)
-            if problem is not None:
-                messages.append(explain(problem, logs, str(path)))
+        if _is_review(str(path)):
+            messages += _judge_review(text, before, path, cwd)
+            continue
+        found = _judge_target(text, before, path, event)
+        messages += [found.refusal] if found.refusal else []
+        advice += [found.advice] if found.advice else []
     if not messages:
-        return None
-    return "\n\n".join(messages) + (
+        return Outcome(advice="\n\n".join(advice) or None)
+    return Outcome("\n\n".join(messages + advice) + (
         "\n\nThe file was already written by that command: fix the entry now (Edit the file), "
-        "then go on.")
+        "then go on."))
 
 
 def main() -> int:
@@ -551,16 +571,24 @@ def main() -> int:
         return 0
     tool, hook = event.get("tool_name"), event.get("hook_event_name")
     if hook == "PreToolUse" and tool in _WRITE_TOOLS:
-        message = on_write(event)
-        return shell_text.refuse(message) if message else 0
-    if hook == "PreToolUse" and tool in _SHELL_TOOLS:
+        found = on_write(event)
+    elif hook == "PreToolUse" and tool in _SHELL_TOOLS:
         on_shell_pre(event)
+        found = on_commit(event)
     elif hook == "PostToolUse" and tool in _POST_TOOLS:
-        message = on_shell_post(event)
-        if message:
+        found = on_shell_post(event)
+        if found.refusal:
             # The command already ran, so the shared refusal footer ("NOTHING in this call ran")
             # would be false here: PostToolUse blocks through its own decision field instead.
-            sys.stdout.write(json.dumps({"decision": "block", "reason": message}) + "\n")
+            sys.stdout.write(json.dumps({"decision": "block", "reason": found.refusal}) + "\n")
+            return 0
+    else:
+        return 0
+    if found.refusal:
+        return shell_text.refuse(found.refusal)
+    if found.advice:
+        sys.stdout.write(json.dumps({"hookSpecificOutput": {
+            "hookEventName": hook, "additionalContext": found.advice}}) + "\n")
     return 0
 
 

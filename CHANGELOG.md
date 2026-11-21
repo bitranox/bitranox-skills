@@ -30,6 +30,20 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.19.0]
+
+### Added
+
+- decision-claim-guard now also judges approval claims. Text added to OPEN-WORK.md, a handover.md or a git commit message (`-m`, a `-F` file, a stdin heredoc) that says the user approved, agreed, accepted or said yes (German: "der Benutzer hat ... freigegeben / zugestimmt", "vom Benutzer freigegeben") must quote the user's own words or carry a `decision-check: "<term>"` marker that resolves in USER-DECISIONS.jsonl. A quote counts when the person typed it (not a teammate, subagent or task message), chose it in an AskUserQuestion answer, or it is in a chosen USER-DECISIONS.jsonl answer; the project's earlier transcripts are searched on a miss, and naming the file of a plan the user approved in plan mode also counts. A bare paraphrase is refused, and so is a quote the user never typed, with the nearest message the user did type. A `-F` file's text is never quoted back.
+- A claim that passes but reaches past the user's words (a widening word such as "as is" or "everything" the quote lacks, or an iron-rule area it does not name: secrets, a public push or release, a force push, deleting data or history, AI attribution) gets an advisory telling the model to raise it with the user and recommend the narrowest reading, with the reason. It never blocks; that choice and the area list are the implementer's reading, recorded as such in the hook's Decisions block.
+- When a Bash command writes OPEN-WORK.md or handover.md, a path it names is read the way Git Bash reads it on Windows (`/c/...` is drive C; a mount such as `/tmp/...` names no file), so the written file is the one judged.
+- The backlog_add tool applies the same rule in mod_bridge.py (refusal kind `ApprovalClaimRefused`, advisory in `data.advice`): Claude Code runs no PreToolUse hook for a mod's tool (probed on CLI 2.1.329).
+- Replayed over 7,418 recorded writes to these files: 38 refused (0.51%), 1 advisory; the pre-change guard refused none. The passive "approved by the user" and "with the user's go" stay outside the trigger list: they raised the refusals to 56, mostly plan approvals and future-tense conditions.
+
+### Changed
+
+- The entry splitting, added-line detection and `decision-check` marker lookup the review-log rule uses moved to `hooks/decision_claims.py`, shared with the approval rule; the review-log rule behaves as before.
+
 ## [11.18.1]
 
 ### Fixed
