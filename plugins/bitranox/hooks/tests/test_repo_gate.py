@@ -3908,14 +3908,15 @@ def test_version_sync_fires_on_a_pyproject_that_is_not_valid_toml(tmp_path):
     assert any("not valid TOML" in f for f in failures)
 
 
-def _versions_across_origin(root):
+def _versions_across_origin(root: Path) -> tuple[object, object] | None:
     """(origin/master's plugin.json version, the checkout's), or None with no origin/master: what
     a fixture below must show before its check means anything."""
     rc, old_blob, _ = RG._git(root, "show", "origin/master:" + PJ_REL)
     if rc != 0:
         return None
-    new = json.loads((root / PJ_REL).read_text(encoding="utf-8")).get("version")
-    return json.loads(old_blob).get("version"), new
+    new: object = json.loads((root / PJ_REL).read_text(encoding="utf-8")).get("version")
+    old: object = json.loads(old_blob).get("version")
+    return old, new
 
 
 def test_changelog_fires_on_an_undocumented_version_with_no_bump(tmp_path):
