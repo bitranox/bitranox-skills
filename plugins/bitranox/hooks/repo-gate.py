@@ -110,10 +110,12 @@ import skill_frontmatter  # noqa: E402
 # same question for its own reason (a commit is when work concludes, which is when the
 # decision-review nudge fires), and two copies of this regex set would drift silently in both
 # directions. Re-exported here because this module's own tests and callers name it.
-# Typed views of the sibling modules this gate calls. Those modules carry no annotations, so a
-# direct call yields Unknown everywhere it flows. Each view is a Protocol the module object itself
-# is passed as (not a cast): pyright checks the module against it, and a call still resolves on
-# the live module, so nothing is bound at import.
+# A typed view of `shell_text`, the one sibling module this gate still reaches through a view:
+# shell_text leaves most parameters and returns unannotated, so a direct call yields Unknown
+# everywhere it flows. The other helpers this gate calls (harness_checks, secret_patterns,
+# skill_frontmatter) declare their own types and are called directly. The view is a Protocol the
+# module object itself is passed as (not a cast): pyright checks the module against it, and a call
+# still resolves on the live module, so nothing is bound at import.
 class _ShellText(Protocol):
     def iter_segments(self, text: str, tool_name: str | None = None) -> Iterator[tuple[int, str]]: ...
     def is_git_verb(self, segment: str, verbs: AbstractSet[str], tool_name: str = "Bash") -> bool: ...
