@@ -461,3 +461,15 @@ def test_help_works_under_python_oo() -> None:
     proc = subprocess.run([sys.executable, "-OO", versionrot.__file__, "--help"],
                           capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert proc.returncode == 0 and "usage:" in proc.stdout, proc.stdout + proc.stderr
+
+
+def test_a_real_scan_answers_the_same_under_python_oo(tmp_path: Path) -> None:
+    """A real scan under -OO must report exactly what it reports with docstrings kept."""
+    root = _store(tmp_path, {"stale": ("When X, know it was fixed in bmk 3.13.0.", "The race.")})
+    args = [versionrot.__file__, "scan", "--chain", str(root), "--current", "bmk=3.21.1", "--json"]
+    runs = [subprocess.run([sys.executable, *flags, *args], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", check=False)
+            for flags in ([], ["-OO"])]
+    plain, stripped = runs
+    assert plain.returncode == 1, plain.stdout + plain.stderr
+    assert (stripped.returncode, stripped.stdout) == (plain.returncode, plain.stdout), stripped.stderr

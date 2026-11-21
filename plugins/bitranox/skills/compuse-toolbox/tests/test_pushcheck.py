@@ -856,3 +856,22 @@ def test_help_works_under_python_oo():
     proc = subprocess.run([sys.executable, "-OO", str(TOOL), "--help"], capture_output=True,
                           text=True, encoding="utf-8", errors="replace")
     assert proc.returncode == 0 and "usage:" in proc.stdout, proc.stdout + proc.stderr
+
+
+def test_a_real_scan_answers_the_same_under_python_oo(tmp_path):
+    """A real range scan under -OO must report exactly what it reports with docstrings kept."""
+    repo = _repo(tmp_path)
+    # Joined at run time: the scan needs a real-looking home path to report, and a literal one
+    # here would make pushcheck refuse the push that adds this test.
+    home_path = "/" + "home/alice/project"
+    (repo / "doc.md").write_text(f"run it from {home_path}\n", encoding="utf-8")
+    _git(repo, "add", "doc.md")
+    _git(repo, "commit", "-qm", "add doc")
+    args = [str(TOOL), "--repo", str(repo), "--range", "HEAD~1..HEAD", "--visibility", "public",
+            "--json"]
+    runs = [subprocess.run([sys.executable, *flags, *args], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", check=False, cwd=str(tmp_path))
+            for flags in ([], ["-OO"])]
+    plain, stripped = runs
+    assert plain.returncode == 1, plain.stdout + plain.stderr
+    assert (stripped.returncode, stripped.stdout) == (plain.returncode, plain.stdout), stripped.stderr
