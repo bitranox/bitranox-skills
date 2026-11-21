@@ -30,6 +30,12 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.21.1]
+
+### Fixed
+
+- `compuse-vnc`: the `key` row's partial name list ended in "..."; it now points at `vnc-remote-control key --help`, which lists every accepted name from vnc-remote-control 1.2.6 on, and the text above the table says a command's `--help` runs without `--port`.
+
 ## [11.21.0]
 
 ### Fixed

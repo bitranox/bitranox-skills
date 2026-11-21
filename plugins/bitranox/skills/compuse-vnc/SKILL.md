@@ -44,13 +44,14 @@ fetches it each run); tesseract is still required. Then drive the target with th
 
 ## Commands
 
-Every command in this table needs `--port`; `--host` defaults to `127.0.0.1`. The CLI's other
-commands (`info`, `config`, the email commands) run without it.
+Every command in this table needs `--port`; `--host` defaults to `127.0.0.1`. Its `--help`
+(`vnc-remote-control key --help`) and the CLI's other commands (`info`, `config`, the email
+commands) run without it.
 
 | Command                                       | Does                                                                                            |
 |-----------------------------------------------|-------------------------------------------------------------------------------------------------|
 | `type "text" [--enter] [--us-shift]`          | Type a literal string into the focused field (`--enter` adds Return; `--us-shift`: see below)   |
-| `key <name>`                                  | Press one named key: `enter`, `tab`, `esc`, arrows, `f1`-`f12`, ...                             |
+| `key <name>`                                  | Press one named key: `enter`, `tab`, `esc`, arrows, `f1`-`f12`; `key --help` lists them all     |
 | `click X Y`                                   | Left-click at an absolute framebuffer pixel                                                     |
 | `screenshot out.png [--mark X,Y] [--grid 50]` | Write the native-resolution PNG; prints `resolution: WxH`; optional crosshair / coordinate grid |
 | `ocr [--grep PATTERN]`                        | List on-screen words with their click centers and confidence                                    |
