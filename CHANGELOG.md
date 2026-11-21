@@ -30,6 +30,12 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.20.3]
+
+### Changed
+
+- `infra-proxmox-bindsnap`: the vzdump safety net now tells the reader to check every managed `mpN` in `pct config` for `backup=1` (off unless set, so an archive taken for a data volume can hold none of its data), set it with `pct set <vmid> -mpN <current value>,backup=1` (applied live on a running CT), and confirm from the task log's `including mount point ...` / `excluding volume mount point ... (disabled)` lines. It also gives the route back over the same CT (`pct stop`, `pct restore <vmid> <archive> --force 1`, `pct start`), and the quick-reference row names `backup=1`. Mirrors pve-bindsnap 1.9.2.
+
 ## [11.20.2]
 
 ### Changed
