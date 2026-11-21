@@ -71,8 +71,8 @@ import functools
 import os
 import re
 import sys
-from pathlib import PurePosixPath, PureWindowsPath
 from collections.abc import Callable, Container, Iterable, Iterator, Mapping, Sequence
+from pathlib import PurePosixPath, PureWindowsPath
 from typing import IO, Final, Literal, Self, TypeGuard
 
 # The delimiter of a heredoc is a whole shell WORD, not an identifier: bash accepts `<<\EOF`,
