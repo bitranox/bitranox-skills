@@ -18,7 +18,6 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import statusrot  # noqa: E402
 import versionrot  # noqa: E402
 
 
@@ -435,13 +434,25 @@ def _names_imported_from(source: Path, module: str) -> set[str]:
             for alias in node.names}
 
 
+def _declared_all(source: Path) -> set[str]:
+    """The names a module's top-level `__all__` literal declares, read without importing it."""
+    for node in ast.parse(source.read_text(encoding="utf-8")).body:
+        if isinstance(node, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == "__all__" for t in node.targets):
+            names = ast.literal_eval(node.value)
+            assert isinstance(names, (list, tuple)), names
+            return {str(name) for name in names}
+    raise AssertionError(f"{source.name} declares no __all__")
+
+
 def test_every_name_taken_from_statusrot_is_its_public_api() -> None:
     # A private helper reached across modules is a contract nobody declared: a rename in
     # statusrot would break this scanner with nothing on statusrot's side saying it is used.
     source = Path(versionrot.__file__)
     taken = _names_imported_from(source, "statusrot")
     assert taken, "versionrot no longer imports from statusrot; this test has nothing to check"
-    assert taken <= set(statusrot.__all__), sorted(taken - set(statusrot.__all__))
+    declared = _declared_all(source.with_name("statusrot.py"))
+    assert taken <= declared, sorted(taken - declared)
 
 
 def test_help_works_under_python_oo() -> None:
