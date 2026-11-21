@@ -66,6 +66,7 @@ stay queued. `--match` refuses on no match or an ambiguous one instead of guessi
 Pure standard library.
 """
 import argparse
+import io
 import json
 import math
 import os
@@ -497,6 +498,8 @@ def _reconfigure_stdout():
     UnicodeEncodeError came AFTER the store write, so a recorded add or ship exited 1. Escape
     instead. Guarded: a replaced stream may not support reconfigure."""
     for stream in (sys.stdout, sys.stderr):
+        if not isinstance(stream, io.TextIOWrapper):
+            continue
         try:
             stream.reconfigure(errors="backslashreplace")
         except (AttributeError, ValueError, OSError):

@@ -32,6 +32,7 @@ The replacement table is built from code points with chr()/ranges so this script
 is itself pure ASCII and passes the same check.
 """
 
+import io
 import re
 import sys
 from pathlib import Path
@@ -267,9 +268,10 @@ def _main(argv):
         # The stream's encoding is the locale's unless something overrides it, and a cp1252
         # console turns an em dash into three garbage bytes before this ever sees it. Same
         # newline="" reasoning as the file branch below: line endings pass through untouched.
-        # An in-memory stream (a caller's StringIO) has no encoding to fix and no reconfigure.
+        # An in-memory stream (a caller's StringIO) has no encoding to fix and no reconfigure;
+        # only a TextIOWrapper carries one, and asking for the type is what the checker can read.
         for stream in (sys.stdin, sys.stdout):
-            if hasattr(stream, "reconfigure"):
+            if isinstance(stream, io.TextIOWrapper):
                 stream.reconfigure(encoding="utf-8", newline="")
         try:
             data = sys.stdin.read()

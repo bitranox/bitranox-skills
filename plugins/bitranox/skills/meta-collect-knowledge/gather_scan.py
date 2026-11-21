@@ -21,6 +21,7 @@ Imports the shared helpers from the plugin's hooks dir, like the meta-dream-tree
 import argparse
 import hashlib
 import datetime
+import io
 import os
 import re
 import sys
@@ -502,6 +503,8 @@ def _tolerant_stdio():
     """Make stdout/stderr replace what their encoding cannot carry rather than crash: a Windows
     pipe is cp1252, and a CJK keyword or path would otherwise end the run mid-report."""
     for stream in (sys.stdout, sys.stderr):
+        if not isinstance(stream, io.TextIOWrapper):
+            continue
         try:
             stream.reconfigure(errors="replace")
         except (AttributeError, ValueError, OSError):

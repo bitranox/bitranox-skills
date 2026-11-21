@@ -36,6 +36,7 @@ Pure standard library; ASCII output.
 """
 
 import argparse
+import io
 import json
 import os
 import re
@@ -837,6 +838,8 @@ def _reconfigure_stdout():
     """A cp1252 console (bare `python3` on Windows) crashed on a slug or path it could not
     encode. Escape instead; guarded, since a replaced stream may not support reconfigure."""
     for stream in (sys.stdout, sys.stderr):
+        if not isinstance(stream, io.TextIOWrapper):
+            continue
         try:
             stream.reconfigure(errors="backslashreplace")
         except (AttributeError, ValueError, OSError):

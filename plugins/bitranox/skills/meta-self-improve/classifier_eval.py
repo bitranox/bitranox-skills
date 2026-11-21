@@ -54,6 +54,7 @@ exit is 2.
 """
 
 import argparse
+import io
 import json
 import math
 import os
@@ -1820,6 +1821,8 @@ def _reconfigure_stdout():
     Windows) crashed on any path or prompt it could not encode. Escape instead; guarded, since a
     replaced stream may not support reconfigure."""
     for stream in (sys.stdout, sys.stderr):
+        if not isinstance(stream, io.TextIOWrapper):
+            continue
         try:
             stream.reconfigure(errors="backslashreplace")
         except (AttributeError, ValueError, OSError):

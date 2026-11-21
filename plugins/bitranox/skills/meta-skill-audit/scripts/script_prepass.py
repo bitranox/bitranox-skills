@@ -30,6 +30,7 @@ Pure standard library.
 import argparse
 import ast
 import doctest
+import io
 import json
 import re
 import subprocess
@@ -909,6 +910,8 @@ def vendored_targets(audit_skills, room):
 def _tolerant_stdio():
     """Replace, rather than crash on, a character a cp1252 console cannot encode."""
     for stream in (sys.stdout, sys.stderr):
+        if not isinstance(stream, io.TextIOWrapper):
+            continue
         try:
             stream.reconfigure(errors="replace")
         except (AttributeError, ValueError, OSError):

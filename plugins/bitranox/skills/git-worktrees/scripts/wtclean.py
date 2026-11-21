@@ -74,6 +74,7 @@ stderr so stdout stays parseable.
 """
 
 import argparse
+import io
 import json
 import os
 import shutil
@@ -852,8 +853,10 @@ def _reconfigure_stdio() -> None:
     """A path the console code page cannot encode must not crash the report, least of all after
     an `--apply` has already deleted things: on Windows a redirected stdout is the ANSI page."""
     for stream in (sys.stdout, sys.stderr):
+        if not isinstance(stream, io.TextIOWrapper):
+            continue
         try:
-            stream.reconfigure(errors="backslashreplace")  # type: ignore[union-attr]
+            stream.reconfigure(errors="backslashreplace")
         except (AttributeError, ValueError, OSError):
             continue
 

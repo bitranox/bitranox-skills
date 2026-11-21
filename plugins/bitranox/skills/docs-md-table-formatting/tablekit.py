@@ -30,6 +30,7 @@ the headers, which a round trip would delete; an unknown alignment; invalid JSON
 """
 
 import argparse
+import io
 import json
 import re
 import sys
@@ -313,12 +314,17 @@ def _utf8_stdio() -> None:
     """The documented pipeline is `read | jq | replace`, and jq speaks UTF-8. In a Windows locale
     the default code page crashed `read` on a check mark and made `replace` write mojibake."""
     for stream in (sys.stdin, sys.stdout):
+        if not isinstance(stream, io.TextIOWrapper):
+            continue
         try:
             stream.reconfigure(encoding="utf-8")
         except (AttributeError, ValueError, OSError):
             continue
+    stderr = sys.stderr
+    if not isinstance(stderr, io.TextIOWrapper):
+        return
     try:
-        sys.stderr.reconfigure(errors="backslashreplace")
+        stderr.reconfigure(errors="backslashreplace")
     except (AttributeError, ValueError, OSError):
         pass
 

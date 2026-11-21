@@ -30,6 +30,7 @@ error, so it is false only on exit 2.
 
 import argparse
 import hashlib
+import io
 import json
 import re
 import sys
@@ -1192,8 +1193,10 @@ def _reconfigure_stdio() -> None:
     """A reason carrying a path the console code page cannot encode must print, not crash: on
     Windows a redirected stdout is the ANSI page, and the crash turned BROKEN (2) into a traceback."""
     for stream in (sys.stdout, sys.stderr):
+        if not isinstance(stream, io.TextIOWrapper):
+            continue
         try:
-            stream.reconfigure(errors="backslashreplace")  # type: ignore[union-attr]
+            stream.reconfigure(errors="backslashreplace")
         except (AttributeError, ValueError, OSError):
             continue
 

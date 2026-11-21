@@ -27,6 +27,7 @@ import argparse
 import concurrent.futures as cf
 import hashlib
 import importlib.util
+import io
 import json
 import os
 import re
@@ -1139,6 +1140,8 @@ def _tolerant_stdio():
     lands after the reviewers have been paid for. A stream that cannot be reconfigured is left as
     it is."""
     for stream in (sys.stdout, sys.stderr):
+        if not isinstance(stream, io.TextIOWrapper):
+            continue
         try:
             stream.reconfigure(errors="replace")
         except (AttributeError, ValueError, OSError):

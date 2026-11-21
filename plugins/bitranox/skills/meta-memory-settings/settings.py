@@ -18,6 +18,7 @@ Pure standard library.
 """
 
 import importlib.util
+import io
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -230,8 +231,11 @@ def _reconfigure_stdout():
     """A cp1252 console (bare `python3` on Windows) cannot encode every value a knob may hold; the
     UnicodeEncodeError then came AFTER the write, so `set` reported failure for a stored value and
     `view` crashed on every run. Escape instead of crashing. Guarded: a replaced stream may lack it."""
+    stdout = sys.stdout
+    if not isinstance(stdout, io.TextIOWrapper):
+        return
     try:
-        sys.stdout.reconfigure(errors="backslashreplace")
+        stdout.reconfigure(errors="backslashreplace")
     except (AttributeError, ValueError, OSError):
         pass
 

@@ -23,6 +23,7 @@ Pure standard library. Cross-platform: paths via pathlib, git via argv lists (ne
 """
 
 import argparse
+import io
 import json
 import os
 import re
@@ -1137,6 +1138,8 @@ def _tolerant_stdio():
     """Replace what the console encoding cannot carry instead of crashing on it: a Windows pipe
     is cp1252, and a path or gate line outside it would end the report with a traceback."""
     for stream in (sys.stdout, sys.stderr):
+        if not isinstance(stream, io.TextIOWrapper):
+            continue
         try:
             stream.reconfigure(errors="replace")
         except (AttributeError, ValueError, OSError):
