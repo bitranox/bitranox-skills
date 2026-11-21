@@ -9,7 +9,23 @@ reads as empty text, so a caller never wedges a turn on a missing or odd transcr
 import json
 import os
 import re
-from typing import NamedTuple
+from collections.abc import Iterator, Mapping, Sequence
+from typing import IO, NamedTuple, TypeIs
+
+#: A path argument: a str or anything os.fspath turns into one.
+type StrPath = str | os.PathLike[str]
+#: A decoded transcript record or content block: its fields are checked where they are read.
+type JsonObject = dict[str, object]
+
+
+def _is_object(value: object) -> TypeIs[JsonObject]:
+    """True for a dict: a decoded JSON object, whose keys are str by JSON's own grammar."""
+    return isinstance(value, dict)
+
+
+def _is_list(value: object) -> TypeIs[list[object]]:
+    """True for a list: a decoded JSON array, whose items are checked where they are read."""
+    return isinstance(value, list)
 
 # Transcripts grow to many MB, so only the tail is read: 64 KiB first, widened 4x at a time until
 # the window holds the human prompt AND the reply it answered (or the prompt before it, past which
@@ -65,7 +81,7 @@ NOT_TYPED_PREFIXES = ("<command-", "<local-command", "<task-notification",
 NOT_TYPED_PATTERNS = (re.compile(r"^\d+\s+background\s+agents?\s+(?:were|was)\s+stopped\b"),)
 
 
-def looks_typed(text):
+def looks_typed(text: str | None) -> bool:
     """False for a turn the harness produced rather than the person.
 
     One registry, two mechanisms: the cheap prefix tuple, then the patterns for shapes no prefix
@@ -86,23 +102,23 @@ class Turn(NamedTuple):
     reply_before_prompt: str  # the assistant text the prompt answered
 
 
-def _content(obj):
+def _content(obj: object) -> object:
     """The `message.content` of a record, or None - whatever shape the line turned out to have."""
-    message = obj.get("message") if isinstance(obj, dict) else None
-    return message.get("content") if isinstance(message, dict) else None
+    message = obj.get("message") if _is_object(obj) else None
+    return message.get("content") if _is_object(message) else None
 
 
-def text_of(content):
+def text_of(content: object) -> str:
     """Flatten a transcript message's content (string, or list of blocks) to text."""
     if isinstance(content, str):
         return content
-    if isinstance(content, list):
-        return " ".join(b["text"] for b in content
-                        if isinstance(b, dict) and isinstance(b.get("text"), str))
+    if _is_list(content):
+        return " ".join(text for b in content
+                        if _is_object(b) and isinstance(text := b.get("text"), str))
     return ""
 
 
-def human_text(obj):
+def human_text(obj: object) -> str:
     """The text of a `user` record the person actually typed, else "".
 
     A turn's last `user` record is almost never the prompt: every tool call is answered by a
@@ -125,7 +141,7 @@ def human_text(obj):
     `/goal` whose pasted backlog text says "instead of", and 33 of the 41 shadow rows that could
     not be placed for being a command now locate (the other 8 are bare skill commands).
     """
-    if not isinstance(obj, dict):
+    if not _is_object(obj):
         return ""
     # A headless SDK run writes no `origin` key; its records name the entrypoint instead.
     if str(obj.get("entrypoint") or "").startswith("sdk"):
@@ -135,24 +151,24 @@ def human_text(obj):
     if obj.get("type") != "user" or obj.get("isMeta") or obj.get("isCompactSummary"):
         return ""
     if "origin" in obj:
-        origin = obj["origin"]
-        if not (isinstance(origin, dict) and origin.get("kind") == "human"):
+        origin = obj.get("origin")
+        if not (_is_object(origin) and origin.get("kind") == "human"):
             return ""
     return _typed_text(text_of(_content(obj)))
 
 
-def _queued_human_text(attachment):
+def _queued_human_text(attachment: object) -> str:
     """The prompt of a `queued_command` attachment the person typed, else ""."""
-    if not isinstance(attachment, dict) or attachment.get("type") != "queued_command":
+    if not _is_object(attachment) or attachment.get("type") != "queued_command":
         return ""
     origin = attachment.get("origin")
-    if not (isinstance(origin, dict) and origin.get("kind") == "human"):
+    if not (_is_object(origin) and origin.get("kind") == "human"):
         return ""
     text = attachment.get("prompt")
     return _typed_text(text) if isinstance(text, str) else ""
 
 
-def _typed_text(text):
+def _typed_text(text: str) -> str:
     """`text` when the person typed it, a slash command with arguments as `/name args`, else ""."""
     if not text.strip():
         return ""
@@ -168,7 +184,7 @@ _COMMAND_TAG = re.compile(r"\s*<(command-name|command-message|command-args)>(.*?
                           re.DOTALL)
 
 
-def slash_command(text):
+def slash_command(text: str | None) -> str:
     """A slash command with arguments as the prompt-time hooks receive it (`/goal do 3-7`), else "".
 
     The person typed the command and its arguments, so the arguments are a prompt like any other
@@ -176,7 +192,8 @@ def slash_command(text):
     command (`/clear`, empty arguments) carries no prose to judge and stays out, as does every
     other `<command-`/`<local-command` record: the command's output, a caveat, a skill echo.
     """
-    tags, pos, head = {}, 0, (text or "").lstrip()
+    tags: dict[str, str] = {}
+    pos, head = 0, (text or "").lstrip()
     if not head.startswith("<command-"):
         return ""
     while pos < len(head):
@@ -191,14 +208,14 @@ def slash_command(text):
     return "%s %s" % (name, args)
 
 
-def is_hook_feedback(obj):
+def is_hook_feedback(obj: object) -> bool:
     """True for the record a blocking Stop hook writes into the transcript."""
-    if not isinstance(obj, dict) or obj.get("type") != "user":
+    if not _is_object(obj) or obj.get("type") != "user":
         return False
     return text_of(_content(obj)).lstrip().startswith(HOOK_FEEDBACK_PREFIXES)
 
 
-def _records(data):
+def _records(data: bytes) -> Iterator[JsonObject]:
     """The JSON objects among the complete lines of `data` (bytes); any other line is skipped."""
     for raw in data.splitlines():
         line = raw.strip()
@@ -208,11 +225,11 @@ def _records(data):
             obj = json.loads(line.decode("utf-8", "replace"))
         except ValueError:
             continue
-        if isinstance(obj, dict):
+        if _is_object(obj):
             yield obj
 
 
-def _scan(data):
+def _scan(data: bytes) -> tuple[Turn, int]:
     """(Turn, number of typed prompts seen) for the complete JSONL lines of `data` (bytes)."""
     prompt = reply = before = ""
     prompts = 0
@@ -240,12 +257,12 @@ def _scan(data):
     return Turn(prompt, reply or "", before), prompts
 
 
-def scan(data):
+def scan(data: bytes) -> Turn:
     """The Turn among the complete JSONL lines of `data` (bytes)."""
     return _scan(data)[0]
 
 
-def _tail(path, window):
+def _tail(path: StrPath, window: int) -> tuple[bytes, int]:
     size = os.path.getsize(path)
     with open(path, "rb") as fh:
         if size > window:
@@ -254,7 +271,8 @@ def _tail(path, window):
         return fh.read(), size
 
 
-def read_turn(transcript_path, tail_bytes=TAIL_BYTES, max_bytes=MAX_TAIL_BYTES):
+def read_turn(transcript_path: StrPath, tail_bytes: int = TAIL_BYTES,
+              max_bytes: int = MAX_TAIL_BYTES) -> Turn:
     """The last Turn of the transcript, widening the tail until the turn is complete in it.
 
     Complete means the prompt is in the window and so is what it answered: an assistant text
@@ -274,7 +292,8 @@ def read_turn(transcript_path, tail_bytes=TAIL_BYTES, max_bytes=MAX_TAIL_BYTES):
         window *= 4
 
 
-def last_reply(transcript_path, tail_bytes=TAIL_BYTES, max_bytes=MAX_TAIL_BYTES):
+def last_reply(transcript_path: StrPath, tail_bytes: int = TAIL_BYTES,
+               max_bytes: int = MAX_TAIL_BYTES) -> str:
     """The newest assistant text in the transcript, whether or not a prompt follows it.
 
     At UserPromptSubmit the new prompt may not be on disk yet, so "the reply before the last
@@ -290,25 +309,26 @@ SKILLS_TAIL_BYTES = 1024 * 1024
 _FILE_TOOLS = ("Read", "Edit", "Write", "NotebookEdit")
 
 
-def _tool_calls(transcript_path, window):
+def _tool_calls(transcript_path: StrPath, window: int) -> list[tuple[str, JsonObject]]:
     """(name, input) of every tool_use block in the transcript tail, oldest first."""
     try:
         data, _size = _tail(transcript_path, window)
     except (OSError, TypeError, ValueError):
         return []
-    calls = []
+    calls: list[tuple[str, JsonObject]] = []
     for obj in _records(data):
         if obj.get("type") != "assistant":
             continue
         content = _content(obj)
-        for block in content if isinstance(content, list) else []:
-            if isinstance(block, dict) and block.get("type") == "tool_use":
-                inp = block.get("input") if isinstance(block.get("input"), dict) else {}
+        for block in content if _is_list(content) else []:
+            if _is_object(block) and block.get("type") == "tool_use":
+                raw = block.get("input")
+                inp: JsonObject = raw if _is_object(raw) else {}
                 calls.append((str(block.get("name") or ""), inp))
     return calls
 
 
-def _label(name, inp):
+def _label(name: str, inp: Mapping[str, object]) -> str:
     """A short, safe label for one tool call. A Bash call is named by the description the model
     wrote for it, never by its command line, which can carry hostnames, paths and arguments."""
     if name == "Bash" or name in ("Agent", "Task"):
@@ -324,14 +344,15 @@ def _label(name, inp):
     return name
 
 
-def recent_activity(transcript_path, n=6, cap=300, tail_bytes=TAIL_BYTES):
+def recent_activity(transcript_path: StrPath, n: int = 6, cap: int = 300,
+                    tail_bytes: int = TAIL_BYTES) -> str:
     """The last `n` tool calls as short labels, oldest first, trimmed to about `cap` characters:
     what "it" in a prompt like "check it again" refers to."""
     labels = [_label(name, inp) for name, inp in _tool_calls(transcript_path, tail_bytes)[-n:]]
     return excerpt("; ".join(label for label in labels if label), cap)
 
 
-def skills_used(transcript_path, tail_bytes=SKILLS_TAIL_BYTES):
+def skills_used(transcript_path: StrPath, tail_bytes: int = SKILLS_TAIL_BYTES) -> list[str]:
     """The skills invoked in the transcript tail, without their plugin prefix, sorted."""
     names = {str(inp.get("skill") or "").rsplit(":", 1)[-1]
              for name, inp in _tool_calls(transcript_path, tail_bytes) if name == "Skill"}
@@ -357,9 +378,10 @@ SCHEDULE_CHUNK_BYTES = 1024 * 1024
 SCHEDULE_LINE_CAP = 4 * 1024 * 1024
 
 
-def _lines_naming(data, needle):
+def _lines_naming(data: bytes, needle: bytes) -> Iterator[bytes]:
     """Every complete line of `data` (bytes) that contains `needle`, each once."""
-    seen, start = set(), data.find(needle)
+    seen: set[int] = set()
+    start = data.find(needle)
     while start != -1:
         begin = data.rfind(b"\n", 0, start) + 1
         end = data.find(b"\n", start)
@@ -370,7 +392,7 @@ def _lines_naming(data, needle):
         start = data.find(needle, end)
 
 
-def _streamed_lines_naming(fh, needles):
+def _streamed_lines_naming(fh: IO[bytes], needles: Sequence[bytes]) -> Iterator[bytes]:
     """Every line of the binary file `fh` that contains one of `needles`, read in fixed pieces.
 
     Holds one piece plus the unfinished line it ends in; a line growing past SCHEDULE_LINE_CAP is
@@ -396,19 +418,19 @@ def _streamed_lines_naming(fh, needles):
         yield from _lines_in(carry, needles)
 
 
-def _lines_in(data, needles):
+def _lines_in(data: bytes, needles: Sequence[bytes]) -> Iterator[bytes]:
     for needle in needles:
         yield from _lines_naming(data, needle)
 
 
-def scheduled_prompts(transcript_path):
+def scheduled_prompts(transcript_path: StrPath) -> set[str]:
     """The `prompt` argument of every CronCreate / ScheduleWakeup call in the transcript,
     stripped. Empty when the file is missing or unreadable."""
     # The name as a JSON string value, quotes included: a tool_use block's `"name":"CronCreate"`
     # carries them, while prose mentioning the tool (a Read of this module, an escaped \"name\"
     # inside a tool output) does not, so those long lines are never decoded.
     names = tuple(('"%s"' % tool).encode("ascii") for tool in SCHEDULING_TOOLS)
-    found = set()
+    found: set[str] = set()
     try:
         with open(transcript_path, "rb") as fh:
             for line in _streamed_lines_naming(fh, names):
@@ -418,21 +440,22 @@ def scheduled_prompts(transcript_path):
     return found
 
 
-def _scheduled_in_line(line):
+def _scheduled_in_line(line: bytes) -> set[str]:
     """The scheduled prompts one transcript line's CronCreate / ScheduleWakeup calls carry."""
-    found = set()
+    found: set[str] = set()
     for obj in _records(line):
         content = _content(obj) if obj.get("type") == "assistant" else None
-        for block in content if isinstance(content, list) else []:
-            if (isinstance(block, dict) and block.get("type") == "tool_use"
-                    and block.get("name") in SCHEDULING_TOOLS and isinstance(block.get("input"), dict)):
-                prompt = str(block["input"].get("prompt") or "").strip()
+        for block in content if _is_list(content) else []:
+            if (_is_object(block) and block.get("type") == "tool_use"
+                    and block.get("name") in SCHEDULING_TOOLS
+                    and _is_object(inp := block.get("input"))):
+                prompt = str(inp.get("prompt") or "").strip()
                 if prompt:
                     found.add(prompt)
     return found
 
 
-def scheduled_by_the_session(prompt, transcript_path):
+def scheduled_by_the_session(prompt: str | None, transcript_path: StrPath | None) -> bool:
     """True when `prompt` is exactly the text a CronCreate / ScheduleWakeup call in this session
     scheduled: the harness is talking, not the person. A prompt that merely QUOTES that text is
     typed, so the comparison is whole-text, not a substring."""
@@ -440,20 +463,20 @@ def scheduled_by_the_session(prompt, transcript_path):
     return bool(text) and bool(transcript_path) and text in scheduled_prompts(transcript_path)
 
 
-def is_scheduled_record(obj):
+def is_scheduled_record(obj: object) -> bool:
     """True for the record the harness writes for a scheduled fire, AFTER the prompt-time hooks
     ran: a `user` record with promptSource "system" and a scheduledTaskId. For reading a
     transcript afterwards; a prompt-time hook cannot see it yet (use scheduled_by_the_session)."""
-    return (isinstance(obj, dict) and obj.get("type") == "user"
+    return (_is_object(obj) and obj.get("type") == "user"
             and obj.get("promptSource") == "system" and bool(obj.get("scheduledTaskId")))
 
 
-def scheduled_text(obj):
+def scheduled_text(obj: object) -> str:
     """The prompt text of a scheduled-fire record (see is_scheduled_record), else ""."""
     return text_of(_content(obj)) if is_scheduled_record(obj) else ""
 
 
-def excerpt(text, cap):
+def excerpt(text: str | None, cap: int) -> str:
     """`text` trimmed to about `cap` characters, keeping both ends: a reply's opening says what
     it is about and its end usually holds the question a short answer like "yes" refers to."""
     text = (text or "").strip()
