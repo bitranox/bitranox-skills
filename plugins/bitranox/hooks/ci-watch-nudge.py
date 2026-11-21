@@ -701,14 +701,15 @@ def main(raw: str | None = None) -> int:
     try:
         # Mask by the language the command is in. The clear half also reads non-shell tools
         # (a Monitor call), whose command text is Bash.
-        shell = event.get("tool_name") if is_shell_tool(event.get("tool_name")) else "Bash"
+        tool_name = event.get("tool_name")
+        shell = tool_name if is_shell_tool(tool_name) else "Bash"
         if _watching(command, shell):
             state.clear_session(key, session)
             return 0
         # Only a shell tool can have MADE a push. The clear half above is deliberately wider: a
         # Monitor call watching CI is the commonest way this record is satisfied, and a hook that
         # cannot see it leaves a watched push pending until the gate gives up.
-        if not is_shell_tool(event.get("tool_name")):
+        if not is_shell_tool(tool_name):
             return 0
         found = notice(command, cwd, shell)
         if not found:

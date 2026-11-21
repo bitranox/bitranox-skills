@@ -43,6 +43,25 @@ read as unknown.
   `EXEPATH`. Pinned by `test_a_non_drive_mount_reads_as_unknown`.
 - Reopen if: Claude Code passes the hook the Git Bash it runs (its root or mount table), or a
   measured guard decision on Windows turns on a `/tmp` or `/usr` path.
+
+A `tool_name` of None is legal at every function that takes one, and is typed `str | None`.
+- Decision: None means "no event to ask": a pure helper, a replay or a test has no event at all.
+  Each reader resolves it to the reading that fails visibly for ITS question, as its docstring
+  states: the masking, splitting, basename, cd and drive readers take the Bash reading (escaping
+  nothing would let `\\"` close a string and hide a `git push` behind it), while the separator walk
+  (`iter_segments`) escapes nothing, which can only add separators. A hook holding an event asks
+  `is_shell_tool` first, a TypeGuard, so the name it passes on is already a str.
+- Why: the alternative, every caller turning None into a string first, copies that per-reader
+  choice into every caller, where one defaulting to "Bash" would silently move the separator walk
+  onto the reading that can swallow a separator.
+- Evidence: `mask_data_regions` already documented None as the Bash reading and a test passed
+  None to `blank_unexpanded_text`, while strict pyright reported 25 call sites passing a possibly
+  None tool name to parameters inferred as `str` from their "Bash" defaults: 21 in hooks, most of
+  which had already tested `is_shell_tool` without the checker seeing it, 3 tests passing None on
+  purpose, and 1 inside this module. Pinned by
+  `test_a_none_tool_name_takes_each_reader_s_documented_reading`.
+- Reopen if: a reader gains a third reading for an absent tool, or a hook needs to tell an absent
+  tool from the Bash tool.
 """
 
 import bisect
@@ -51,6 +70,7 @@ import os
 import re
 import sys
 from pathlib import PurePosixPath, PureWindowsPath
+from typing import TypeGuard
 
 # The delimiter of a heredoc is a whole shell WORD, not an identifier: bash accepts `<<\EOF`,
 # `<<'END-OF'`, `<<END.X`, `<<E"O"F` and `<<1`, and takes the word after quote removal as the
@@ -179,7 +199,7 @@ _COMMENT_MAY_FOLLOW = frozenset(" \t\n;&|(")
 # the spellings live in the walk below rather than in a pattern of their own.
 
 
-def _iter_separators(text, tool_name=None):
+def _iter_separators(text, tool_name: str | None = None):
     """(start, end) of every separator in `text` that genuinely begins a new statement.
 
     Quoting decides this, and it decides it DIFFERENTLY for the two kinds of separator, which
@@ -209,7 +229,7 @@ def _iter_separators(text, tool_name=None):
     escape, substitutes = {
         "Bash": ("\\", True),
         "PowerShell": ("`", False),
-    }.get(tool_name, ("", True))
+    }.get(tool_name or "", ("", True))
     depth: list[tuple[str, bool, bool]] = []   # (closer, saved_single, saved_double)
     in_single = in_double = False
     i, n = 0, len(text)
@@ -383,7 +403,7 @@ _STATEMENT_KEYWORDS = frozenset({
 _PREFIX_SCAN_LIMIT = 12
 
 
-def past_command_prefix(tokens, idx, programs, tool_name="Bash"):
+def past_command_prefix(tokens, idx, programs, tool_name: str | None = "Bash"):
     """Index of the first of `programs` that the launcher at `tokens[idx]` runs, else None.
 
     None as well when `tokens[idx]` is not a known launcher (`sudo`, `nice`, `timeout`, `env`,
@@ -410,7 +430,7 @@ def past_command_prefix(tokens, idx, programs, tool_name="Bash"):
     return None
 
 
-def statement_program(tokens, programs, tool_name="Bash"):
+def statement_program(tokens, programs, tool_name: str | None = "Bash"):
     """Index of the program a statement runs when it is one of `programs`, else None.
 
     Loop and branch keywords, leading `VAR=value` assignments and a known launcher in front of the
@@ -430,7 +450,7 @@ def statement_program(tokens, programs, tool_name="Bash"):
     return idx
 
 
-def git_verb_operands(tokens, verbs, tool_name="Bash"):
+def git_verb_operands(tokens, verbs, tool_name: str | None = "Bash"):
     r"""Tokens after git's SUBCOMMAND when this really is `git <global opts> <verb>`; else None.
 
     The single answer to "what git command is this?", because asking it with a regex is wrong in
@@ -462,7 +482,7 @@ def git_verb_operands(tokens, verbs, tool_name="Bash"):
     return tokens[idx + 1:]
 
 
-def argv_for_match(segment, tool_name="Bash"):
+def argv_for_match(segment, tool_name: str | None = "Bash"):
     r"""Quote-aware argv for NAME MATCHING a command - never for resolving an operand.
 
     `segment.split()` is wrong wherever a global option's VALUE may be quoted and contain a
@@ -501,7 +521,7 @@ def argv_for_match(segment, tool_name="Bash"):
         return text.split()
 
 
-def _drop_severed_continuation(text, tool_name):
+def _drop_severed_continuation(text, tool_name: str | None):
     """`text` without a final UNESCAPED backslash, under the POSIX reading only.
 
     An odd run of trailing backslashes ends in one that escapes nothing; an even run is escaped
@@ -514,7 +534,7 @@ def _drop_severed_continuation(text, tool_name):
     return body[:-1] if run % 2 else text
 
 
-def _without_comments(segment, tool_name):
+def _without_comments(segment, tool_name: str | None):
     """`segment` with every comment and unquoted line continuation turned into spaces.
 
     Both are exactly the regions `mask_data_regions` turns into SPACES rather than filler, so the
@@ -524,7 +544,7 @@ def _without_comments(segment, tool_name):
     return "".join(" " if mask == " " else char for char, mask in zip(segment, masked))
 
 
-def is_git_verb(segment, verbs, tool_name="Bash"):
+def is_git_verb(segment, verbs, tool_name: str | None = "Bash"):
     """True when `segment` is a `git <global opts> <verb>` command for one of `verbs`."""
     return git_verb_operands(argv_for_match(segment, tool_name), verbs, tool_name) is not None
 
@@ -597,7 +617,7 @@ def _readable_dir(target, base, msys_drives=False, unknown_mounts=True):
     return os.path.normpath(landing) if landing else None
 
 
-def reads_msys_drives(tool_name="Bash", os_name=os.name):
+def reads_msys_drives(tool_name: str | None = "Bash", os_name=os.name):
     """True when a path in `tool_name`'s command text spells a drive as Git Bash does. PURE.
 
     Claude Code's Bash tool is Git Bash on a Windows host, so there `cd /c/temp` (and a `/c/temp`
@@ -611,8 +631,8 @@ def reads_msys_drives(tool_name="Bash", os_name=os.name):
     return os_name == "nt" and (tool_name or "Bash") == "Bash"
 
 
-def resolve_path(path, base, tool_name="Bash", *, msys_drives=None, unknown_mounts=True,
-                 os_name=os.name):
+def resolve_path(path, base, tool_name: str | None = "Bash", *, msys_drives=None,
+                 unknown_mounts=True, os_name=os.name):
     """`path` as the shell finds it from `base`, not normalised, or None when that cannot be read:
     a relative `path` and no `base`, or a Git Bash mount that is not a drive.
 
@@ -689,7 +709,7 @@ def msys_drive_path(path, windows):
     return match.group(1).upper() + ":/" + path[match.end():]
 
 
-def msys_drive_path_for_tool(path, tool_name="Bash", os_name=os.name):
+def msys_drive_path_for_tool(path, tool_name: str | None = "Bash", os_name=os.name):
     """`path` as `tool_name`'s shell on this host reaches it, for a caller reading ONE word, or
     None for a Git Bash mount no reader can place (`is_msys_mount`: `/tmp/x` on Windows). PURE.
 
@@ -738,8 +758,8 @@ def _cd_target(args):
 _STACK_ROTATION = re.compile(r"^[+-]\d+$")
 
 
-def directory_change(statement, here, tool_name="Bash", *, expand_home=False, msys_drives=None,
-                     unknown_mounts=True):
+def directory_change(statement, here, tool_name: str | None = "Bash", *, expand_home=False,
+                     msys_drives=None, unknown_mounts=True):
     """(changes, landing) for ONE statement: does it move the shell's directory, and to where.
 
     THE cd reader. Four nudges once carried a private regex each, and they had drifted in every
@@ -1194,7 +1214,7 @@ class _BodyTracker:
         self.unknown = self.unknown or (in_case and _moves_the_shell(tokens, self.tool))
 
 
-def git_verb_dir(command, cwd, verbs, tool_name=None, *, msys_drives=None):
+def git_verb_dir(command, cwd, verbs, tool_name: str | None = None, *, msys_drives=None):
     """The directory the first `git <verb>` in `command` runs in, or None when it is unreadable.
 
     Follows every cd-like statement before the verb, then the verb's own `-C` values, starting from
@@ -1332,7 +1352,7 @@ def git_verb_dir(command, cwd, verbs, tool_name=None, *, msys_drives=None):
     return None
 
 
-def git_segment_dir(tokens, verbs, here, tool_name="Bash", *, msys_drives=None,
+def git_segment_dir(tokens, verbs, here, tool_name: str | None = "Bash", *, msys_drives=None,
                     unknown_mounts=True):
     """(is this statement `git <verb>` for one of `verbs`, the directory it runs in or None).
 
@@ -1350,7 +1370,7 @@ def git_segment_dir(tokens, verbs, here, tool_name="Bash", *, msys_drives=None,
                                     unknown_mounts)
 
 
-def iter_segments(text, tool_name=None):
+def iter_segments(text, tool_name: str | None = None):
     """(offset, segment) for each statement in `text`, offsets into `text` itself.
 
     `SEP.split` throws the positions away, which is fine for a yes/no question and not fine for a
@@ -1361,7 +1381,7 @@ def iter_segments(text, tool_name=None):
 
 
 @_whole_command_view
-def _segments(text, tool_name=None):
+def _segments(text, tool_name: str | None = None):
     """`iter_segments` as a tuple, so a large command is split once however many ask."""
     out, pos = [], 0
     for start, end in _iter_separators(text, tool_name):
@@ -1557,7 +1577,7 @@ def _powershell_single_quoted(command, start):
     return None, start
 
 
-def split_for_tool(command, tool_name="Bash", comments=False):
+def split_for_tool(command, tool_name: str | None = "Bash", comments=False):
     r"""Split a tool's `tool_input.command` into argv, by the TOOL's language, never the host OS.
 
     A hook on a `Bash|PowerShell` matcher receives two different languages. The Bash tool is a
@@ -1609,7 +1629,7 @@ def _join_line_continuations(command):
     return "".join(out)
 
 
-def basename_for_tool(token, tool_name="Bash"):
+def basename_for_tool(token, tool_name: str | None = "Bash"):
     r"""The program name from a token that may carry a path, by the TOOL's separator rules.
 
     A guard asking "is this command `sed`?" has to strip the path first, and which characters
@@ -1636,8 +1656,12 @@ def basename_for_tool(token, tool_name="Bash"):
         name = PurePosixPath(token.replace("\\", "/")).name
     return name[:-4] if name.lower().endswith(".exe") else name
 
-def is_shell_tool(tool_name) -> bool:
+def is_shell_tool(tool_name: object) -> TypeGuard[str]:
     """True when `tool_name` is a tool that carries a shell command in `tool_input.command`.
+
+    A type guard: after `if not is_shell_tool(name): return`, the checker knows `name` is a str, so
+    a hook can hand the event's `tool_name` on without restating the test. TypeGuard, not TypeIs: a
+    False answer says nothing about the type, since "Edit" is a str that is not a shell tool.
 
     Use this in place of a literal `tool_name == "Bash"` check, and pair it with a
     `Bash|PowerShell` matcher in hooks.json - the matcher decides whether the hook runs at all, so
@@ -1704,7 +1728,7 @@ def _is_assignment_word(word):
     return bool(sep) and name.replace("_", "a").isalnum() and not name[:1].isdigit()
 
 
-def program_word_at(words, tool_name="Bash"):
+def program_word_at(words, tool_name: str | None = "Bash"):
     """Index of the word a statement RUNS, past assignments and launchers; None when there is none.
 
     `python -m X` runs X. `python -c ...` runs code, never a gate by name, so it answers None.
@@ -1737,7 +1761,7 @@ def program_word_at(words, tool_name="Bash"):
     return None
 
 
-def runs_a_gate(command, tool_name="Bash"):
+def runs_a_gate(command, tool_name: str | None = "Bash"):
     """True when a statement of `command` RUNS a recognised gate (or the gate.py jig) as its program.
 
     A gate that is only text - inside a heredoc body or quotes, or an argument of another program
@@ -1754,7 +1778,7 @@ def runs_a_gate(command, tool_name="Bash"):
     return False
 
 
-def gate_program_in(text, tool_name="Bash", pattern=GATE_RE, start=0, end=None):
+def gate_program_in(text, tool_name: str | None = "Bash", pattern=GATE_RE, start=0, end=None):
     """The `pattern` match at the PROGRAM word of the statement `text[start:end]`, else None.
 
     One pipeline element or one statement, already split by the caller. The match is taken where
@@ -1786,7 +1810,7 @@ def gate_program_in(text, tool_name="Bash", pattern=GATE_RE, start=0, end=None):
     return pattern.match(text, name_at, end)
 
 
-def is_gated_command(command, tool_name=None):
+def is_gated_command(command, tool_name: str | None = None):
     """True when a statement in `command` is a git commit, a git push, or a gh pr create.
 
     Heredoc bodies are dropped first, then each remaining statement is matched anchored at its
@@ -1813,7 +1837,7 @@ def is_gated_command(command, tool_name=None):
     return False
 
 
-def opens_a_pr(command, tool_name=None):
+def opens_a_pr(command, tool_name: str | None = None):
     """True when a statement in `command` is a `gh pr create` - the PR half of is_gated_command.
 
     Segmented and anchored exactly like is_gated_command, so the two cannot disagree about what a
@@ -1830,7 +1854,7 @@ def opens_a_pr(command, tool_name=None):
     return False
 
 
-def commands_only(command: str, tool_name="Bash") -> str:
+def commands_only(command: str, tool_name: str | None = "Bash") -> str:
     """`command` with every DATA region removed, leaving only text the shell will EXECUTE.
 
     `tool_name` picks the escape rules, as it does for `mask_data_regions`: a hook registered for
@@ -1858,7 +1882,7 @@ def commands_only(command: str, tool_name="Bash") -> str:
     return mask_data_regions(strip_heredoc_bodies(command or ""), tool_name=tool_name)
 
 
-def commands_only_aligned(command: str, tool_name="Bash") -> str:
+def commands_only_aligned(command: str, tool_name: str | None = "Bash") -> str:
     """The offset-preserving twin of `commands_only`: the same data regions, blanked or masked in
     place, so `len(out) == len(command)` and an offset found on the result indexes the raw command.
 
@@ -2154,7 +2178,7 @@ def heredoc_bodies(command: str) -> str:
     return "\n".join(_split_heredocs(command)[1])
 
 
-def blank_unexpanded_text(command: str, *, tool_name="Bash") -> str:
+def blank_unexpanded_text(command: str, *, tool_name: str | None = "Bash") -> str:
     """Blank the regions the shell will neither execute nor expand, keeping structure intact.
 
     A heredoc is not the only data region in a command. These three are just as inert, and a guard
@@ -2382,7 +2406,7 @@ def _mask_special(escape):
 _MASK_SPECIAL = {escape: _mask_special(escape) for escape in ("\\", "`", "")}
 
 
-def mask_data_regions(command: str, fill: str = "Q", tool_name="Bash") -> str:
+def mask_data_regions(command: str, fill: str = "Q", tool_name: str | None = "Bash") -> str:
     """Replace every region that cannot affect STATEMENT STRUCTURE with a filler character.
 
     `blank_unexpanded_text` above answers "will the shell expand this?" and therefore must leave
@@ -2425,7 +2449,7 @@ def mask_data_regions(command: str, fill: str = "Q", tool_name="Bash") -> str:
 
 
 @_whole_command_view
-def _masked_view(command, fill, tool_name):
+def _masked_view(command, fill, tool_name: str | None):
     """The body of `mask_data_regions`, kept for the last few large commands."""
     escape = {"Bash": "\\", "PowerShell": "`", None: "\\"}.get(tool_name, "")
     bash_quoting = tool_name != "PowerShell"
@@ -2569,7 +2593,7 @@ def _cut_by_substitution(text: str, at: int, segment: str) -> bool:
     return _RUNS_SUBSTITUTION.match(text, at + len(segment)) is not None
 
 
-def _deciding_program_index(tokens, tool_name):
+def _deciding_program_index(tokens, tool_name: str | None):
     """Index of the token that decides what this statement DOES, or None.
 
     Two things sit in front of it and neither changes the answer: leading `VAR=value` environment
@@ -2605,7 +2629,7 @@ def _deciding_program_index(tokens, tool_name):
     return at
 
 
-def _sink_keep_words(segment: str, tool_name=None) -> int:
+def _sink_keep_words(segment: str, tool_name: str | None = None) -> int:
     """How many leading words to KEEP when this statement is a data sink; 0 when it is not.
 
     The VERB is kept and only its operands are blanked, which matters for a reason none of the
@@ -2650,7 +2674,7 @@ def _sink_keep_words(segment: str, tool_name=None) -> int:
     return 0
 
 
-def strip_data_sink_statements(command: str, tool_name=None) -> str:
+def strip_data_sink_statements(command: str, tool_name: str | None = None) -> str:
     """Blank each statement whose program stores or prints its argument instead of running it.
 
     Three shipped nudges fired on `echo '<the footgun>'` and on a commit message describing one,

@@ -246,10 +246,13 @@ def main() -> int:
         event = json.load(sys.stdin)
     except Exception:  # noqa: BLE001 - no/invalid stdin: do nothing
         return 0
-    if not isinstance(event, dict) or not is_shell_tool(event.get("tool_name")):
+    if not isinstance(event, dict):
+        return 0
+    tool_name = event.get("tool_name")
+    if not is_shell_tool(tool_name):
         return 0
     cwd = event.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
-    message = notice((event.get("tool_input") or {}).get("command"), cwd, event.get("tool_name"))
+    message = notice((event.get("tool_input") or {}).get("command"), cwd, tool_name)
     if message:
         sys.stdout.write(json.dumps({"hookSpecificOutput": {
             "hookEventName": "PreToolUse",

@@ -12,6 +12,8 @@ import pstats
 import random
 import shlex
 import subprocess
+from collections.abc import Callable
+
 import pytest
 import shell_text as S
 
@@ -226,6 +228,64 @@ def test_blank_unexpanded_text_defaults_to_the_bash_reading(command):
     assert S.blank_unexpanded_text(command) == bash
     assert S.blank_unexpanded_text(command, tool_name=None) == bash
 
+
+# A backslash-escaped `;` and a backslash before a closing quote: the two places where the Bash
+# reading and the escape-nothing reading part ways.
+_ESCAPES = 'echo a\\; git push; echo "q\\" ; x"'
+
+
+def _mask(tool: str | None) -> object:
+    return S.mask_data_regions(_ESCAPES, tool_name=tool)
+
+
+def _commands_only(tool: str | None) -> object:
+    return S.commands_only(_ESCAPES, tool)
+
+
+def _commands_only_aligned(tool: str | None) -> object:
+    return S.commands_only_aligned(_ESCAPES, tool)
+
+
+def _blank_unexpanded(tool: str | None) -> object:
+    return S.blank_unexpanded_text(_ESCAPES, tool_name=tool)
+
+
+def _split(tool: str | None) -> object:
+    return S.split_for_tool(_ESCAPES, tool)
+
+
+def _argv(tool: str | None) -> object:
+    return S.argv_for_match(_ESCAPES, tool)
+
+
+def _basename(tool: str | None) -> object:
+    return S.basename_for_tool("C:git.exe", tool)    # PowerShell: "git"; Bash: "C:git"
+
+
+def _directory_change(tool: str | None) -> object:
+    return S.directory_change("cd sub\\dir", "/opt/repo", tool)
+
+
+def _reads_msys_drives(tool: str | None) -> object:
+    return S.reads_msys_drives(tool, os_name="nt")
+
+
+_BASH_READING_FOR_NONE: dict[str, Callable[[str | None], object]] = {
+    "mask": _mask, "commands_only": _commands_only, "commands_only_aligned": _commands_only_aligned,
+    "blank_unexpanded": _blank_unexpanded, "split": _split, "argv": _argv, "basename": _basename,
+    "directory_change": _directory_change, "reads_msys_drives": _reads_msys_drives,
+}
+
+
+@pytest.mark.parametrize("reader", sorted(_BASH_READING_FOR_NONE))
+def test_a_none_tool_name_takes_each_reader_s_documented_reading(reader: str) -> None:
+    """The module Decision: None is legal everywhere and the readers above take the Bash reading
+    for it. The control is the separator walk, which takes the escape-nothing reading instead, so
+    the input really does tell the two readings apart."""
+    read = _BASH_READING_FOR_NONE[reader]
+    assert read(None) == read("Bash")
+    assert list(S.iter_segments(_ESCAPES)) == list(S.iter_segments(_ESCAPES, None))
+    assert list(S.iter_segments(_ESCAPES, None)) != list(S.iter_segments(_ESCAPES, "Bash"))
 
 # --------------------------------------------------------------------------
 # split_for_tool: a Bash|PowerShell matcher delivers command strings in two
