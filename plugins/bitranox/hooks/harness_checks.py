@@ -21,11 +21,44 @@ import shlex
 import shutil
 import subprocess
 import sys
-from pathlib import Path
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from pathlib import Path, PurePath
+from typing import Any, Literal, Protocol, overload
 
 import claude_paths
 import skill_frontmatter
 import tell_chars
+
+#: A path argument: a str or anything os.fspath turns into one.
+type StrPath = str | os.PathLike[str]
+#: A decoded JSON object (a settings file, a hooks group); values are checked where they are read.
+type JsonObject = dict[str, object]
+#: One hook a settings file registers: (event, matcher as the file holds it, command).
+type Registration = tuple[str, object, str]
+#: One test dir pytest could not collect: (path, message, unmeasured).
+type Uncollectable = tuple[str, str, bool]
+#: A retired artifact a reader would take for a live one: (path, why).
+type GraveyardEntry = tuple[Path, str]
+
+
+class CollectionResult(Protocol):
+    """What `uncollectable_tests` reads of a finished collection attempt: a CompletedProcess, or
+    a test double carrying the same three attributes."""
+
+    @property
+    def returncode(self) -> int: ...
+
+    @property
+    def stdout(self) -> str | None: ...
+
+    @property
+    def stderr(self) -> str | None: ...
+
+
+class PytestRunner(Protocol):
+    """The `run` seam of `uncollectable_tests`: one collection attempt, argv and a timeout."""
+
+    def __call__(self, argv: Sequence[str], timeout: float) -> CollectionResult: ...
 
 # A plugin root announces itself with one of these; either means some other gate owns the content.
 PLUGIN_MANIFESTS = ("plugin.json", "marketplace.json")
@@ -37,7 +70,7 @@ PRUNE_DIRS = frozenset({
 })
 
 
-def owning_plugin(path):
+def owning_plugin(path: StrPath) -> Path | None:
     """The nearest ancestor a plugin manifest marks as shipped, or None.
 
     Nearest rather than outermost: a marketplace repo that also ships the plugin carries two
@@ -50,13 +83,13 @@ def owning_plugin(path):
     return None
 
 
-def claude_dir(home=None):
+def claude_dir(home: StrPath | None = None) -> Path:
     """Claude's config dir: `<home>/.claude` for an explicit `home`, else
     `claude_paths.config_dir()`, which follows CLAUDE_CONFIG_DIR. Resolved per call."""
     return Path(home) / ".claude" if home is not None else claude_paths.config_dir()
 
 
-def under_installed_plugins(path, home=None):
+def under_installed_plugins(path: StrPath, home: StrPath | None = None) -> bool:
     """True when `path` sits under `<config dir>/plugins` (see `claude_dir`).
 
     That tree holds installed copies - the marketplace clone and the per-version cache. They carry
@@ -70,12 +103,12 @@ def under_installed_plugins(path, home=None):
     return True
 
 
-def is_shipped(skills_dir, home=None):
+def is_shipped(skills_dir: StrPath, home: StrPath | None = None) -> bool:
     """True when a plugin already ships this skills dir, so another gate owns it."""
     return under_installed_plugins(skills_dir, home) or owning_plugin(skills_dir) is not None
 
 
-def skip_reason(skills_dir, home=None):
+def skip_reason(skills_dir: StrPath, home: StrPath | None = None) -> str | None:
     """Why this dir is not a target, or None when it is one.
 
     The reason matters more than the verdict: a selection that silently drops most of what it
@@ -88,7 +121,7 @@ def skip_reason(skills_dir, home=None):
     return None
 
 
-def _run_git(cwd, args):
+def _run_git(cwd: StrPath, args: Sequence[str]) -> str | None:
     """Git stdout, or None when git is absent, errors, or the path is outside a repository."""
     try:
         proc = subprocess.run(["git", "-C", str(cwd), *args],
@@ -98,7 +131,7 @@ def _run_git(cwd, args):
     return proc.stdout if proc.returncode == 0 else None
 
 
-def _git_identity_dirs(path):
+def _git_identity_dirs(path: StrPath) -> tuple[Path, Path] | tuple[None, None]:
     """(common git dir, worktree toplevel) for `path`, or (None, None) outside a repository.
 
     The COMMON dir is what makes a linked worktree recognisable: every worktree of one repository
@@ -119,14 +152,15 @@ def _git_identity_dirs(path):
     return None, None
 
 
-def target_identity(skills_dir):
+def target_identity(skills_dir: StrPath) -> tuple[str, ...]:
     """A stable key so two checkouts of one repository are audited once.
 
     A linked worktree is a second checkout, so the same SKILL.md sits at two paths; auditing both
     spends a reviewer twice and reports every finding twice."""
     path = Path(skills_dir)
     common, top = _git_identity_dirs(path)
-    if common is None:
+    # Both are None together; naming `top` too lets the type checker see it is a Path below.
+    if common is None or top is None:
         return (str(_norm(path)),)
     try:
         relative = _norm(path).relative_to(_norm(top))
@@ -135,7 +169,7 @@ def target_identity(skills_dir):
     return (str(_norm(common)), str(relative))
 
 
-def _norm(path):
+def _norm(path: StrPath) -> Path:
     """Resolved when it exists, normalised otherwise - never raises on a missing path."""
     path = Path(path)
     try:
@@ -144,12 +178,12 @@ def _norm(path):
         return Path(os.path.normpath(str(path)))
 
 
-def select_targets(candidates, home=None):
+def select_targets(candidates: Iterable[StrPath], home: StrPath | None = None) -> list[Path]:
     """The candidates no plugin ships, de-duplicated by repository identity, sorted.
 
     Where two paths share an identity the shorter one wins, which is the main checkout rather than
     a linked worktree nested inside it."""
-    keep = {}
+    keep: dict[tuple[str, ...], Path] = {}
     for candidate in candidates:
         path = Path(candidate)
         if is_shipped(path, home):
@@ -171,7 +205,7 @@ EXCLUDE_DIRS = frozenset({"tests", "demos", "examples", "__pycache__", "scripts_
 EXCLUDE_FILES = frozenset({"conftest.py", "__init__.py"})
 
 
-def ships_scripts(pkg):
+def ships_scripts(pkg: StrPath) -> bool:
     """True when `pkg` ships a .py someone actually runs - fixtures and demos do not count."""
     pkg = Path(pkg)
     for path in pkg.rglob("*.py"):
@@ -182,7 +216,7 @@ def ships_scripts(pkg):
     return False
 
 
-def has_tests(pkg):
+def has_tests(pkg: StrPath) -> bool:
     """True when `pkg` carries at least one real test module."""
     pkg = Path(pkg)
     for path in pkg.rglob("test_*.py"):
@@ -192,7 +226,8 @@ def has_tests(pkg):
     return False
 
 
-def packages_missing_tests(packages):
+def packages_missing_tests[PackagePath: StrPath](packages: Iterable[PackagePath]
+                                             ) -> list[PackagePath]:
     """Those that ship a runnable .py but carry no test. A script with no test is incomplete."""
     return [p for p in packages if ships_scripts(p) and not has_tests(p)]
 
@@ -206,7 +241,7 @@ CSO_STOP = frozenset({
     "good", "need", "want", "like", "just",
 })
 
-def frontmatter_description(path):
+def frontmatter_description(path: StrPath) -> str | None:
     """The `description:` value from a SKILL.md front matter, or None when there is none.
 
     Read through `skill_frontmatter`, the reader the trigger and catalog builders use too: the
@@ -214,7 +249,7 @@ def frontmatter_description(path):
     return skill_frontmatter.description(path)
 
 
-def frontmatter_name(path):
+def frontmatter_name(path: StrPath) -> str | None:
     """The `name:` value from a SKILL.md front matter, or None (see `frontmatter_description`)."""
     return skill_frontmatter.name(path)
 
@@ -233,7 +268,7 @@ DESCRIPTION_CAP = 1024
 NAME_CAP = 64
 
 
-def cso_failures_for(label, description):
+def cso_failures_for(label: str, description: str) -> list[str]:
     """Why `description` fails the CSO rules, at most one message, empty when it passes.
 
     One message rather than all of them: the first failure is the one to fix, and a description
@@ -259,7 +294,7 @@ def cso_failures_for(label, description):
     return []
 
 
-def _holds_skill(skills_dir):
+def _holds_skill(skills_dir: Path) -> bool:
     """True when at least one immediate child ships a SKILL.md. An empty dir is not a target."""
     try:
         return any((child / "SKILL.md").is_file() for child in skills_dir.iterdir() if child.is_dir())
@@ -267,7 +302,8 @@ def _holds_skill(skills_dir):
         return False
 
 
-def _walk_error_sink(errors):
+def _walk_error_sink(errors: list[tuple[str, str]] | None
+                     ) -> Callable[[OSError], None] | None:
     """An os.walk onerror that records (path, reason) into `errors`, or None when not asked.
 
     Without one, os.walk skips a directory it cannot list and says nothing, so an unreadable
@@ -277,7 +313,8 @@ def _walk_error_sink(errors):
     return lambda err: errors.append((str(getattr(err, "filename", None) or "?"), str(err)))
 
 
-def discover_shipped(roots, home=None, errors=None):
+def discover_shipped(roots: Iterable[StrPath], home: StrPath | None = None,
+                     errors: list[tuple[str, str]] | None = None) -> list[Path]:
     """Plugin-owned `<dir>/skills` dirs under `roots`. Reported as skipped, never audited.
 
     Selection would drop these anyway, but INVISIBLY: a tool repo's `skills/` is not
@@ -285,7 +322,7 @@ def discover_shipped(roots, home=None, errors=None):
     An ownership filter whose work leaves no trace reads exactly like one that never ran, and the
     reader has no way to tell a correctly-scoped audit from a walk that missed half the tree.
     Pass a list as `errors` to receive (path, reason) for every directory the walk could not list."""
-    found = set()
+    found: set[Path] = set()
     for root in [Path(r) for r in roots]:
         if not root.is_dir():
             continue
@@ -298,7 +335,9 @@ def discover_shipped(roots, home=None, errors=None):
     return sorted(found)
 
 
-def discover_candidates(roots, home=None, personal=True, errors=None):
+def discover_candidates(roots: Iterable[StrPath], home: StrPath | None = None,
+                        personal: bool = True,
+                        errors: list[tuple[str, str]] | None = None) -> list[Path]:
     """Every `<dir>/.claude/skills` holding a SKILL.md under `roots`, plus the personal
     `<config dir>/skills` (see `claude_dir`; it need not be named `.claude`).
 
@@ -307,7 +346,7 @@ def discover_candidates(roots, home=None, personal=True, errors=None):
     Pass a list as `errors` to receive (path, reason) for every directory the walk could not list."""
     personal_dir = claude_dir(home)
     extra = [personal_dir] if personal else []
-    found = set()
+    found: set[Path] = set()
     for root in [*[Path(r) for r in roots], *extra]:
         if not root.is_dir():
             continue
@@ -345,7 +384,7 @@ _PATHISH_POSIX = re.compile(r"^(/[\w.@+-]|~/|\$HOME/|\$\{HOME\}/)")
 _PATHISH_WINDOWS = re.compile(r"^([A-Za-z]:[\\/]|\\\\[^\\])")
 
 
-def _is_pathish(token, windows=None):
+def _is_pathish(token: str, windows: bool | None = None) -> bool:
     """True when the token unambiguously names a file path on the platform in question.
 
     `windows` overrides the platform so both shapes stay askable from either OS; leave it None
@@ -354,7 +393,7 @@ def _is_pathish(token, windows=None):
     return bool(_PATHISH_POSIX.match(token) or (on_windows and _PATHISH_WINDOWS.match(token)))
 
 
-def _windows_argv(command):
+def _windows_argv(command: str) -> list[str]:
     r"""Windows argv via CommandLineToArgvW - the C runtime's OWN command-line parser.
 
     This is the function every Windows program uses to read its own command line, so a command
@@ -367,6 +406,10 @@ def _windows_argv(command):
         # CommandLineToArgvW("") does NOT return an empty list - it returns the path of the
         # CURRENT executable, so an empty command would silently become a path to python itself.
         return []
+    if sys.platform != "win32":
+        # shell32 exists only on Windows, where `split_command_line` is the one caller; the
+        # check also tells the type checker that everything below is Windows-only code.
+        raise OSError("CommandLineToArgvW exists only on Windows")
     import ctypes                       # noqa: PLC0415 - Windows-only; wintypes cannot import on POSIX
     from ctypes import wintypes         # noqa: PLC0415 - same
 
@@ -387,7 +430,7 @@ def _windows_argv(command):
         kernel32.LocalFree(argv)
 
 
-def split_command_line(command):
+def split_command_line(command: str) -> list[str]:
     r"""Split a command string into argv, by the platform's own rules.
 
     POSIX: shlex. Windows: CommandLineToArgvW, so the string is split exactly as the program it
@@ -413,7 +456,7 @@ def split_command_line(command):
     return _windows_argv(command)
 
 
-def _expand(token, home):
+def _expand(token: str, home: StrPath | None) -> str:
     """`~` and `$HOME` expanded against `home`. Other variables are left alone on purpose."""
     home = str(home) if home is not None else str(Path.home())
     for prefix in ("~/", "$HOME/", "${HOME}/"):
@@ -431,12 +474,12 @@ class SettingsUnreadable(ValueError):
     for a file with no hooks - and a caller that cannot tell the two apart reports a harness whose
     every hook is dead as clean."""
 
-    def __init__(self, path, reason):
+    def __init__(self, path: StrPath, reason: str) -> None:
         super().__init__("%s: %s" % (path, reason))
         self.path, self.reason = str(path), reason
 
 
-def _load_settings(settings_path):
+def _load_settings(settings_path: StrPath) -> object:
     """The parsed settings object, None when the file does not exist, SettingsUnreadable else.
 
     Decoded as `utf-8-sig`: a BOM is what a Windows editor leaves, and reading it strictly made
@@ -455,7 +498,15 @@ def _load_settings(settings_path):
         raise SettingsUnreadable(settings_path, "not valid JSON: %s" % exc) from exc
 
 
-def _as(value, kind, what, malformed):
+@overload
+def _as(value: object, kind: type[dict[Any, Any]], what: str, malformed: list[str]
+        ) -> JsonObject | None: ...
+@overload
+def _as(value: object, kind: type[list[Any]], what: str, malformed: list[str]
+        ) -> list[object] | None: ...
+@overload
+def _as(value: object, kind: type[str], what: str, malformed: list[str]) -> str | None: ...
+def _as(value: object, kind: type[object], what: str, malformed: list[str]) -> object:
     """`value` when it is a `kind` (None reads as empty); else None, with `what` named in
     `malformed` - the entry is skipped and the rest of the file still read."""
     if value is None:
@@ -466,7 +517,7 @@ def _as(value, kind, what, malformed):
     return value
 
 
-def scan_hook_registrations(settings_path):
+def scan_hook_registrations(settings_path: StrPath) -> tuple[list[Registration], list[str]]:
     """(registrations, malformed) for a settings file.
 
     `registrations` is (event, matcher, command) for every hook the file registers; `malformed`
@@ -479,7 +530,8 @@ def scan_hook_registrations(settings_path):
     data = _load_settings(settings_path)
     if data is None:
         return [], []
-    malformed, out = [], []
+    malformed: list[str] = []
+    out: list[Registration] = []
     data = _as(data, dict, "the top level", malformed)
     hooks = _as(data.get("hooks"), dict, '"hooks"', malformed) if data is not None else None
     for event, groups in (hooks or {}).items():
@@ -503,13 +555,13 @@ def scan_hook_registrations(settings_path):
     return out, malformed
 
 
-def hook_registrations(settings_path):
+def hook_registrations(settings_path: StrPath) -> list[Registration]:
     """(event, matcher, command) for every hook a settings file registers - `scan_hook_registrations`
     without the list of skipped entries."""
     return scan_hook_registrations(settings_path)[0]
 
 
-def command_paths(command, home=None):
+def command_paths(command: str, home: StrPath | None = None) -> list[str]:
     """The file paths a shell command names. Only unambiguous ones - a token that still holds an
     unresolved ${VAR} is skipped rather than guessed at.
 
@@ -521,7 +573,7 @@ def command_paths(command, home=None):
     except (ValueError, OSError):
         tokens = command.split()
     on_windows = os.name == "nt"
-    found = []
+    found: list[str] = []
     for token in tokens:
         if not _is_pathish(token, on_windows):
             continue
@@ -532,9 +584,10 @@ def command_paths(command, home=None):
     return found
 
 
-def registration_problems(settings_path, home=None):
+def registration_problems(settings_path: StrPath, home: StrPath | None = None
+                          ) -> list[tuple[str, str, str]]:
     """Registered commands whose target file is missing, as (event, command, missing path)."""
-    problems = []
+    problems: list[tuple[str, str, str]] = []
     for event, _matcher, command in hook_registrations(settings_path):
         for path in command_paths(command, home):
             if not Path(path).exists():
@@ -542,9 +595,9 @@ def registration_problems(settings_path, home=None):
     return problems
 
 
-def registered_paths(settings_paths, home=None):
+def registered_paths(settings_paths: Iterable[StrPath], home: StrPath | None = None) -> set[str]:
     """Every file path any of these settings files registers, existing or not."""
-    out = set()
+    out: set[str] = set()
     for settings in settings_paths:
         for _event, _matcher, command in hook_registrations(settings):
             out.update(command_paths(command, home))
@@ -560,7 +613,7 @@ _NONZERO_EXIT_RX = re.compile(
     r"(?:SystemExit|sys\.exit)\(\s*(?:[1-9]|[rRbBfFuU]{0,2}[\"'])|^[^\S\n]*exit\s+[1-9]", re.M)
 
 
-def is_retired_shim(path):
+def is_retired_shim(path: StrPath) -> bool:
     """True when the file announces itself retired in its opening lines."""
     try:
         head = Path(path).read_text(encoding="utf-8", errors="replace")[:1200]
@@ -577,7 +630,7 @@ _SCRIPT_PATH_RX = re.compile(r"[\w.-]/[\w.-]+\.(?:py|sh)\b")
 _SCRIPT_NAME_RX = re.compile(r"(?<![\w.-])[\w.-]+\.(?:py|sh)\b")
 
 
-def _names_replacement(text, own_name):
+def _names_replacement(text: str, own_name: str) -> bool:
     """True when the tombstone points a reader somewhere else.
 
     Phrase-matching is the wrong instrument here: real tombstones say "superseded by", "ships with
@@ -589,7 +642,7 @@ def _names_replacement(text, own_name):
     return bool({m.group(0) for m in _SCRIPT_NAME_RX.finditer(text)} - {own_name})
 
 
-def is_executable(path, posix=None):
+def is_executable(path: StrPath, posix: bool | None = None) -> bool:
     """True if the file carries a POSIX executable bit.
 
     Windows has no such bit, and os.access(X_OK) there returns True for ANY existing file. Asked
@@ -603,14 +656,15 @@ def is_executable(path, posix=None):
     return os.access(path, os.X_OK)
 
 
-def shim_problems(path, registered=(), home=None):
+def shim_problems(path: StrPath, registered: Iterable[str] = (),
+                  home: StrPath | None = None) -> list[str]:
     """What is wrong with a retired shim, empty when it is a well-formed tombstone.
 
     A shim that exits zero is worse than no shim: the caller sees success and carries on, so the
     guard reads as present and passing while it enforces nothing."""
     path = Path(path)
     text = path.read_text(encoding="utf-8", errors="replace")
-    problems = []
+    problems: list[str] = []
     if is_executable(path):
         problems.append("still executable - a retired file should not be runnable")
     if not _NONZERO_EXIT_RX.search(text):
@@ -622,7 +676,7 @@ def shim_problems(path, registered=(), home=None):
     return problems
 
 
-def orphan_scripts(hooks_dir, registered=()):
+def orphan_scripts(hooks_dir: StrPath, registered: Iterable[str] = ()) -> list[Path]:
     """Scripts in `hooks_dir` that nothing registers and that are neither library nor tombstone.
 
     The convention the marketplace follows exactly: a hyphenated name is a hook entry point, an
@@ -632,7 +686,7 @@ def orphan_scripts(hooks_dir, registered=()):
     if not hooks_dir.is_dir():
         return []
     registered = set(registered)
-    orphans = []
+    orphans: list[Path] = []
     for path in sorted(hooks_dir.iterdir()):
         if not path.is_file() or path.suffix not in (".py", ".sh"):
             continue
@@ -650,7 +704,7 @@ _DIRECT_COLLECT_TIMEOUT_S = 180
 _UV_FALLBACK_TIMEOUT_S = 240
 
 
-def _run_pytest(argv, timeout):
+def _run_pytest(argv: Sequence[str], timeout: float) -> subprocess.CompletedProcess[str]:
     """Real subprocess seam for a pytest collection attempt, direct or via the uv fallback.
 
     Explicit encoding/errors: with no encoding, subprocess decodes with the machine's locale
@@ -659,7 +713,10 @@ def _run_pytest(argv, timeout):
                           errors="replace", timeout=timeout)
 
 
-def uncollectable_tests(tests_dir, python=None, run=_run_pytest, resolve_uv=None, extra_deps=()):
+def uncollectable_tests(tests_dir: StrPath, python: str | None = None,
+                        run: PytestRunner = _run_pytest,
+                        resolve_uv: Callable[[], str | None] | None = None,
+                        extra_deps: Sequence[str] = ()) -> list[Uncollectable]:
     """Test modules pytest cannot even import, as (path, message, unmeasured) triples.
 
     `unmeasured` is True only when the CHECK itself could not run - neither the launching
@@ -699,12 +756,15 @@ def uncollectable_tests(tests_dir, python=None, run=_run_pytest, resolve_uv=None
     return _parse_collection_failure(text, tests_dir)
 
 
-def _default_resolve_uv():
+def _default_resolve_uv() -> str | None:
     """Real `resolve_uv` seam: where `uv` sits on PATH, or None."""
     return shutil.which("uv")
 
 
-def _collect_via_uv_fallback(tests_dir, run, resolve_uv, extra_deps=(), pytest_missing=True):
+def _collect_via_uv_fallback(tests_dir: Path, run: PytestRunner,
+                             resolve_uv: Callable[[], str | None],
+                             extra_deps: Sequence[str] = (), pytest_missing: bool = True
+                             ) -> list[Uncollectable]:
     """Retry collection under `uv run --with pytest`, since uv is already required to launch this
     script and can provision pytest on demand. Only when this ALSO cannot run does the launching
     interpreter's missing pytest become an unmeasured result instead of a real measurement."""
@@ -739,7 +799,7 @@ def _collect_via_uv_fallback(tests_dir, run, resolve_uv, extra_deps=(), pytest_m
     return _parse_collection_failure(text, tests_dir)
 
 
-def _parse_collection_failure(text, tests_dir):
+def _parse_collection_failure(text: str, tests_dir: StrPath) -> list[Uncollectable]:
     """A real, target-attributable collection failure, as (path, message, unmeasured=False)."""
     out = [(_resolve_reported_path(line[len("ERROR "):].strip(), tests_dir),
             _first_error_line(text), False)
@@ -753,7 +813,7 @@ def _parse_collection_failure(text, tests_dir):
     return [(str(tests_dir), _first_error_line(text) or "collection failed", False)]
 
 
-def _resolve_reported_path(token, tests_dir=None):
+def _resolve_reported_path(token: str, tests_dir: StrPath | None = None) -> str:
     """pytest's `ERROR <path>` rendered as an absolute path when it resolves.
 
     pytest prints that path relative to its own ROOTDIR, which is not this process's cwd. Two
@@ -766,7 +826,7 @@ def _resolve_reported_path(token, tests_dir=None):
     So the target dir is tried as a base before the cwd. Anything that still does not point at a
     real file (a nodeid, an odd rendering) is left untouched rather than turned into an invented
     path."""
-    bases = []
+    bases: list[str] = []
     if tests_dir is not None:
         bases += [str(tests_dir), str(Path(tests_dir).parent)]
     bases.append(os.getcwd())
@@ -777,7 +837,7 @@ def _resolve_reported_path(token, tests_dir=None):
     return token
 
 
-def _first_error_line(text):
+def _first_error_line(text: str | None) -> str:
     for line in (text or "").splitlines():
         if line.startswith("E   "):
             return line[4:].strip()
@@ -788,14 +848,15 @@ _TB_FILE_RX = re.compile(r'File "([^"]+)", line \d+')
 _EXC_RX = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*(Error|Exit|Exception)\b")
 
 
-def _internalerror_culprit(text, tests_dir):
+def _internalerror_culprit(text: str, tests_dir: StrPath) -> tuple[str, str] | None:
     """The test file a pytest INTERNALERROR blames, as (path, exception line), or None.
 
     A module raising SystemExit at import time never produces a normal `ERROR` line: pytest
     reraises it and dies with INTERNALERROR, so a parser reading only `ERROR ` reports the
     directory and loses the file. That is the exact shape of a test importing a retired shim."""
     base = os.path.abspath(str(tests_dir))
-    blamed, exception = None, ""
+    blamed: str | None = None
+    exception = ""
     for line in text.splitlines():
         match = _TB_FILE_RX.search(line)
         if match and os.path.abspath(match.group(1)).startswith(base):
@@ -808,7 +869,9 @@ def _internalerror_culprit(text, tests_dir):
 
 # --- a local skill that shadows a shipped one -------------------------------------------------
 
-def unmanaged_twins(local_skills_dir, shipped_descriptions, threshold=0.90):
+def unmanaged_twins(local_skills_dir: StrPath,
+                    shipped_descriptions: Mapping[str, str | None] | None,
+                    threshold: float = 0.90) -> list[tuple[str, str, float]]:
     """Local skills whose description matches a shipped skill's, as (name, shipped name, ratio).
 
     The marketplace runs a mirror gate over the twins it knows about. A local copy is in nobody's
@@ -816,12 +879,13 @@ def unmanaged_twins(local_skills_dir, shipped_descriptions, threshold=0.90):
     local_skills_dir = Path(local_skills_dir)
     if not local_skills_dir.is_dir():
         return []
-    found = []
+    found: list[tuple[str, str, float]] = []
     for skill in sorted(d for d in local_skills_dir.iterdir() if d.is_dir()):
         description = frontmatter_description(skill / "SKILL.md")
         if not description:
             continue
-        best, best_ratio = None, 0.0
+        best: str | None = None
+        best_ratio = 0.0
         for shipped_name, shipped_desc in (shipped_descriptions or {}).items():
             ratio = difflib.SequenceMatcher(None, description, shipped_desc or "").ratio()
             if ratio > best_ratio:
@@ -831,12 +895,12 @@ def unmanaged_twins(local_skills_dir, shipped_descriptions, threshold=0.90):
     return found
 
 
-def shipped_descriptions(skills_dir):
+def shipped_descriptions(skills_dir: StrPath) -> dict[str, str]:
     """{skill name: description} for a shipped catalogue, to compare local copies against."""
     skills_dir = Path(skills_dir)
     if not skills_dir.is_dir():
         return {}
-    out = {}
+    out: dict[str, str] = {}
     for skill in skills_dir.iterdir():
         if skill.is_dir():
             description = frontmatter_description(skill / "SKILL.md")
@@ -847,7 +911,7 @@ def shipped_descriptions(skills_dir):
 
 # --- front matter parity ----------------------------------------------------------------------
 
-def _skill_lines(path):
+def _skill_lines(path: StrPath) -> list[str] | None:
     """The lines of a SKILL.md as every front-matter reader here sees them, or None if unreadable.
 
     Decoded by `skill_frontmatter.read_text` - BOM dropped, undecodable bytes REPLACED - so these
@@ -858,7 +922,7 @@ def _skill_lines(path):
     return None if text is None else text.lstrip("\ufeff").splitlines()
 
 
-def frontmatter_undecodable(path):
+def frontmatter_undecodable(path: StrPath) -> str | None:
     """Where a SKILL.md stops being UTF-8 (`byte 0xe9 at offset 141`), or None when it is UTF-8
     or cannot be read at all (a missing file is the callers' problem, reported elsewhere)."""
     try:
@@ -868,7 +932,7 @@ def frontmatter_undecodable(path):
     return _undecodable_in(data)
 
 
-def _undecodable_in(data):
+def _undecodable_in(data: bytes) -> str | None:
     """`frontmatter_undecodable` over bytes already read."""
     try:
         data.decode("utf-8-sig")
@@ -877,7 +941,7 @@ def _undecodable_in(data):
     return None
 
 
-def frontmatter_unterminated(path):
+def frontmatter_unterminated(path: StrPath) -> bool:
     """True when a SKILL.md opens a front-matter block that never closes on a line of its own.
 
     The failure shape is a closing `---` glued to the end of the last value
@@ -888,7 +952,7 @@ def frontmatter_unterminated(path):
     return _unterminated_in(_skill_lines(path))
 
 
-def _unterminated_in(lines):
+def _unterminated_in(lines: Sequence[str] | None) -> bool:
     """`frontmatter_unterminated` over lines already read (None when unreadable)."""
     if lines is None:
         return False
@@ -897,23 +961,23 @@ def _unterminated_in(lines):
     return not any(line.strip() == "---" for line in lines[1:])
 
 
-def _fenced_lines(lines):
+def _fenced_lines(lines: Sequence[str]) -> set[int]:
     """Indices of lines in a fenced code block, fence lines included, by the shared fence rule
     (`tell_chars.code_line_flags`). Skills that DOCUMENT front matter show one in a fence, so a scan
     that cannot see fences reads the example as a real second block."""
     return {index for index, is_code in enumerate(tell_chars.code_line_flags(lines)) if is_code}
 
 
-def _bare_delimiters(lines):
+def _bare_delimiters(lines: Sequence[str]) -> list[int]:
     """Indices of `---` lines that stand alone outside any code fence."""
     fenced = _fenced_lines(lines)
     return [i for i, line in enumerate(lines)
             if i not in fenced and line.strip() == "---" and not line.startswith("    ")]
 
 
-def _top_level_keys(lines):
+def _top_level_keys(lines: Sequence[str]) -> list[tuple[str, int]]:
     """`key` names that begin a line, in order, with the index each was found at."""
-    found = []
+    found: list[tuple[str, int]] = []
     for index, line in enumerate(lines):
         match = _FRONTMATTER_KEY.match(line)
         if match:
@@ -925,7 +989,7 @@ def _top_level_keys(lines):
 FRONTMATTER_KEYS = frozenset({"name", "description"})
 
 
-def frontmatter_second_block(path):
+def frontmatter_second_block(path: StrPath) -> int | None:
     """The 1-based line of a second front-matter-shaped block, or None.
 
     Every other reader in this module splits on the FIRST bare `---`, so anything past the
@@ -936,7 +1000,7 @@ def frontmatter_second_block(path):
     return _second_block_in(_skill_lines(path))
 
 
-def _second_block_in(lines):
+def _second_block_in(lines: Sequence[str] | None) -> int | None:
     """`frontmatter_second_block` over lines already read (None when unreadable)."""
     if not lines or lines[0].strip() != "---":
         return None
@@ -951,7 +1015,7 @@ def _second_block_in(lines):
     return None
 
 
-def frontmatter_scalar_colon(path):
+def frontmatter_scalar_colon(path: StrPath) -> str | None:
     """The front-matter key whose plain scalar holds a YAML-breaking colon, or None.
 
     A `: ` inside an unquoted value makes YAML read a nested mapping, and a trailing `:` does
@@ -962,7 +1026,7 @@ def frontmatter_scalar_colon(path):
     return _scalar_colon_in(_skill_lines(path))
 
 
-def _scalar_colon_in(lines):
+def _scalar_colon_in(lines: Sequence[str] | None) -> str | None:
     """`frontmatter_scalar_colon` over lines already read (None when unreadable)."""
     if not lines or lines[0].strip() != "---":
         return None
@@ -982,7 +1046,18 @@ def _scalar_colon_in(lines):
     return None
 
 
-def _load_yaml():
+class _YamlLoader(Protocol):
+    """The one method of a ruamel `YAML` loader that `_load_yaml` hands out."""
+
+    def load(self, stream: str) -> object: ...
+
+
+def _bound_load(loader: _YamlLoader) -> Callable[[str], object]:
+    """`loader.load`, typed through `_YamlLoader`: ruamel leaves `stream` unannotated."""
+    return loader.load
+
+
+def _load_yaml() -> Callable[[str], object] | None:
     """PyYAML, ruamel as a fallback, or None when neither is installed.
 
     A seam rather than a bare import so the no-library path is testable: nothing provisions a
@@ -996,10 +1071,10 @@ def _load_yaml():
         from ruamel.yaml import YAML                  # noqa: PLC0415 - optional dependency
     except ImportError:
         return None
-    return YAML(typ="safe").load
+    return _bound_load(YAML(typ="safe"))
 
 
-def frontmatter_yaml_error(path):
+def frontmatter_yaml_error(path: StrPath) -> str | None:
     """What a real YAML parser rejects about the front-matter block, or None.
 
     The stdlib checks above are shaped for the malformations that have actually occurred here;
@@ -1016,7 +1091,7 @@ def frontmatter_yaml_error(path):
     return _yaml_error_in(_skill_lines(path))
 
 
-def _yaml_error_in(lines):
+def _yaml_error_in(lines: Sequence[str] | None) -> str | None:
     """`frontmatter_yaml_error` over lines already read (None when unreadable)."""
     load = _load_yaml()
     if load is None:
@@ -1035,7 +1110,8 @@ def _yaml_error_in(lines):
     return None
 
 
-def frontmatter_file_problems(md, label, expect_name=None):
+def frontmatter_file_problems(md: StrPath, label: str, expect_name: str | None = None
+                              ) -> list[str]:
     """Front-matter failures for ONE SKILL.md, as a list of messages.
 
     Split out from `frontmatter_problems` so the commit gate can run the same checks over the
@@ -1051,7 +1127,7 @@ def frontmatter_file_problems(md, label, expect_name=None):
     text = None if data is None else data.decode("utf-8-sig", errors="replace")
     lines = None if text is None else text.lstrip("\ufeff").splitlines()
     block = None if text is None else skill_frontmatter.frontmatter_block(text)
-    problems = []
+    problems: list[str] = []
     undecodable = None if data is None else _undecodable_in(data)
     if undecodable is not None:
         problems.append("%s: SKILL.md is not valid UTF-8 (%s) - every reader here replaces the "
@@ -1098,12 +1174,12 @@ def frontmatter_file_problems(md, label, expect_name=None):
     return problems
 
 
-def frontmatter_problems(skills_dir):
+def frontmatter_problems(skills_dir: StrPath) -> list[str]:
     """Per-skill front-matter failures across a whole skills dir."""
     skills_dir = Path(skills_dir)
     if not skills_dir.is_dir():
         return []
-    problems = []
+    problems: list[str] = []
     for skill in sorted(d for d in skills_dir.iterdir() if d.is_dir()):
         md = skill / "SKILL.md"
         if md.is_file():
@@ -1113,7 +1189,7 @@ def frontmatter_problems(skills_dir):
 
 # --- graveyards: retired artifacts left where they read as live -------------------------------
 
-def graveyard_entries(root):
+def graveyard_entries(root: StrPath) -> list[GraveyardEntry]:
     """Retired artifacts that a reader would mistake for live ones, as (path, why).
 
     A `.orig-<date>` beside its replacement is the SANCTIONED way to retire a file here, so it is
@@ -1123,7 +1199,7 @@ def graveyard_entries(root):
     if not root.is_dir():
         return []
     walk = _graveyard_walk(root)
-    found = []
+    found: list[GraveyardEntry] = []
     for path in sorted(walk.backups):
         if not path.is_file():
             continue
@@ -1146,7 +1222,7 @@ class _GraveyardWalk:
     `*.bak` dir with the skills directly in it. One walk feeds every graveyard check, so a root
     holding many `.pytest_cache` dirs is not re-walked once per cache."""
 
-    def __init__(self, root):
+    def __init__(self, root: Path) -> None:
         self.root = root
         self.parked: dict[Path, int] = {}
         self.backups: list[Path] = []
@@ -1155,14 +1231,14 @@ class _GraveyardWalk:
         self.sources: set[str] = set()
 
 
-def _graveyard_walk(root):
+def _graveyard_walk(root: StrPath) -> _GraveyardWalk:
     """Walk `root` once, never descending PRUNE_DIRS: a virtualenv or node_modules holds no
     first-party artifact and can be larger than everything else together. The two caches a check
     reads are opened at their known path rather than walked. Paths stay strings in the loop: a
     Path per file costs more than the walk itself."""
     walk = _GraveyardWalk(Path(root))
     top = str(walk.root)
-    parked = {}
+    parked: dict[str, int] = {}
     for dirpath, dirnames, filenames in os.walk(top):
         if dirpath == top:
             parked = {os.path.join(top, d): 0 for d in dirnames if d.endswith(".bak")}
@@ -1190,9 +1266,9 @@ def _graveyard_walk(root):
     return walk
 
 
-def _stale_bytecode(walk):
+def _stale_bytecode(walk: _GraveyardWalk) -> list[GraveyardEntry]:
     """Compiled modules whose source is gone - the usual trace of a deleted script."""
-    out = []
+    out: list[GraveyardEntry] = []
     for pyc in sorted(walk.bytecode):
         source = pyc.parent.parent / (pyc.name.split(".")[0] + ".py")
         if not source.exists():
@@ -1200,15 +1276,15 @@ def _stale_bytecode(walk):
     return out
 
 
-def _relative_posix(path, base):
+def _relative_posix(path: PurePath, base: PurePath) -> str:
     """`path` relative to `base`, with `/` separators - the form pytest writes node ids in on
     every OS. A native Windows relative path has `\\`, so no cached id would ever match it."""
     return path.relative_to(base).as_posix()
 
 
-def _stale_nodeids(walk):
+def _stale_nodeids(walk: _GraveyardWalk) -> list[GraveyardEntry]:
     """Cached pytest node ids naming a test file that is gone."""
-    out = []
+    out: list[GraveyardEntry] = []
     for cache in sorted(walk.nodeid_caches):
         try:
             ids = json.loads(cache.read_text(encoding="utf-8"))
@@ -1230,10 +1306,10 @@ def _stale_nodeids(walk):
 # survives every routine pass because each existing check asks a question it still satisfies. A
 # recurring dedup pass is what closes it.
 
-def shipped_file_index(shipped_root):
+def shipped_file_index(shipped_root: StrPath) -> dict[str, Path]:
     """{basename: path} for every .py a plugin ships - its hooks/ plus every skill's scripts/tools."""
     root = Path(shipped_root)
-    index = {}
+    index: dict[str, Path] = {}
     if not root.is_dir():
         return index
     for sub in ("hooks", "skills"):
@@ -1247,7 +1323,8 @@ def shipped_file_index(shipped_root):
     return index
 
 
-def duplicate_shipped_files(local_dirs, shipped_root):
+def duplicate_shipped_files(local_dirs: Iterable[StrPath], shipped_root: StrPath
+                            ) -> list[tuple[str, str, Literal["identical", "drifted"]]]:
     """(local, shipped, status) per local .py whose basename the plugin also ships.
 
     status is "identical" (safe to retire) or "drifted" (NOT safe to retire yet). The distinction is
@@ -1258,7 +1335,7 @@ def duplicate_shipped_files(local_dirs, shipped_root):
     A RETIRED tombstone is skipped: it is the completed retirement, and reporting it would push a
     reader to delete the very thing that makes a stale caller fail loudly."""
     index = shipped_file_index(shipped_root)
-    out = []
+    out: list[tuple[str, str, Literal["identical", "drifted"]]] = []
     if not index:
         return out
     for d in local_dirs:
