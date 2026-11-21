@@ -82,13 +82,51 @@ import os
 import re
 import sys
 import time
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
-from typing import NamedTuple, cast
+from typing import NamedTuple, Protocol, cast
 
 import checkpoint_names
 import open_work
 import self_improve_signals as sig
 import shell_text
+
+
+class _ShellText(Protocol):
+    """The shell_text readers this hook calls, with the types they hand back.
+
+    shell_text leaves these parameters and returns unannotated, so every call read as partially
+    unknown. `_SHELL` below is the module itself assigned to this protocol: pyright checks each
+    member against the module's own definition, and each call site gets a typed answer.
+    """
+
+    def argv_for_match(self, segment: str, tool_name: str = ...) -> Sequence[str]: ...
+
+    def directory_change(self, statement: str, here: str | None) -> tuple[bool, str | None]: ...
+
+    def iter_heredocs(self, command: str) -> Iterator[tuple[int, object, tuple[int, int]]]: ...
+
+    def is_rooted(self, path: str) -> bool: ...
+
+    def msys_drive_path_for_tool(self, path: str) -> str | None: ...
+
+    def strip_heredoc_bodies(self, command: str) -> str: ...
+
+
+_SHELL: _ShellText = shell_text
+
+#: A filesystem path as the callers hand it in: text or a path object.
+_PathArg = str | os.PathLike[str]
+#: A decoded hook event, transcript record or block: JSON keys to JSON values.
+_Json = dict[str, object]
+
+
+class FoundCheckpoint(NamedTuple):
+    """A file holding a fresh checkpoint: where it is, what it says, and when it last changed."""
+
+    path: Path
+    text: str
+    mtime: float
 
 #: Below the harness's 10,000-character inline limit, with room for the framing around the body.
 MAX_CONTEXT_CHARS = 9000
@@ -191,7 +229,7 @@ _PLAN = (
 )
 
 
-def repo_root(cwd) -> Path:
+def repo_root(cwd: _PathArg) -> Path:
     """The git top level of `cwd`, or `cwd` itself outside a repository. Never raises."""
     try:
         return open_work.backlog_path(cwd).parent
@@ -199,7 +237,7 @@ def repo_root(cwd) -> Path:
         return Path(cwd)
 
 
-def fresh_checkpoint(path, asked_at):
+def fresh_checkpoint(path: _PathArg, asked_at: float) -> str | None:
     """The checkpoint text when it is this session's latest, else None. IMPURE (reads).
 
     Latest means written at or after the save request and not yet marked read. A request time of 0
@@ -221,14 +259,14 @@ def fresh_checkpoint(path, asked_at):
     return text
 
 
-def has_checkpoint_heading(text) -> bool:
+def has_checkpoint_heading(text: str) -> bool:
     """True when a line of `text` is exactly the checkpoint heading. PURE."""
     return any(line.rstrip() == _CHECKPOINT_HEADING for line in text.splitlines())
 
 
-def resume_context(path, text, today):
+def resume_context(path: _PathArg, text: str, today: str) -> str:
     """The block that hands the checkpoint back, cut to fit the inline limit. PURE."""
-    fill = {"path": str(path), "today": today, "cut": "", "body": text.rstrip()}
+    fill: dict[str, str] = {"path": str(path), "today": today, "cut": "", "body": text.rstrip()}
     whole = _RESUME % fill
     if len(whole) <= MAX_CONTEXT_CHARS:
         return whole
@@ -239,25 +277,29 @@ def resume_context(path, text, today):
     return _RESUME % fill
 
 
-def build(event, today=None, now=None):
+def build(event: object, today: str | None = None, now: float | None = None) -> str | None:
     """The additionalContext for this SessionStart event, or None to stay silent. IMPURE (reads)."""
-    if not isinstance(event, dict) or event.get("source") != "compact":
+    if not isinstance(event, dict):
+        return None
+    event = cast(_Json, event)
+    if event.get("source") != "compact":
         return None
     cwd = _event_text(event, "cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
     session = str(event.get("session_id") or "")
     transcript = _event_text(event, "transcript_path")
     shown = transcript or "(unknown)"
-    found = []
+    found: list[FoundCheckpoint] = []
     if session:
         asked_at = sig.checkpoint_asked_at(session)
         record = scan_transcript(transcript, asked_at) if asked_at > 0 else None
         writes = record.writes if record is not None else None
         touched = sig.read_touched_paths(session)
         found = qualifying(candidates(cwd, touched, writes), asked_at)
-        own = [c for c in found if is_own(c[0], c[2], writes, touched)]
+        own = [c for c in found if is_own(c.path, c.mtime, writes, touched)]
         if own:
-            path, text, _mtime = max(own, key=lambda c: c[2])
-            return resume_context(path, text, today or datetime.date.today().isoformat())
+            newest = max(own, key=lambda c: c.mtime)
+            return resume_context(newest.path, newest.text,
+                                  today or datetime.date.today().isoformat())
         own_note = _own_note(record, shown)
         if own_note:
             return own_note
@@ -267,7 +309,7 @@ def build(event, today=None, now=None):
     return _NO_CHECKPOINT % {"transcript": shown}
 
 
-def _event_text(event, key) -> str:
+def _event_text(event: _Json, key: str) -> str:
     """The event's `key` when it is a string, else "" (read as absent). PURE.
 
     The event is untrusted JSON. A path field that is not a string is no path: handed on, a mapping
@@ -320,7 +362,7 @@ def retired_checkpoint(record: TranscriptRecord) -> str | None:
     return max(retired)[1] if retired else None
 
 
-def candidates(cwd, touched, writes):
+def candidates(cwd: _PathArg, touched: Iterable[str], writes: Iterable[str] | None) -> list[Path]:
     """Every path that may hold a checkpoint: the cwd's repo root, then this session's records. PURE
     apart from the git lookup of the cwd's top level."""
     paths = [repo_root(cwd) / checkpoint_names.CHECKPOINT_NAME]
@@ -333,21 +375,22 @@ def candidates(cwd, touched, writes):
     return paths
 
 
-def qualifying(paths, asked_at):
-    """[(path, text, mtime)] for each of `paths` holding a fresh checkpoint. IMPURE (reads)."""
-    found = []
+def qualifying(paths: Iterable[Path], asked_at: float) -> list[FoundCheckpoint]:
+    """A FoundCheckpoint for each of `paths` holding a fresh checkpoint. IMPURE (reads)."""
+    found: list[FoundCheckpoint] = []
     for path in paths:
         text = fresh_checkpoint(path, asked_at)
         if text is None:
             continue
         try:
-            found.append((path, text, os.path.getmtime(path)))
+            found.append(FoundCheckpoint(path, text, os.path.getmtime(path)))
         except OSError:
             continue
     return found
 
 
-def is_own(path, mtime, writes, touched) -> bool:
+def is_own(path: _PathArg, mtime: float, writes: Mapping[str, float] | None,
+           touched: Iterable[str]) -> bool:
     """True when this session's records show it wrote `path` as it now stands. PURE.
 
     With a transcript (`writes` not None): a successful write of the path after the request, and
@@ -360,16 +403,16 @@ def is_own(path, mtime, writes, touched) -> bool:
     return at is not None and mtime <= at + _WRITE_SLACK
 
 
-def listing(found, now) -> str:
+def listing(found: Iterable[FoundCheckpoint], now: float) -> str:
     """One line per unattributed candidate, newest first, with its path and age. PURE."""
-    rows = sorted(found, key=lambda c: c[2], reverse=True)[:_MAX_LISTED]
+    rows = sorted(found, key=lambda c: c.mtime, reverse=True)[:_MAX_LISTED]
     return "\n".join(
         f"- {path} (changed {_age(now - mtime)}, "
         f"{datetime.datetime.fromtimestamp(mtime):%Y-%m-%d %H:%M})"
         for path, _text, mtime in rows)
 
 
-def _age(seconds) -> str:
+def _age(seconds: float) -> str:
     """`seconds` as a short age: '2 min ago', '3 h 5 min ago', '2 d ago'. PURE."""
     minutes = max(0, int(seconds // 60))
     if minutes < 120:
@@ -382,10 +425,6 @@ def _age(seconds) -> str:
 def _norm(path: object) -> str:
     """An absolute, normalised spelling of `path`, for comparing recorded paths. PURE."""
     return os.path.normpath(os.path.abspath(str(path)))
-
-
-#: A decoded transcript record or block: JSON keys to JSON values.
-_Json = dict[str, object]
 
 
 class _Pending(NamedTuple):
@@ -552,9 +591,8 @@ def bash_targets(command: object, cwd: str | None) -> dict[str, bool]:
     out: dict[str, bool] = {}
     here: str | None = cwd or None
     bases: set[str | None] = set()
-    for statement in _statements(shell_text.strip_heredoc_bodies(command)):
-        changed, landing = cast(tuple[bool, str | None],
-                                shell_text.directory_change(statement, here))
+    for statement in _statements(_SHELL.strip_heredoc_bodies(command)):
+        changed, landing = _SHELL.directory_change(statement, here)
         if changed:
             here = landing
             continue
@@ -562,9 +600,7 @@ def bash_targets(command: object, cwd: str | None) -> dict[str, bool]:
             bases.add(here)
         _collect_targets(statement, here, out, shell=True)
     lines = command.split("\n")
-    heredocs = cast(list[tuple[int, object, tuple[int, int]]],
-                    list(shell_text.iter_heredocs(command)))
-    for _line, _opener, (start, end) in heredocs:
+    for _line, _opener, (start, end) in _SHELL.iter_heredocs(command):
         body = "\n".join(lines[start:end])
         for base in bases or {None}:
             _collect_targets(body, base, out, shell=False)
@@ -615,7 +651,7 @@ def _collect_targets(text: str, base: str | None, out: dict[str, bool], *, shell
     if not _BASH_CHANGES.search(text):
         return
     removes = bool(_BASH_REMOVES.search(text))
-    words = cast(list[str], shell_text.argv_for_match(text.strip(), "Bash"))
+    words = _SHELL.argv_for_match(text.strip(), "Bash")
     program = next((w for w in words if "=" not in w), "")
     raw = shell                      # the text still carries the shell's quotes and escapes
     if os.path.basename(program) in _COPY_PROGRAMS and len(words) > 1:
@@ -632,7 +668,7 @@ def _collect_targets(text: str, base: str | None, out: dict[str, bool], *, shell
         if "$" in token or not checkpoint_names.is_checkpoint_name(os.path.basename(token)):
             continue
         token = os.path.expanduser(token)
-        if not shell_text.is_rooted(token):
+        if not _SHELL.is_rooted(token):
             if not base:
                 continue
             token = os.path.join(base, token)
@@ -653,7 +689,7 @@ def _as_bash_reads(token: str, *, escaped: bool) -> str | None:
     """
     if escaped:
         token = _BASH_ESCAPE.sub(r"\1", token)
-    return cast(str | None, shell_text.msys_drive_path_for_tool(token))
+    return _SHELL.msys_drive_path_for_tool(token)
 
 
 def _epoch(stamp: object) -> float | None:
