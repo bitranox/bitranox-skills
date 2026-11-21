@@ -1401,3 +1401,53 @@ def test_self_heal_names_at_most_three_levels_and_counts_the_rest():
     assert "5 level(s)" in line and "/t/l0" in line and "/t/l2" in line and "/t/l3" not in line
     assert "2 more" in line
     assert S._refused_heal_line([]) == ""
+
+
+# A retirement heal cannot finish (the archive will not take the body) leaves the retired body in
+# `facts/` for good. heal reports it under `retirements_held`; the session-start self-heal showed
+# only the refused and unreadable levels, so the body sat there with nothing said until heal was
+# run by hand.
+
+_held_posix_non_root = pytest.mark.skipif(
+    os.name == "nt" or os.geteuid() == 0,
+    reason="a read-only dir refuses a rename on POSIX only for a user who is not root")
+
+
+def _tree_with_a_renamed_fact(tmp_path):
+    anchor = tmp_path / "tree"
+    proj = anchor / "proj"
+    proj.mkdir(parents=True)
+    for level in (anchor, proj):
+        (level / "CLAUDE.md").write_text("x\n", encoding="utf-8")
+    (anchor / US.STORE_DIRNAME).mkdir()
+    ME.add_or_update_entry(str(proj), "Old title",
+                           "When a fact is renamed, its old body is archived, never adopted.",
+                           body="OLD PROSE", slug="old-slug")
+    return anchor, proj
+
+
+@_held_posix_non_root
+def test_a_retirement_the_self_heal_could_not_finish_is_named_in_its_output(tmp_path):
+    anchor, proj = _tree_with_a_renamed_fact(tmp_path)
+    archive = US.central_facts_dir(str(anchor)).parent / ".archive"
+    archive.mkdir(parents=True, exist_ok=True)
+    archive.chmod(0o500)                                   # a rename into it fails
+    try:
+        assert ME.rename_entry(str(proj), "old-slug", "new-slug").renamed
+        text = S._self_heal(str(proj))
+    finally:
+        archive.chmod(0o700)
+    lines = [ln for ln in text.split("\n") if "retired body still in facts/" in ln]
+    assert len(lines) == 1, text
+    assert "old-slug" in lines[0] and "renamed" in lines[0] and "memory_engine.py heal" in lines[0]
+    # Once the archive takes it, heal finishes the retirement and the line is gone.
+    assert "retired body" not in S._self_heal(str(proj))
+
+
+def test_held_retirement_lines_show_three_and_count_the_rest():
+    held = [ME.SlugReason("slug-%d" % i, "why %d" % i) for i in range(5)]
+    lines = S._held_retirement_lines(held)
+    assert len(lines) == 4
+    assert all("not archived: slug-%d [why %d]" % (i, i) in lines[i] for i in range(3))
+    assert "2 more" in lines[3]
+    assert S._held_retirement_lines([]) == []

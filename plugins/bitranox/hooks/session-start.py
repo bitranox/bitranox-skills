@@ -24,7 +24,9 @@ import re
 import subprocess
 import sys
 import time
+from collections.abc import Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import claude_paths
 import open_work
@@ -41,6 +43,9 @@ from self_improve_signals import (
     project_unseeded,
     read_contributions,
 )
+
+if TYPE_CHECKING:  # the engine is imported lazily at run time, inside _self_heal
+    from memory_engine import SlugReason
 
 
 _RETRIEVAL_TMPL = (
@@ -630,12 +635,26 @@ def _unreadable_heal_line(unreadable):
             "re-save it as UTF-8." % (len(unreadable), shown, rest))
 
 
+def _held_retirement_lines(held: Sequence["SlugReason"]) -> list[str]:
+    """One context line per retirement heal could not finish, worded as `memory_engine.py heal`
+    prints it, for the first few; then one line counting the rest. [] when none was held."""
+    lines = ["MEMORY STORE: retired body still in facts/, not archived: %s [%s]. "
+             "`memory_engine.py heal --proj <level>` retries it and names it while it still fails."
+             % (left.slug, left.reason) for left in held[:_REFUSED_HEAL_SHOWN]]
+    more = len(held) - _REFUSED_HEAL_SHOWN
+    if more > 0:
+        lines.append("MEMORY STORE: and %d more retired body(ies) still in facts/; "
+                     "`memory_engine.py heal --proj <level>` names each one." % more)
+    return lines
+
+
 def _self_heal(proj):
     """Best-effort repair of the project's memory chain every session (missing/malformed stores,
     markers, index files). Returns the context lines naming the levels heal REFUSED (left untouched
-    with a reason, such as a legacy scope block whose TOPICS line does not parse) and those it
-    could not READ (not UTF-8, no permission), else "": such a level is not scaffolded, and
-    dropping the report hid that until heal was run by hand.
+    with a reason, such as a legacy scope block whose TOPICS line does not parse), those it could
+    not READ (not UTF-8, no permission) and each retirement it could not finish (a retired body
+    still in `facts/`), else "": such a level is not scaffolded and such a body is never archived,
+    and dropping the report hid that until heal was run by hand.
     Fail-open: any error is swallowed and reads as "" so a broken store never wedges a start.
     Skipped under BITRANOX_MEMORY_WRITES=off (heal itself is a no-op there too; this also spares the
     engine import)."""
@@ -645,7 +664,8 @@ def _self_heal(proj):
         import memory_engine
         report = memory_engine.heal(proj)
         lines = (_refused_heal_line(report.refused_levels),
-                 _unreadable_heal_line(report.unreadable))
+                 _unreadable_heal_line(report.unreadable),
+                 *_held_retirement_lines(report.retirements_held))
         return "\n".join(line for line in lines if line)
     except Exception:  # noqa: BLE001 - a hook must never block a session
         return ""
