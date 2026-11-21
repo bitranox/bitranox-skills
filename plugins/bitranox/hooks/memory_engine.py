@@ -1074,8 +1074,7 @@ def _upsert_checked(proj: str, anchor: _StrPath, slug: str, title: str, hook: st
         raise PlacedElsewhere(slug, [level for level, _ptr in copies])
     store_dir = us.central_facts_dir(anchor).parent   # the `.claude-memory` store dir for this tree
     store_existed = store_dir.exists()
-    lock_target = sig.claude_local_md_path(proj)
-    with sig.memory_lock(lock_target):
+    with _hold_level_for_setup(proj) as held:
         # An amend decides "this level holds the fact" here, under the lock: decided on an
         # earlier read, a fact moved or archived since was created anew (or its dangling body
         # adopted) by a verb that never creates.
@@ -1086,7 +1085,7 @@ def _upsert_checked(proj: str, anchor: _StrPath, slug: str, title: str, hook: st
         owners = _slug_owned_elsewhere(anchor, proj, slug)
         if owners:
             raise SlugOwnedElsewhere(slug, owners, _free_slug(anchor, slug))
-        ensure_level(proj, scope_default=scope_default, _locked=True)
+        ensure_level(proj, scope_default=scope_default, _held=held)
         scope, entries, _bodies = read_store(proj)
         by_slug = {e.slug: e for e in entries}
         if slug not in by_slug and us.body_path(anchor, slug).is_file():
@@ -2240,7 +2239,47 @@ def _move_cap_refusal(src: _StrPath, dst: _StrPath, plan: Sequence[tuple[str, tu
 
 
 
-def ensure_level(proj: _StrPath, scope_default: str = "", _locked: bool = False) -> None:
+@dataclass(frozen=True)
+class _HeldLevel:
+    """What `_hold_level_for_setup` yields: `level`'s lock is held, and git was already asked
+    about the level's private files before it was taken. `ensure_level(..., _held=...)` takes
+    one in place of asking git itself, so a caller holding the lock cannot reach its locked path
+    without that check having run outside the lock."""
+
+    level: str
+
+
+@contextlib.contextmanager
+def _hold_level_for_setup(proj: _StrPath) -> Generator[_HeldLevel]:
+    """Hold `proj`'s level lock for a caller that sets the level up under it (`ensure_level`
+    with `_held`): git is asked whether the level's private files are ignored FIRST, then the
+    lock is taken. Every git call is a subprocess (about 250 ms for the first check of a process
+    on Windows, cached per process after it), and under the lock every other writer of the level
+    waits it out. Skipped when ensure_level is going to refuse anyway (writes off, an excluded
+    level), so a refused call still asks git nothing."""
+    proj = os.path.abspath(str(proj))
+    if not sig.memory_writes_off() and not _is_excluded_level(proj):
+        _ignore_level_private(proj)
+    with sig.memory_lock(sig.claude_local_md_path(proj)):
+        yield _HeldLevel(proj)
+
+
+def _ignore_level_private(proj: str) -> None:
+    """Best-effort: make git ignore `proj`'s `CLAUDE.local.md` and its anchor's store when
+    `track_private` is off, warning on stderr for a pattern git could not confirm. Runs git:
+    never call it while holding a level lock (see `_hold_level_for_setup`)."""
+    if sig.load_config().get("track_private"):     # the user wants memory committed
+        return
+    for where, pattern in ((proj, "CLAUDE.local.md"),
+                           (str(anchor_dir(proj)), us.STORE_DIRNAME + "/")):
+        if not sig.ensure_gitignored(where, pattern):
+            sys.stderr.write("~ warning: could not make sure git ignores %s in %s (git did not "
+                             "answer, or its exclude file could not be read or written) - "
+                             "check `git status` there before staging anything\n"
+                             % (pattern, where))
+
+
+def ensure_level(proj: _StrPath, scope_default: str = "", _held: _HeldLevel | None = None) -> None:
     """Ensure this level can carry curated memory: (1) its `CLAUDE.local.md` holds a managed pointer
     block with a scope descriptor (created if absent; an existing scope is kept, else a legacy scope
     harvested from `CLAUDE.md`, else `scope_default`), and (2) any LEGACY `<!-- bitranox:self-learning
@@ -2248,6 +2287,10 @@ def ensure_level(proj: _StrPath, scope_default: str = "", _locked: bool = False)
     the markers). Best-effort gitignore of `CLAUDE.local.md` + the anchor's `.claude-memory/` when not
     `track_private`; when git cannot confirm a pattern is ignored, a warning on stderr names it
     (the level is still set up). Idempotent + mtime-neutral. No `@import`, no `index.md`.
+
+    git runs outside the level lock: after releasing it here, or, for a caller that holds the
+    lock already and passes the `_HeldLevel` it got from `_hold_level_for_setup`, before that
+    caller took it (`_held` must name this level; another level's raises ValueError).
 
     REFUSES an excluded altitude (home, the system temp dir, the filesystem root): those dirs are
     never a memory level, and scaffolding them turns e.g. all of /tmp into a fake knowledge tree
@@ -2285,23 +2328,14 @@ def ensure_level(proj: _StrPath, scope_default: str = "", _locked: bool = False)
         if us.INDEX_BEGIN not in text or want_scope != scope:
             us.write_if_changed(local, us.upsert_pointer_block(text, want_scope, pointers))
 
-    def _ignore() -> None:
-        if not sig.load_config().get("track_private"):     # keep local wiring + central store unpushed
-            for where, pattern in ((proj, "CLAUDE.local.md"),
-                                   (str(anchor_dir(proj)), us.STORE_DIRNAME + "/")):
-                if not sig.ensure_gitignored(where, pattern):
-                    sys.stderr.write("~ warning: could not make sure git ignores %s in %s (git did not "
-                                     "answer, or its exclude file could not be read or written) - "
-                                     "check `git status` there before staging anything\n"
-                                     % (pattern, where))
-
-    if _locked:
+    if _held is not None:
+        if not same_level(_held.level, proj):
+            raise ValueError("ensure_level(%s) was handed the lock of %s" % (proj, _held.level))
+        _do()          # its holder asked git before taking the lock
+        return
+    with sig.memory_lock(sig.claude_local_md_path(proj)):
         _do()
-        _ignore()
-    else:
-        with sig.memory_lock(sig.claude_local_md_path(proj)):
-            _do()
-        _ignore()      # git writes only its own exclude file: no reason to hold the level lock
+    _ignore_level_private(proj)   # git writes only its own exclude file: no reason to hold the lock
 
 
 def _is_excluded_level(proj: _StrPath) -> bool:
@@ -2373,11 +2407,11 @@ def _heal_level(proj: _StrPath, report: HealReport) -> None:
     """Repair one altitude in place (locked): ensure the CLAUDE.md marker + the CLAUDE.local.md pointer
     block + scope exist, and re-render the pointer block to canonical (heals a malformed SCOPE block or
     drifted grammar). Idempotent + mtime-neutral."""
-    with sig.memory_lock(sig.claude_local_md_path(proj)):
+    with _hold_level_for_setup(proj) as held:
         made = _ensure_claude_md(proj)
         if made:
             report.healed.append(made)
-        ensure_level(proj, _locked=True)
+        ensure_level(proj, _held=held)
         local = sig.claude_local_md_path(proj)
         text = read_store_text(local)
         scope, pointers = us.parse_pointer_index(text)
@@ -5540,13 +5574,13 @@ def _main(argv: Sequence[str] | None = None) -> int:
         # CURRENT descriptor - its pointer block's, else the legacy CLAUDE.md block ensure_level
         # would harvest, else none - before ensure_level writes anything, so a refused call leaves
         # no level behind and no legacy block moved.
-        with sig.memory_lock(local):
+        with _hold_level_for_setup(args.proj) as held:
             current, stored_in = _current_scope(args.proj)
             try:
                 scope_keeping_topics(current, scope.strip(), stored_in=stored_in)
             except (TopicRefusal, tp.InvalidTopic) as exc:
                 return _refused(exc)
-            ensure_level(args.proj, _locked=True)     # make sure the pointer block exists first
+            ensure_level(args.proj, _held=held)      # make sure the pointer block exists first
             text = read_store_text(local)
             old_scope, pointers = us.parse_pointer_index(text)
             try:
