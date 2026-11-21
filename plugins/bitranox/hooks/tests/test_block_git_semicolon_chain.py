@@ -20,6 +20,9 @@ import time
 import pytest
 from pathlib import Path
 
+if sys.platform != "win32":
+    import resource
+
 import block_git_semicolon_chain as G
 
 HOOKS_DIR = Path(__file__).resolve().parent.parent
@@ -873,19 +876,48 @@ def test_a_one_line_function_definition_is_not_executed():
 # --- cost: the judgment must not grow faster than the command's statement count -----------------
 
 
-def _best_judge_seconds(command, repeats=3):
-    """Best wall time of `repeats` runs of the hook's real `main()` on `command`."""
+# USER CPU time (process-test-design, growth-ratio rule 1): wall time charges this process for
+# every other process on a busy runner. Windows has no getrusage and its CPU-time clocks step
+# 15.625 ms, longer than these windows, so it keeps the wall clock and the equal windows alone.
+if sys.platform == "win32":
+    _clock = time.perf_counter
+else:
+    def _clock():
+        return resource.getrusage(resource.RUSAGE_SELF).ru_utime
+
+
+def _judge_seconds(command, calls=1):
+    """Time of `calls` back-to-back runs of the hook's real `main()` on `command`, by `_clock`."""
     payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}})
-    best = float("inf")
-    for _ in range(repeats):
+    start = _clock()
+    for _ in range(calls):
         stdin, sys.stdin = sys.stdin, io.StringIO(payload)
-        start = time.perf_counter()
         try:
             assert G.main() == 0
         finally:
             sys.stdin = stdin
-        best = min(best, time.perf_counter() - start)
-    return best
+    return _clock() - start
+
+
+_GROWTH = 8
+# Linear cost puts the ratio near 1 and quadratic cost near _GROWTH; the bound sits between them.
+_GROWTH_BOUND = 3
+
+
+def _growth_ratio(small, large, rounds=5):
+    """Best time of one judgement of `large` over the best time of _GROWTH judgements of `small`.
+
+    `large` holds _GROWTH times the statements of `small`, so when the cost is linear both windows
+    do the same work. Timing ONE small call against one large call let a busy runner alone push a
+    linear ratio past its bound: the short window can fall wholly inside a fast moment while the
+    long one averages over the load (measured on a macOS CI cell: 32.6 against a bound of 30). The
+    windows alternate so that a burst of load hits both.
+    """
+    best_small = best_large = float("inf")
+    for _ in range(rounds):
+        best_small = min(best_small, _judge_seconds(small, calls=_GROWTH))
+        best_large = min(best_large, _judge_seconds(large))
+    return best_large / best_small
 
 
 @pytest.mark.parametrize(("statement", "joiner"), [
@@ -895,10 +927,11 @@ def _best_judge_seconds(command, repeats=3):
 def test_judging_a_long_chain_grows_about_linearly(statement, joiner):
     """Every PAIR of git statements was examined and each pair walked the parts between them, so
     a correctly joined fleet sweep cost O(G^2 * n): about 9x per doubling, 4.6 s at 400 steps.
-    Only the RATIO of 8x the statements against 1x is compared, never an absolute time: linear
-    work gives about 8, quadratic 64, cubic 512, and the bound leaves room for noise, not for 64."""
+    Only a RATIO is compared, never an absolute time: one judgement of 8x the statements against
+    8 judgements of 1x, so linear work gives about 1, quadratic 8 and cubic 64, and the bound of 3
+    leaves room for noise, not for 8."""
     small = joiner.join(statement % i for i in range(40))
-    large = joiner.join(statement % i for i in range(320))
+    large = joiner.join(statement % i for i in range(40 * _GROWTH))
     assert G.chained_state_changes(large) is None          # the shape under test never fires
-    ratio = _best_judge_seconds(large) / _best_judge_seconds(small)
-    assert ratio < 30, ratio
+    ratio = _growth_ratio(small, large)
+    assert ratio < _GROWTH_BOUND, ratio

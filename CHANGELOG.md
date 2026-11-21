@@ -30,6 +30,12 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.22.1]
+
+### Fixed
+
+- The growth test of `block-git-semicolon-chain` no longer fails on a busy CI runner. It timed one judgement of the small chain against one of the 8x chain by wall clock, so a short window that fell into a quiet moment read a linear cost as 32.6 against a bound of 30 (macOS CI). It now follows the growth-ratio recipe of `process-test-design`: user CPU time on POSIX, and 8 judgements of the small chain against one of the large, alternating, with the bound at 3. Under three busy loops on the same CPU the old test failed 10 of 10 runs and the new one 0 of 10; an added quadratic pass in the judge still fails it (ratio 8.6 to 9.4).
+
 ## [11.22.0]
 
 ### Added
