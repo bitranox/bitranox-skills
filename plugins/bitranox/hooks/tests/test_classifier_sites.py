@@ -44,6 +44,13 @@ def env(tmp_path, monkeypatch, fake_jev):
     return {"home": home, "state": state, "fake": fake}
 
 
+def _criteria(question: cl.Question) -> dict[str, object]:
+    """A choice question's criteria. `Question` types them as object, since a noul's are text."""
+    criteria = question.criteria
+    assert isinstance(criteria, dict)
+    return criteria
+
+
 def _config(home, **knobs):
     (home / ".claude" / ".bitranox-memory.json").write_text(json.dumps(knobs), encoding="utf-8")
 
@@ -485,8 +492,8 @@ def test_router_choice_offers_every_skill_and_a_no_match_option():
     assert [q.id for q in qs] == [cl.NEW_TASK_ID, cl.PICK_ID]
     pick = qs[1]
     assert pick.type == "choice"
-    assert set(pick.criteria) == {"a", "b", cl.NO_SKILL_KEY}
-    assert pick.criteria["a"] == "does a"
+    assert set(_criteria(pick)) == {"a", "b", cl.NO_SKILL_KEY}
+    assert _criteria(pick)["a"] == "does a"
 
 
 def test_the_no_match_key_cannot_collide_with_a_skill_name():
@@ -533,7 +540,7 @@ def test_rerank_asks_one_choice_over_the_shortlist_and_one_noul_per_candidate():
     qs = cl.skill_router_rerank_questions({"a": "the whole body of a", "b": "the whole body of b"})
     assert [q.id for q in qs] == [cl.PICK_ID, "a", "b"]
     assert qs[0].type == "choice"
-    assert set(qs[0].criteria) == {"a", "b", cl.NO_SKILL_KEY}
+    assert set(_criteria(qs[0])) == {"a", "b", cl.NO_SKILL_KEY}
     assert all(q.type == "noul" for q in qs[1:])
     assert "'a'" in qs[1].instructions and "the whole body of a" in qs[1].instructions
 
@@ -602,7 +609,7 @@ def test_a_skill_question_drops_the_already_used_clause_when_nothing_has_been_us
 def test_the_choice_pick_drops_the_already_used_clause_too():
     pick = cl.skill_router_choice_questions({"x": "does x"}, FIRST_PROMPT)[1]
     assert "skills_already_used" not in pick.instructions
-    assert cl.NO_SKILL_KEY in pick.criteria
+    assert cl.NO_SKILL_KEY in _criteria(pick)
 
 
 def test_the_two_arms_still_ask_the_same_gate_for_the_same_state():
@@ -643,8 +650,10 @@ def test_a_structured_router_entry_stays_an_object_all_the_way_to_the_request(tm
     roster = cl.load_router_criteria({"a": "Use when ..."}, path=path)
     assert roster["a"] == entry
     pick = cl.skill_router_choice_questions(roster, MID_SESSION)[1]
-    assert pick.criteria["a"] == entry
-    assert pick.to_api()["criteria"]["a"]["not_for"] == "reviewing a decision"
+    assert _criteria(pick)["a"] == entry
+    sent = pick.to_api()["criteria"]
+    assert isinstance(sent, dict)
+    assert sent["a"]["not_for"] == "reviewing a decision"
     json.dumps(pick.to_api())            # the request really serialises
 
 

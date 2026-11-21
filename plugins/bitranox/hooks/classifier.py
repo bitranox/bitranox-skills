@@ -793,8 +793,8 @@ NO_SKILL_KEY = "none_needed"
 CHOICE_BYPASS = 0.7
 
 
-def choice_pick(gate: object, winner: object, probabilities: Mapping[str, object] | None, *,
-                threshold: float, bypass: float | None = CHOICE_BYPASS) -> object:
+def choice_pick[W](gate: object, winner: W | None, probabilities: Mapping[str, object] | None, *,
+                   threshold: float, bypass: float | None = CHOICE_BYPASS) -> W | None:
     """The skill a gate-plus-choice answer suggests, or None.
 
     The winner is taken when the gate passes (an unanswered gate does not suppress), or when the

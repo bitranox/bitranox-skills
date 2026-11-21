@@ -117,7 +117,7 @@ def _keyword_pattern(keyword):
     return re.compile("(?<!%s)%s(?!%s)" % (_WORD_CHAR, re.escape(keyword), _WORD_CHAR))
 
 
-def match(prompt, triggers, min_hits=MIN_HITS, max_skills=MAX_SKILLS):
+def match(prompt, triggers, min_hits=MIN_HITS, max_skills: int | None = MAX_SKILLS):
     """[(skill, hit_count)] for skills whose distinct keyword hits reach min_hits, best first
     (ties alphabetical), at most `max_skills` of them (None: all).
 
@@ -190,10 +190,12 @@ def _router_request(prompt, sid, triggers, transcript, cwd):
     new-task gate plus one choice over the installed roster, with the context the prompt needs to
     be read - and that roster. Shadow and decide both build it here, so they ask the same thing."""
     ranked = match(prompt, triggers, max_skills=len(triggers) or 1)
-    regex = {"selected": [s for s, _n in ranked[:MAX_SKILLS]],
-             "scores": {s: n for s, n in ranked}, "context_view": classifier.CONTEXT_VIEW,
-             "router_view": ROUTER_VIEW, "matcher_view": MATCHER_VIEW,
-             "question_view": QUESTION_VIEW}
+    # The log row's keyword half: each key carries its own shape (a list, a mapping, a view tag).
+    regex: dict[str, object] = {"selected": [s for s, _n in ranked[:MAX_SKILLS]],
+                                "scores": {s: n for s, n in ranked},
+                                "context_view": classifier.CONTEXT_VIEW,
+                                "router_view": ROUTER_VIEW, "matcher_view": MATCHER_VIEW,
+                                "question_view": QUESTION_VIEW}
     notification = bool(prompt_text.notification_fields(prompt))
     if notification:
         # Its own field set, so the eval never pools these rows with typed-prompt rows.
@@ -296,7 +298,8 @@ def _decide(prompt, sid, triggers, hits, transcript, cwd, cfg):
         row, path, pick, skills = _ask_jev(prompt, sid, triggers, transcript, cwd, cfg)
     except Exception as exc:  # noqa: BLE001 - a failure to ask is a failure to answer
         failure = exc
-        row, path, pick, skills = None, "fallback-error: %s" % type(exc).__name__, None, {}
+        # The row is replaced by the error row below; {} only keeps its type a mapping.
+        row, path, pick, skills = {}, "fallback-error: %s" % type(exc).__name__, None, {}
     already = _already_nudged(cwd, sid)
     if path == "jev":
         name = skill_roster.invocation_name(pick, skills)

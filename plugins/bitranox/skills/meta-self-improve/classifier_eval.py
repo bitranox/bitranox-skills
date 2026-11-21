@@ -64,6 +64,8 @@ from collections import Counter
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from collections.abc import Mapping
+from typing import Any, TypeIs
 
 _HERE = Path(__file__).resolve().parent
 _HOOKS = _HERE.parent.parent / "hooks"
@@ -310,11 +312,21 @@ def _command_records(path, want):
             if text.startswith(COMMAND_PREFIXES) and tag in text]
 
 
-def _scores(result):
+def _scores(result: object) -> dict[str, float] | None:
     """{question id: numeric value} from one logged result, or None when it was unanswered."""
-    if not isinstance(result, dict):
+    if not _is_json_object(result):
         return None
-    out = {}
+    return _answer_scores(result)
+
+
+def _is_json_object(value: object) -> TypeIs[dict[str, Any]]:
+    """True for a decoded JSON object; its keys are str by JSON's own grammar."""
+    return isinstance(value, dict)
+
+
+def _answer_scores(result: Mapping[str, Any]) -> dict[str, float]:
+    """{question id: numeric value} from a logged result that was answered."""
+    out: dict[str, float] = {}
     for qid, ans in (result.get("answers") or {}).items():
         value = ans.get("value") if isinstance(ans, dict) else None
         if isinstance(value, (int, float)):
@@ -398,7 +410,7 @@ def _router_verdict(row, threshold, top):
         return None
     answers = result.get("answers") or {}
     if cl.PICK_ID not in answers:
-        scores = _scores(result)
+        scores = _answer_scores(result)
         return _router_picks(scores, threshold, top), scores
     winner, probs = _choice_parts(answers, cl.PICK_ID)
     pick = cl.choice_pick(_value(answers, cl.NEW_TASK_ID), winner, probs, threshold=threshold)
@@ -409,8 +421,8 @@ def _router_verdict(row, threshold, top):
 def summarize_skill_router(rows, threshold, top):
     """The keyword selection against Jev's suggestion: its `top` highest-scoring skills at or
     above threshold on a noul row, the gate-plus-choice pick on a choice row."""
-    s = {"prompts": 0, "identical": 0, "regex_picks": 0, "jev_picks": 0, "agreed_picks": 0,
-         "unanswered": 0, "disagreements": []}
+    s: dict[str, Any] = {"prompts": 0, "identical": 0, "regex_picks": 0, "jev_picks": 0,
+                         "agreed_picks": 0, "unanswered": 0, "disagreements": []}
     for row in rows:
         verdict = _router_verdict(row, threshold, top)
         if verdict is None:
@@ -471,9 +483,9 @@ def summarize_notifications(rows, threshold, top):
     "none" when it would not, "unanswered" when the row has no result. `by_kind_status` crosses
     kind and status, since a failed background command is the one kind a skill is known to fit.
     """
-    t = {"rows": 0, "threshold": threshold, "top": top, "by_status": Counter(),
-         "by_kind": Counter(), "by_verdict": dict.fromkeys(_VERDICTS, 0),
-         "by_kind_status": {}, "picks": Counter()}
+    t: dict[str, Any] = {"rows": 0, "threshold": threshold, "top": top, "by_status": Counter(),
+                         "by_kind": Counter(), "by_verdict": dict.fromkeys(_VERDICTS, 0),
+                         "by_kind_status": {}, "picks": Counter()}
     for row in filter(_is_notification, rows):
         state = _first_state(row)
         status = str(state.get("task_status") or "(none)")
@@ -512,14 +524,14 @@ def render_notifications(t):
 
 def summarize_recall(rows, threshold):
     """Injected notes against the shortlisted notes Jev scores relevant, and the score spread."""
-    s = {"prompts": 0, "regex_injected": 0, "jev_relevant": 0, "agreed": 0, "unanswered": 0,
-         "disagreements": []}
+    s: dict[str, Any] = {"prompts": 0, "regex_injected": 0, "jev_relevant": 0, "agreed": 0,
+                         "unanswered": 0, "disagreements": []}
     spreads = []
     for row in rows:
         regex = row.get("regex") or {}
-        pairs = [(note, sc.get("relevant")) for note, sc
+        pairs = [(note, relevant) for note, sc
                  in zip(regex.get("shortlist") or [], _answered(row))
-                 if sc is not None and sc.get("relevant") is not None]
+                 if sc is not None and (relevant := sc.get("relevant")) is not None]
         if not pairs:
             s["unanswered"] += 1
             continue
@@ -548,7 +560,7 @@ def summarize_subagent_signal(rows, threshold):
     A buffered message (strict or broad_only) Jev does not fire on is `regex_only`, an unbuffered
     one it fires on is `jev_only`. An unanswered message is counted apart and never as a no.
     """
-    s = {"subagents": 0, "by_kind": {}, "unanswered": 0, "disagreements": []}
+    s: dict[str, Any] = {"subagents": 0, "by_kind": {}, "unanswered": 0, "disagreements": []}
     for row in rows:
         verdicts = (row.get("regex") or {}).get("messages") or []
         states = row.get("states") or []
@@ -785,7 +797,7 @@ CONTINUATION_WORDS = 3
 # inverted the gate, scoring the positive 0.24 and the negative 0.34.
 _CONTEXT = {"project": "bitranox-skills: a Claude Code plugin marketplace",
             "recent_activity": "Bash: run make test; Read: classifier.py"}
-REPLAY_CONTROLS = (
+REPLAY_CONTROLS: tuple[dict[str, Any], ...] = (
     {"fields": dict(_CONTEXT,
                     previous_assistant_message="Released 7.9.0 and CI is green on every cell.",
                     user_prompt="the markdown table in README.md has misaligned columns, "
@@ -876,8 +888,9 @@ def run_arm(name, ask, fields, skills, *, threshold, top=DEFAULT_TOP,
         cl.skill_router_questions
     questions = build(roster, fields, turn=turn)
     answers = ask(fields, questions)
-    out = {"arm": name, "answered": answers is not None, "gate": None, "picks": [], "requests": 1,
-           "scores": {}}
+    # One JSON row: each key carries its own shape, so the record is dynamic, not one value type.
+    out: dict[str, Any] = {"arm": name, "answered": answers is not None, "gate": None, "picks": [],
+                           "requests": 1, "scores": {}}
     if answers is None:
         return out
     # Every score that could move a verdict is kept, not just the verdict. A threshold is the
@@ -1260,11 +1273,11 @@ def _replay_one(prompt: Prompt, ask, skills, bodies, router, triggers, args, rou
     offered, source = roster_for(prompt, skills, getattr(args, "roster", "shipped"))
     overrides = dict(getattr(args, "description", None) or [])
     offered, applied = with_descriptions(offered, overrides)
-    row = {"uuid": prompt.uuid, "source": prompt.source, "line": prompt.line,
-           "continuation": _is_continuation(prompt.prompt),
-           "lang": cl.detect_language(prompt.prompt or ""),
-           "keyword_picks": [s for s, _n in ranked[:args.top]], "state": fields,
-           "roster": source, "roster_size": len(offered), "arms": {}}
+    row: dict[str, Any] = {"uuid": prompt.uuid, "source": prompt.source, "line": prompt.line,
+                           "continuation": _is_continuation(prompt.prompt),
+                           "lang": cl.detect_language(prompt.prompt or ""),
+                           "keyword_picks": [s for s, _n in ranked[:args.top]], "state": fields,
+                           "roster": source, "roster_size": len(offered), "arms": {}}
     if overrides:
         row["description_overrides"] = applied
     for name in selected_arms(getattr(args, "arm", None)):
@@ -1345,7 +1358,7 @@ class InstalledRosterVetting:
                 "failed": sum(1 for v in self.verdicts.values() if v)}
 
 
-def _run_replay(args, clf=None, skills=None):
+def _run_replay(args, clf=None, skills=None) -> tuple[int, dict[str, Any] | None, str | None]:
     """(exit code, data, error) for replay / size / controls. Raises ControlFailed (exit 2).
 
     `clf` and `skills` are the two external edges - the paid classifier and the installed skill
@@ -1658,9 +1671,10 @@ def _run_packet(args, skills):
     descriptions, names = _panel_descriptions(pooled, skills)
     instructions = (args.instructions.read_text(encoding="utf-8") if args.instructions
                     else jp.DEFAULT_INSTRUCTIONS)
-    built = jp.build_packet(pooled, descriptions=descriptions, all_names=names,
-                            overrides=dict(args.override or []), judges=args.judges,
-                            seed=args.seed, instructions=instructions)
+    built: dict[str, Any] = jp.build_packet(
+        pooled, descriptions=descriptions, all_names=names,
+        overrides=dict(args.override or []), judges=args.judges,
+        seed=args.seed, instructions=instructions)
     args.out.mkdir(parents=True, exist_ok=True)
     for name in ("items", "key"):
         (args.out / (name + ".json")).write_text(
@@ -1684,7 +1698,7 @@ def _run_harvest(args):
             # Malformed input, not "nothing found": a judge transcript always holds a verdict.
             return 2, None, "no verdict object for these items in %s" % path
         panels.append(panel)
-    out = jp.harvest(key, panels)
+    out: dict[str, Any] = jp.harvest(key, panels)
     args.out.write_text(json.dumps(out["labels"], ensure_ascii=False, indent=1), encoding="utf-8")
     return 0, {"labelled": len(out["labels"]), "judges": out["judges"], "out": str(args.out),
                "splits": out["splits"], "unjudged": out["unjudged"],
