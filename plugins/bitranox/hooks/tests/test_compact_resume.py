@@ -876,3 +876,28 @@ def test_a_plan_file_written_before_the_request_is_not_named(tmp_path, monkeypat
     ctx = _context(_run(monkeypatch, capsys, _event(repo, transcript=str(tr))))
     assert str(plan) not in ctx
     assert "no checkpoint was saved" in ctx
+
+
+def test_a_non_string_cwd_in_the_event_falls_back_like_a_missing_one(tmp_path, monkeypatch,
+                                                                    capsys):
+    # The event is untrusted JSON: a cwd that is not a string must read as absent (the project
+    # dir, then the process cwd), not end the hook in a TypeError that prints nothing and loses
+    # the checkpoint this session saved.
+    repo = _repo(tmp_path)
+    _checkpoint(repo, "# Handover\n- CWD-NOT-TEXT-51\n")
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(repo))
+    event = dict(_event(repo), cwd=123)
+    ctx = _context(_run(monkeypatch, capsys, event))
+    assert "CWD-NOT-TEXT-51" in ctx
+
+
+def test_a_non_string_transcript_path_in_the_event_reads_as_no_transcript(tmp_path,
+                                                                         monkeypatch, capsys):
+    # A transcript_path that is not a string must read as no transcript: open() of a mapping
+    # raised TypeError and the hook printed nothing, and open() of an integer would read (and
+    # then close) that file descriptor of the hook's own process.
+    repo = _repo(tmp_path)
+    _checkpoint(repo, "# Handover\n- TRANSCRIPT-NOT-TEXT-52\n")
+    event = dict(_event(repo), transcript_path={"path": "/t/s-1.jsonl"})
+    ctx = _context(_run(monkeypatch, capsys, event))
+    assert "TRANSCRIPT-NOT-TEXT-52" in ctx

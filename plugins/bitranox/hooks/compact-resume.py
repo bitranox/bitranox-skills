@@ -243,9 +243,9 @@ def build(event, today=None, now=None):
     """The additionalContext for this SessionStart event, or None to stay silent. IMPURE (reads)."""
     if not isinstance(event, dict) or event.get("source") != "compact":
         return None
-    cwd = event.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+    cwd = _event_text(event, "cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
     session = str(event.get("session_id") or "")
-    transcript = event.get("transcript_path") or ""
+    transcript = _event_text(event, "transcript_path")
     shown = transcript or "(unknown)"
     found = []
     if session:
@@ -265,6 +265,17 @@ def build(event, today=None, now=None):
         return _UNATTRIBUTED % {"listing": listing(found, time.time() if now is None else now),
                                 "transcript": shown}
     return _NO_CHECKPOINT % {"transcript": shown}
+
+
+def _event_text(event, key) -> str:
+    """The event's `key` when it is a string, else "" (read as absent). PURE.
+
+    The event is untrusted JSON. A path field that is not a string is no path: handed on, a mapping
+    made open() and Path() raise TypeError, which ended the hook silent and lost the checkpoint, and
+    an integer made open() read (and close) that file descriptor of this process.
+    """
+    value = event.get(key)
+    return value if isinstance(value, str) else ""
 
 
 def _own_note(record: TranscriptRecord | None, shown: str) -> str | None:
