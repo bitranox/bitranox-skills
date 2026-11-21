@@ -2283,7 +2283,7 @@ def blank_unexpanded_text(command: str, *, tool_name: str | None = "Bash") -> st
 
 
 @_whole_command_view
-def _unexpanded_view(command, powershell):
+def _unexpanded_view(command: str, powershell: bool) -> str:
     """`blank_unexpanded_text` at the top level, kept for the last few large commands."""
     return _blank_unexpanded(command, powershell, 0)
 
@@ -2293,7 +2293,7 @@ def _unexpanded_view(command, powershell):
 _MAX_BLANK_NESTING = 32
 
 
-def _blank_unexpanded(command, powershell, depth):
+def _blank_unexpanded(command: str, powershell: bool, depth: int) -> str:
     """`blank_unexpanded_text` at substitution nesting `depth`."""
     escape = "`" if powershell else "\\"
     out: list[str] = []
@@ -2367,7 +2367,7 @@ def _blank_unexpanded(command, powershell, depth):
     return "".join(out)
 
 
-def _blank_substitution(text, powershell, depth):
+def _blank_substitution(text: str, powershell: bool, depth: int) -> str:
     """`text` - a `$(` through its closing `)`, or to the end when unterminated - with its body
     blanked as the command it is."""
     if depth >= _MAX_BLANK_NESTING:
@@ -2377,7 +2377,7 @@ def _blank_substitution(text, powershell, depth):
     return "$(" + _blank_unexpanded(body, powershell, depth + 1) + (")" if closed else "")
 
 
-def _hash_starts_a_word(out, word_at, cont_at, cont_prev):
+def _hash_starts_a_word(out: Sequence[str], word_at: int, cont_at: int, cont_prev: str) -> bool:
     """Whether a `#` appended at position len(out) of a blanking walk begins a word, and so a
     comment. `word_at` / `cont_at` are the out-positions just past an escaped character and just
     past a line continuation; `cont_prev` is the character before that continuation's backslash."""
@@ -2390,12 +2390,23 @@ def _hash_starts_a_word(out, word_at, cont_at, cont_prev):
     return out[-1].isspace()
 
 
-# The two quoting contexts `_quoting_end` walks. A frame is `[kind, open_parens]`; the paren count
-# is only used by a substitution, where `$(( ))` arithmetic and subshells nest plain parentheses.
-_DOUBLE_QUOTE, _SUBSTITUTION = "double-quote", "substitution"
+# The two quoting contexts `_quoting_end` walks. A frame is its kind and its open parentheses; the
+# count is only used by a substitution, where `$(( ))` arithmetic and subshells nest plain ones.
+type _QuotingContext = Literal["double-quote", "substitution"]
+_DOUBLE_QUOTE: Final = "double-quote"
+_SUBSTITUTION: Final = "substitution"
 
 
-def _quoting_end(text, start, context, escape, bash_quoting):
+@dataclasses.dataclass(slots=True)
+class _QuotingFrame:
+    """One open context of `_quoting_end`'s stack."""
+
+    kind: _QuotingContext
+    parens: int = 0
+
+
+def _quoting_end(text: str, start: int, context: _QuotingContext, escape: str,
+                 bash_quoting: bool) -> int:
     """Index just past the character that closes a `"..."` string or a `$(...)` substitution
     whose body starts at `start`; an unterminated one runs to the end, as bash keeps reading.
 
@@ -2406,35 +2417,36 @@ def _quoting_end(text, start, context, escape, bash_quoting):
     of the command, hiding every later statement. The walk keeps an explicit stack rather than
     recursing, so a pathologically nested command cannot exhaust Python's recursion limit.
     """
-    stack = [[context, 0]]
+    stack = [_QuotingFrame(context)]
     index, size = start, len(text)
     while stack and index < size:
         if escape and text[index] == escape and index + 1 < size:
             index += 2
             continue
-        if stack[-1][0] == _DOUBLE_QUOTE:
+        if stack[-1].kind == _DOUBLE_QUOTE:
             index = _double_quote_step(text, index, stack)
         else:
             index = _substitution_step(text, index, stack, bash_quoting)
     return size if stack else index
 
 
-def _double_quote_step(text, index, stack):
+def _double_quote_step(text: str, index: int, stack: list[_QuotingFrame]) -> int:
     """One step inside a double-quoted string: only its closing quote and a `$(` mean anything."""
     if text[index] == '"':
         stack.pop()
         return index + 1
     if text.startswith("$(", index):
-        stack.append([_SUBSTITUTION, 0])
+        stack.append(_QuotingFrame(_SUBSTITUTION))
         return index + 2
     return index + 1
 
 
-def _substitution_step(text, index, stack, bash_quoting):
+def _substitution_step(text: str, index: int, stack: list[_QuotingFrame],
+                       bash_quoting: bool) -> int:
     """One step inside `$(...)`: quotes and comments are skipped whole, parentheses are counted."""
     char = text[index]
     if text.startswith("$(", index):
-        stack.append([_SUBSTITUTION, 0])
+        stack.append(_QuotingFrame(_SUBSTITUTION))
         return index + 2
     if bash_quoting and text.startswith("$$", index):
         return index + 2                       # the PID: its second `$` does not open `$'...'`
@@ -2444,7 +2456,7 @@ def _substitution_step(text, index, stack, bash_quoting):
         closing = text.find("'", index + 1)
         return len(text) if closing == -1 else closing + 1
     if char == '"':
-        stack.append([_DOUBLE_QUOTE, 0])
+        stack.append(_QuotingFrame(_DOUBLE_QUOTE))
         return index + 1
     if char == "#" and (index == 0 or text[index - 1].isspace() or text[index - 1] in ";&|("):
         newline = text.find("\n", index)     # a comment's apostrophe is not a quote
@@ -2452,20 +2464,20 @@ def _substitution_step(text, index, stack, bash_quoting):
     return _paren_step(text, index, stack)
 
 
-def _paren_step(text, index, stack):
+def _paren_step(text: str, index: int, stack: list[_QuotingFrame]) -> int:
     """Count a plain parenthesis inside a substitution; the unmatched `)` closes it."""
     frame = stack[-1]
     if text[index] == "(":
-        frame[1] += 1
+        frame.parens += 1
     elif text[index] == ")":
-        if frame[1]:
-            frame[1] -= 1
+        if frame.parens:
+            frame.parens -= 1
         else:
             stack.pop()
     return index + 1
 
 
-def _mask_special(escape):
+def _mask_special(escape: str) -> re.Pattern[str]:
     """The characters `mask_data_regions` must stop at: every branch's first character."""
     return re.compile(f"[{re.escape("$'\"`@#" + escape)}]")
 
@@ -2517,7 +2529,7 @@ def mask_data_regions(command: str, fill: str = "Q", tool_name: str | None = "Ba
 
 
 @_whole_command_view
-def _masked_view(command, fill, tool_name: str | None):
+def _masked_view(command: str, fill: str, tool_name: str | None) -> str:
     """The body of `mask_data_regions`, kept for the last few large commands."""
     escape = {"Bash": "\\", "PowerShell": "`", None: "\\"}.get(tool_name, "")
     bash_quoting = tool_name != "PowerShell"
