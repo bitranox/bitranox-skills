@@ -45,6 +45,7 @@ import tempfile
 import sys
 import time
 from pathlib import Path
+from typing import NotRequired, TypedDict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "hooks"))
 import claude_paths                      # noqa: E402
@@ -383,18 +384,42 @@ def ensure_gitignore(proj):
 
 # ---- migrate one store -------------------------------------------------------------------------
 
-def migrate_store(slug, dry_run=True, scope_default="", redirect=None, backup_run=None):
-    """Migrate one native store. Returns a report dict. On apply: backs up out-of-tree, curates each
-    native entry into the resolved (or `redirect`-forced) project's curated store via the engine,
+# What migrate_store reports for one store, and what main() totals and prints. The functional form
+# because one key is `in`, a keyword: no attribute (so no dataclass field) can carry that name, and
+# callers read the report by key. `gitignore` is set only when an apply ran to the end.
+StoreReport = TypedDict("StoreReport", {
+    "slug": str,
+    "resolved": str | None,       # the project dir the slug resolved to; None when parked
+    "in": int,                    # native entries read
+    "placed": int,                # placed (or, in a dry run, would be placed)
+    "skipped": int,               # already in the receipt
+    "parked": bool,
+    "excluded": bool,
+    "redirected": bool,
+    "dry_run": bool,
+    "failed": list[str],          # entries the engine refused, one line each
+    "unreadable": list[str],      # topic files that could not be read or decoded
+    "error": str | None,          # what stopped this store (backup, write or read failure)
+    "backup": str | None,         # the out-of-tree backup dir an apply took
+    "gitignore": NotRequired[str],
+})
+
+
+def migrate_store(slug: str, dry_run: bool = True, scope_default: str = "",
+                  redirect: str | None = None,
+                  backup_run: "BackupRun | None" = None) -> StoreReport:
+    """Migrate one native store and return its StoreReport. On apply: backs up out-of-tree, curates
+    each native entry into the resolved (or `redirect`-forced) project's curated store via the engine,
     records a receipt. Idempotent (receipt-skipped). Unresolved -> parked; an excluded target
     (`/tmp`, `$HOME`) -> skipped, not migrated. `redirect` forces the target for a renamed/moved slug."""
     memdir = _projects_dir() / slug / "memory"
-    unreadable = []
+    unreadable: list[str] = []
     entries = read_native_entries(memdir, unreadable=unreadable)
     proj = redirect or resolve_one(slug)
-    rep = {"slug": slug, "resolved": proj, "in": len(entries), "placed": 0, "skipped": 0,
-           "parked": False, "excluded": False, "redirected": bool(redirect), "dry_run": dry_run,
-           "failed": [], "unreadable": unreadable, "error": None, "backup": None}
+    rep: StoreReport = {
+        "slug": slug, "resolved": proj, "in": len(entries), "placed": 0, "skipped": 0,
+        "parked": False, "excluded": False, "redirected": bool(redirect), "dry_run": dry_run,
+        "failed": [], "unreadable": unreadable, "error": None, "backup": None}
     if proj and is_excluded(proj):
         rep["excluded"] = True
         return rep
@@ -703,7 +728,7 @@ def _usage_problems(args):
 _GITIGNORE_FINE = ("gitignored", "not a git repo: skipped", "track_private: left tracked")
 
 
-def _report_store_problems(rep):
+def _report_store_problems(rep: StoreReport) -> tuple[bool, bool]:
     """Print what one store did NOT migrate. Returns (refused, io_failed): an entry the engine
     refused is a partial outcome (exit 1); an unreadable topic file or a failed backup/write/read
     is a failure (exit 2). A gitignore warning is printed too but does not count: every entry was

@@ -122,6 +122,24 @@ def test_migrate_apply_writes_curated_store_and_receipt(env):
     assert len(backups) == 1 and "Body A." in backups[0].read_text(encoding="utf-8")
 
 
+
+def test_the_store_report_carries_exactly_its_declared_fields(env):
+    """The report's type lists every key migrate_store writes, no more: a key added on one path
+    and missing from StoreReport would leave main() reading a field the checker never saw. A dry
+    run, a parked store and a finished apply cover the three return paths; only the apply sets
+    `gitignore`."""
+    tmp_path, home = env
+    required = set(M.StoreReport.__required_keys__)
+    assert set(M.StoreReport.__optional_keys__) == {"gitignore"}
+    proj = tmp_path / "repoR"
+    proj.mkdir()
+    slug = _encode_slug(proj)
+    _native_store(home, slug, [("a.md", "project-a", "fact a", "Body A.")])
+    assert set(M.migrate_store(slug, dry_run=True)) == required
+    _native_store(home, "-no-such-path-for-report", [("a.md", "project-p", "fact p", "Body P.")])
+    assert set(M.migrate_store("-no-such-path-for-report", dry_run=True)) == required
+    assert set(M.migrate_store(slug, dry_run=False)) == required | {"gitignore"}
+
 def test_migrate_apply_idempotent(env):
     tmp_path, home = env
     proj = tmp_path / "repoC"
