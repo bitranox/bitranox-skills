@@ -30,6 +30,17 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.19.1]
+
+### Fixed
+
+- `test_approval_claim_guard.py`: the two `git commit -F` tests built the command with an unquoted
+  temp path. The Bash tool parses a POSIX command line on every OS, so on Windows the backslashes
+  were dropped, the hook found no message file and allowed the call: the refusal test failed on
+  windows-latest and the pass test passed without reading the file. Both now spell the path as a
+  quoted forward-slash path (as `test_commit_tell_sweep.py` does), and the pass test first checks
+  that a paraphrase at the same path is refused. The guard itself is unchanged.
+
 ## [11.19.0]
 
 ### Added

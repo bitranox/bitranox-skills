@@ -312,10 +312,21 @@ def test_a_plan_the_user_rejected_in_plan_mode_does_not_pass(repo, transcript, t
 # ---- commit messages ------------------------------------------------------------------------
 
 
+def _commit_f(msg):
+    """`git commit -F <msg>` as the Bash tool takes it on every OS.
+
+    The Bash tool is a POSIX command line even on Windows (Git Bash), so an unquoted `C:\\...` path
+    loses its backslashes and names no file: the hook then reads no message and allows the call,
+    which a refusal test sees as a failure and a pass test cannot see at all. Quote a forward-slash
+    path, as tests/test_commit_tell_sweep.py does.
+    """
+    return 'git commit -F "%s"' % msg.as_posix()
+
+
 def test_a_commit_message_file_with_a_paraphrase_is_refused_without_echoing_it(repo, transcript, tmp_path):
     msg = repo / "msg.txt"
     msg.write_text("Release 1.2\n\nThe user approved the quuxfrob release.\n", encoding="utf-8")
-    r = _run(_bash("PreToolUse", repo, "git commit -F %s" % msg, transcript), tmp_path)
+    r = _run(_bash("PreToolUse", repo, _commit_f(msg), transcript), tmp_path)
     assert r.returncode == 2, r
     assert "APPROVAL CLAIM CHECK" in r.stderr
     assert "quuxfrob" not in r.stderr                # a -F file's content is never quoted back
@@ -323,8 +334,12 @@ def test_a_commit_message_file_with_a_paraphrase_is_refused_without_echoing_it(r
 
 def test_a_commit_message_file_with_a_real_quote_passes(repo, transcript, tmp_path):
     msg = repo / "msg.txt"
+    # Liveness first: the same command on a paraphrase is refused, so the hook reads this path and
+    # the pass below is the quote's doing, not a message file it never found.
+    msg.write_text("Merge topic\n\nThe user approved the merge.\n", encoding="utf-8")
+    assert _run(_bash("PreToolUse", repo, _commit_f(msg), transcript), tmp_path).returncode == 2
     msg.write_text('Merge topic\n\nThe user approved the merge ("%s").\n' % _TYPED, encoding="utf-8")
-    r = _run(_bash("PreToolUse", repo, "git commit -F %s" % msg, transcript), tmp_path)
+    r = _run(_bash("PreToolUse", repo, _commit_f(msg), transcript), tmp_path)
     assert (r.returncode, r.stdout, r.stderr) == (0, "", ""), r
 
 
