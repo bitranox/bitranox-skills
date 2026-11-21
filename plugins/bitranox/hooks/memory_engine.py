@@ -138,6 +138,13 @@ class LevelReason(NamedTuple):
     reason: str
 
 
+class SlugReason(NamedTuple):
+    """A fact slug with why it was left as it is: a retired body still in `facts/`."""
+
+    slug: str
+    reason: str
+
+
 class RefSite(StrEnum):
     """Where a repointed [[ref]] sat in the citing fact."""
 
@@ -232,6 +239,8 @@ class HealReport:
     invalid_pointers: list[LevelLine] = field(default_factory=list[LevelLine])
     unreadable: list[LevelReason] = field(default_factory=list[LevelReason])
     refused_levels: list[LevelReason] = field(default_factory=list[LevelReason])
+    retirements_finished: list[str] = field(default_factory=list[str])
+    retirements_held: list[SlugReason] = field(default_factory=list[SlugReason])
     levels: int = 0
     skipped: str | None = None
 
@@ -2474,6 +2483,11 @@ def heal(proj: _StrPath) -> HealReport:
     'unreadable' - skipping it without a word read exactly like a healthy level. A level whose
     legacy CLAUDE.md scope block has a TOPICS line that does not parse is left untouched and
     REPORTED under 'refused' with the refusal, which names the file to fix by hand.
+    Every retirement the tree's store records (`_retire_body`: a renamed or relocated body that
+    could not be archived) is finished: the body is archived, or a stale record dropped, and the
+    slug listed under 'retirements_finished'; one it still cannot finish is REPORTED under
+    'retirements_held' with why. Without this a retired body whose slug no add ever names again
+    would sit in `facts/` for good.
     FAIL-OPEN (never raises). Returns a `HealReport`.
     Under BITRANOX_MEMORY_WRITES=off it touches nothing and returns every list empty, with
     `skipped` holding the refusal line (SessionStart calls it on every start, so it must not
@@ -2496,7 +2510,20 @@ def heal(proj: _StrPath) -> HealReport:
             report.refused_levels.append(LevelReason(level, str(exc)))
         except Exception:                            # noqa: BLE001 - one bad level never blocks the rest
             continue
+    if levels:                                       # the same anchor an add of the slug uses
+        _heal_retirements(anchor_dir(os.path.abspath(str(proj))), report)
     return report
+
+
+def _heal_retirements(anchor: _StrPath, report: HealReport) -> None:
+    """Finish the store's recorded retirements into `report` (see `heal`). Fail-open like heal:
+    a store it cannot list or lock is left for the next heal or add of the slug."""
+    try:
+        done, held = finish_retirements(anchor)
+    except OSError:                                  # TimeoutError (a held lock) included
+        return
+    report.retirements_finished.extend(done)
+    report.retirements_held.extend(SlugReason(slug, why) for slug, why in held)
 
 
 @dataclass
@@ -5791,6 +5818,10 @@ def _main(argv: Sequence[str] | None = None) -> int:
                   "UTF-8): %s [%s]" % (why, level))
         for level, why in rep.refused_levels:
             print(_REFUSED_LEVEL_LINE % (why, level))
+        for slug in rep.retirements_finished:
+            print("    ~ finished a retirement: %s" % slug)
+        for slug, why in rep.retirements_held:
+            print("    ! retired body still in facts/, not archived: %s [%s]" % (slug, why))
         # heal could not do its job at an unreadable level, so "done" would be a lie there
         return 2 if rep.unreadable else 0
 

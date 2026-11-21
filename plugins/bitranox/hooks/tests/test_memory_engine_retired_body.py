@@ -267,3 +267,35 @@ def test_an_add_racing_a_retirement_never_fails_on_the_record_or_body_vanishing(
     assert res["finishes"] >= 50 and res["held_count"] == 0, res
     assert not us.body_path(anchor, "old-slug").exists() and not _record(anchor).exists()
     assert len(list(_archive(anchor).glob("old-slug*.md"))) == RETIREMENTS
+
+
+@posix_non_root
+def test_heal_reports_a_held_retirement_and_finishes_it_once_the_archive_works(tmp_path):
+    """A retirement no add of its slug ever finishes would otherwise sit in `facts/` for good:
+    heal finishes every record of the tree, and reports one it still cannot finish."""
+    anchor, proj = _old_fact(tmp_path)
+    body = us.body_path(anchor, "old-slug")
+    with _ReadOnlyArchive(anchor):
+        _rename(proj)
+        rep = E.heal(proj)
+        assert rep.retirements_finished == []
+        [(slug, why)] = rep.retirements_held
+        assert slug == "old-slug" and "renamed" in why, why
+        assert body.is_file() and _record(anchor).is_file()
+    rep = E.heal(proj)
+    assert (rep.retirements_finished, rep.retirements_held) == (["old-slug"], [])
+    assert not body.exists() and not _record(anchor).exists()
+    assert "OLD PROSE" in _archived_prose(anchor)[0]
+
+
+@posix_non_root
+def test_the_cli_heal_names_a_held_retirement(tmp_path):
+    import subprocess
+    anchor, proj = _old_fact(tmp_path)
+    with _ReadOnlyArchive(anchor):
+        _rename(proj)
+        done = subprocess.run([sys.executable, str(ENGINE), "heal", "--proj", proj],
+                              capture_output=True, text=True, encoding="utf-8", timeout=120,
+                              check=False)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "! retired body still in facts/, not archived: old-slug [" in done.stdout, done.stdout
