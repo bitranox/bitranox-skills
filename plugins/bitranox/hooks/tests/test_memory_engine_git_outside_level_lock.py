@@ -1,6 +1,7 @@
 """No git subprocess runs while a level lock is held, for the callers that set a level up under
 their own hold of its lock: `add` (upsert_entry), `heal` (_heal_level) and `set-scope`; nor while
-an `add` of a fact bound to a topic holds the tree's placement lock.
+an `add` of a fact bound to a topic holds the tree's placement lock. A level outside any git
+repo asks git once per process, not on every call.
 
 ensure_level asks git whether the level's private files are ignored. Its unlocked path asks
 after releasing the lock; the callers that already held the lock asked under it, so the first
@@ -72,15 +73,17 @@ def _recording_git(tmp_path):
     return shim.parent
 
 
-def _run_watched(tmp_path, level, args, watched=None):
-    """Run the engine CLI with the recording git first on PATH, watching `watched` (default:
-    `level`'s lock file); return the logged calls."""
+def _run_watched(tmp_path, level, args, watched=None, program=None):
+    """Run the engine CLI (or the Python source `program`, with argv `args`) with the recording
+    git first on PATH, watching `watched` (default: `level`'s lock file); return the logged
+    calls."""
     log = tmp_path / ("git-calls-%d.log" % len(list(tmp_path.glob("git-calls-*.log"))))
     env = dict(os.environ)
     env["PATH"] = str(_recording_git(tmp_path)) + os.pathsep + env.get("PATH", "")
     env["WATCHED_LOCK"] = str(watched or str(sig.claude_local_md_path(level)) + ".lock")
     env["GIT_CALL_LOG"] = str(log)
-    done = subprocess.run([sys.executable, str(ENGINE), *map(str, args)], env=env,
+    cmd = [sys.executable, "-c", program] if program else [sys.executable, str(ENGINE)]
+    done = subprocess.run([*cmd, *map(str, args)], env=env,
                           capture_output=True, text=True, encoding="utf-8", timeout=120)
     assert done.returncode == 0, done.stdout + done.stderr
     return log.read_text(encoding="utf-8").splitlines() if log.exists() else []
@@ -154,3 +157,30 @@ def test_an_add_of_a_bound_fact_asks_git_before_it_takes_the_placement_lock(tmp_
     _assert_git_asked_only_outside_the_lock(calls)
     assert "Changed." in sig.claude_local_md_path(py).read_text(encoding="utf-8")
 
+
+_ENSURE_TWICE = """
+import sys
+sys.path.insert(0, sys.argv[1])
+import memory_engine as E
+E.ensure_level(sys.argv[2], scope_default="WHAT: a level outside git")
+E.ensure_level(sys.argv[2], scope_default="WHAT: a level outside git")
+"""
+
+
+def test_a_level_outside_git_asks_git_once_per_process(tmp_path):
+    """Outside a git repo there is nothing to ignore. The answer was not remembered, so every
+    add at such a level spawned `git rev-parse` again (about 50 ms each on Windows)."""
+    root = tmp_path / "plain"
+    root.mkdir()
+    (root / "CLAUDE.md").write_text("x\n", encoding="utf-8")
+    (root / us.STORE_DIRNAME).mkdir()
+    probe = subprocess.run(["git", "-C", str(root), "rev-parse", "--show-toplevel"],
+                           capture_output=True, check=False)
+    if probe.returncode == 0:
+        pytest.skip("the test dir sits inside a git repo")
+    calls = _run_watched(tmp_path, root, [Path(E.__file__).resolve().parent, root],
+                         program=_ENSURE_TWICE)
+    asked = [c for c in calls if "rev-parse --show-toplevel" in c]
+    # the level is its own anchor: the first ensure_level asks once for both of its patterns,
+    # the second asks nothing
+    assert len(asked) == 1, calls

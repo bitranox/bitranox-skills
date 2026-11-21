@@ -340,6 +340,11 @@ _EXCLUDE_HEADER = "# bitranox curated memory (local; CLAUDE.local.md @imports it
 # restart; `track_private` is still read on every call.
 _IGNORED_HERE: set[tuple[str, str]] = set()
 
+# Absolute dirs this process already saw git place outside any repo: nothing to ignore there.
+# Not remembered, a level outside git spawned `git rev-parse` on every add. Same lifetime as
+# `_IGNORED_HERE`; a dir git could not be asked about (git missing, a timeout) is not remembered.
+_OUTSIDE_GIT_HERE: set[str] = set()
+
 
 def ensure_gitignored(proj: _StrPath, *patterns: str) -> bool:
     """Best-effort: on a git repo, make sure git ignores each `pattern`. Honors `track_private`
@@ -367,10 +372,13 @@ def ensure_gitignored(proj: _StrPath, *patterns: str) -> bool:
     escaped every fail-open handler here); the file's own line ending is kept.
 
     A pattern found ignored (or written) is remembered for the rest of the process
-    (`_IGNORED_HERE`), so a loop of adds asks git once per level and pattern, not on every add."""
+    (`_IGNORED_HERE`), so a loop of adds asks git once per level and pattern, not on every add;
+    so is a dir git answered is in no repo (`_OUTSIDE_GIT_HERE`)."""
     if load_config().get("track_private"):
         return True
     here = str(Path(proj).absolute())
+    if here in _OUTSIDE_GIT_HERE:
+        return True
     patterns = tuple(p for p in patterns if (here, p) not in _IGNORED_HERE)
     if not patterns:
         return True
@@ -378,6 +386,7 @@ def ensure_gitignored(proj: _StrPath, *patterns: str) -> bool:
     if top is None:
         return False
     if not top[1]:
+        _OUTSIDE_GIT_HERE.add(here)
         return True
     add: list[str] = []
     for pattern in patterns:
