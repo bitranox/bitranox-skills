@@ -50,6 +50,7 @@ def test_request_carries_model_bearer_state_and_questions(fake):
 
 def test_noul_and_choice_answers_are_typed(fake):
     result = _jev(fake.url).ask({"user_message": "x"}, [NOUL, CHOICE])
+    assert result is not None
     assert result.answers["correction"].value == 0.9
     assert result.answers["lang"].value == "en"
     assert result.answers["lang"].confidence == 0.7
@@ -66,13 +67,13 @@ def test_an_http_error_returns_none_and_names_the_status(fake_jev, status):
 def test_a_malformed_body_returns_none(fake_jev):
     c = _jev(fake_jev(body=b"not json").url)
     assert c.ask({"user_message": "x"}, [NOUL]) is None
-    assert c.last_reason.startswith("bad response")
+    assert c.last_reason is not None and c.last_reason.startswith("bad response")
 
 
 def test_a_missing_answer_returns_none(fake_jev):
     c = _jev(fake_jev(body={"model": "m", "answers": {}, "usage": {}}).url)
     assert c.ask({"user_message": "x"}, [NOUL]) is None
-    assert c.last_reason.startswith("bad response")
+    assert c.last_reason is not None and c.last_reason.startswith("bad response")
 
 
 def test_a_dict_body_without_answers_is_a_bad_response(fake_jev):
@@ -210,7 +211,7 @@ def test_ask_many_runs_requests_concurrently_and_keeps_order(fake_jev):
     out = c.ask_many([({"n": str(i)}, [NOUL]) for i in range(6)], workers=6)
     assert len(out) == 6 and all(r is not None for r in out)
     assert fake.max_in_flight > 1
-    assert [r.model for r in out] == [str(i) for i in range(6)]
+    assert [r.model if r is not None else None for r in out] == [str(i) for i in range(6)]
 
 
 def test_one_tls_context_serves_every_request(fake_jev, monkeypatch):
@@ -340,9 +341,10 @@ def test_a_non_loopback_base_url_override_is_ignored(tmp_path):
     cfg = {"classifier_backend": "jev", "classifier_stop_signal": "shadow"}
     env = {"TYPESAFE_API_KEY": "abc", "BITRANOX_CLASSIFIER_BASE_URL": "https://evil.example"}
     c = cl.get_classifier(cfg, "stop_signal", env=env, home=tmp_path)
-    assert c.base_url == cl.DEFAULT_BASE_URL
+    assert isinstance(c, cl.JevClassifier) and c.base_url == cl.DEFAULT_BASE_URL
     env["BITRANOX_CLASSIFIER_BASE_URL"] = "http://127.0.0.1:9"
-    assert cl.get_classifier(cfg, "stop_signal", env=env, home=tmp_path).base_url == "http://127.0.0.1:9"
+    loopback = cl.get_classifier(cfg, "stop_signal", env=env, home=tmp_path)
+    assert isinstance(loopback, cl.JevClassifier) and loopback.base_url == "http://127.0.0.1:9"
 
 
 def test_shadow_enabled_needs_backend_and_site():

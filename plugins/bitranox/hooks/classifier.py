@@ -43,10 +43,12 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Buffer, Iterator, Mapping, Sequence, Sized
 from dataclasses import dataclass, field
 from enum import StrEnum
-from datetime import datetime, timedelta, UTC
+from datetime import date, datetime, timedelta, UTC
 from pathlib import Path
+from typing import Any, Protocol, Self, SupportsIndex, SupportsInt, TypeIs, cast
 from urllib.parse import urlparse
 
 _HOOKS_DIR = Path(__file__).resolve().parent
@@ -57,6 +59,38 @@ import claude_paths  # noqa: E402
 import secret_patterns  # noqa: E402
 import skill_frontmatter  # noqa: E402
 import transcript_turns  # noqa: E402
+
+#: A path argument: a str or anything os.fspath turns into one.
+type StrPath = str | os.PathLike[str]
+#: A mapping decoded from JSON (a payload file, an API reply, a caller's request spec). Its shape
+#: is checked where a value is used, not declared here, so a value read from it stays dynamic.
+type JsonObject = Mapping[str, Any]
+#: One state a question set is asked over, and the questions: an item of `ask_many`.
+type AskItem = tuple[Mapping[str, object], Sequence[Question]]
+
+
+class _RedactFn(Protocol):
+    def __call__(self, text: str, extra_literals: Sequence[str] = ...) -> tuple[str, int]: ...
+
+
+class _ExcerptFn(Protocol):
+    def __call__(self, text: str | None, cap: int) -> str: ...
+
+
+class _DescriptionFn(Protocol):
+    def __call__(self, path: Path) -> str | None: ...
+
+
+# Typed views of the sibling helpers this module calls, which carry no annotations themselves.
+_redact_text = cast(_RedactFn, secret_patterns.redact)
+_excerpt = cast(_ExcerptFn, transcript_turns.excerpt)
+_description = cast(_DescriptionFn, skill_frontmatter.description)
+
+
+def _is_json_object(value: object) -> TypeIs[dict[str, Any]]:
+    """True for a dict: a decoded JSON object, whose keys are str and whose values are checked
+    where they are used."""
+    return isinstance(value, dict)
 
 __all__ = [
     "Answer", "CAP_MARK", "CONTEXT_VIEW", "DEFAULT_BASE_URL",
@@ -173,7 +207,7 @@ class QuestionType(StrEnum):
     SCORE = "score"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class Question:
     """One typed question. `id` is for code only - the API never shows it to the model, so
     `instructions` must carry the whole meaning, naming state fields as backticked paths.
@@ -185,22 +219,28 @@ class Question:
     instructions: str
     criteria: object = None
 
-    def __post_init__(self):
-        object.__setattr__(self, "type", QuestionType(self.type))
+    # Written out rather than generated so the signature says what it accepts: a member OR its
+    # string for `type`, which the attribute then always holds as the member.
+    def __init__(self, id: str, type: QuestionType | str, instructions: str,
+                 criteria: object = None) -> None:
+        object.__setattr__(self, "id", id)
+        object.__setattr__(self, "type", QuestionType(type))
+        object.__setattr__(self, "instructions", instructions)
+        object.__setattr__(self, "criteria", criteria)
 
-    def to_json(self):
-        d = {"id": self.id, "type": self.type, "instructions": self.instructions}
+    def to_json(self) -> dict[str, object]:
+        d: dict[str, object] = {"id": self.id, "type": self.type, "instructions": self.instructions}
         if self.criteria is not None:
             d["criteria"] = self.criteria
         return d
 
     @classmethod
-    def from_json(cls, d):
+    def from_json(cls, d: JsonObject) -> Self:
         return cls(id=d["id"], type=d["type"], instructions=d["instructions"],
                    criteria=d.get("criteria"))
 
-    def to_api(self):
-        d = {"type": self.type, "instructions": self.instructions}
+    def to_api(self) -> dict[str, object]:
+        d: dict[str, object] = {"type": self.type, "instructions": self.instructions}
         if self.criteria is not None:
             d["criteria"] = self.criteria
         return d
@@ -231,7 +271,7 @@ class Result:
         answer = self.answers.get(question_id)
         return None if answer is None else answer.number()
 
-    def to_json(self):
+    def to_json(self) -> dict[str, object]:
         return {"answers": {k: {"type": a.type, "value": a.value, "probabilities": a.probabilities,
                                 "confidence": a.confidence} for k, a in self.answers.items()},
                 "latency_ms": self.latency_ms, "input_tokens": self.input_tokens,
@@ -245,13 +285,13 @@ class _BadResponse(ValueError):
 class NullClassifier:
     """The off switch: answers nothing, so every caller keeps its regex verdict."""
 
-    def __init__(self, reason):
+    def __init__(self, reason: str | None) -> None:
         self.last_reason = reason
 
-    def ask(self, state, questions):
+    def ask(self, state: Mapping[str, object], questions: Sequence[Question]) -> Result | None:
         return None
 
-    def ask_many(self, items, workers=8):
+    def ask_many(self, items: Sequence[AskItem], workers: int = 8) -> list[Result | None]:
         return [None for _ in items]
 
 
@@ -261,25 +301,25 @@ class JevClassifier:
     model: str = "jev-latest"
     base_url: str = DEFAULT_BASE_URL
     deadline: float = DEFAULT_DEADLINE
-    last_reason: object = field(default=None)
+    last_reason: str | None = field(default=None)
     # One TLS context for every request this classifier makes. Building one loads the system
     # certificate store - 12 cost 0.25 s on a Windows dev box - and recall asks up to 30 at once
     # under DEFAULT_DEADLINE, so a context per request spent a large part of that budget on setup.
-    _tls: object = field(default=None, init=False, repr=False, compare=False)
-    _tls_lock: object = field(default_factory=threading.Lock, init=False, repr=False,
-                              compare=False)
+    _tls: ssl.SSLContext | None = field(default=None, init=False, repr=False, compare=False)
+    _tls_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False,
+                                      compare=False)
 
-    def _tls_context(self):
+    def _tls_context(self) -> ssl.SSLContext:
         with self._tls_lock:
             if self._tls is None:
                 self._tls = ssl.create_default_context()
             return self._tls
 
-    def ask(self, state, questions):
+    def ask(self, state: Mapping[str, object], questions: Sequence[Question]) -> Result | None:
         """One request; a Result, or None with `last_reason` set. Never raises."""
         return self.ask_many([(state, questions)], workers=1)[0]
 
-    def ask_many(self, items, workers=8):
+    def ask_many(self, items: Sequence[AskItem], workers: int = 8) -> list[Result | None]:
         """Concurrent requests under ONE overall deadline; results keep the input order.
 
         `urlopen(timeout=)` bounds each socket operation, not the whole exchange, so a server
@@ -287,12 +327,12 @@ class JevClassifier:
         the caller waits only until the deadline; a late thread is abandoned, and being a daemon
         it cannot keep the process alive at exit (a ThreadPoolExecutor worker would).
         """
-        results = [None] * len(items)
-        reasons = ["deadline"] * len(items)
+        results: list[Result | None] = [None] * len(items)
+        reasons: list[str | None] = ["deadline"] * len(items)
         gate = threading.Semaphore(max(1, workers))
         end = time.monotonic() + self.deadline
 
-        def _run(i, state, questions):
+        def _run(i: int, state: Mapping[str, object], questions: Sequence[Question]) -> None:
             with gate:
                 if time.monotonic() >= end:
                     return
@@ -317,7 +357,8 @@ class JevClassifier:
         self.last_reason = failed[0] if failed else None
         return out
 
-    def _post(self, state, questions, end):
+    def _post(self, state: Mapping[str, object], questions: Sequence[Question],
+              end: float) -> Result:
         body = json.dumps({"model": self.model, "state": state,
                            "questions": {q.id: q.to_api() for q in questions}}).encode("utf-8")
         req = urllib.request.Request(
@@ -333,22 +374,22 @@ class JevClassifier:
         return _parse(raw, questions, latency)
 
 
-def _parse(raw, questions, latency):
+def _parse(raw: bytes, questions: Sequence[Question], latency: int) -> Result:
     try:
         data = json.loads(raw)
     except ValueError as exc:
         raise _BadResponse("not json") from exc
-    answers_in = data.get("answers") if isinstance(data, dict) else None
-    if not isinstance(answers_in, dict):
+    answers_in = data.get("answers") if _is_json_object(data) else None
+    if not _is_json_object(answers_in):
         raise _BadResponse("no answers")
-    answers = {}
+    answers: dict[str, Answer] = {}
     for q in questions:
         a = answers_in.get(q.id)
-        if not isinstance(a, dict) or a.get("type") != q.type or q.type not in a:
+        if not _is_json_object(a) or a.get("type") != q.type or q.type not in a:
             raise _BadResponse("missing or mistyped answer %r" % q.id)
         value = a[q.type]
         # A str test first: an unhashable value (a list, a dict) cannot be looked up at all.
-        if q.type == QuestionType.CHOICE and isinstance(q.criteria, dict) and (
+        if q.type == QuestionType.CHOICE and _is_json_object(q.criteria) and (
                 not isinstance(value, str) or value not in q.criteria):
             raise _BadResponse("choice %r not among the options" % (value,))
         if q.type == QuestionType.NOUL and not _is_number_within(value, 1):
@@ -357,13 +398,14 @@ def _parse(raw, questions, latency):
             raise _BadResponse("score %r is not a level: %r" % (q.id, value))
         answers[q.id] = Answer(type=q.type, value=value, probabilities=a.get("probabilities"),
                                confidence=a.get("confidence"))
-    usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+    usage_in = data.get("usage")
+    usage: JsonObject = usage_in if _is_json_object(usage_in) else {}
     return Result(answers=answers, latency_ms=latency,
                   input_tokens=_token_count(usage.get("input_tokens")),
                   model=str(data.get("model", "")))
 
 
-def _is_number_within(value, top):
+def _is_number_within(value: object, top: float) -> bool:
     """True for a finite JSON number in [0, top]; never for a bool, a string or null.
 
     The boundary check every noul/score consumer relies on: once parsed, "not a number" can only
@@ -371,29 +413,37 @@ def _is_number_within(value, top):
     unanswered and let a suppressed pick through. bool is excluded by exact type, since True is
     an int that compares >= every threshold below 1.
     """
-    return type(value) in (int, float) and math.isfinite(value) and 0 <= value <= top
+    if type(value) is int or type(value) is float:
+        return math.isfinite(value) and 0 <= value <= top
+    return False
 
 
-def _score_top(criteria):
+def _score_top(criteria: object) -> float:
     """The highest level a score answer may name: levels count from 0, so len(criteria) - 1.
     Unsized criteria give no upper bound beyond finiteness."""
+    if not isinstance(criteria, Sized):
+        return math.inf
     try:
         return max(len(criteria) - 1, 0)
     except TypeError:
         return math.inf
 
 
-def _token_count(value):
+def _token_count(value: object) -> int:
     """A usage count, or 0. Accounting metadata must never cost the answers it came with."""
     try:
-        return int(value or 0)
+        value = value or 0
+        # What int() accepts at all; anything else is the TypeError int() would raise.
+        if not isinstance(value, (str, Buffer, SupportsInt, SupportsIndex)):
+            return 0
+        return int(value)
     except (TypeError, ValueError, OverflowError):
         return 0
 
 
 # ---- configuration -------------------------------------------------------------------------
 
-def load_key(env, home):
+def load_key(env: Mapping[str, str], home: StrPath) -> tuple[str | None, str | None]:
     """(key, None) or (None, reason). The env var wins, then `~/.credentials/typesafe.key`.
 
     A keyfile any other user could read is refused: the key is billing authority, and a
@@ -423,7 +473,7 @@ def load_key(env, home):
     return key, None
 
 
-def site_mode(cfg, site):
+def site_mode(cfg: Mapping[str, object], site: str) -> SiteMode:
     """The SiteMode the site's knob asks for. Anything but the jev backend reads as OFF; so does a
     value outside SiteMode, which is also named on stderr: a hand-edited `"decided"` otherwise
     switched the site off without a word (meta-memory-settings refuses it, a text editor does not).
@@ -442,12 +492,12 @@ def site_mode(cfg, site):
         return SiteMode.OFF
 
 
-def shadow_enabled(cfg, site):
+def shadow_enabled(cfg: Mapping[str, object], site: str) -> bool:
     """Only `shadow`: a site in decide mode asks in the hook and must not also spawn a child."""
     return site_mode(cfg, site) is SiteMode.SHADOW
 
 
-def _base_url(env):
+def _base_url(env: Mapping[str, str]) -> str:
     """The API base. The env override exists for tests and is honoured ONLY for a loopback
     host - honouring any host would let one environment variable send the key elsewhere."""
     override = (env.get(BASE_URL_ENV) or "").strip()
@@ -456,7 +506,9 @@ def _base_url(env):
     return DEFAULT_BASE_URL
 
 
-def get_classifier(cfg, site, env=None, home=None, deadline=DEFAULT_DEADLINE):
+def get_classifier(cfg: Mapping[str, object], site: str, env: Mapping[str, str] | None = None,
+                   home: StrPath | None = None,
+                   deadline: float = DEFAULT_DEADLINE) -> NullClassifier | JevClassifier:
     env = os.environ if env is None else env
     home = Path.home() if home is None else Path(home)
     if cfg.get("classifier_backend") != "jev":
@@ -472,16 +524,18 @@ def get_classifier(cfg, site, env=None, home=None, deadline=DEFAULT_DEADLINE):
 
 # ---- egress preparation --------------------------------------------------------------------
 
-def prepare_state(fields, key=None, cap=FIELD_CAP):
+def prepare_state(fields: Mapping[str, object], key: str | None = None,
+                  cap: int = FIELD_CAP) -> tuple[dict[str, str], int]:
     """Redact and cap each named field; return (state, redaction_count).
 
     A long field keeps its head and its tail: a message's intent sits at the start, a tool
     output's verdict at the end.
     """
-    state, total = {}, 0
+    state: dict[str, str] = {}
+    total = 0
     literals = [key] if key else []
-    for name, text in fields.items():
-        text, n = secret_patterns.redact(str(text or ""), extra_literals=literals)
+    for name, value in fields.items():
+        text, n = _redact_text(str(value or ""), extra_literals=literals)
         total += n
         if len(text) > cap:
             half = cap // 2
@@ -498,7 +552,7 @@ _EN = {"the", "and", "not", "is", "you", "please", "we", "with", "on", "a", "an"
        "but", "or", "also", "very", "good", "now", "that", "this", "it"}
 
 
-def detect_language(text):
+def detect_language(text: str | None) -> str:
     """en | de | unknown - a stopword count, enough to split the eval per language (Jev is
     documented as English-primary, and the Stop gate's regexes cover German too)."""
     words = [w.strip(".,;:!?\"'()[]") for w in (text or "").lower().split()]
@@ -521,14 +575,14 @@ PREVIOUS_CAP = 300
 PREVIOUS_FIELD = "previous_assistant_message"
 
 
-def with_previous(fields, previous):
+def with_previous(fields: Mapping[str, object], previous: str | None) -> dict[str, object]:
     """`fields` plus the trimmed previous reply, first; unchanged when there is none (the first
     prompt of a session), so no question is asked about an empty field."""
-    text = transcript_turns.excerpt(previous, PREVIOUS_CAP)
+    text = _excerpt(previous, PREVIOUS_CAP)
     return {PREVIOUS_FIELD: text, **fields} if text else dict(fields)
 
 
-def stop_signal_questions():
+def stop_signal_questions() -> list[Question]:
     """The Stop gate's learning-signal families, over {previous_assistant_message, user_message,
     assistant_reply}."""
     return [
@@ -557,21 +611,21 @@ def stop_signal_questions():
 _REPLY_FAMILIES = ("self_admission", "realization")
 
 
-def subagent_signal_questions():
+def subagent_signal_questions() -> list[Question]:
     """The Stop gate's reply questions, verbatim, over {assistant_reply}: one subagent message."""
     stop = {q.id: q for q in stop_signal_questions()}
     return [stop[family] for family in _REPLY_FAMILIES]
 
 
-def load_skill_descriptions(skills_dir=None):
+def load_skill_descriptions(skills_dir: StrPath | None = None) -> dict[str, str]:
     """{skill name: description} from each shipped SKILL.md front matter.
 
     Read through `skill_frontmatter`, the reader the commit gate lints with, so the router is
     offered the same description the gate passed and the keyword map was built from."""
     skills_dir = Path(skills_dir) if skills_dir else _HOOKS_DIR.parent / "skills"
-    out = {}
+    out: dict[str, str] = {}
     for md in sorted(skills_dir.glob("*/SKILL.md")):
-        desc = skill_frontmatter.description(md)
+        desc = _description(md)
         if desc:
             out[md.parent.name] = desc
     return out
@@ -590,18 +644,18 @@ def load_skill_descriptions(skills_dir=None):
 ROUTER_CRITERIA_FILE = _HOOKS_DIR / "router_criteria.json"
 
 
-def load_router_criteria(skills, path=None):
+def load_router_criteria(skills: Mapping[str, object],
+                         path: StrPath | None = None) -> dict[str, object]:
     """{skill name: option text}, preferring a router-authored entry over the description.
 
     Never raises: a hook may not wedge a prompt over its own data file, and a missing or malformed
     file degrades to the descriptions, which is the behaviour before this file existed.
     """
     try:
-        raw = json.loads(Path(path or ROUTER_CRITERIA_FILE).read_text(encoding="utf-8"))
+        decoded: object = json.loads(Path(path or ROUTER_CRITERIA_FILE).read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        raw = {}
-    if not isinstance(raw, dict):
-        raw = {}
+        decoded = {}
+    raw: JsonObject = decoded if _is_json_object(decoded) else {}
     return {name: raw.get(name) or desc for name, desc in skills.items()}
 
 
@@ -628,12 +682,12 @@ NOTIFY_VIEW = "fields-v1"
 _CONTEXT_FIELDS = ("previous_assistant_message", "recent_activity", "skills_already_used")
 
 
-def _have(fields, name):
+def _have(fields: Mapping[str, object] | None, name: str) -> bool:
     """Did the caller send this field with something in it?"""
     return bool(str((fields or {}).get(name) or "").strip())
 
 
-def _and_list(names):
+def _and_list(names: Sequence[str]) -> str:
     """'`a`', '`a` and `b`', '`a`, `b` and `c`' - the fields one sentence may name."""
     ticked = ["`%s`" % n for n in names]
     if len(ticked) < 2:
@@ -641,12 +695,12 @@ def _and_list(names):
     return "%s and %s" % (", ".join(ticked[:-1]), ticked[-1])
 
 
-def _joined(*parts):
+def _joined(*parts: str) -> str:
     """The sentences that have something to say, one space apart."""
     return " ".join(p for p in parts if p)
 
 
-def _describing(fields):
+def _describing(fields: Mapping[str, object]) -> list[str]:
     """The fields that say what work is already under way.
 
     The previous turn's REASONING is deliberately not among them. It was implemented and A/B'd on
@@ -659,9 +713,9 @@ def _describing(fields):
     return [n for n in (PREVIOUS_FIELD, "recent_activity") if _have(fields, n)]
 
 
-def _context_sentence(fields, subject):
+def _context_sentence(fields: Mapping[str, object], subject: str) -> str:
     """What the state fields are, for the reader of a skill question - naming only those sent."""
-    parts = []
+    parts: list[str] = []
     if _have(fields, PREVIOUS_FIELD) and subject:
         parts.append("%s is a reply to `%s`" % (subject, PREVIOUS_FIELD))
     naming = [n for n in ("project", "recent_activity") if _have(fields, n)]
@@ -671,7 +725,7 @@ def _context_sentence(fields, subject):
     return ", and ".join(parts) + "." if parts else ""
 
 
-def _router_turn_text(turn, fields):
+def _router_turn_text(turn: str, fields: Mapping[str, object]) -> tuple[str, str, str]:
     """(gate instructions, what the skill question is about, the context sentence) for `turn`."""
     under_way = _describing(fields)
     if turn == TURN_NOTIFICATION:
@@ -695,7 +749,8 @@ def _router_turn_text(turn, fields):
     )
 
 
-def skill_router_questions(skills, fields, turn=TURN_PROMPT):
+def skill_router_questions(skills: Mapping[str, object], fields: Mapping[str, object],
+                           turn: str = TURN_PROMPT) -> list[Question]:
     """The gate question, then one noul per skill; each skill's id is its name.
 
     `fields` is the state this same request will carry, because the questions may only name what
@@ -731,7 +786,8 @@ NO_SKILL_KEY = "none_needed"
 CHOICE_BYPASS = 0.7
 
 
-def choice_pick(gate, winner, probabilities, *, threshold, bypass=CHOICE_BYPASS):
+def choice_pick(gate: object, winner: object, probabilities: Mapping[str, object] | None, *,
+                threshold: float, bypass: float | None = CHOICE_BYPASS) -> object:
     """The skill a gate-plus-choice answer suggests, or None.
 
     The winner is taken when the gate passes (an unanswered gate does not suppress), or when the
@@ -742,7 +798,10 @@ def choice_pick(gate, winner, probabilities, *, threshold, bypass=CHOICE_BYPASS)
         return None
     if not isinstance(gate, (int, float)) or gate >= threshold:
         return winner
-    sure = (probabilities or {}).get(winner)
+    # Looked up with the winner as it came, whatever its type, so the lookup stays the mapping's
+    # own: a key of any hashable type is asked for, and an unhashable one raises as dict.get does.
+    by_key: Mapping[Any, object] = probabilities or {}
+    sure = by_key.get(winner)
     if bypass is not None and isinstance(sure, (int, float)) and sure >= bypass:
         return winner
     return None
@@ -755,7 +814,7 @@ SHORT_DESC_CAP = 120
 _USE_PREFIX = re.compile(r"^use\s+(?:when|to|for|on|at|after|before|if|while|during)\s+", re.I)
 
 
-def short_description(desc, cap=SHORT_DESC_CAP):
+def short_description(desc: object, cap: int = SHORT_DESC_CAP) -> str:
     """The opening clause of a skill description, without the `Use when` boilerplate.
 
     80 of the 81 shipped descriptions open with "Use when" or another "Use <preposition>", so an
@@ -771,7 +830,8 @@ def short_description(desc, cap=SHORT_DESC_CAP):
     return (head if sep else cut).rstrip(" ,;:-")
 
 
-def _pick_question(skills, subject, context, no_match, fields=None):
+def _pick_question(skills: Mapping[str, object], subject: str, context: str, no_match: str,
+                   fields: Mapping[str, object] | None = None) -> Question:
     wrong = ("one that merely sounds related is wrong, as is one already listed in "
              "`skills_already_used`" if _have(fields, "skills_already_used")
              else "one that merely sounds related is wrong")
@@ -784,7 +844,8 @@ def _pick_question(skills, subject, context, no_match, fields=None):
         criteria={**skills, NO_SKILL_KEY: no_match})
 
 
-def skill_router_choice_questions(skills, fields, turn=TURN_PROMPT):
+def skill_router_choice_questions(skills: Mapping[str, object], fields: Mapping[str, object],
+                                  turn: str = TURN_PROMPT) -> list[Question]:
     """The same gate, then ONE choice over the whole roster.
 
     The gate is byte-identical to the noul arm's on purpose: this arm moves the shape of the
@@ -798,7 +859,7 @@ def skill_router_choice_questions(skills, fields, turn=TURN_PROMPT):
                            "general understanding, or a task none of these cover.", fields)]
 
 
-def skill_router_rerank_questions(shortlist):
+def skill_router_rerank_questions(shortlist: Mapping[str, object]) -> list[Question]:
     """Second request: the same choice over a handful of candidates shown in FULL, plus one noul
     per candidate asking whether it does the specific thing asked.
 
@@ -815,7 +876,7 @@ def skill_router_rerank_questions(shortlist):
         for name, body in shortlist.items()]
 
 
-def recall_questions():
+def recall_questions() -> list[Question]:
     """One noul per (prompt, note) pair, asked in its own request (TypeSafe's rerank pattern)."""
     return [Question("relevant", QuestionType.NOUL,
                      "Would `memory_note` be useful context for carrying out `user_prompt`, read "
@@ -825,11 +886,11 @@ def recall_questions():
 
 # ---- shadow: the hook side -----------------------------------------------------------------
 
-def _audit_dir():
+def _audit_dir() -> Path:
     return claude_paths.audit_dir()
 
 
-def _transcript_location(transcript):
+def _transcript_location(transcript: StrPath | None) -> dict[str, object]:
     """{"path", "offset"} of the transcript as it stood when the hook ran, both None without one.
 
     The offset is the file size at that moment, which places the prompt a row was asked about
@@ -843,7 +904,8 @@ def _transcript_location(transcript):
         return {"path": str(transcript), "offset": None}
 
 
-def _payload(site, session_id, regex, requests, transcript):
+def _payload(site: str, session_id: object, regex: object, requests: Sequence[JsonObject],
+             transcript: StrPath | None) -> dict[str, object]:
     """What a shadow child is handed, and what decide mode asks from inside the hook."""
     return {"site": site, "session_id": session_id, "regex": regex,
             "transcript": _transcript_location(transcript),
@@ -852,7 +914,8 @@ def _payload(site, session_id, regex, requests, transcript):
                          for r in requests]}
 
 
-def spawn_shadow(site, session_id, regex, requests, transcript=""):
+def spawn_shadow(site: str, session_id: object, regex: object, requests: Sequence[JsonObject],
+                 transcript: StrPath | None = "") -> None:
     """Hand one shadow comparison to a detached child and return immediately.
 
     `requests` is a list of {"fields": {name: text}, "questions": [Question, ...]}. The payload
@@ -866,22 +929,22 @@ def spawn_shadow(site, session_id, regex, requests, transcript=""):
         fd, path = tempfile.mkstemp(prefix="classifier-", suffix=".json", dir=str(d))
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(payload, fh)
-        kwargs = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL,
-                  "stderr": subprocess.DEVNULL, "close_fds": True}
-        if os.name == "nt":
-            kwargs["creationflags"] = (getattr(subprocess, "DETACHED_PROCESS", 0)
-                                       | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
-        else:
-            kwargs["start_new_session"] = True
+        # Detached either way: its own process group on Windows, its own session elsewhere. 0 and
+        # False are Popen's defaults, so each platform gets exactly the one setting it needs.
+        windows = os.name == "nt"
+        creationflags: int = (getattr(subprocess, "DETACHED_PROCESS", 0)
+                              | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)) if windows else 0
         subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--shadow", path],
-                         **kwargs)
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, close_fds=True, creationflags=creationflags,
+                         start_new_session=not windows)
     except Exception:  # noqa: BLE001 - shadow mode must never cost the hook anything
         pass
 
 
 # ---- shadow: the child side ----------------------------------------------------------------
 
-def _read_payload(argv):
+def _read_payload(argv: Sequence[str]) -> Any:
     """The payload file named on the command line (deleted once read), else stdin."""
     if len(argv) > 1:
         path = Path(argv[1])
@@ -895,7 +958,7 @@ def _read_payload(argv):
     return json.loads(sys.stdin.read())
 
 
-def _plugin_version():
+def _plugin_version() -> str:
     """The version of the plugin this file shipped in, so each row names the release that wrote
     it: sessions on different releases append to the same log."""
     try:
@@ -905,16 +968,17 @@ def _plugin_version():
         return ""
 
 
-def _stamp(record, payload):
+def _stamp(record: dict[str, object], payload: JsonObject) -> dict[str, object]:
     """Add the release and the transcript location every row carries, success or failure."""
-    where = payload.get("transcript") if isinstance(payload.get("transcript"), dict) else {}
+    transcript = payload.get("transcript")
+    where: JsonObject = transcript if _is_json_object(transcript) else {}
     record["plugin_version"] = _plugin_version()
     record["transcript_path"] = where.get("path")
     record["transcript_offset"] = where.get("offset")
     return record
 
 
-def _error_record(payload, exc):
+def _error_record(payload: JsonObject, exc: BaseException) -> dict[str, object]:
     """The row for a comparison that failed: no answers, and the cause as its `reason`."""
     message, _n = prepare_state({"e": "%s: %s" % (type(exc).__name__, exc)}, cap=ERROR_CAP)
     return _stamp({
@@ -928,7 +992,7 @@ def _error_record(payload, exc):
 
 
 @contextlib.contextmanager
-def shadow_guard(site, session_id):
+def shadow_guard(site: str, session_id: object) -> Iterator[None]:
     """Run a site's shadow hand-off, swallowing any exception but logging it as an error row.
 
     Shadow mode must never cost a hook anything, and it must not fail silently either: a site
@@ -943,7 +1007,7 @@ def shadow_guard(site, session_id):
             pass
 
 
-def error_row(site, session_id, exc):
+def error_row(site: str, session_id: object, exc: BaseException) -> dict[str, object]:
     """The row for a site whose hand-off raised before any request was made."""
     return _error_record({"site": site, "session_id": session_id}, exc)
 
@@ -964,26 +1028,34 @@ class Asked:
         return self.results[0] if self.results else None
 
 
-def run_shadow(payload, cfg, env=None, home=None, deadline=SHADOW_DEADLINE, workers=8):
+def run_shadow(payload: JsonObject, cfg: Mapping[str, object], env: Mapping[str, str] | None = None,
+               home: StrPath | None = None, deadline: float = SHADOW_DEADLINE,
+               workers: int = 8) -> dict[str, object]:
     """Ask Jev for one site's comparison and return the log record (the caller appends it)."""
     return _ask(payload, cfg, env=env, home=home, deadline=deadline, workers=workers).row
 
 
-def _ask(payload, cfg, env=None, home=None, deadline=SHADOW_DEADLINE, workers=8) -> Asked:
+def _ask(payload: JsonObject, cfg: Mapping[str, object], env: Mapping[str, str] | None = None,
+         home: StrPath | None = None, deadline: float = SHADOW_DEADLINE,
+         workers: int = 8) -> Asked:
     """Ask Jev for one site's comparison: the typed results and the log record built from them."""
     site = str(payload.get("site") or "")
-    requests = payload.get("requests") or []
+    requests: Sequence[JsonObject] = payload.get("requests") or []
     clf = get_classifier(cfg, site, env=env, home=home, deadline=deadline)
     key = getattr(clf, "key", None)
-    states, redactions = [], 0
+    states: list[dict[str, str]] = []
+    redactions = 0
     for r in requests:
         state, n = prepare_state(r.get("fields") or {}, key=key)
         states.append(state)
         redactions += n
-    items = [(s, [Question.from_json(q) for q in r.get("questions") or []])
-             for s, r in zip(states, requests)]
+    items: list[AskItem] = []
+    for s, r in zip(states, requests):
+        specs: Sequence[JsonObject] = r.get("questions") or []
+        items.append((s, [Question.from_json(q) for q in specs]))
     results = tuple(clf.ask_many(items, workers=workers))
-    first_text = " ".join(str(v) for v in (requests[0].get("fields") or {}).values()) if requests else ""
+    first_fields: Mapping[str, object] = (requests[0].get("fields") or {}) if requests else {}
+    first_text = " ".join(str(v) for v in first_fields.values())
     return Asked(row=_stamp({
         "ts": datetime.now(UTC).isoformat(timespec="seconds"),
         "site": site,
@@ -999,7 +1071,9 @@ def _ask(payload, cfg, env=None, home=None, deadline=SHADOW_DEADLINE, workers=8)
     }, payload), results=results)
 
 
-def ask_in_hook(site, session_id, regex, requests, cfg, transcript="", workers=8) -> Asked:
+def ask_in_hook(site: str, session_id: object, regex: object, requests: Sequence[JsonObject],
+                cfg: Mapping[str, object], transcript: StrPath | None = "",
+                workers: int = 8) -> Asked:
     """Decide mode: ask Jev from inside the hook, under DEFAULT_DEADLINE. The `Asked` it returns
     carries the typed answers in `results` and, in `row`, the record a shadow child would have
     logged for the same request - same redaction, same fields. The caller decides on `results`,
@@ -1011,7 +1085,8 @@ def ask_in_hook(site, session_id, regex, requests, cfg, transcript="", workers=8
                 deadline=DEFAULT_DEADLINE, workers=workers)
 
 
-def decided_row(site, session_id, regex, transcript=""):
+def decided_row(site: str, session_id: object, regex: object,
+                transcript: StrPath | None = "") -> dict[str, object]:
     """The row for a decide-mode turn settled WITHOUT asking Jev (the keywords already decided):
     the regex verdict, no answers. The caller adds how it decided and appends it."""
     payload = _payload(site, session_id, regex, [], transcript)
@@ -1021,7 +1096,8 @@ def decided_row(site, session_id, regex, transcript=""):
                    "states": []}, payload)
 
 
-def stop_signal_firings(result: Result | None, *, user_message, threshold=None) -> list[str]:
+def stop_signal_firings(result: Result | None, *, user_message: str | None,
+                        threshold: float | None = None) -> list[str]:
     """The learning families one Stop-gate answer fires on, sorted: each scored at least
     `threshold` (the site's own by default), `NON_FIRING_FAMILIES` excluded, and a family in
     `MIN_PROMPT_CHARS` only when `user_message` is at least that long once stripped."""
@@ -1042,10 +1118,10 @@ def choice_answer(result: Result | None) -> tuple[object, object, dict[str, obje
     pick = result.answers.get(PICK_ID)
     probabilities = pick.probabilities if pick is not None else None
     return (None if gate is None else gate.value, None if pick is None else pick.value,
-            probabilities if isinstance(probabilities, dict) else {})
+            probabilities if _is_json_object(probabilities) else {})
 
 
-def append_row(record):
+def append_row(record: Mapping[str, object]) -> None:
     """Append one row to today's shadow log (pruning as every append does). Never raises."""
     try:
         _append_log(record)
@@ -1053,12 +1129,12 @@ def append_row(record):
         pass
 
 
-def shadow_log_path(audit, now):
+def shadow_log_path(audit: StrPath, now: datetime) -> Path:
     """The day file a row logged at `now` (an aware UTC datetime) is appended to."""
     return Path(audit) / ("%s%s.jsonl" % (SHADOW_DAY_PREFIX, now.strftime("%Y-%m-%d")))
 
 
-def shadow_log_files(audit):
+def shadow_log_files(audit: StrPath) -> list[Path]:
     """Every shadow log in `audit`, oldest rows first: the undated SHADOW_LOG, then the day files.
 
     Day files sort by name because the date in it is fixed-width. A missing dir lists nothing.
@@ -1071,7 +1147,7 @@ def shadow_log_files(audit):
     return [Path(audit) / n for n in legacy + sorted(n for n in names if _SHADOW_DAY_RE.match(n))]
 
 
-def _log_day(path):
+def _log_day(path: Path) -> date:
     """The UTC date a log's newest row was written on: from the name, or the undated file's mtime."""
     m = _SHADOW_DAY_RE.match(path.name)
     if m:
@@ -1079,7 +1155,7 @@ def _log_day(path):
     return datetime.fromtimestamp(path.stat().st_mtime, UTC).date()
 
 
-def _unlink(path):
+def _unlink(path: Path) -> bool:
     """True when `path` is gone afterwards. A concurrent prune may have removed it first, and on
     Windows a file another process holds open refuses; the next append retries that one."""
     try:
@@ -1091,13 +1167,15 @@ def _unlink(path):
     return True
 
 
-def prune_shadow_logs(audit, now, keep_days=SHADOW_KEEP_DAYS, max_bytes=SHADOW_MAX_BYTES):
+def prune_shadow_logs(audit: StrPath, now: datetime, keep_days: int = SHADOW_KEEP_DAYS,
+                      max_bytes: int = SHADOW_MAX_BYTES) -> list[Path]:
     """Delete whole logs older than `keep_days` UTC days, then the oldest until the rest fit in
     `max_bytes`. The current day's file is never deleted, even when it alone is over the cap.
     Returns the paths it removed. Never raises for a file that vanished or will not go."""
     today = shadow_log_path(audit, now)
     oldest_kept = (now - timedelta(days=keep_days - 1)).date()
-    removed, sized = [], []
+    removed: list[Path] = []
+    sized: list[tuple[Path, int]] = []
     for path in shadow_log_files(audit):
         try:
             day, size = _log_day(path), path.stat().st_size
@@ -1118,7 +1196,8 @@ def prune_shadow_logs(audit, now, keep_days=SHADOW_KEEP_DAYS, max_bytes=SHADOW_M
     return removed
 
 
-def _append_log(record, audit=None, now=None):
+def _append_log(record: Mapping[str, object], audit: StrPath | None = None,
+                now: datetime | None = None) -> None:
     d = Path(audit) if audit is not None else _audit_dir()
     now = now or datetime.now(UTC)
     d.mkdir(parents=True, exist_ok=True)
@@ -1127,18 +1206,18 @@ def _append_log(record, audit=None, now=None):
     prune_shadow_logs(d, now)
 
 
-def _shadow_main(argv):
+def _shadow_main(argv: Sequence[str]) -> int:
     """0 when the row was logged, 2 when the child could not run (an unreadable or malformed
     payload, an internal error): the error row is still appended, since the log is the only
     reader that sees it."""
     import self_improve_signals as sig  # noqa: PLC0415 - only the child needs the config reader
-    payload = {}
+    payload: Any = {}
     try:
         payload = _read_payload(argv)
         _append_log(run_shadow(payload, sig.load_config()))
     except Exception as exc:  # noqa: BLE001 - its only reader is the log, so the failure goes there
         try:
-            _append_log(_error_record(payload if isinstance(payload, dict) else {}, exc))
+            _append_log(_error_record(payload if _is_json_object(payload) else {}, exc))
         except Exception:  # noqa: BLE001 - nothing left to report to
             pass
         return 2
