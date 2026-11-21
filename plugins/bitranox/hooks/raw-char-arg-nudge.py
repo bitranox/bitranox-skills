@@ -61,6 +61,7 @@ import json
 import sys
 import unicodedata
 from pathlib import PurePath
+from typing import TypeIs
 
 from hook_event import parse_pre_tool_use
 import shell_text
@@ -143,7 +144,17 @@ def _python_blocks(text: str) -> str:
     return "\n".join(kept)
 
 
-def _lookalike_reports(tool_name: str, tool_input: dict) -> list[str]:
+def _is_object(value: object) -> TypeIs[dict[str, object]]:
+    """True for a decoded JSON object; its keys are always strings, so the narrowed type holds."""
+    return isinstance(value, dict)
+
+
+def _is_list(value: object) -> TypeIs[list[object]]:
+    """True for a decoded JSON array, whose elements are still unchecked."""
+    return isinstance(value, list)
+
+
+def _lookalike_reports(tool_name: str, tool_input: dict[str, object]) -> list[str]:
     """One "field: U+XXXX NAME (chr(0xXXXX)), ..." line per written .py / .md-python text with a lookalike."""
     path = tool_input.get("file_path")
     if tool_name not in _FILE_TOOLS or not isinstance(path, str):
@@ -168,16 +179,16 @@ def _label(character: str) -> str:
 
 def _texts(tool_name: str, tool_input: object) -> list[tuple[str, str]]:
     """(field, text) for every argument this tool writes."""
-    if not isinstance(tool_input, dict):
+    if not _is_object(tool_input):
         return []
     if tool_name == "MultiEdit":
         edits = tool_input.get("edits")
-        if not isinstance(edits, list):
+        if not _is_list(edits):
             return []
-        return [(f"edits[{i}].new_string", edit["new_string"]) for i, edit in enumerate(edits)
-                if isinstance(edit, dict) and isinstance(edit.get("new_string"), str)]
-    return [(field, tool_input[field]) for field in _FIELDS.get(tool_name, ())
-            if isinstance(tool_input.get(field), str)]
+        return [(f"edits[{i}].new_string", text) for i, edit in enumerate(edits)
+                if _is_object(edit) and isinstance(text := edit.get("new_string"), str)]
+    return [(field, text) for field in _FIELDS.get(tool_name, ())
+            if isinstance(text := tool_input.get(field), str)]
 
 
 def _reports(tool_name: str, tool_input: object) -> list[str]:
@@ -214,7 +225,7 @@ def _commits_or_tags(command: str, tool_name: str) -> bool:
                for _offset, segment in shell_text.iter_segments(executed, tool_name))
 
 
-def _permanent_target(tool_name: str, tool_input: dict) -> str | None:
+def _permanent_target(tool_name: str, tool_input: dict[str, object]) -> str | None:
     """What makes this call's text lasting (a commit, a source file), or None."""
     if tool_name in _SHELL_TOOLS:
         command = tool_input.get("command")
@@ -231,7 +242,7 @@ def _permanent_target(tool_name: str, tool_input: dict) -> str | None:
 
 def block_reason(tool_name: str, tool_input: object) -> str | None:
     """The refusal text when this call writes a flagged character where it is never wanted."""
-    if not isinstance(tool_input, dict):
+    if not _is_object(tool_input):
         return None
     lookalikes = _lookalike_reports(tool_name, tool_input)
     if lookalikes:
