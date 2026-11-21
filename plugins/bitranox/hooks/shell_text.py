@@ -65,12 +65,14 @@ A `tool_name` of None is legal at every function that takes one, and is typed `s
 """
 
 import bisect
+import enum
 import functools
 import os
 import re
 import sys
 from pathlib import PurePosixPath, PureWindowsPath
-from typing import TypeGuard
+from collections.abc import Iterator, Sequence
+from typing import Final, Self, TypeGuard
 
 # The delimiter of a heredoc is a whole shell WORD, not an identifier: bash accepts `<<\EOF`,
 # `<<'END-OF'`, `<<END.X`, `<<E"O"F` and `<<1`, and takes the word after quote removal as the
@@ -482,7 +484,7 @@ def git_verb_operands(tokens, verbs, tool_name: str | None = "Bash"):
     return tokens[idx + 1:]
 
 
-def argv_for_match(segment, tool_name: str | None = "Bash"):
+def argv_for_match(segment: str, tool_name: str | None = "Bash") -> list[str]:
     r"""Quote-aware argv for NAME MATCHING a command - never for resolving an operand.
 
     `segment.split()` is wrong wherever a global option's VALUE may be quoted and contain a
@@ -521,7 +523,7 @@ def argv_for_match(segment, tool_name: str | None = "Bash"):
         return text.split()
 
 
-def _drop_severed_continuation(text, tool_name: str | None):
+def _drop_severed_continuation(text: str, tool_name: str | None) -> str:
     """`text` without a final UNESCAPED backslash, under the POSIX reading only.
 
     An odd run of trailing backslashes ends in one that escapes nothing; an even run is escaped
@@ -534,7 +536,7 @@ def _drop_severed_continuation(text, tool_name: str | None):
     return body[:-1] if run % 2 else text
 
 
-def _without_comments(segment, tool_name: str | None):
+def _without_comments(segment: str, tool_name: str | None) -> str:
     """`segment` with every comment and unquoted line continuation turned into spaces.
 
     Both are exactly the regions `mask_data_regions` turns into SPACES rather than filler, so the
@@ -602,7 +604,8 @@ _REPO_OPTIONS = ("--git-dir", "--work-tree")
 _REPO_ENV = ("GIT_DIR=", "GIT_WORK_TREE=")
 
 
-def _readable_dir(target, base, msys_drives=False, unknown_mounts=True):
+def _readable_dir(target: str | None, base: str | None, msys_drives: bool = False,
+                  unknown_mounts: bool = True) -> str | None:
     """Where `cd target` (or `git -C target`) lands from `base`, or None when it cannot be read.
 
     Unreadable: no target (a bare `cd` goes to HOME), `-` ($OLDPWD), a tilde path (the HOME of the
@@ -617,7 +620,7 @@ def _readable_dir(target, base, msys_drives=False, unknown_mounts=True):
     return os.path.normpath(landing) if landing else None
 
 
-def reads_msys_drives(tool_name: str | None = "Bash", os_name=os.name):
+def reads_msys_drives(tool_name: str | None = "Bash", os_name: str = os.name) -> bool:
     """True when a path in `tool_name`'s command text spells a drive as Git Bash does. PURE.
 
     Claude Code's Bash tool is Git Bash on a Windows host, so there `cd /c/temp` (and a `/c/temp`
@@ -631,8 +634,9 @@ def reads_msys_drives(tool_name: str | None = "Bash", os_name=os.name):
     return os_name == "nt" and (tool_name or "Bash") == "Bash"
 
 
-def resolve_path(path, base, tool_name: str | None = "Bash", *, msys_drives=None,
-                 unknown_mounts=True, os_name=os.name):
+def resolve_path(path: str, base: str | None, tool_name: str | None = "Bash", *,
+                 msys_drives: bool | None = None, unknown_mounts: bool = True,
+                 os_name: str = os.name) -> str | None:
     """`path` as the shell finds it from `base`, not normalised, or None when that cannot be read:
     a relative `path` and no `base`, or a Git Bash mount that is not a drive.
 
@@ -656,7 +660,7 @@ def resolve_path(path, base, tool_name: str | None = "Bash", *, msys_drives=None
     return os.path.join(base, path) if base else None
 
 
-def is_rooted(path):
+def is_rooted(path: str) -> bool:
     """True when `cd path` lands in the same place whatever directory the shell is in.
 
     Not `os.path.isabs` alone: from Python 3.13 it answers False on Windows for a root with no
@@ -673,7 +677,7 @@ _MSYS_DRIVE = re.compile(r"^/([A-Za-z])(?=/|$)/*")
 _UNC_PATH = re.compile(r"^//[^/]")
 
 
-def is_msys_mount(path, windows):
+def is_msys_mount(path: str, windows: bool) -> bool:
     """True when `windows` is True and `path` is a rooted Git Bash path that is neither a drive
     path (`/c/...`) nor a UNC path (`//server/share`): `/tmp/x`, `/usr/bin`, `/`, `/cygdrive/c`.
     PURE.
@@ -688,7 +692,7 @@ def is_msys_mount(path, windows):
             and not _UNC_PATH.match(path))
 
 
-def msys_drive_path(path, windows):
+def msys_drive_path(path: str, windows: bool) -> str:
     """`path` with a Git Bash drive prefix spelled as Windows spells it (`/c/temp` -> `C:/temp`)
     when `windows` is True, else `path` unchanged. PURE.
 
@@ -709,7 +713,8 @@ def msys_drive_path(path, windows):
     return match.group(1).upper() + ":/" + path[match.end():]
 
 
-def msys_drive_path_for_tool(path, tool_name: str | None = "Bash", os_name=os.name):
+def msys_drive_path_for_tool(path: str, tool_name: str | None = "Bash",
+                             os_name: str = os.name) -> str | None:
     """`path` as `tool_name`'s shell on this host reaches it, for a caller reading ONE word, or
     None for a Git Bash mount no reader can place (`is_msys_mount`: `/tmp/x` on Windows). PURE.
 
@@ -741,7 +746,7 @@ def is_work_tree_root(directory: str | os.PathLike[str]) -> bool:
         return False
 
 
-def _cd_target(args):
+def _cd_target(args: Sequence[str]) -> str | None:
     """The destination operand of a cd-like command, its own options skipped.
 
     Taking the first word as the target read `cd -P <dir>` as a cd into "<previous>/-P".
@@ -758,8 +763,9 @@ def _cd_target(args):
 _STACK_ROTATION = re.compile(r"^[+-]\d+$")
 
 
-def directory_change(statement, here, tool_name: str | None = "Bash", *, expand_home=False,
-                     msys_drives=None, unknown_mounts=True):
+def directory_change(statement: str | None, here: str | None, tool_name: str | None = "Bash",
+                     *, expand_home: bool = False, msys_drives: bool | None = None,
+                     unknown_mounts: bool = True) -> tuple[bool, str | None]:
     """(changes, landing) for ONE statement: does it move the shell's directory, and to where.
 
     THE cd reader. Four nudges once carried a private regex each, and they had drifted in every
@@ -790,8 +796,9 @@ def directory_change(statement, here, tool_name: str | None = "Bash", *, expand_
     return _directory_change_tokens(tokens, here, tool, expand_home, msys_drives, unknown_mounts)
 
 
-def _directory_change_tokens(tokens, here, tool, expand_home=False, msys_drives=None,
-                             unknown_mounts=True):
+def _directory_change_tokens(tokens: Sequence[str], here: str | None, tool: str,
+                             expand_home: bool = False, msys_drives: bool | None = None,
+                             unknown_mounts: bool = True) -> tuple[bool, str | None]:
     """`directory_change` on an argv the caller already split."""
     if msys_drives is None:
         msys_drives = reads_msys_drives(tool)
@@ -1016,8 +1023,17 @@ class _SubshellTracker:
         return here
 
 
-#: `git_verb_dir`'s "no verb answer held yet": None is itself an answer (unreadable).
-_NOT_HELD = object()
+class _Held(enum.Enum):
+    """`git_verb_dir`'s "no verb answer held yet": None is itself an answer (unreadable).
+
+    An enum member rather than a bare `object()`, so `held is not _NOT_HELD` narrows `held` to the
+    answer it holds and the function's `str | None` return is checked, not inferred as object.
+    """
+
+    NOTHING = enum.auto()
+
+
+_NOT_HELD: Final = _Held.NOTHING
 
 #: Keywords that open a block whose body may not run, or may run again: kind each one closes with.
 _BLOCK_OPENERS = {"if": "if", "while": "loop", "until": "loop", "for": "loop", "select": "loop"}
@@ -1214,7 +1230,8 @@ class _BodyTracker:
         self.unknown = self.unknown or (in_case and _moves_the_shell(tokens, self.tool))
 
 
-def git_verb_dir(command, cwd, verbs, tool_name: str | None = None, *, msys_drives=None):
+def git_verb_dir(command, cwd, verbs, tool_name: str | None = None, *,
+                 msys_drives=None) -> str | None:
     """The directory the first `git <verb>` in `command` runs in, or None when it is unreadable.
 
     Follows every cd-like statement before the verb, then the verb's own `-C` values, starting from
@@ -1281,7 +1298,7 @@ def git_verb_dir(command, cwd, verbs, tool_name: str | None = None, *, msys_driv
     known, leading, previous_end = {}, tool == "Bash", 0
     subshells, gap_start, cdpath_set, home_set = _SubshellTracker(), 0, False, False
     bodies, chain, statement_end = _BodyTracker(tool), _AndOrList(), 0
-    held = _NOT_HELD    # a verb's answer found inside a loop, kept until the loop closes
+    held: str | None | _Held = _NOT_HELD    # a verb's answer found inside a loop, kept until the loop closes
     for index, (at, segment) in enumerate(segments):
         # Measured from the last STATEMENT, not the last segment: `a &&\n b` has an empty segment
         # between its `&&` and its newline, and the newline does not end the list there.
@@ -1406,22 +1423,23 @@ class ShellWord(str):
 
     unquoted_lead: int
 
-    def __new__(cls, value, unquoted_lead):
+    def __new__(cls, value: str, unquoted_lead: int) -> Self:
         word = super().__new__(cls, value)
         word.unquoted_lead = unquoted_lead
         return word
 
-    def __getnewargs__(self):
+    def __getnewargs__(self) -> tuple[str, int]:
         return str(self), self.unquoted_lead     # copy and pickle call __new__ with these
 
 
 class _WordBuilder:
     """The characters of one word as they are read, and how long its unquoted lead runs."""
 
-    def __init__(self):
-        self.parts, self.lead, self.lead_open = [], 0, True
+    def __init__(self) -> None:
+        self.parts: list[str] = []
+        self.lead, self.lead_open = 0, True
 
-    def add(self, text, bare):
+    def add(self, text: str, bare: bool) -> None:
         if not text:
             return
         self.parts.append(text)
@@ -1430,7 +1448,7 @@ class _WordBuilder:
         elif self.lead_open:
             self.lead += len(text)
 
-    def word(self):
+    def word(self) -> ShellWord:
         return ShellWord("".join(self.parts), self.lead)
 
 
@@ -1438,7 +1456,7 @@ _POSIX_BLANKS = " \t\r\n"
 _POSIX_QUOTES = "'\""
 
 
-def _posix_words(text, comments=False):
+def _posix_words(text: str, comments: bool = False) -> list[str]:
     """`shlex.split(text, comments=comments)` as `ShellWord`s, with the same words and errors.
 
     A port of shlex's POSIX `read_token` for the whitespace-split mode `shlex.split` uses, so the
@@ -1446,7 +1464,8 @@ def _posix_words(text, comments=False):
     had, which shlex drops. Raises ValueError("No closing quotation") and ValueError("No escaped
     character") where shlex does.
     """
-    words, at = [], 0
+    words: list[str] = []
+    at = 0
     while True:
         word, at = _posix_word(text, at, comments)
         if word is None:
@@ -1454,7 +1473,7 @@ def _posix_words(text, comments=False):
         words.append(word)
 
 
-def _posix_word(text, at, comments):
+def _posix_word(text: str, at: int, comments: bool) -> tuple[ShellWord | None, int]:
     """(the next word from `at`, the index after it), or (None, len(text)) past the last word."""
     built, state, back, n = _WordBuilder(), " ", "a", len(text)
     while at < n:
@@ -1498,7 +1517,7 @@ def _after_line(text, at):
     return len(text) if end < 0 else end + 1
 
 
-def _windows_command_argv(command):
+def _windows_command_argv(command: str) -> list[str]:
     r"""Split a Windows command line by the documented C-runtime rules.
 
     Pure Python rather than `CommandLineToArgvW`, unlike the copy in `harness_checks`: that one
@@ -1515,7 +1534,8 @@ def _windows_command_argv(command):
     string is PowerShell before any C runtime sees it: `-newermt '-3 minutes'` is one argument,
     and splitting it at the space made two hooks each keep a private re-join.
     """
-    args, cur, in_quotes, started, i, n = [], _WordBuilder(), False, False, 0, len(command)
+    args: list[str] = []
+    cur, in_quotes, started, i, n = _WordBuilder(), False, False, 0, len(command)
     while i < n:
         ch = command[i]
         if ch == "\\":
@@ -1577,7 +1597,8 @@ def _powershell_single_quoted(command, start):
     return None, start
 
 
-def split_for_tool(command, tool_name: str | None = "Bash", comments=False):
+def split_for_tool(command: str, tool_name: str | None = "Bash",
+                   comments: bool = False) -> list[str]:
     r"""Split a tool's `tool_input.command` into argv, by the TOOL's language, never the host OS.
 
     A hook on a `Bash|PowerShell` matcher receives two different languages. The Bash tool is a
@@ -1607,7 +1628,7 @@ def split_for_tool(command, tool_name: str | None = "Bash", comments=False):
     return _posix_words(_join_line_continuations(command), comments=comments)
 
 
-def _join_line_continuations(command):
+def _join_line_continuations(command: str) -> str:
     r"""`command` with every unquoted backslash-newline removed, as bash removes it before splitting.
 
     shlex does not: it keeps the newline as part of the NEXT token, so `status && \<newline>git
@@ -1619,7 +1640,8 @@ def _join_line_continuations(command):
     if "\\\n" not in command:
         return command
     masked = mask_data_regions(command)
-    out, i, n = [], 0, len(command)
+    out: list[str] = []
+    i, n = 0, len(command)
     while i < n:
         if command.startswith("\\\n", i) and masked[i:i + 2] == "  ":
             i += 2
@@ -1918,7 +1940,7 @@ def strip_leading_cd(command: str) -> str:
     return command
 
 
-def iter_heredocs(command: str):
+def iter_heredocs(command: str) -> Iterator[tuple[int, re.Match[str], tuple[int, int]]]:
     """Yield (line, opener, body) for every heredoc the shell would open in `command`.
 
     `line` is the opener's index in `command.split("\\n")`, `opener` its `HEREDOC_OPEN` match on
@@ -1969,11 +1991,11 @@ class _HeredocScan:
             self.starts.append(self.starts[-1] + len(line) + 1)
         self.stack: list[str] = []
         self.backticks = 0
-        self.pending: list[tuple[int, re.Match]] = []
+        self.pending: list[tuple[int, re.Match[str]]] = []
         self.escaped_end = -1
         self.parens: dict[int, int] | None = None
 
-    def run(self):
+    def run(self) -> Iterator[tuple[int, re.Match[str], tuple[int, int]]]:
         i, size = 0, len(self.text)
         while i < size:
             found, i = self._step(i)
