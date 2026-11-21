@@ -53,6 +53,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import NamedTuple
 
+from hook_event import PostToolUseFailureEvent, PreToolUseEvent, parse_post_tool_use_failure
 from shell_text import (
     basename_for_tool,
     blank_heredoc_bodies,
@@ -314,9 +315,10 @@ def notice(pending_command, recorded, tool_name="Bash"):
     return None
 
 
-def _record(event) -> int:
+def _record(event: PostToolUseFailureEvent) -> int:
     """PostToolUseFailure: remember the shape of the command that failed."""
-    if not is_shell_tool(event.get("tool_name")) or event.get("is_interrupt"):
+    tool_name = event.get("tool_name")
+    if not is_shell_tool(tool_name) or event.get("is_interrupt"):
         return 0                                          # an interrupt is the user, not a failure
     command = (event.get("tool_input") or {}).get("command")
     # A compound's failure names no culprit: an earlier statement may be the one that failed, or
@@ -324,9 +326,9 @@ def _record(event) -> int:
     # later `git rev-parse --verify -q --short HEAD` it "already FAILED" when the failed compound's
     # rev-parse never ran. Recording the compound's full shape instead was the alternative; over the
     # real corpus it would have kept exactly one more firing, so the simpler rule wins.
-    if not isinstance(command, str) or not is_single_statement(command, event.get("tool_name")):
+    if not isinstance(command, str) or not is_single_statement(command, tool_name):
         return 0
-    current = shape(command, event.get("tool_name"))
+    current = shape(command, tool_name)
     if not current:
         return 0
     # Both sides are `CommandShape`s, so the dedup compares like with like. Comparing a stored JSON
@@ -340,16 +342,16 @@ def _record(event) -> int:
     return 0
 
 
-def _judge(event) -> int:
+def _judge(event: PreToolUseEvent) -> int:
     """PreToolUse: warn when the pending command re-runs a failed one with a flag added."""
-    if not is_shell_tool(event.get("tool_name")):
+    tool_name = event.get("tool_name")
+    if not is_shell_tool(tool_name):
         return 0
     session = str(event.get("session_id") or "")
     state = _load(session)
     if state.fired >= FIRE_CAP:
         return 0
-    message = notice((event.get("tool_input") or {}).get("command"), state.failed,
-                     event.get("tool_name"))
+    message = notice((event.get("tool_input") or {}).get("command"), state.failed, tool_name)
     if not message:
         return 0
     _save(session, replace(state, fired=state.fired + 1))
@@ -360,10 +362,10 @@ def _judge(event) -> int:
 
 def main() -> int:
     try:
-        event = json.load(sys.stdin)
+        event = parse_post_tool_use_failure(json.load(sys.stdin))
     except Exception:  # noqa: BLE001 - no/invalid stdin: do nothing
         return 0
-    if not isinstance(event, dict):
+    if event is None:
         return 0
     if event.get("hook_event_name") == "PostToolUseFailure":
         return _record(event)

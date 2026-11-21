@@ -44,6 +44,7 @@ import sys
 from pathlib import Path
 
 import claude_paths
+from hook_event import StopEvent, parse_stop
 from self_improve_signals import git_scoped as _git
 from self_improve_signals import main_checkout_root, project_slug, session_state_path
 
@@ -278,7 +279,7 @@ def _logged_ids(path):
     return ids
 
 
-def on_stop(event, now):
+def on_stop(event: StopEvent, now: str) -> None:
     """Log the plan-rejection remarks the transcript gained since the previous Stop."""
     transcript, session = event.get("transcript_path"), event.get("session_id")
     if not isinstance(transcript, str) or not transcript or not isinstance(session, str):
@@ -324,8 +325,9 @@ def main() -> int:
     except Exception:  # noqa: BLE001 - no/invalid stdin: nothing to log
         return 0
     now = datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
-    if isinstance(event, dict) and event.get("hook_event_name") == "Stop":
-        on_stop(event, now)
+    stop = parse_stop(event)
+    if stop is not None and stop.get("hook_event_name") == "Stop":
+        on_stop(stop, now)
         return 0
     rows = records(event, now)
     if not rows:

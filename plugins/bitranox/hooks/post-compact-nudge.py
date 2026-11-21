@@ -32,16 +32,17 @@ import json
 import os
 import sys
 
+from hook_event import HookEventBase, parse_hook_event
 from self_improve_signals import mark_nap_owed
 
 
-def _read_event():
+def _read_event() -> HookEventBase:
     """The event object, or {} for anything else - no stdin, invalid JSON, or a non-object value."""
     try:
-        event = json.load(sys.stdin)
+        event = parse_hook_event(json.load(sys.stdin))
     except Exception:  # noqa: BLE001 - no/invalid stdin: fall back, never wedge
         return {}
-    return event if isinstance(event, dict) else {}
+    return event if event is not None else {}
 
 
 def main():

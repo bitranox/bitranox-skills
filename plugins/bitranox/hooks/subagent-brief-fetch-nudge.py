@@ -88,6 +88,7 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from hook_event import parse_pre_tool_use
 
 SUBAGENT_TOOLS = {"Task", "Agent"}
 
@@ -300,10 +301,10 @@ def assess(tool_name, tool_input) -> str | None:
 
 def main() -> int:
     try:
-        event = json.load(sys.stdin)
+        event = parse_pre_tool_use(json.load(sys.stdin))
     except Exception:  # noqa: BLE001 - no/invalid stdin: do nothing
         return 0
-    if not isinstance(event, dict):
+    if event is None:
         return 0
     message = assess(event.get("tool_name"), event.get("tool_input"))
     if message:

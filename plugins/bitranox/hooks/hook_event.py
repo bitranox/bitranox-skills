@@ -29,13 +29,18 @@ from typing import TypedDict, TypeIs
 __all__ = [
     "EditEntry",
     "HookEventBase",
+    "PostToolBatchEvent",
     "PostToolUseEvent",
+    "PostToolUseFailureEvent",
     "PreToolUseEvent",
     "StopEvent",
     "ToolInput",
     "ToolResponse",
     "UserPromptSubmitEvent",
+    "parse_hook_event",
+    "parse_post_tool_batch",
     "parse_post_tool_use",
+    "parse_post_tool_use_failure",
     "parse_pre_tool_use",
     "parse_stop",
     "parse_tool_input",
@@ -71,18 +76,23 @@ class ToolInput(TypedDict, total=False):
     edits: list[EditEntry]
     prompt: str
     name: str
+    subagent_type: str
+    model: str
+    effort: str
     to: str
     task_id: str
     shell_id: str
 
 
 class ToolResponse(TypedDict, total=False):
-    """The `tool_response` fields a PostToolUse hook reads (a Bash call's output)."""
+    """The `tool_response` fields a PostToolUse hook reads: a Bash call's output, and the text a
+    Write replaced (`originalFile`)."""
 
     stdout: str
     stderr: str
     interrupted: bool
     backgroundTaskId: str
+    originalFile: str
 
 
 class HookEventBase(TypedDict, total=False):
@@ -109,6 +119,23 @@ class PostToolUseEvent(PreToolUseEvent, total=False):
     """A PostToolUse event: the call that ran, with its response."""
 
     tool_response: ToolResponse
+
+
+class PostToolUseFailureEvent(PreToolUseEvent, total=False):
+    """A PostToolUseFailure event: the call that failed, and whether the user interrupted it."""
+
+    error: str
+    is_interrupt: bool
+
+
+class PostToolBatchEvent(HookEventBase, total=False):
+    """A PostToolBatch event: every call of the batch that just finished.
+
+    Each element stays as it was decoded: a call's `tool_response` is a string for one tool and an
+    object for another, and the hook that reads the batch already checks each element itself.
+    """
+
+    tool_calls: list[object]
 
 
 class StopEvent(HookEventBase, total=False):
@@ -207,6 +234,12 @@ def parse_tool_input(raw: object) -> ToolInput | None:
         tool_input["prompt"] = value
     if (value := _text(raw, "name")) is not None:
         tool_input["name"] = value
+    if (value := _text(raw, "subagent_type")) is not None:
+        tool_input["subagent_type"] = value
+    if (value := _text(raw, "model")) is not None:
+        tool_input["model"] = value
+    if (value := _text(raw, "effort")) is not None:
+        tool_input["effort"] = value
     if (value := _text(raw, "to")) is not None:
         tool_input["to"] = value
     if (value := _text(raw, "task_id")) is not None:
@@ -235,6 +268,8 @@ def _parse_tool_response(raw: object) -> ToolResponse | None:
         response["interrupted"] = interrupted
     if (task := _text(raw, "backgroundTaskId")) is not None:
         response["backgroundTaskId"] = task
+    if (original := _text(raw, "originalFile")) is not None:
+        response["originalFile"] = original
     return response
 
 
@@ -358,4 +393,85 @@ def parse_user_prompt_submit(raw: object) -> UserPromptSubmitEvent | None:
     _fill_base(raw, event)
     if (prompt := _text(raw, "prompt")) is not None:
         event["prompt"] = prompt
+    return event
+
+
+def parse_hook_event(raw: object) -> HookEventBase | None:
+    """Narrow a payload whose readers need only the fields every event carries.
+
+    SubagentStart (its `agent_type`) and PostCompact (its `cwd`, `session_id` and
+    `transcript_path`) are read this way: no hook here reads a field of theirs beyond the common
+    ones, so a shape of their own would declare nothing more.
+
+    Args:
+        raw: What `json.load` returned for the hook's stdin.
+
+    Returns:
+        The common fields that hold the declared type, or None for a non-object.
+
+    Examples:
+        >>> parse_hook_event({"hook_event_name": "SubagentStart", "agent_type": "Explore"})
+        {'hook_event_name': 'SubagentStart', 'agent_type': 'Explore'}
+        >>> parse_hook_event({"agent_type": ["Explore"]})
+        {}
+    """
+    if not _is_object(raw):
+        return None
+    event: HookEventBase = {}
+    _fill_base(raw, event)
+    return event
+
+
+def parse_post_tool_use_failure(raw: object) -> PostToolUseFailureEvent | None:
+    """Narrow a PostToolUseFailure payload; None when it is not a JSON object.
+
+    A PreToolUse payload parses too, to the fields the two share, so a hook registered for both
+    events can read either through this one function.
+
+    Args:
+        raw: What `json.load` returned for the hook's stdin.
+
+    Returns:
+        The declared fields that hold the declared type, or None for a non-object.
+
+    Examples:
+        >>> parse_post_tool_use_failure({"tool_name": "Bash", "is_interrupt": True})
+        {'tool_name': 'Bash', 'is_interrupt': True}
+        >>> parse_post_tool_use_failure({"is_interrupt": "yes", "error": 2})
+        {}
+    """
+    if not _is_object(raw):
+        return None
+    event: PostToolUseFailureEvent = {}
+    _fill_tool_call(raw, event)
+    if (error := _text(raw, "error")) is not None:
+        event["error"] = error
+    if (interrupt := _flag(raw, "is_interrupt")) is not None:
+        event["is_interrupt"] = interrupt
+    return event
+
+
+def parse_post_tool_batch(raw: object) -> PostToolBatchEvent | None:
+    """Narrow a PostToolBatch payload; None when it is not a JSON object.
+
+    Args:
+        raw: What `json.load` returned for the hook's stdin.
+
+    Returns:
+        The common fields and the `tool_calls` list that hold the declared type, or None for a
+        non-object. The list's elements are kept as decoded.
+
+    Examples:
+        >>> parse_post_tool_batch({"hook_event_name": "PostToolBatch", "tool_calls": [{"a": 1}, 2]})
+        {'hook_event_name': 'PostToolBatch', 'tool_calls': [{'a': 1}, 2]}
+        >>> parse_post_tool_batch({"tool_calls": {"a": 1}})
+        {}
+    """
+    if not _is_object(raw):
+        return None
+    event: PostToolBatchEvent = {}
+    _fill_base(raw, event)
+    calls = raw.get("tool_calls")
+    if _is_array(calls):
+        event["tool_calls"] = calls
     return event

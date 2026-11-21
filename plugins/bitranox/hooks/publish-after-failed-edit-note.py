@@ -29,6 +29,7 @@ import json
 import re
 import sys
 
+from hook_event import parse_post_tool_batch
 from shell_text import is_gated_command, is_shell_tool
 
 EDIT_TOOLS = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit"})
@@ -98,10 +99,10 @@ def note(pairs):
 
 def main() -> int:
     try:
-        event = json.load(sys.stdin)
+        event = parse_post_tool_batch(json.load(sys.stdin))
     except Exception:  # noqa: BLE001 - no/invalid stdin: do nothing
         return 0
-    if not isinstance(event, dict) or event.get("hook_event_name") != "PostToolBatch":
+    if event is None or event.get("hook_event_name") != "PostToolBatch":
         return 0
     pairs = findings(event.get("tool_calls"))
     if pairs:

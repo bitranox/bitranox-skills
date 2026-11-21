@@ -51,6 +51,8 @@ error. Pure standard library, ASCII only; launched via run-python.sh so it works
 import json
 import sys
 
+from hook_event import parse_hook_event
+
 # Agent types that must receive NOTHING. Matched case-insensitively against `agent_type`, both bare
 # and plugin-scoped, because a dispatch may name either form.
 #
@@ -98,10 +100,10 @@ def brief_for(agent_type):
 
 def main() -> int:
     try:
-        event = json.load(sys.stdin)
+        event = parse_hook_event(json.load(sys.stdin))
     except Exception:  # noqa: BLE001 - no/invalid stdin: do nothing
         return 0
-    if not isinstance(event, dict):
+    if event is None:
         return 0
     text = brief_for(event.get("agent_type"))
     if not text:

@@ -57,6 +57,7 @@ import re
 import sys
 from pathlib import Path
 
+from hook_event import parse_pre_tool_use
 import claude_paths
 import skill_receipt
 
@@ -306,10 +307,10 @@ def assess(tool_name, tool_input, plan_armed=False, definition_model=None):
 
 def main():
     try:
-        event = json.load(sys.stdin)
+        event = parse_pre_tool_use(json.load(sys.stdin))
     except Exception:  # noqa: BLE001 - no/invalid stdin: do nothing
         return 0
-    if not isinstance(event, dict):
+    if event is None:
         return 0
     try:
         # The EVENT's session: a plan armed in another session must not deny dispatches here.
@@ -319,7 +320,7 @@ def main():
     tool_input = event.get("tool_input") or {}
     try:
         definition_model = agent_definition_model(
-            tool_input.get("subagent_type") if isinstance(tool_input, dict) else None,
+            tool_input.get("subagent_type"),
             project_dir=os.environ.get("CLAUDE_PROJECT_DIR") or event.get("cwd"))
     except Exception:  # noqa: BLE001 - an unreadable definition leaves the dispatch unpinned
         definition_model = None

@@ -30,6 +30,7 @@ import os
 import subprocess
 import sys
 
+from hook_event import parse_pre_tool_use
 from shell_text import (
     git_verb_dir,
     is_git_verb,
@@ -102,8 +103,10 @@ def _behind_count(cwd):
 
 def main():
     try:
-        event = json.load(sys.stdin)
+        event = parse_pre_tool_use(json.load(sys.stdin))
     except Exception:  # noqa: BLE001 - no/invalid stdin: do nothing
+        return 0
+    if event is None:
         return 0
     command = (event.get("tool_input") or {}).get("command") or ""
     tool_name = event.get("tool_name")

@@ -52,6 +52,7 @@ import unicodedata
 from collections import namedtuple
 
 import tell_chars
+from hook_event import parse_post_tool_use
 
 _MAX_LISTED = 20
 _MAX_READ = 8 * 1024 * 1024
@@ -197,14 +198,14 @@ def _report(path, tool_name, found):
 
 def main() -> int:
     try:
-        event = json.load(sys.stdin)
+        event = parse_post_tool_use(json.load(sys.stdin))
     except Exception:
         return 0
-    if not isinstance(event, dict):
+    if event is None:
         return 0
     tool_name = event.get("tool_name")
     tool_input = event.get("tool_input")
-    if not isinstance(tool_input, dict):
+    if tool_input is None:
         return 0
     path = tool_input.get("file_path")
     if not isinstance(path, str) or not path or tell_chars.is_prose_path(path):

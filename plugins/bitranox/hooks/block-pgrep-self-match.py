@@ -74,6 +74,7 @@ import json
 import re
 import sys
 
+from hook_event import parse_pre_tool_use
 import shell_text
 from shell_text import (
     argv_for_match,
@@ -756,8 +757,10 @@ _PS_CALL = re.compile(r"(?<![\w-])ps(?![\w.-])")
 
 def main() -> int:
     try:
-        data = json.load(sys.stdin)
+        data = parse_pre_tool_use(json.load(sys.stdin))
     except Exception:
+        return 0
+    if data is None:
         return 0
     cmd = (data.get("tool_input") or {}).get("command") or ""
     if not cmd:

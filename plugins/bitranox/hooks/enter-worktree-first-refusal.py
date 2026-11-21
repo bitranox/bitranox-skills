@@ -23,6 +23,7 @@ Exit 0 always; the refusal is a permissionDecision on stdout. ASCII only.
 import json
 import sys
 
+from hook_event import parse_pre_tool_use
 from self_improve_signals import session_state_path
 
 _REFUSED_FLAG = ".enter-worktree-refused"
@@ -65,10 +66,10 @@ def should_refuse(session):
 
 def main() -> int:
     try:
-        event = json.load(sys.stdin)
+        event = parse_pre_tool_use(json.load(sys.stdin))
     except Exception:  # noqa: BLE001 - no/invalid stdin: do nothing
         return 0
-    if not isinstance(event, dict) or event.get("tool_name") != "EnterWorktree":
+    if event is None or event.get("tool_name") != "EnterWorktree":
         return 0
     if should_refuse(event.get("session_id")):
         sys.stdout.write(json.dumps({"hookSpecificOutput": {

@@ -23,6 +23,7 @@ works on Windows too. ASCII only.
 import json
 import re
 import sys
+from hook_event import parse_pre_tool_use
 
 SUBAGENT_TOOLS = {"Task", "Agent"}
 
@@ -207,10 +208,10 @@ def assess(tool_name, tool_input=None):
 
 def main():
     try:
-        event = json.load(sys.stdin)
+        event = parse_pre_tool_use(json.load(sys.stdin))
     except Exception:  # noqa: BLE001 - no/invalid stdin: do nothing
         return 0
-    if not isinstance(event, dict):
+    if event is None:
         return 0
     action, message = assess(event.get("tool_name"), event.get("tool_input"))
     if action == "deny":
