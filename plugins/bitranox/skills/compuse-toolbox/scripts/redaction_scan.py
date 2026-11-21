@@ -76,10 +76,10 @@ from _cli_envelope import EXIT_ERROR, EXIT_NO, EXIT_YES, EnvelopeArgumentParser,
 from pushcheck import (
     PushCheckError,
     Rule,
-    _changed_lines,
     RuleList,
     added_lines,
     binary_files,
+    changed_lines,
     fold_case,
     parse_rules,
     range_diff,
@@ -194,7 +194,7 @@ def re_padded_lines(diff: str) -> set[tuple[str, int]]:
     """
     padded: set[tuple[str, int]] = set()
     for section in _sections(diff):
-        changed = list(_changed_lines(section))
+        changed = list(changed_lines(section))
         removed = Counter(_collapsed(text) for _, _, sign, text in changed if sign == "-")
         for path, lineno, sign, text in changed:
             key = _collapsed(text)

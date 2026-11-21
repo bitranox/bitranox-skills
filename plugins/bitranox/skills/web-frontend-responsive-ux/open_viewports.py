@@ -27,7 +27,7 @@ from pathlib import Path
 
 def _open_one(browser, prof, url, *, route_rules, storage_state):
     """Open one profile's window; return ``(page, loaded)``. A failed load is reported, not raised."""
-    from audit_responsive import _apply_routes
+    from audit_responsive import apply_routes
 
     ctx = browser.new_context(
         viewport={"width": prof["width"], "height": prof["height"]},
@@ -35,7 +35,7 @@ def _open_one(browser, prof, url, *, route_rules, storage_state):
         has_touch=prof["has_touch"], storage_state=storage_state,
     )
     page = ctx.new_page()
-    _apply_routes(page, route_rules)
+    apply_routes(page, route_rules)
     try:
         page.goto(url, wait_until="load", timeout=30000)  # let it fully paint before the next opens
         page.evaluate("t => { document.title = t; }", f"{prof['name']}  {prof['width']}x{prof['height']}")

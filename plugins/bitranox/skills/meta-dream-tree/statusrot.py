@@ -64,6 +64,12 @@ import uuid_store
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from tree_support import EnvelopeArgumentParser, store_anchor, utf8_stdio
 
+__all__ = ["PATTERNS", "PENDING_KINDS", "BaselineUnreadable", "LevelUnreadable", "Pointer",
+           "ScanResult", "TreeUnusable", "baseline_path", "chain_levels", "classify",
+           "cleared_digests", "fact_added_on", "facts_added_on", "hook_digest", "load_baseline",
+           "main", "new_or_changed", "parse_pointers", "read_baseline_strict", "read_level",
+           "scan", "self_contradiction", "tree_levels", "triage_pending"]
+
 PATTERNS: dict[str, re.Pattern[str]] = {
     "SHIPPED": re.compile(
         r"\b(shipped|deployed|landed|merged upstream|now folded|folded into|superseded|retired|"
@@ -174,7 +180,7 @@ class LevelUnreadable(Exception):
     """A level that could not be read; the message names its path and the reason."""
 
 
-def _read_level(path: Path) -> str:
+def read_level(path: Path) -> str:
     """The text of one level, or LevelUnreadable naming the path.
 
     A decode error's own text names a codec and a byte offset but never the file, so over a chain
@@ -199,7 +205,7 @@ def scan(levels: list[Path]) -> ScanResult:
     result = ScanResult()
     flagged: set[str] = set()
     for path in levels:
-        text = _read_level(path)
+        text = read_level(path)
         for ptr in parse_pointers(text, level=Path(path).parent.name or str(path)):
             result.total_pointers += 1
             for kind in classify(ptr):

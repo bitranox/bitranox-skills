@@ -35,6 +35,11 @@ import sys
 from contextlib import contextmanager
 from pathlib import Path
 
+__all__ = ["DEFAULT_AXE_URL", "EXIT_CANNOT_RUN", "EXIT_FINDINGS", "EXIT_PASS",
+           "PSEUDO_LOCALIZE_JS", "apply_routes", "audit_one_profile", "guess_content_type",
+           "launch_chromium", "launch_failure", "main", "make_console_safe", "parse_args",
+           "parse_route_specs", "run_audit", "select_profiles", "slugify"]
+
 # Pinned axe-core from a CDN; injected at runtime so nothing is vendored (and no
 # redistribution/attribution obligation). Override with --axe-url for an offline mirror.
 DEFAULT_AXE_URL = "https://cdnjs.cloudflare.com/ajax/libs/axe-core/4.10.2/axe.min.js"
@@ -144,7 +149,7 @@ def _make_route_handler(local_path):
     return handler
 
 
-def _apply_routes(page, route_rules):
+def apply_routes(page, route_rules):
     """Register request-interception overlays: fulfill matching URLs from local files."""
     for glob, local in route_rules:
         page.route(glob, _make_route_handler(local))
@@ -162,7 +167,7 @@ def audit_one_profile(browser, profile: dict, url: str, *, storage_state, axe_ur
         storage_state=storage_state,
     )
     page = context.new_page()
-    _apply_routes(page, route_rules)  # overlay local assets onto the (possibly remote) page
+    apply_routes(page, route_rules)  # overlay local assets onto the (possibly remote) page
     raw: dict = {}
     try:
         page.goto(url, wait_until="networkidle", timeout=30000)

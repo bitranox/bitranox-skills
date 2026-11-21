@@ -1,7 +1,10 @@
 """Tests for open_viewports: the guard paths, and open_windows/main with a scripted browser."""
 
+import ast
 import inspect
+from pathlib import Path
 
+import audit_responsive
 import open_viewports as ov
 from responsive_fake_browser import MISSING_EXECUTABLE, MISSING_HOST_DEPS, Script, fake_launcher
 
@@ -119,3 +122,19 @@ def _laptop():
     import device_profiles
 
     return device_profiles.profile_by_name("Laptop 1440")
+
+
+def _names_imported_from(source: Path, module: str) -> set[str]:
+    """Every name any `from <module> import ...` in `source` takes, function-local ones included."""
+    tree = ast.parse(source.read_text(encoding="utf-8"))
+    return {alias.name for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module == module
+            for alias in node.names}
+
+
+def test_every_name_taken_from_audit_responsive_is_its_public_api() -> None:
+    # The imports are function-local (Playwright loads only when a window opens), so an
+    # import-time check would never see them; read the source instead.
+    taken = _names_imported_from(Path(ov.__file__), "audit_responsive")
+    assert taken, "open_viewports no longer imports from audit_responsive; nothing to check"
+    assert taken <= set(audit_responsive.__all__), sorted(taken - set(audit_responsive.__all__))

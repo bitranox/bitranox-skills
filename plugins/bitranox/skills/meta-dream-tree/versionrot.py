@@ -97,9 +97,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from statusrot import (  # noqa: E402
     LevelUnreadable,
     TreeUnusable,
-    _read_level,
     chain_levels,
     parse_pointers,
+    read_level,
     tree_levels,
 )
 from tree_support import store_anchor, utf8_stdio  # noqa: E402
@@ -502,7 +502,7 @@ def scan_facts(levels: list[Path], store: Path | None, reg: Registry,
     seen: dict[str, FactReport] = {}
     asked: set[str] = set()
     for path in levels:
-        for ptr in parse_pointers(_read_level(path), level=str(Path(path).parent)):
+        for ptr in parse_pointers(read_level(path), level=str(Path(path).parent)):
             if ptr.slug in seen:
                 seen[ptr.slug].levels.append(ptr.level)
                 continue

@@ -8,6 +8,7 @@ matching every `#` in the change, and a `name==>replacement` rule searched as it
 so never matching the name.
 """
 
+import ast
 import json
 import subprocess
 import sys
@@ -15,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+import pushcheck
 import redaction_scan as R
 
 TOOL = Path(__file__).resolve().parents[1] / "scripts" / "redaction_scan.py"
@@ -353,3 +355,18 @@ def test_a_second_rule_list_is_matched_by_its_own_patterns():
     assert R.match_rules("an alpha line", first) == [first[0]]
     assert R.match_rules("an alpha line", second) == []
     assert R.match_rules("a BETA line", second) == [second[0]]
+
+def _names_imported_from(source: Path, module: str) -> set[str]:
+    """Every name any `from <module> import ...` in `source` takes, function-local ones included."""
+    tree = ast.parse(source.read_text(encoding="utf-8"))
+    return {alias.name for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module == module
+            for alias in node.names}
+
+
+def test_every_name_taken_from_pushcheck_is_its_public_api() -> None:
+    # A private helper reached across modules is a contract nobody declared: a rename in
+    # pushcheck would break this scanner with nothing on pushcheck's side saying it is used.
+    taken = _names_imported_from(TOOL, "pushcheck")
+    assert taken, "the scanner no longer imports from pushcheck; this test has nothing to check"
+    assert taken <= set(pushcheck.__all__), sorted(taken - set(pushcheck.__all__))

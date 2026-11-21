@@ -71,14 +71,17 @@ import json
 import re
 import subprocess
 import sys
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
 from pathlib import Path
 
 from _cli_envelope import EXIT_ERROR, EnvelopeArgumentParser, emit, guarded
 
-__all__ = ["Finding", "Rule", "RuleList", "Verdict", "added_lines", "decide", "fold_case",
-           "parse_remote", "parse_rules", "scan_diff", "scan_messages", "scan_text", "split_lines"]
+__all__ = ["Finding", "PushCheckError", "Rule", "RuleList", "Verdict", "added_lines",
+           "binary_files", "changed_lines", "decide", "fold_case", "parse_remote", "parse_rules",
+           "range_diff", "range_messages", "repo_root", "scan_diff", "scan_messages", "scan_text",
+           "split_lines"]
 
 # A remote URL in any of the shapes git accepts. Owner and repo are what the visibility lookup
 # needs; the host decides whether we can ask at all.
@@ -372,7 +375,7 @@ def _header_path(field_text: str) -> str:
     return target[2:] if target.startswith(("a/", "b/")) else target
 
 
-def _changed_lines(diff: str):
+def changed_lines(diff: str) -> Iterator[tuple[str, int, str, str]]:
     """(path, new-file line, sign, text) for every ADDED (`+`) and REMOVED (`-`) line of a diff.
 
     A `+++ `/`--- ` line is a file header only BETWEEN a `diff ` line and the first `@@` of that
@@ -405,7 +408,7 @@ def _changed_lines(diff: str):
 
 def added_lines(diff: str):
     """(path, new-file line, text) for every ADDED line of a unified diff."""
-    for path, lineno, sign, text in _changed_lines(diff):
+    for path, lineno, sign, text in changed_lines(diff):
         if sign == "+":
             yield path, lineno, text
 
@@ -432,7 +435,7 @@ def added_line_count(diff: str) -> int:
 
 def removed_line_count(diff: str) -> int:
     """How many lines the range removes - what tells a cleanup range from an empty one."""
-    return sum(1 for _, _, sign, _ in _changed_lines(diff) if sign == "-")
+    return sum(1 for _, _, sign, _ in changed_lines(diff) if sign == "-")
 
 
 _BINARY_RX = re.compile(r"^Binary files (?P<old>.+) and (?P<new>.+) differ$")

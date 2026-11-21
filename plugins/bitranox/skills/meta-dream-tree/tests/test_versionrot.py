@@ -8,6 +8,7 @@ A fact like "fixed in bmk 3.13.0" stays correct as a sentence and wrong as a les
 * be able to say "nothing superseded" over a non-empty store, and refuse a scan of zero facts.
 """
 
+import ast
 import json
 import sys
 from pathlib import Path
@@ -16,6 +17,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import statusrot  # noqa: E402
 import versionrot  # noqa: E402
 
 
@@ -422,3 +424,20 @@ class TestPypiAsksOnlyAboutPackageMentions:
         # "processes" is only the nearest unknown word behind "fixed in", not the version's owner.
         text = "It rebuilt under running processes (fixed in 3.13.0)."
         assert self._ask([text], versionrot.Registry()) == []
+
+
+def _names_imported_from(source: Path, module: str) -> set[str]:
+    """Every name any `from <module> import ...` in `source` takes, function-local ones included."""
+    tree = ast.parse(source.read_text(encoding="utf-8"))
+    return {alias.name for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module == module
+            for alias in node.names}
+
+
+def test_every_name_taken_from_statusrot_is_its_public_api() -> None:
+    # A private helper reached across modules is a contract nobody declared: a rename in
+    # statusrot would break this scanner with nothing on statusrot's side saying it is used.
+    source = Path(versionrot.__file__)
+    taken = _names_imported_from(source, "statusrot")
+    assert taken, "versionrot no longer imports from statusrot; this test has nothing to check"
+    assert taken <= set(statusrot.__all__), sorted(taken - set(statusrot.__all__))
