@@ -605,6 +605,16 @@ class UnknownSlug(ValueError):
                          "'add --pin' to create it first" % slug)
 
 
+class BodyChanged(ValueError):
+    """Raised by an upsert given `expect_body` when the stored body, read under the level lock,
+    is no longer the one its caller read: the caller derived its write from a body a concurrent
+    writer has changed since. Nothing is written; read again and decide again."""
+
+    def __init__(self, slug: str) -> None:
+        self.slug = slug
+        super().__init__("%s's body changed since it was read; read it again and retry" % slug)
+
+
 # ---- store IO (pointer block in CLAUDE.local.md + central bodies), locked + mtime-neutral --------
 
 def anchor_dir(proj: _StrPath) -> Path:
@@ -994,7 +1004,7 @@ def add_or_update_entry(proj: _StrPath, title: str, hook: str | None, body: str 
 def upsert_entry(proj: _StrPath, title: str, hook: str | None, body: str = "", type_: str | None = None, pin: bool = False,
                  scope_default: str = "", slug: str | None = None, allow_over_cap_hook: bool = False,
                  allow_pinned_overwrite: bool = False, skill: str | None = None, *,
-                 must_exist: bool = False) -> tuple[str, bool]:
+                 must_exist: bool = False, expect_body: str | None = None) -> tuple[str, bool]:
     """Upsert a curated fact into `<proj>`'s pointer block + the anchor's central store (the single write
     path). Ensures the level's pointer block + scope, and writes under a lock, mtime-neutral.
     Returns (slug, created): `created` is True when this call made a new fact, decided under the
@@ -1033,6 +1043,12 @@ def upsert_entry(proj: _StrPath, title: str, hook: str | None, body: str = "", t
     `must_exist` is `amend_pinned_entry`'s: the write only UPDATES. A slug this level holds no line
     of, decided under the level lock, raises `UnknownSlug` before any write (never a create, never
     an adopted dangling body), and an empty `title` keeps the stored one, read under that lock.
+
+    `expect_body` is for a caller that DERIVES its write (the body, the kind) from a body it read
+    before this call: the stored body, read under the level lock, must still be exactly that
+    text (as `read_store_text` returns it; "" for no body), else `BodyChanged` is raised before
+    any write. Without it a body amend landing between the caller's read and this write was
+    overwritten with text derived from the older body.
 
     Under BITRANOX_MEMORY_WRITES=off it raises `sig.MemoryWritesOff` as its first statement, before
     the lock is taken and before anything is read: this is the entry write path the skill scripts
@@ -1084,11 +1100,12 @@ def upsert_entry(proj: _StrPath, title: str, hook: str | None, body: str = "", t
     # placed decision below and every line it rewrites see no render or set-topics half done.
     with _placement_lock_if_bound(anchor, slug, "add"):
         return _upsert_checked(asked, anchor, slug, title, hook, body, type_, pin, scope_default,
-                               allow_pinned_overwrite, skill, must_exist)
+                               allow_pinned_overwrite, skill, must_exist, expect_body)
 
 
 def _upsert_checked(asked: _GitAsked, anchor: _StrPath, slug: str, title: str, hook: str, body: str, type_: str | None, pin: bool, scope_default: str,
-                    allow_pinned_overwrite: bool, skill: str | None, must_exist: bool) -> tuple[str, bool]:
+                    allow_pinned_overwrite: bool, skill: str | None, must_exist: bool,
+                    expect_body: str | None) -> tuple[str, bool]:
     """The writing half of `upsert_entry`, from the placed-by-topic checks on: its caller has
     validated every argument, asked git about the level (`asked`, whose level is the write's)
     and holds the placement lock when the fact is bound."""
@@ -1114,6 +1131,11 @@ def _upsert_checked(asked: _GitAsked, anchor: _StrPath, slug: str, title: str, h
         # adopted) by a verb that never creates.
         if must_exist and _current_line(proj, slug) is None:
             raise UnknownSlug(slug)
+        # Compared under the lock the write below holds (and the placement lock, for a fact
+        # bound to a topic), which every engine writer of this body takes, so the body that
+        # matched is the one the write replaces.
+        if expect_body is not None and read_store_text(us.body_path(anchor, slug)) != expect_body:
+            raise BodyChanged(slug)
         # Before the level is scaffolded, so the refusal writes nothing: a slug another level of
         # the tree points at is that level's fact, wherever the level sits.
         owners = _slug_owned_elsewhere(anchor, proj, slug)
