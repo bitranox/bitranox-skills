@@ -39,6 +39,7 @@ import sys
 import time
 from pathlib import Path
 
+from hook_event import PostToolUseEvent, parse_post_tool_use
 import self_improve_signals as sig
 from shell_text import is_git_verb, iter_segments, strip_heredoc_bodies
 
@@ -174,7 +175,7 @@ def _reformat_file_fn():
     return mod.reformat_file
 
 
-def _markdown_paths_from_a_command(event) -> list[str]:
+def _markdown_paths_from_a_command(event: PostToolUseEvent) -> list[str]:
     """Return markdown files a shell command just wrote, newest-first.
 
     Write and Edit announce their target in ``file_path``; a command does not. A
@@ -239,8 +240,10 @@ def _markdown_paths_from_a_command(event) -> list[str]:
 
 def main():
     try:
-        event = json.load(sys.stdin)
+        event = parse_post_tool_use(json.load(sys.stdin))
     except Exception:  # noqa: BLE001
+        return 0
+    if event is None:
         return 0
     path = (event.get("tool_input") or {}).get("file_path") or ""
     if path.lower().endswith(_MD_SUFFIXES) and Path(path).is_file():

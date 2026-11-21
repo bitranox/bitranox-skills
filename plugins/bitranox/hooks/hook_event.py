@@ -82,6 +82,7 @@ class ToolResponse(TypedDict, total=False):
     stdout: str
     stderr: str
     interrupted: bool
+    backgroundTaskId: str
 
 
 class HookEventBase(TypedDict, total=False):
@@ -232,6 +233,8 @@ def _parse_tool_response(raw: object) -> ToolResponse | None:
         response["stderr"] = stderr
     if (interrupted := _flag(raw, "interrupted")) is not None:
         response["interrupted"] = interrupted
+    if (task := _text(raw, "backgroundTaskId")) is not None:
+        response["backgroundTaskId"] = task
     return response
 
 

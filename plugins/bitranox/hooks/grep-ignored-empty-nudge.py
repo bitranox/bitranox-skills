@@ -44,6 +44,7 @@ import fnmatch
 import json
 import sys
 
+from hook_event import parse_post_tool_use
 from shell_text import argv_for_match, iter_segments, strip_heredoc_bodies
 
 _PROGRAM = "grep"
@@ -176,10 +177,10 @@ def notice(payload):
     return MESSAGE % statement if statement else None
 
 
-def main(raw=None) -> int:
+def main(raw: str | None = None) -> int:
     """Read the hook event, emit additionalContext when the shape matches. Always exits 0."""
     try:
-        payload = json.loads(raw if raw is not None else sys.stdin.read() or "{}")
+        payload = parse_post_tool_use(json.loads(raw if raw is not None else sys.stdin.read() or "{}"))
     except (ValueError, TypeError):
         return 0
     text = notice(payload)

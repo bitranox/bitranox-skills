@@ -69,10 +69,12 @@ def test_a_payload_that_is_not_an_object_parses_to_none(parse, raw):
 
 def test_post_tool_use_narrows_the_response():
     raw = {"tool_name": "Bash", "tool_input": {"command": "grep -r x ."},
-           "tool_response": {"stdout": "", "stderr": "e", "interrupted": False, "extra": 1}}
+           "tool_response": {"stdout": "", "stderr": "e", "interrupted": False,
+                             "backgroundTaskId": "b1", "extra": 1}}
     assert H.parse_post_tool_use(raw) == {
         "tool_name": "Bash", "tool_input": {"command": "grep -r x ."},
-        "tool_response": {"stdout": "", "stderr": "e", "interrupted": False}}
+        "tool_response": {"stdout": "", "stderr": "e", "interrupted": False,
+                          "backgroundTaskId": "b1"}}
 
 
 def test_a_plain_text_tool_response_reads_as_absent():

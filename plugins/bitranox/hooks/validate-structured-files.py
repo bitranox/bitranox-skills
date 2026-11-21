@@ -46,6 +46,7 @@ import json
 import os
 import re
 import sys
+from hook_event import parse_post_tool_use
 
 # Template markers: a file carrying these is a template, not strict data. ${VAR}
 # (shell/compose interpolation) is deliberately NOT here - it is valid in a string.
@@ -316,8 +317,10 @@ def is_template(kind: str, text: str) -> bool:
 
 def main() -> int:
     try:
-        event = json.load(sys.stdin)
+        event = parse_post_tool_use(json.load(sys.stdin))
     except Exception:  # noqa: BLE001
+        return 0
+    if event is None:
         return 0
     tool_input = event.get("tool_input") or {}
     # NotebookEdit names its target notebook_path; every other matched tool uses file_path.

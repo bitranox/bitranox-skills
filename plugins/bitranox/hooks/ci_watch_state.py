@@ -39,6 +39,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from hook_event import HookEventBase
+
 __all__ = [
     "MAX_AGE_SECONDS",
     "MAX_BLOCKS",
@@ -74,7 +76,7 @@ MAX_BLOCKS = 3
 _LOCK_TIMEOUT = 2.0
 
 
-def session_key(event: dict) -> str:
+def session_key(event: HookEventBase | None) -> str:
     """Where this session's record lives.
 
     Both hooks must compute this the SAME way or the gate reads a different file than the nudge

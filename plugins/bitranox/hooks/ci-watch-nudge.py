@@ -58,6 +58,7 @@ try:
 except ImportError:                     # a hook provisions no dependencies; without it, decide nothing
     _yaml = None
 
+from hook_event import parse_post_tool_use
 import ci_watch_state as state
 from shell_text import (
     LIST_SEP,
@@ -682,16 +683,15 @@ def notice(command, cwd: str = "", tool_name: str = "Bash") -> Notice | None:
 def main(raw: str | None = None) -> int:
     """Record a landed push, or clear the record when CI is being watched. Always exits 0."""
     try:
-        event = json.loads(raw if raw is not None else sys.stdin.read() or "{}")
+        event = parse_post_tool_use(json.loads(raw if raw is not None else sys.stdin.read() or "{}"))
     except (ValueError, TypeError, OSError):
         return 0
-    if not isinstance(event, dict):
+    if event is None:
         return 0
     if os.environ.get(_BYPASS_ENV):
         return 0
 
-    tool_input = event.get("tool_input")
-    command = tool_input.get("command") if isinstance(tool_input, dict) else None
+    command = (event.get("tool_input") or {}).get("command")
     cwd = event.get("cwd") or ""
     key = state.session_key(event)
     session = event.get("session_id") or ""

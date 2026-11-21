@@ -25,6 +25,7 @@ a turn); the file is capped so a long session cannot grow it without bound.
 import json
 import sys
 
+from hook_event import parse_post_tool_use
 import self_improve_signals as sig
 
 _MAX_LINES = 400          # cap: plenty for a session's distinct files, bounded for a long one
@@ -32,8 +33,10 @@ _MAX_LINES = 400          # cap: plenty for a session's distinct files, bounded 
 
 def main() -> int:
     try:
-        event = json.load(sys.stdin)
+        event = parse_post_tool_use(json.load(sys.stdin))
     except Exception:                                     # noqa: BLE001 - never wedge a turn
+        return 0
+    if event is None:
         return 0
     try:
         tool_input = event.get("tool_input") or {}

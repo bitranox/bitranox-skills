@@ -32,6 +32,7 @@ error) exits 0, so a broken guard never wedges a turn.
 import json
 import sys
 
+from hook_event import parse_post_tool_use
 import tell_chars
 
 _MAX_LISTED = 20
@@ -51,8 +52,10 @@ def _capped(lines):
 
 def main() -> int:
     try:
-        event = json.load(sys.stdin)
+        event = parse_post_tool_use(json.load(sys.stdin))
     except Exception:
+        return 0
+    if event is None:
         return 0
     fp = (event.get("tool_input") or {}).get("file_path") or ""
     if not tell_chars.is_prose_path(fp):

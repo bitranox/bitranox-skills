@@ -41,6 +41,37 @@ PRE_TOOL_USE_HOOKS = [
     "venv-guard.py", "warn-inline-powershell.py", "warn-ps1-copy.py",
 ]
 
+# A call each of these hooks reacts to (refuses or advises), from its own tests, so its
+# wrong-typed runs are compared against a run that has something to say. The other hooks react to
+# `_COMMAND`, or to nothing a stateless event can show (a transcript, a recorded state).
+FIRING = {
+    "block-cmd-if-chain.py": ("PowerShell", 'ssh win "if exist x del x & echo'),
+    "block-env-dump.py": ("Bash", "env >&2"),
+    "block-git-semicolon-chain.py": ("Bash", "git commit -m x\ngit push"),
+    "block-index-splice.py": ("Bash", "python3 - <<'PY'\ns = p.read_text()\n"
+                              "a = s.index('<' * 7 + ' ours\\n')\n"
+                              "b = s.index('>>>>>>> theirs\\n') + len('>>>>>>> theirs\\n')\n"
+                              "p.write_text(s[:a] + KEEP + s[b:])\nPY\n"),
+    "block-write-after-sibling-cd.py": ("Bash", "cd /opt && lane1 & ./lane2 & wait"),
+    "bmk-gate-nudge.py": ("Bash", "bmk test"),
+    "gated-prep-nudge.py": ("Bash", "git pull && git push"),
+    "git-footgun-guard.py": ("Bash", "git rev-parse --short A B"),
+    "git-ls-files-tracking-nudge.py": ("Bash", "git ls-files a.md && exit 0"),
+    "make-push-args-nudge.py": ("Bash", "make push x\\|y"),
+    "missing-mechanism-nudge.py": ("Bash", 'memory_engine.py add --hook "There is no caller for this path."'),
+    "pct-path-nudge.py": ("Bash", "pct exec 101 -- env PATH=%s uv"),
+    "sed-line1-range-nudge.py": ("Bash", "sed 1,/^---$/d f.md"),
+    "sha-literal-nudge.py": ("Bash", 'gh run list --commit "fb3330b${SHA:7}"'),
+    "shell-prefix-selfref-guard.py": ("Bash", 'X="a b" cmd "$X"'),
+    "tail-obsolete-count-nudge.py": ("Bash", "tail +2 a b"),
+    "unbuffered-python-nudge.py": ("Bash", "ssh host python3 probe.py"),
+    "warn-inline-powershell.py": ("Bash", "ssh host 'powershell -Command x'"),
+    "warn-ps1-copy.py": ("Bash", "scp /tmp/x.ps1 winhost:/tmp/"),
+}
+SPEAKS_ON_THE_COMMON_COMMAND = {"arbitrary-sleep-nudge.py", "block-masked-gate-exit.py",
+                                "block-unbounded-find.py", "git-revparse-nudge.py",
+                                "toolbox-nudge.py"}
+
 # (path into the event, a value of the wrong type for it)
 PRE_TOOL_USE_FIELDS = [
     (("tool_name",), 7),
@@ -68,11 +99,12 @@ def _load(name):
     return _LOADED[name]
 
 
-def _pre_tool_use_event(tmp_path):
+def _pre_tool_use_event(tmp_path, name=None):
+    tool_name, command = FIRING.get(name, ("Bash", _COMMAND))
     return {"hook_event_name": "PreToolUse", "session_id": "entry-test", "cwd": str(tmp_path),
             "transcript_path": str(tmp_path / "absent.jsonl"), "tool_use_id": "toolu_entry",
-            "tool_name": "Bash",
-            "tool_input": {"command": _COMMAND, "run_in_background": True, "description": "d"}}
+            "tool_name": tool_name,
+            "tool_input": {"command": command, "run_in_background": True, "description": "d"}}
 
 
 def _with(event, path, value):
@@ -127,13 +159,66 @@ def isolated(tmp_path, monkeypatch):
 def test_a_wrong_typed_pre_tool_use_field_behaves_as_absent(name, path, wrong, isolated,
                                                             monkeypatch, capsys):
     module = _load(name)
-    event = _pre_tool_use_event(isolated)
+    event = _pre_tool_use_event(isolated, name)
     absent = _drive(module, _without(event, path), monkeypatch, capsys)
     wrong_typed = _drive(module, _with(event, path, wrong), monkeypatch, capsys)
     assert wrong_typed == absent
 
 
+@pytest.mark.parametrize("name", sorted(set(FIRING) | SPEAKS_ON_THE_COMMON_COMMAND))
+def test_the_well_typed_event_makes_the_hook_speak(name, isolated, monkeypatch, capsys):
+    """The comparison above is only worth something where the full event gets an answer."""
+    code, out, err = _drive(_load(name), _pre_tool_use_event(isolated, name), monkeypatch, capsys)
+    assert code != 0 or out or err
+
+
 @pytest.mark.parametrize("name", PRE_TOOL_USE_HOOKS)
 @pytest.mark.parametrize("payload", [[], "text", 3, None])
 def test_a_payload_that_is_not_an_object_is_ignored(name, payload, isolated, monkeypatch, capsys):
+    assert _drive(_load(name), payload, monkeypatch, capsys) == (0, "", "")
+
+
+POST_TOOL_USE_HOOKS = [
+    "ci-watch-nudge.py", "decision-claim-guard.py", "grep-ignored-empty-nudge.py",
+    "reformat-md-tables.py", "tell-sweep.py", "touched-paths.py", "validate-structured-files.py",
+]
+
+POST_TOOL_USE_FIELDS = PRE_TOOL_USE_FIELDS + [
+    (("hook_event_name",), 1),
+    (("tool_input", "file_path"), 9),
+    (("tool_response",), ["out"]),
+    (("tool_response", "stdout"), 0),
+    (("tool_response", "interrupted"), "no"),
+]
+
+
+def _post_tool_use_event(work):
+    # A markdown file holding a typographic tell and a misaligned table, so the file hooks judge.
+    doc = work / "OPEN-WORK.md"
+    doc.write_text("# Notes " + chr(0x2014) + " x\n\n|a|b|\n|-|-|\n|long cell|c|\n", encoding="utf-8")
+    event = _pre_tool_use_event(work)
+    event["hook_event_name"] = "PostToolUse"
+    event["tool_name"] = "Bash"
+    event["tool_input"]["command"] = "grep -r needle . ; git push"
+    event["tool_input"]["run_in_background"] = False
+    event["tool_input"]["file_path"] = str(doc)
+    event["tool_response"] = {"stdout": "", "stderr": "", "interrupted": False}
+    return event
+
+
+@pytest.mark.parametrize("path,wrong", POST_TOOL_USE_FIELDS, ids=lambda v: str(v))
+@pytest.mark.parametrize("name", POST_TOOL_USE_HOOKS)
+def test_a_wrong_typed_post_tool_use_field_behaves_as_absent(name, path, wrong, isolated,
+                                                             monkeypatch, capsys):
+    module = _load(name)
+    absent = _drive(module, _without(_post_tool_use_event(isolated), path), monkeypatch, capsys)
+    wrong_typed = _drive(module, _with(_post_tool_use_event(isolated), path, wrong), monkeypatch,
+                         capsys)
+    assert wrong_typed == absent
+
+
+@pytest.mark.parametrize("name", POST_TOOL_USE_HOOKS)
+@pytest.mark.parametrize("payload", [[], "text", 3, None])
+def test_a_post_tool_use_payload_that_is_not_an_object_is_ignored(name, payload, isolated,
+                                                                  monkeypatch, capsys):
     assert _drive(_load(name), payload, monkeypatch, capsys) == (0, "", "")

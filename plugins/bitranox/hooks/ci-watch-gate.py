@@ -27,6 +27,7 @@ import shlex
 import sys
 from pathlib import Path
 
+from hook_event import parse_stop
 import ci_watch_state as state
 import claude_paths
 
@@ -89,10 +90,10 @@ def verdict(pending: list[state.Entry], attempt: int = 1) -> str | None:
 def main(raw: str | None = None) -> int:
     """Block the stop while a push from this session has unwatched CI. Always exits 0."""
     try:
-        event = json.loads(raw if raw is not None else sys.stdin.read() or "{}")
+        event = parse_stop(json.loads(raw if raw is not None else sys.stdin.read() or "{}"))
     except (ValueError, TypeError, OSError):
         return 0
-    if not isinstance(event, dict):
+    if event is None:
         return 0
     # A Stop hook already caused this continuation; blocking again is how a session gets wedged.
     if event.get("stop_hook_active"):
