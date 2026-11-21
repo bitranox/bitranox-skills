@@ -456,6 +456,23 @@ def test_a_missing_engine_parser_exits_2_not_the_gate_answer_1(tmp_path):
     assert json.loads(proc.stdout)["ok"] is False
 
 
+
+def test_a_direct_call_without_the_engine_raises_the_import_error_it_held():
+    """main() refuses before any helper runs, but a library caller reaches a helper directly. It
+    must get the ImportError that explains the failure, not an AttributeError on NoneType."""
+    script = Path(mem_levels.__file__).resolve()
+    probe = ("import importlib.util, os, sys; sys.modules['uuid_store'] = None; "
+             "script = sys.argv[1]; sys.path.insert(0, os.path.dirname(script)); "
+             "spec = importlib.util.spec_from_file_location('mem_levels_probe', script); "
+             "mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)\n"
+             "for call in (lambda: mod.slugs_in('x'), lambda: mod.is_pruned_dir('x')):\n"
+             "    try:\n        call()\n    except Exception as exc:\n"
+             "        print('ImportError' if isinstance(exc, ImportError) else type(exc).__name__)")
+    proc = subprocess.run([sys.executable, "-c", probe, str(script)], capture_output=True,
+                          text=True, encoding="utf-8", errors="replace")
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.split() == ["ImportError", "ImportError"], proc.stdout
+
 def test_a_pointer_file_without_a_managed_block_is_not_a_level(tmp_path):
     """NU-5: the engine counts a level only when its CLAUDE.local.md carries a managed block, so a
     hand-written file of bare pointer lines is not a level here either - one level count

@@ -60,14 +60,34 @@ from _cli_envelope import EXIT_ERROR, EXIT_NO, EXIT_YES, EnvelopeArgumentParser,
 # way. A failed import is held rather than raised: its traceback exits 1, which is this tool's "no
 # level holds it", so main() refuses with 2 instead.
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "hooks"))
+_import_error: ImportError | None = None
 try:
     import memory_engine  # noqa: E402
     import uuid_store  # noqa: E402
-    _IMPORT_ERROR: ImportError | None = None
 except ImportError as _exc:
-    memory_engine = None  # type: ignore[assignment]
-    uuid_store = None  # type: ignore[assignment]
-    _IMPORT_ERROR = _exc
+    memory_engine = None
+    uuid_store = None
+    _import_error = _exc
+
+
+# Every use goes through these two, which narrow the failed-import None away in one place: a bare
+# `uuid_store.x` is an Optional access the checker cannot prove safe, and a None that slipped past
+# main()'s refusal (a direct call of a helper) raised an AttributeError naming NoneType instead of
+# the import error that explains it. The return type is the module itself, inferred: a module has no
+# spelling in an annotation that keeps its members.
+def _uuid_store():
+    """The engine's `uuid_store` module, or the ImportError held when it failed to import."""
+    if uuid_store is None:
+        raise _import_error or ImportError("uuid_store")
+    return uuid_store
+
+
+def _memory_engine():
+    """The engine's `memory_engine` module, or the ImportError held when it failed to import."""
+    if memory_engine is None:
+        raise _import_error or ImportError("memory_engine")
+    return memory_engine
+
 
 LEVEL_FILE = "CLAUDE.local.md"
 STORE_DIR = ".claude-memory"
@@ -82,9 +102,7 @@ def is_pruned_dir(name: str) -> bool:
     virtualenv shape such as `.venv-win`, `venv-<user>` and `venv_<project>`, the store and the
     migration backup beside it), so this tool and the engine report one level set. Without the
     engine module main() already refuses; a direct call raises the import error it held."""
-    if uuid_store is None:
-        raise _IMPORT_ERROR or ImportError("uuid_store")
-    return uuid_store.is_non_level_dirname(name)
+    return _uuid_store().is_non_level_dirname(name)
 
 
 @dataclass
@@ -146,7 +164,7 @@ def _iter_level_files(root: Path, unreadable: list[str]):
 
 
 def _pointers_in(text: str):
-    return uuid_store.parse_pointer_index(text)[1]
+    return _uuid_store().parse_pointer_index(text)[1]
 
 
 def slugs_in(text: str) -> list[str]:
@@ -161,7 +179,8 @@ def slugs_in(text: str) -> list[str]:
 def _carries_block(text: str) -> bool:
     """Whether a level file holds a managed pointer block, current or legacy - the engine's own
     curated-level test (`memory_engine.carries_pointer_block`)."""
-    return uuid_store.INDEX_BEGIN in text or uuid_store.LEGACY_INDEX_BEGIN in text
+    store = _uuid_store()
+    return store.INDEX_BEGIN in text or store.LEGACY_INDEX_BEGIN in text
 
 
 def _is_level(text: str) -> bool:
@@ -194,7 +213,7 @@ def _read_levels(root: Path, report: Report) -> None:
 def _has_body(root: Path, slug: str, legacy_uuid: str | None, bodies: set[str]) -> bool:
     if legacy_uuid is None:
         return slug in bodies
-    return uuid_store.legacy_body_path(root, legacy_uuid).is_file()
+    return _uuid_store().legacy_body_path(root, legacy_uuid).is_file()
 
 
 def _listdir(d: Path, unreadable: list[str]) -> list[Path]:
@@ -222,7 +241,7 @@ def _store_bodies(facts: Path, unreadable: list[str]) -> tuple[set[str], dict[st
         if not d.is_dir() or d.is_symlink():
             continue
         for f in _listdir(d, unreadable):
-            if f.suffix == ".md" and f.is_file() and uuid_store.shard(f.stem) == d.name:
+            if f.suffix == ".md" and f.is_file() and _uuid_store().shard(f.stem) == d.name:
                 sharded[f.stem] = "%s/%s" % (d.name, f.stem)
     return flat, sharded
 
@@ -233,13 +252,14 @@ def _bound_to_a_topic(root: Path, slug: str) -> bool:
     two cannot disagree. A level that pins the fact is the caller's check. A body that is missing
     or cannot be read is not judged placed: its lines at several levels stay duplicates. Reads the
     head of the body only."""
-    if not uuid_store.is_valid_slug(slug):
+    store, engine = _uuid_store(), _memory_engine()
+    if not store.is_valid_slug(slug):
         return False
     try:
-        head = memory_engine.read_body_head(uuid_store.body_path(root, slug))
-    except uuid_store.TreeWalkError:
+        head = engine.read_body_head(store.body_path(root, slug))
+    except store.TreeWalkError:
         return False
-    return head is not None and memory_engine.managed_topics(slug, head, ()) is not None
+    return head is not None and engine.managed_topics(slug, head, ()) is not None
 
 
 def scan(root: str | Path) -> Report:
@@ -371,9 +391,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--slug", default=None, help="report which level holds this slug (exit 1 if none)")
     ap.add_argument("--json", action="store_true", dest="as_json", help="machine-readable envelope")
     args = ap.parse_args(argv)
-    if uuid_store is None:
+    if _import_error is not None:
         return _fail("mem_levels: cannot import the engine's modules (hooks/uuid_store.py, "
-                     "hooks/memory_engine.py): %s" % _IMPORT_ERROR, args.as_json)
+                     "hooks/memory_engine.py): %s" % _import_error, args.as_json)
     return _run(args)
 
 
