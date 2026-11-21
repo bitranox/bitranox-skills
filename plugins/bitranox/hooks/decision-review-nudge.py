@@ -62,6 +62,7 @@ import sys
 from enum import StrEnum
 from typing import NamedTuple
 
+from hook_event import parse_stop
 import self_improve_signals as sig
 import shell_text
 
@@ -339,10 +340,10 @@ _GOAL_REMINDER = (
 
 def main():
     try:
-        event = json.load(sys.stdin)
+        event = parse_stop(json.load(sys.stdin))
     except Exception:                                     # noqa: BLE001 - never wedge a turn
         return 0
-    if not isinstance(event, dict) or event.get("stop_hook_active"):
+    if event is None or event.get("stop_hook_active"):
         return 0
     session = str(event.get("session_id") or "")
     transcript = event.get("transcript_path") or ""

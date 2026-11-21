@@ -60,6 +60,7 @@ _SKILL_HINT_MAX = 12
 # module and its tests use. Signals cluster in FAMILIES (user correction / "remember";
 # endorsement either side; assistant self-admission / realization); extend the family in
 # self_improve_signals, not here.
+from hook_event import StopEvent, parse_stop
 import self_improve_signals as _sig
 from self_improve_signals import (
     USER_PATTERN as _USER_PATTERN,
@@ -126,7 +127,7 @@ def _skill_usage(transcript_path):
         return _NO_SKILL_USAGE
 
 
-def _routing_hint(event, proj):
+def _routing_hint(event: StopEvent, proj):
     """Prose naming the OTHER repos/levels this session edited, or '' when the subject IS cwd.
 
     Capture is cwd-keyed, so a learning about a repo you edited from somewhere else is misplaced from
@@ -334,7 +335,7 @@ def _request(last_user, last_asst, previous):
     return {"fields": fields, "questions": _classifier.stop_signal_questions()}
 
 
-def _shadow_stop_signal(event, last_user, last_asst, previous=""):
+def _shadow_stop_signal(event: StopEvent, last_user, last_asst, previous=""):
     """Hand this turn to the classifier's detached shadow child. Never changes the decision
     and never raises: the regex verdict per family is logged beside Jev's. A failure is logged
     as an error row."""
@@ -347,7 +348,7 @@ def _shadow_stop_signal(event, last_user, last_asst, previous=""):
                                  transcript=event.get("transcript_path") or "")
 
 
-def _decide_stop_signal(event, regex, request, cfg):
+def _decide_stop_signal(event: StopEvent, regex, request, cfg):
     """Decide mode: True when Jev's answer blocks a turn the keywords left quiet.
 
     Keywords OR Jev - the union adjudicated blind on 2026-09-25 - so a turn the keywords already
@@ -379,10 +380,10 @@ def _decide_stop_signal(event, regex, request, cfg):
 
 def main():
     try:
-        event = json.loads(sys.stdin.read())
+        event = parse_stop(json.loads(sys.stdin.read()))
     except (ValueError, OSError):
         return 0
-    if not isinstance(event, dict) or event.get("stop_hook_active"):
+    if event is None or event.get("stop_hook_active"):
         return 0
     # Before the session-meta record and the per-message state file: an arm session under
     # BITRANOX_MEMORY_WRITES=off may not capture, so asking it to would only stall its turn.

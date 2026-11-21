@@ -36,6 +36,7 @@ import re
 import sys
 from dataclasses import dataclass
 
+from hook_event import parse_user_prompt_submit
 from self_improve_signals import session_state_path
 
 __all__ = ["forgotten_backstops", "is_pure_deadline", "main"]
@@ -344,10 +345,10 @@ def _remember(session, ids):
 
 def main():
     try:
-        event = json.load(sys.stdin)
+        event = parse_user_prompt_submit(json.load(sys.stdin))
     except Exception:  # noqa: BLE001 - no/invalid stdin: do nothing
         return 0
-    if not isinstance(event, dict):
+    if event is None:
         return 0
     prompt = str(event.get("prompt") or "")
     if not prompt.lstrip().startswith(_NOTIFICATION):

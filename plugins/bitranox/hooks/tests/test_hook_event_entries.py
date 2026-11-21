@@ -17,6 +17,7 @@ import itertools
 import json
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -135,6 +136,8 @@ def _drive(module, event, monkeypatch, capsys):
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home / ".claude"))
+    # self-improve-gate keeps its per-project state under the temp dir
+    monkeypatch.setattr(tempfile, "tempdir", str(home))
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(event)))
     code = module.main()
     out, err = capsys.readouterr()
@@ -221,4 +224,87 @@ def test_a_wrong_typed_post_tool_use_field_behaves_as_absent(name, path, wrong, 
 @pytest.mark.parametrize("payload", [[], "text", 3, None])
 def test_a_post_tool_use_payload_that_is_not_an_object_is_ignored(name, payload, isolated,
                                                                   monkeypatch, capsys):
+    assert _drive(_load(name), payload, monkeypatch, capsys) == (0, "", "")
+
+
+STOP_HOOKS = ["ci-watch-gate.py", "decision-review-nudge.py", "self-improve-gate.py"]
+
+STOP_FIELDS = [
+    (("stop_hook_active",), "false"),
+    (("last_assistant_message",), ["Done."]),
+    (("session_id",), 3),
+    (("transcript_path",), ["t"]),
+    (("cwd",), {"d": 1}),
+    (("hook_event_name",), 2),
+]
+
+
+def _transcript(work):
+    records = [
+        {"type": "user", "origin": {"kind": "human"},
+         "message": {"role": "user", "content": "From now on always run the gate before a push, "
+                                                "remember this. Which decisions are shaky?"}},
+        {"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "toolu_bg", "name": "Bash",
+             "input": {"command": "sleep 100", "run_in_background": True}}]}},
+        {"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "text", "text": "Done: I chose the second option and pushed it."}]}},
+    ]
+    path = work / "session.jsonl"
+    path.write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
+    return path
+
+
+def _stop_event(work):
+    return {"hook_event_name": "Stop", "session_id": "entry-test", "cwd": str(work),
+            "transcript_path": str(_transcript(work)), "stop_hook_active": False,
+            "last_assistant_message": "Done: I chose the second option and pushed it."}
+
+
+@pytest.mark.parametrize("path,wrong", STOP_FIELDS, ids=lambda v: str(v))
+@pytest.mark.parametrize("name", STOP_HOOKS)
+def test_a_wrong_typed_stop_field_behaves_as_absent(name, path, wrong, isolated, monkeypatch,
+                                                    capsys):
+    module = _load(name)
+    absent = _drive(module, _without(_stop_event(isolated), path), monkeypatch, capsys)
+    wrong_typed = _drive(module, _with(_stop_event(isolated), path, wrong), monkeypatch, capsys)
+    assert wrong_typed == absent
+
+
+def test_an_active_stop_hook_flag_still_silences_the_stop_hooks(isolated, monkeypatch, capsys):
+    """The one Stop field whose value, not presence, decides: True still means stand down."""
+    for name in STOP_HOOKS:
+        event = _with(_stop_event(isolated), ("stop_hook_active",), True)
+        assert _drive(_load(name), event, monkeypatch, capsys) == (0, "", "")
+
+
+USER_PROMPT_SUBMIT_FIELDS = [
+    (("prompt",), ["<task-notification>"]),
+    (("session_id",), 3),
+    (("transcript_path",), 1.5),
+    (("cwd",), None),
+]
+
+
+def _user_prompt_submit_event(work):
+    return {"hook_event_name": "UserPromptSubmit", "session_id": "entry-test", "cwd": str(work),
+            "transcript_path": str(_transcript(work)),
+            "prompt": "<task-notification><task-id>other</task-id><status>completed</status>"
+                      "</task-notification>"}
+
+
+@pytest.mark.parametrize("path,wrong", USER_PROMPT_SUBMIT_FIELDS, ids=lambda v: str(v))
+def test_a_wrong_typed_user_prompt_submit_field_behaves_as_absent(path, wrong, isolated,
+                                                                  monkeypatch, capsys):
+    module = _load("forgotten-backstop-nudge.py")
+    event = _user_prompt_submit_event(isolated)
+    absent = _drive(module, _without(event, path), monkeypatch, capsys)
+    wrong_typed = _drive(module, _with(event, path, wrong), monkeypatch, capsys)
+    assert wrong_typed == absent
+
+
+@pytest.mark.parametrize("name", STOP_HOOKS + ["forgotten-backstop-nudge.py"])
+@pytest.mark.parametrize("payload", [[], "text", 3, None])
+def test_a_stop_or_prompt_payload_that_is_not_an_object_is_ignored(name, payload, isolated,
+                                                                   monkeypatch, capsys):
     assert _drive(_load(name), payload, monkeypatch, capsys) == (0, "", "")
