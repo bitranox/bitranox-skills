@@ -65,14 +65,15 @@ A `tool_name` of None is legal at every function that takes one, and is typed `s
 """
 
 import bisect
+import dataclasses
 import enum
 import functools
 import os
 import re
 import sys
 from pathlib import PurePosixPath, PureWindowsPath
-from collections.abc import Callable, Iterator, Sequence
-from typing import Final, Self, TypeGuard
+from collections.abc import Callable, Container, Iterable, Iterator, Mapping, Sequence
+from typing import Final, Literal, Self, TypeGuard
 
 # The delimiter of a heredoc is a whole shell WORD, not an identifier: bash accepts `<<\EOF`,
 # `<<'END-OF'`, `<<END.X`, `<<E"O"F` and `<<1`, and takes the word after quote removal as the
@@ -412,7 +413,8 @@ _STATEMENT_KEYWORDS = frozenset({
 _PREFIX_SCAN_LIMIT = 12
 
 
-def past_command_prefix(tokens, idx, programs, tool_name: str | None = "Bash"):
+def past_command_prefix(tokens: Sequence[str], idx: int, programs: Container[str],
+                        tool_name: str | None = "Bash") -> int | None:
     """Index of the first of `programs` that the launcher at `tokens[idx]` runs, else None.
 
     None as well when `tokens[idx]` is not a known launcher (`sudo`, `nice`, `timeout`, `env`,
@@ -439,14 +441,15 @@ def past_command_prefix(tokens, idx, programs, tool_name: str | None = "Bash"):
     return None
 
 
-def statement_program(tokens, programs, tool_name: str | None = "Bash"):
+def statement_program(tokens: Sequence[str], programs: Container[str],
+                      tool_name: str | None = "Bash") -> int | None:
     """Index of the program a statement runs when it is one of `programs`, else None.
 
     Loop and branch keywords, leading `VAR=value` assignments and a known launcher in front of the
     program (`timeout 900 make test`, `env -u VIRTUAL_ENV make test`) are skipped, so the program
     is found where the shell finds it rather than at the first word.
     """
-    idx = 0
+    idx: int | None = 0
     while idx < len(tokens) and (
         tokens[idx] in _STATEMENT_KEYWORDS
         or ("=" in tokens[idx] and not tokens[idx].startswith("-"))
@@ -459,7 +462,8 @@ def statement_program(tokens, programs, tool_name: str | None = "Bash"):
     return idx
 
 
-def git_verb_operands(tokens, verbs, tool_name: str | None = "Bash"):
+def git_verb_operands(tokens: Sequence[str], verbs: Container[str],
+                      tool_name: str | None = "Bash") -> list[str] | None:
     r"""Tokens after git's SUBCOMMAND when this really is `git <global opts> <verb>`; else None.
 
     The single answer to "what git command is this?", because asking it with a regex is wrong in
@@ -476,7 +480,8 @@ def git_verb_operands(tokens, verbs, tool_name: str | None = "Bash"):
       early. A commit that the gate cannot see is a commit it cannot gate.
 
     Leading `VAR=value` environment assignments are skipped, and the program name is taken with
-    `basename_for_tool`, so `/usr/bin/git` and `git.exe` both count.
+    `basename_for_tool`, so `/usr/bin/git` and `git.exe` both count. The operands come back as a
+    list whatever sequence `tokens` is; a list's slice is already one.
     """
     idx = statement_program(tokens, ("git",), tool_name)
     if idx is None:
@@ -488,7 +493,7 @@ def git_verb_operands(tokens, verbs, tool_name: str | None = "Bash"):
         idx += 1
     if idx >= len(tokens) or tokens[idx] not in verbs:
         return None
-    return tokens[idx + 1:]
+    return list(tokens[idx + 1:])
 
 
 def argv_for_match(segment: str, tool_name: str | None = "Bash") -> list[str]:
@@ -553,7 +558,7 @@ def _without_comments(segment: str, tool_name: str | None) -> str:
     return "".join(" " if mask == " " else char for char, mask in zip(segment, masked))
 
 
-def is_git_verb(segment, verbs, tool_name: str | None = "Bash"):
+def is_git_verb(segment: str, verbs: Container[str], tool_name: str | None = "Bash") -> bool:
     """True when `segment` is a `git <global opts> <verb>` command for one of `verbs`."""
     return git_verb_operands(argv_for_match(segment, tool_name), verbs, tool_name) is not None
 
@@ -567,7 +572,7 @@ _NONBLANK_RUN = re.compile(r"\S+")
 _REDIRECTION_WORD = re.compile(r"^(?:\d+|&|\*)?(?:>>|>&|>\||<>|<&|<<<|<<-?|>|<)(.*)$", re.DOTALL)
 
 
-def drop_redirections(tokens):
+def drop_redirections(tokens: Sequence[str]) -> list[str]:
     """`tokens` without the shell's redirections, each operator with its target.
 
     A split argv keeps a redirection as words - `2>&1` as one, `>` then `f` as two - so a reader of a
@@ -585,7 +590,8 @@ def drop_redirections(tokens):
     taken as raw command text (a `str.split()` of the command): its quotes are still in the word, so
     a quoted operator cannot sit at its start.
     """
-    kept, at = [], 0
+    kept: list[str] = []
+    at = 0
     while at < len(tokens):
         match = _REDIRECTION_WORD.match(tokens[at])
         if match is not None and match.start(1) > _unquoted_lead(tokens[at]):
@@ -598,7 +604,7 @@ def drop_redirections(tokens):
     return kept
 
 
-def _unquoted_lead(token):
+def _unquoted_lead(token: str) -> int:
     """How many leading characters of `token` the shell saw unquoted; all of a plain `str`."""
     return token.unquoted_lead if isinstance(token, ShellWord) else len(token)
 
@@ -830,7 +836,8 @@ def _directory_change_tokens(tokens: Sequence[str], here: str | None, tool: str,
     return True, _readable_dir(target, here, msys_drives, unknown_mounts)
 
 
-def _apply_git_options(prefix, here, tool, msys_drives, unknown_mounts=True):
+def _apply_git_options(prefix: Sequence[str], here: str | None, tool: str | None,
+                       msys_drives: bool, unknown_mounts: bool = True) -> str | None:
     """`here` moved by the `-C` options in `prefix` (the tokens before the verb), or None.
 
     None when a `--git-dir`/`--work-tree` option or a `GIT_DIR`/`GIT_WORK_TREE` assignment points
@@ -861,7 +868,7 @@ _ONE_ASSIGNMENT = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)=(%s)" % _LITERAL_VALUE)
 _SEQUENCING = frozenset({";", "&&"})
 
 
-def _sequenced(gap):
+def _sequenced(gap: str) -> bool:
     """True when the text between two statements is `;`, `&&` or a plain newline - never `||`, a
     pipe, `&`, a parenthesis, or a backslash continuation, after which the assignment may not run,
     or runs in another shell."""
@@ -869,7 +876,7 @@ def _sequenced(gap):
     return stripped in _SEQUENCING or stripped == "\n"
 
 
-def _leading_assignments(raw, gap_before, gap_after):
+def _leading_assignments(raw: str, gap_before: str, gap_after: str) -> dict[str, str] | None:
     """{name: value} for a statement that only assigns absolute literal paths, else None.
 
     None also when the statement is not fenced in by plain sequencing on both sides, so a value is
@@ -880,7 +887,7 @@ def _leading_assignments(raw, gap_before, gap_after):
     statement = raw.strip()
     if not _ASSIGNMENT_STATEMENT.match(statement) or gap_before.strip(" \t\n") or not _sequenced(gap_after):
         return None
-    found = {}
+    found: dict[str, str] = {}
     for name, value in _ONE_ASSIGNMENT.findall(statement):
         value = value[1:-1] if value[:1] in "\"'" else value
         if not is_rooted(value) or _UNKNOWABLE_DIR.search(value) or _GLOB_OR_TILDE.search(value):
@@ -889,7 +896,7 @@ def _leading_assignments(raw, gap_before, gap_after):
     return found
 
 
-def _expansions(raw, known):
+def _expansions(raw: str, known: Mapping[str, str]) -> dict[str, str]:
     """The names in `known` that `raw` may have replaced by their value, and nothing else.
 
     A reference counts only when the shell expands it to exactly the value: inside double quotes
@@ -899,7 +906,7 @@ def _expansions(raw, known):
     """
     if "'" in raw:
         return {}
-    usable = {}
+    usable: dict[str, str] = {}
     for name, value in known.items():
         hits = [m.start() for m in re.finditer(r"\$(?:\{%s\}|%s(?![A-Za-z0-9_]))" % (name, name), raw)]
         before = [raw[i - 1] if i else " " for i in hits]
@@ -912,7 +919,7 @@ def _expansions(raw, known):
 _REBINDS_UNSEEN = re.compile(r"(?:^|[;&|(\n{]|\b(?:then|do|else))\s*(?:source|eval|\.)\s")
 
 
-def _stable_names(known, rest):
+def _stable_names(known: Mapping[str, str], rest: str) -> dict[str, str]:
     """The names in `known` that `rest` (the command after the leading assignments) never starts a
     word with.
 
@@ -932,10 +939,12 @@ def _stable_names(known, rest):
 _LEADING_REFERENCE = re.compile(r"^\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))(.*)$", re.DOTALL)
 
 
-def _expand_known(token, usable):
+def _expand_known(token: str, usable: Mapping[str, str]) -> str:
     """`token` with a leading `$NAME`/`${NAME}` replaced by its value when `usable` has it."""
     match = _LEADING_REFERENCE.match(token)
-    name = match and (match.group(1) or match.group(2))
+    if match is None:
+        return token
+    name = match.group(1) or match.group(2)
     if not name or name not in usable:
         return token
     return usable[name] + match.group(3)
@@ -949,7 +958,7 @@ _HOME_ASSIGNMENT = re.compile(r"(?:^|\s)HOME=")
 _LITERAL_TILDE = re.compile(r"[\"'\\]~")
 
 
-def _expand_home(token):
+def _expand_home(token: str) -> str:
     """`~` and `~/...` resolved against this process's HOME; any other word unchanged.
 
     `~user` is another account's home and is left alone, so `_readable_dir` still refuses it.
@@ -982,14 +991,15 @@ class _SubshellTracker:
     is worse than None, which falls back.
     """
 
-    def __init__(self):
-        self.open = []          # per open subshell: (its opener, the directory it was entered from)
+    def __init__(self) -> None:
+        # per open subshell: (its opener, the directory it was entered from)
+        self.open: list[tuple[str, str | None]] = []
         self.inner = 0          # statement-text `(` whose `)` has not arrived yet
         self.cases = 0          # `case ... esac` blocks open
         self.commented = False  # a `#` comment was seen: a later paren may be the comment's
         self.lost = False
 
-    def statement(self, segment, tokens):
+    def statement(self, segment: str, tokens: list[str]) -> int:
         """Count a statement's own parentheses and case/esac nesting; return its excess closers.
 
         A closer the statement's text holds beyond its own openers first closes an earlier inner
@@ -1008,7 +1018,7 @@ class _SubshellTracker:
             self.cases -= 1
         return max(excess, 0) - absorbed
 
-    def gap(self, gap, here):
+    def gap(self, gap: str, here: str | None) -> str | None:
         """`here` after the subshell boundaries in `gap`, the text between two statements."""
         if self.commented and any(char in gap for char in "()`"):
             self.lost = True
@@ -1054,7 +1064,7 @@ _EMPTY_PARENS = re.compile(r"[ \t]*\([ \t]*\)")
 _SUBSTITUTION_EDGES = re.compile(r"\$\(|<\(|>\(|`|\)")
 
 
-def _list_gap(gap):
+def _list_gap(gap: str) -> str | None:
     """`&&` or `||` when `gap`, the text between two statements, joins them in one and-or list; ""
     when it holds only a command substitution's edges; None when the list ends there (`;`, a
     newline, `&`, a pipe, a subshell's opening paren)."""
@@ -1062,6 +1072,10 @@ def _list_gap(gap):
     if not stripped:
         return None if "\n" in gap else ""      # a bare newline ends the list
     return stripped if stripped in ("&&", "||") else None
+
+
+#: What `_AndOrList.statement` says happens to one statement of the list.
+type _ListAction = Literal["runs", "skipped", "unknown"]
 
 
 class _AndOrList:
@@ -1076,13 +1090,13 @@ class _AndOrList:
     read like `cd /a; cd b`.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.only_cds = True      # every statement so far in this list was a cd
         self.cd_seen = False
         self.conditional = False  # a cd ran behind a statement that may have failed
         self.or_seen = False      # a `||` followed a cd: a verb in the rest of the list is unknown
 
-    def statement(self, joined, is_cd, negated=False):
+    def statement(self, joined: str | None, is_cd: bool, negated: bool = False) -> _ListAction:
         """Read one statement joined by `joined` ("&&", "||" or None for the first) and say what
         happens to it: "runs", "skipped" (it never runs: the `||` branch after cds that are read as
         succeeding, as in `cd /a || cd /b`) or "unknown" (a cd that may or may not run: `x || cd /r`).
@@ -1090,7 +1104,7 @@ class _AndOrList:
         `! cd /r && git push` pushes only where the cd FAILED, so a negated cd counts as a `||`."""
         if joined == "||" and self.cd_seen and self.only_cds:
             return "skipped"
-        action = "runs"
+        action: _ListAction = "runs"
         if is_cd and joined == "||":
             action = "unknown"
         elif is_cd and joined and not self.only_cds:
@@ -1101,7 +1115,7 @@ class _AndOrList:
         return action
 
 
-def _negated(tokens):
+def _negated(tokens: Iterable[str]) -> bool:
     """True when a `!` stands among the keywords in front of the statement's program."""
     for token in tokens:
         if token == "!":
@@ -1111,12 +1125,13 @@ def _negated(tokens):
     return False
 
 
-def _moves_the_shell(tokens, tool):
+def _moves_the_shell(tokens: Iterable[str], tool: str | None) -> bool:
     """True when any word of the statement is a cd-like program, wherever it stands."""
     return any(basename_for_tool(token, tool).lower() in _CD_PROGRAMS | {"popd"} for token in tokens)
 
 
-def _defined_function(tokens, parens_follow=False):
+def _defined_function(tokens: list[str],
+                      parens_follow: bool = False) -> tuple[str, list[str]] | None:
     """(name, the tokens after the name) when the statement opens `name() ...`, `name () ...` or
     `function name ...`, else None.
 
@@ -1136,6 +1151,15 @@ def _defined_function(tokens, parens_follow=False):
     return None
 
 
+@dataclasses.dataclass(slots=True)
+class _OpenBody:
+    """The `{ }` body of a function definition `_BodyTracker` is reading."""
+
+    name: str
+    braces: int = 0         # braces opened and not yet closed
+    moves: bool = False     # the body holds a cd
+
+
 class _BodyTracker:
     """Statements the walk reads but cannot place: case arms, branches, loop bodies, function bodies.
 
@@ -1152,28 +1176,30 @@ class _BodyTracker:
     closes.
     """
 
-    def __init__(self, tool):
+    def __init__(self, tool: str | None) -> None:
         self.tool = tool
         self.cases = 0          # `case ... esac` blocks open
-        self.blocks = []        # open `if`/loop blocks, innermost last: ("if" or "loop", subshell depth)
+        # open `if`/loop blocks, innermost last: ("if" or "loop", subshell depth)
+        self.blocks: list[tuple[str, int]] = []
         self.depth = 0          # subshells open around the statement being read
-        self.body = None        # [name, open braces, holds a cd] of the `{ }` body being read
-        self.pending = None     # a function named without its body: `f()` then `{` on the next line
-        self.moving = set()     # functions this command defined whose body holds a cd
+        self.body: _OpenBody | None = None      # the `{ }` body being read
+        # a function named without its body: `f()` then `{` on the next line
+        self.pending: str | None = None
+        self.moving: set[str] = set()   # functions this command defined whose body holds a cd
         self.unknown = False
 
     @property
-    def in_loop(self):
+    def in_loop(self) -> bool:
         return any(kind == "loop" for kind, _depth in self.blocks)
 
-    def statement(self, tokens, parens_follow=False, depth=0):
+    def statement(self, tokens: list[str], parens_follow: bool = False, depth: int = 0) -> bool:
         """Read one statement; True when it sits inside a function body and must not be applied.
 
         `depth` is how many subshells are open around it: a cd in a subshell opened INSIDE a block
         is undone before that block closes, so it reaches nothing after the block."""
         self.depth = depth
         if self.body is not None:
-            return self._in_body(tokens)
+            return self._in_body(self.body, tokens)
         definition = _defined_function(tokens, parens_follow)
         pending, self.pending = self.pending, None
         if definition is None and pending and tokens[:1] == ["{"]:
@@ -1186,7 +1212,7 @@ class _BodyTracker:
         self.unknown = self.unknown or program in self.moving
         return False
 
-    def _block(self, tokens):
+    def _block(self, tokens: list[str]) -> None:
         """Track `if ... fi` and the `... done` loops by their LEADING keywords, so `echo done`
         closes nothing; a statement can carry several (`then if b`, `done; done` arrive apart).
 
@@ -1195,7 +1221,7 @@ class _BodyTracker:
         is. A `while`/`until` condition runs again on every pass, and an `elif` may never run.
         A block guards only a cd at its own subshell depth: `while x; do (cd /r); done` keeps the
         cd inside its subshell, which the subshell tracker already undoes."""
-        opened = []
+        opened: list[str] = []
         for token in tokens:
             if token in _BLOCK_OPENERS:
                 opened.append(_BLOCK_OPENERS[token])
@@ -1210,24 +1236,23 @@ class _BodyTracker:
                    or "loop" in opened)
         self.unknown = self.unknown or (guarded and _moves_the_shell(tokens, self.tool))
 
-    def _open(self, name, rest):
+    def _open(self, name: str, rest: list[str]) -> bool:
         if rest[:1] != ["{"]:
             self.pending = None if rest else name
             return False
-        self.body = [name, 0, False]
-        return self._in_body(rest)
+        self.body = body = _OpenBody(name)
+        return self._in_body(body, rest)
 
-    def _in_body(self, tokens):
-        body = self.body
-        body[1] += tokens.count("{") - tokens.count("}")
-        body[2] = body[2] or _moves_the_shell(tokens, self.tool)
-        if body[1] <= 0:
-            if body[2]:
-                self.moving.add(body[0])
+    def _in_body(self, body: _OpenBody, tokens: list[str]) -> bool:
+        body.braces += tokens.count("{") - tokens.count("}")
+        body.moves = body.moves or _moves_the_shell(tokens, self.tool)
+        if body.braces <= 0:
+            if body.moves:
+                self.moving.add(body.name)
             self.body = None
         return True
 
-    def _case(self, program, tokens):
+    def _case(self, program: str | None, tokens: list[str]) -> None:
         """Track `case ... esac` by the program word, so an `echo case` opens nothing."""
         if program == "case":
             self.cases += 1
@@ -1237,8 +1262,8 @@ class _BodyTracker:
         self.unknown = self.unknown or (in_case and _moves_the_shell(tokens, self.tool))
 
 
-def git_verb_dir(command, cwd, verbs, tool_name: str | None = None, *,
-                 msys_drives=None) -> str | None:
+def git_verb_dir(command: str | None, cwd: str | None, verbs: Container[str],
+                 tool_name: str | None = None, *, msys_drives: bool | None = None) -> str | None:
     """The directory the first `git <verb>` in `command` runs in, or None when it is unreadable.
 
     Follows every cd-like statement before the verb, then the verb's own `-C` values, starting from
@@ -1302,7 +1327,8 @@ def git_verb_dir(command, cwd, verbs, tool_name: str | None = None, *,
     drives = reads_msys_drives(tool) if msys_drives is None else msys_drives
     text = blank_heredoc_bodies(command or "")
     segments = list(iter_segments(text, tool))
-    known, leading, previous_end = {}, tool == "Bash", 0
+    known: dict[str, str] = {}
+    leading, previous_end = tool == "Bash", 0
     subshells, gap_start, cdpath_set, home_set = _SubshellTracker(), 0, False, False
     bodies, chain, statement_end = _BodyTracker(tool), _AndOrList(), 0
     held: str | None | _Held = _NOT_HELD    # a verb's answer found inside a loop, kept until the loop closes
@@ -1376,8 +1402,9 @@ def git_verb_dir(command, cwd, verbs, tool_name: str | None = None, *,
     return None
 
 
-def git_segment_dir(tokens, verbs, here, tool_name: str | None = "Bash", *, msys_drives=None,
-                    unknown_mounts=True):
+def git_segment_dir(tokens: Sequence[str], verbs: Container[str], here: str | None,
+                    tool_name: str | None = "Bash", *, msys_drives: bool | None = None,
+                    unknown_mounts: bool = True) -> tuple[bool, str | None]:
     """(is this statement `git <verb>` for one of `verbs`, the directory it runs in or None).
 
     `here` is where the statement starts; the verb's own `-C` values move it, and a `--git-dir`,
