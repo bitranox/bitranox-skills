@@ -208,7 +208,7 @@ _COMMENT_MAY_FOLLOW = frozenset(" \t\n;&|(")
 # the spellings live in the walk below rather than in a pattern of their own.
 
 
-def _iter_separators(text, tool_name: str | None = None):
+def _iter_separators(text: str, tool_name: str | None = None) -> Iterator[tuple[int, int]]:
     """(start, end) of every separator in `text` that genuinely begins a new statement.
 
     Quoting decides this, and it decides it DIFFERENTLY for the two kinds of separator, which
@@ -334,7 +334,7 @@ def _iter_separators(text, tool_name: str | None = None):
         i += 1
 
 
-def _is_lone_ampersand(text, i):
+def _is_lone_ampersand(text: str, i: int) -> bool:
     """True when the `&` at `i` backgrounds a statement rather than belonging to an operator.
 
     The walk's twin of `_LONE_AMPERSAND`: `&&` is consumed before this is asked, and the `&` of
@@ -343,7 +343,7 @@ def _is_lone_ampersand(text, i):
     return (i == 0 or text[i - 1] not in "<>&|") and text[i + 1:i + 2] not in (">", "&")
 
 
-def _comment_end(text, start, size, backticks):
+def _comment_end(text: str, start: int, size: int, backticks: int) -> int:
     """Index where the `#` comment opening at `start` stops: its newline, or - inside an open
     backtick substitution - the backtick that closes it, whichever comes first. The newline and
     the backtick are both left for the caller to read, since each ends something itself."""
@@ -355,7 +355,7 @@ def _comment_end(text, start, size, backticks):
     return end
 
 
-def _ansi_c_end(text, start):
+def _ansi_c_end(text: str, start: int) -> int:
     """Index just past the `'` that closes an ANSI-C `$'...'` string whose body starts at `start`.
 
     Inside `$'...'` a backslash escapes the next character, `\\'` included - the one difference
@@ -1394,7 +1394,7 @@ def git_segment_dir(tokens, verbs, here, tool_name: str | None = "Bash", *, msys
                                     unknown_mounts)
 
 
-def iter_segments(text, tool_name: str | None = None):
+def iter_segments(text: str, tool_name: str | None = None) -> Iterator[tuple[int, str]]:
     """(offset, segment) for each statement in `text`, offsets into `text` itself.
 
     `SEP.split` throws the positions away, which is fine for a yes/no question and not fine for a
@@ -1405,9 +1405,10 @@ def iter_segments(text, tool_name: str | None = None):
 
 
 @_whole_command_view
-def _segments(text, tool_name: str | None = None):
+def _segments(text: str, tool_name: str | None = None) -> tuple[tuple[int, str], ...]:
     """`iter_segments` as a tuple, so a large command is split once however many ask."""
-    out, pos = [], 0
+    out: list[tuple[int, str]] = []
+    pos = 0
     for start, end in _iter_separators(text, tool_name):
         out.append((pos, text[pos:start]))
         pos = end
@@ -1435,8 +1436,11 @@ class ShellWord(str):
         word.unquoted_lead = unquoted_lead
         return word
 
-    def __getnewargs__(self) -> tuple[str, int]:
-        return str(self), self.unquoted_lead     # copy and pickle call __new__ with these
+    def __getnewargs_ex__(self) -> tuple[tuple[str, int], dict[str, object]]:
+        # copy and pickle (protocol 2 and up) call __new__ with these. The `_ex` form, which they
+        # ask for before str's own `__getnewargs__`, because overriding that one with a second
+        # argument breaks str's declared one-element signature.
+        return (str(self), self.unquoted_lead), {}
 
 
 class _WordBuilder:
@@ -1518,7 +1522,7 @@ def _posix_word(text: str, at: int, comments: bool) -> tuple[ShellWord | None, i
     return (built.word() if state == "a" else None), n
 
 
-def _after_line(text, at):
+def _after_line(text: str, at: int) -> int:
     """The index just past the newline that ends the line `at` is on, or len(text)."""
     end = text.find("\n", at)
     return len(text) if end < 0 else end + 1
@@ -1583,7 +1587,7 @@ def _windows_command_argv(command: str) -> list[str]:
     return args
 
 
-def _powershell_single_quoted(command, start):
+def _powershell_single_quoted(command: str, start: int) -> tuple[str | None, int]:
     """(text, index past the closing quote) of the PowerShell single-quoted string at `start`.
 
     A single-quoted string is VERBATIM (about_Quoting_Rules): no escape, no expansion, and `''`
@@ -1591,7 +1595,8 @@ def _powershell_single_quoted(command, start):
     apostrophe as an ordinary character - the Windows arm has never raised, and none of its
     callers catches a ValueError.
     """
-    out, i, n = [], start + 1, len(command)
+    out: list[str] = []
+    i, n = start + 1, len(command)
     while i < n:
         if command[i] != "'":
             out.append(command[i])
@@ -1658,7 +1663,7 @@ def _join_line_continuations(command: str) -> str:
     return "".join(out)
 
 
-def basename_for_tool(token, tool_name: str | None = "Bash"):
+def basename_for_tool(token: str, tool_name: str | None = "Bash") -> str:
     r"""The program name from a token that may carry a path, by the TOOL's separator rules.
 
     A guard asking "is this command `sed`?" has to strip the path first, and which characters
