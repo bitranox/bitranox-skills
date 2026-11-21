@@ -289,7 +289,7 @@ def _main(argv, out, err) -> int:
     err = err or sys.stderr
     _tolerate_unencodable(out)
     _tolerate_unencodable(err)
-    ap = EnvelopeArgumentParser(description=__doc__.splitlines()[0], envelope_command="grep-all")
+    ap = EnvelopeArgumentParser(description=(__doc__ or "grep-all").splitlines()[0], envelope_command="grep-all")
     ap.add_argument("pattern", help="python regex")
     ap.add_argument("paths", nargs="*", default=["."], help="files or dirs (default: .)")
     ap.add_argument("--glob", help="only files matching this glob, e.g. '*.md'")

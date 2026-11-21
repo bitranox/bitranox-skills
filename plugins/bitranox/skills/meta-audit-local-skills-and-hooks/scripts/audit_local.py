@@ -408,7 +408,7 @@ def cmd_check(args, out=None, err=None):
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "audit_local").splitlines()[0])
     subs = parser.add_subparsers(dest="command", required=True)
     targets = subs.add_parser("targets", help="list the skill dirs no plugin ships, then exit")
     targets.add_argument("--root", action="append", default=[],

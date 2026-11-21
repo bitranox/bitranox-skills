@@ -530,7 +530,7 @@ def _assert_agree(root: Path, version: str) -> None:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "bump_version").split("\n\n")[0])
     target = parser.add_mutually_exclusive_group()
     target.add_argument("--part", type=Part, choices=tuple(Part), help="raise this part of origin's version")
     target.add_argument("--to", help="the exact new version (must be above origin's)")

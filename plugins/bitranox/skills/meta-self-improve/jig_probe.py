@@ -425,7 +425,7 @@ def _at_least_one(text):
 
 
 def _parse(argv):
-    p = argparse.ArgumentParser(prog="jig_probe.py", description=__doc__.splitlines()[0])
+    p = argparse.ArgumentParser(prog="jig_probe.py", description=(__doc__ or "jig_probe.py").splitlines()[0])
     sub = p.add_subparsers(dest="cmd", required=True)
     for name in ("size", "run"):
         s = sub.add_parser(name)

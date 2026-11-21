@@ -25,16 +25,8 @@ pass that check. Symbols that are intentionally allowed (arrow, multiply sign,
 the low-9 quotes, their closing partners and the guillemets - which is correct
 typography rather than a tell and is not in the detector's set either.
 
-Usage:
-  strip_typographic_tells.py FILE [FILE ...]   rewrite each file in place
-  strip_typographic_tells.py --check FILE ...  exit 1 if any tell remains (no write)
-  strip_typographic_tells.py -                 read stdin, write normalized stdout
-  strip_typographic_tells.py -- -FILE ...      a file whose name starts with '-' goes after --
-  strip_typographic_tells.py -h | --help       print this usage and exit 0
-
-Exit 0 done or clean, 1 (--check only) a tell remains, 2 could not run: an unknown option, a FILE
-missing, unreadable, not UTF-8 or not writable, or stdin not UTF-8. The other files are still
-processed, and 2 wins over 1.
+Usage and exit codes: `USAGE` below, the text `--help` prints. It lives in a constant, not
+here, because `python -OO` strips this docstring.
 
 The replacement table is built from code points with chr()/ranges so this script
 is itself pure ASCII and passes the same check.
@@ -215,7 +207,20 @@ def normalize(text):
         _break_prose_separators(text), _normalize_prose, edges=True)
 
 
-USAGE = __doc__[__doc__.index("Usage:"):__doc__.index("The replacement table")].rstrip() + "\n"
+# Not sliced out of the module docstring: `python -OO` strips that, and the CLI then could not
+# even print its usage.
+USAGE = """\
+Usage:
+  strip_typographic_tells.py FILE [FILE ...]   rewrite each file in place
+  strip_typographic_tells.py --check FILE ...  exit 1 if any tell remains (no write)
+  strip_typographic_tells.py -                 read stdin, write normalized stdout
+  strip_typographic_tells.py -- -FILE ...      a file whose name starts with '-' goes after --
+  strip_typographic_tells.py -h | --help       print this usage and exit 0
+
+Exit 0 done or clean, 1 (--check only) a tell remains, 2 could not run: an unknown option, a FILE
+missing, unreadable, not UTF-8 or not writable, or stdin not UTF-8. The other files are still
+processed, and 2 wins over 1.
+"""
 
 
 class _UsageError(Exception):

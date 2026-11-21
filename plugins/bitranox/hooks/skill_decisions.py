@@ -876,7 +876,7 @@ _VERBS = {"add": _cmd_add, "show": _cmd_show, "check": _cmd_check}
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = _Parser(prog=_PROG, description=__doc__.split("\n")[0])
+    parser = _Parser(prog=_PROG, description=(__doc__ or _PROG).split("\n")[0])
     parser.add_argument("--json", action="store_true", help="print a JSON envelope")
     sub = parser.add_subparsers(dest="command", required=True)
     add = sub.add_parser("add", help="append entries from a JSON file")

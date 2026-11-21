@@ -891,7 +891,8 @@ def main(argv=None):
     utf8_stdio()
     argv = sys.argv[1:] if argv is None else argv
     if "-h" in argv or "--help" in argv:
-        print(__doc__)
+        if __doc__:                  # None under python -OO, which strips docstrings
+            print(__doc__)
         print(USAGE)
         return 0
     parsed = _parse(argv)

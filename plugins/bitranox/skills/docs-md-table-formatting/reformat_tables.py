@@ -583,7 +583,7 @@ def _parse_args(args):
         elif arg == "--strict":
             options["strict"] = True
         elif arg in ("--help", "-h"):
-            print(__doc__.strip())
+            print((__doc__ or USAGE).strip())
             sys.exit(EXIT_OK)
         elif arg.startswith("-"):
             print(f"Unknown option: {arg}", file=sys.stderr)

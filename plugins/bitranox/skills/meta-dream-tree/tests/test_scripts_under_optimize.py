@@ -88,3 +88,12 @@ def test_topic_tagging_items_runs_under_oo(tmp_path: Path) -> None:
                 str(root), "--out", str(out))
     assert r.returncode == 0, r.stderr
     assert "alpha-rule" in out.read_text(encoding="utf-8")
+
+
+def test_dream_state_help_prints_its_usage_not_none_under_oo(tmp_path: Path) -> None:
+    """dream_state's --help printed `__doc__` before its usage: under -OO the first line was
+    the word None."""
+    r = _run_oo(tmp_path, "dream_state.py", "--help")
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.startswith("usage: dream_state.py"), r.stdout
+    assert "None" not in r.stdout.splitlines()[0]

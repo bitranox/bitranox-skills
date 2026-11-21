@@ -224,7 +224,7 @@ def _text(report: Report, skipped: list[dict[str, str]], files: int) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point; returns the exit code."""
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "raisesmatch").splitlines()[0])
     parser.add_argument("paths", nargs="*", type=Path, default=[Path("tests")], help="files or dirs (default: tests)")
     parser.add_argument("--json", action="store_true", help="emit a JSON envelope")
     parser.add_argument("--require-match", action="store_true", help="also flag raises/warns with no match=")

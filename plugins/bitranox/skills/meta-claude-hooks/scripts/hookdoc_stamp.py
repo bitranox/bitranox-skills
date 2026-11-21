@@ -1125,7 +1125,7 @@ def cmd_baseline(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     skill = skill_dir()
-    p = argparse.ArgumentParser(prog="hookdoc_stamp", description=__doc__.split("\n")[0])
+    p = argparse.ArgumentParser(prog="hookdoc_stamp", description=(__doc__ or "hookdoc_stamp").split("\n")[0])
     p.add_argument("--json", action="store_true", help="emit the JSON envelope on stdout")
     sub = p.add_subparsers(dest="command", required=True)
 
