@@ -85,6 +85,7 @@ import sys
 # ALIGNED helpers blank that data in place instead of deleting it, so every offset found on the
 # scanned text is an offset into the raw command: that is what lets the write arm compare a
 # write's position with the gated verb's, and slice a file name out of the raw text.
+from hook_event import parse_pre_tool_use
 from shell_text import (
     HEREDOC_OPEN,
     argv_for_match,
@@ -346,13 +347,13 @@ def notice(command, tool_name=None):
     return None
 
 
-def main(raw=None) -> int:
+def main(raw: str | None = None) -> int:
     """Read the hook event, emit additionalContext when the shape matches. Always exits 0."""
     try:
-        payload = json.loads(raw if raw is not None else sys.stdin.read() or "{}")
+        payload = parse_pre_tool_use(json.loads(raw if raw is not None else sys.stdin.read() or "{}"))
     except (ValueError, TypeError):
         return 0
-    if not isinstance(payload, dict) or not is_shell_tool(payload.get("tool_name")):
+    if payload is None or not is_shell_tool(payload.get("tool_name")):
         return 0
     tool_input = payload.get("tool_input")
     command = tool_input.get("command") if isinstance(tool_input, dict) else None

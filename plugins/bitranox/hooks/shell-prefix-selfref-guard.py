@@ -26,6 +26,7 @@ import json
 import re
 import sys
 
+from hook_event import parse_pre_tool_use
 import shell_text
 
 # Shared with the other command-scanning guards: a heredoc body is DATA, and scanning it makes a
@@ -223,8 +224,10 @@ def main() -> int:
     """Block the call when a prefix assignment is referenced on its own line."""
 
     try:
-        event = json.load(sys.stdin)
+        event = parse_pre_tool_use(json.load(sys.stdin))
     except Exception:
+        return 0
+    if event is None:
         return 0
     command = (event.get("tool_input") or {}).get("command") or ""
     tool_name = event.get("tool_name") or "Bash"

@@ -25,6 +25,7 @@ import json
 import re
 import sys
 
+from hook_event import parse_pre_tool_use
 from shell_text import strip_data_sink_statements, strip_heredoc_bodies
 
 # `pwsh` is PowerShell 7+; both take -Command/-c and both are reached the same way over ssh.
@@ -115,8 +116,10 @@ def build_notice(command: str, tool_name=None) -> str | None:
 
 def main() -> int:
     try:
-        event = json.load(sys.stdin)
+        event = parse_pre_tool_use(json.load(sys.stdin))
     except (json.JSONDecodeError, ValueError):
+        return 0
+    if event is None:
         return 0
     try:
         notice = build_notice(str((event.get("tool_input") or {}).get("command") or ""),

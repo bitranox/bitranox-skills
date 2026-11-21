@@ -100,6 +100,7 @@ import json
 import re
 import sys
 
+from hook_event import parse_pre_tool_use
 import shell_text
 from shell_text import (
     drop_redirections,
@@ -352,10 +353,10 @@ def refusal(line):
 def main() -> int:
     """Block an ssh call whose remote cmd.exe line chains after an unparenthesised `if`."""
     try:
-        event = json.load(sys.stdin)
+        event = parse_pre_tool_use(json.load(sys.stdin))
     except (json.JSONDecodeError, ValueError):
         return 0
-    if not isinstance(event, dict):
+    if event is None:
         return 0
     command = str((event.get("tool_input") or {}).get("command") or "")
     tool_name = event.get("tool_name") or "Bash"

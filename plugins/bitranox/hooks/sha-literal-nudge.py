@@ -84,6 +84,7 @@ import re
 import sys
 from pathlib import Path
 
+from hook_event import PreToolUseEvent, parse_pre_tool_use
 from shell_text import (
     argv_for_match,
     blank_unexpanded_text,
@@ -694,7 +695,7 @@ def notice(command, tool_name=None, shown=None):
     return " ".join(parts) or None
 
 
-def _transcripts(event):
+def _transcripts(event: PreToolUseEvent):
     """(own, relayed): the session transcripts that vouch for a sha, and a subagent's own file.
 
     Inside a subagent `transcript_path` is the MAIN session's and `agent_id` names the subagent,
@@ -722,10 +723,10 @@ def _transcripts(event):
 
 def main() -> int:
     try:
-        event = json.load(sys.stdin)
+        event = parse_pre_tool_use(json.load(sys.stdin))
     except Exception:  # noqa: BLE001 - no/invalid stdin: do nothing
         return 0
-    if not isinstance(event, dict) or not is_shell_tool(event.get("tool_name")):
+    if event is None or not is_shell_tool(event.get("tool_name")):
         return 0
     command = (event.get("tool_input") or {}).get("command")
     tool_name = event.get("tool_name")

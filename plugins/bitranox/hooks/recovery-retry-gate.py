@@ -53,9 +53,11 @@ import json
 import os
 import re
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from typing import NamedTuple
 
+from hook_event import parse_pre_tool_use
 from shell_text import (  # noqa: E402 - shared with the guards
     is_shell_tool,
     strip_heredoc_bodies,
@@ -180,7 +182,7 @@ _SEARCH_ARG = re.compile(
 )
 
 
-def recovery_class(tool: str, tool_input: dict) -> str:
+def recovery_class(tool: str, tool_input: Mapping[str, object]) -> str:
     """Which kind of undo this call performs, or "" for none. PURE."""
     if not is_shell_tool(tool):
         return ""
@@ -211,11 +213,11 @@ _PUBKEY = re.compile(r"\bssh-(?:rsa|ed25519|dss)\s+AAAA[\w+/=]+(?:\s+\S+@\S+)?")
 _REMOTE_VERB = re.compile(r"\b(?:ssh|scp|sftp|rsync)\b")
 
 
-def _basename(path: str) -> str:
+def _basename(path: object) -> str:
     return re.split(r"[\\/]", str(path or ""))[-1]
 
 
-def mentions(tool: str, tool_input: dict) -> set:
+def mentions(tool: str, tool_input: Mapping[str, object]) -> set:
     """Every identifiable SUBJECT this call names: guests, hosts, files. PURE.
 
     Every subject, not one normalised target per call. Repetition on a fleet crosses spellings - the
@@ -242,7 +244,7 @@ def mentions(tool: str, tool_input: dict) -> set:
     return {identifier for identifier in found if len(identifier) < 80}
 
 
-def acting_text(tool: str, tool_input: dict) -> str:
+def acting_text(tool: str, tool_input: Mapping[str, object]) -> str:
     """The text whose destructive operations count for this call. PURE.
 
     A notebook cell's `new_source` counts as a written script's content does: `!rm -rf` or a
@@ -507,10 +509,10 @@ def build_message(damage_index: int, subjects: list, ops: list, gap: int) -> str
 
 def main() -> int:
     try:
-        event = json.load(sys.stdin)
+        event = parse_pre_tool_use(json.load(sys.stdin))
     except Exception:                                     # noqa: BLE001 - no/invalid stdin: do nothing
         return 0
-    if not isinstance(event, dict):
+    if event is None:
         return 0
     tool = event.get("tool_name") or ""
     session = event.get("session_id") or ""
@@ -518,9 +520,7 @@ def main() -> int:
     if tool not in GATED_TOOLS or not session or not transcript:
         return 0
 
-    tool_input = event.get("tool_input")
-    if not isinstance(tool_input, dict):                  # the same guard `_tool_calls` applies
-        tool_input = {}
+    tool_input = event.get("tool_input") or {}             # absent as `_tool_calls` reads it
     text = acting_text(tool, tool_input)
     state = _load(session) or {"v": STATE_VERSION, "off": 0, "n": 0}
     # Absorbed record by record as each chunk is read, holding back only the newest: it may be the

@@ -18,6 +18,7 @@ Exit 2 through `shell_text.refuse`; every other path, any error included, exits 
 import json
 import sys
 
+from hook_event import parse_pre_tool_use
 import shell_text
 from shell_text import argv_for_match, basename_for_tool, iter_segments, statement_program
 
@@ -67,10 +68,10 @@ def assess(command, tool_name="Bash"):
 
 def main():
     try:
-        event = json.load(sys.stdin)
+        event = parse_pre_tool_use(json.load(sys.stdin))
     except ValueError:                                   # no or invalid stdin: nothing to judge
         return 0
-    if not isinstance(event, dict):
+    if event is None:
         return 0
     command = (event.get("tool_input") or {}).get("command") or ""
     message = assess(command, event.get("tool_name") or "")

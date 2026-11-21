@@ -31,6 +31,7 @@ import json
 import re
 import sys
 
+from hook_event import parse_pre_tool_use
 from shell_text import (
     argv_for_match,
     basename_for_tool,
@@ -229,10 +230,10 @@ def notice(command, tool_name=None):
 def main() -> int:
     """Read the hook event, emit additionalContext when the shape matches. Always exits 0."""
     try:
-        event = json.load(sys.stdin)
+        event = parse_pre_tool_use(json.load(sys.stdin))
     except (json.JSONDecodeError, ValueError):
         return 0
-    if not isinstance(event, dict) or not is_shell_tool(event.get("tool_name")):
+    if event is None or not is_shell_tool(event.get("tool_name")):
         return 0
     tool_input = event.get("tool_input")
     if not isinstance(tool_input, dict):

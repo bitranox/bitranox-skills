@@ -23,6 +23,7 @@ from pathlib import Path
 # Shared with the other command-scanning guards: a heredoc body is DATA, and scanning it makes a
 # guard fire on prose that merely mentions the chore it watches for. Re-exported so callers and
 # tests can keep reaching it as `toolbox_nudge.strip_heredoc_bodies`.
+from hook_event import parse_pre_tool_use
 from shell_text import (  # noqa: F401
     blank_unexpanded_text, heredoc_bodies, is_shell_tool, strip_heredoc_bodies,
 )
@@ -921,10 +922,10 @@ def _already_nudged(session, tool):
 
 def main():
     try:
-        event = json.load(sys.stdin)
+        event = parse_pre_tool_use(json.load(sys.stdin))
     except Exception:                                    # noqa: BLE001 - no/invalid stdin: do nothing
         return 0
-    if not isinstance(event, dict) or event.get("tool_name") not in _SCANNED_TOOLS:
+    if event is None or event.get("tool_name") not in _SCANNED_TOOLS:
         return 0
     tool_input = event.get("tool_input") or {}
     if event.get("tool_name") == "Bash" and splice_span.runs_an_unchecked_splice(

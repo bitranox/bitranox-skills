@@ -27,6 +27,7 @@ import json
 import re
 import sys
 
+from hook_event import parse_pre_tool_use
 from shell_text import commands_only, is_shell_tool, refuse, strip_data_sink_statements, strip_heredoc_bodies
 
 # `sed`/`gsed` at a command position, then a 1,/regex/ range ending in `d`. The end pattern is
@@ -107,13 +108,13 @@ def refused(command, tool_name=None):
     return bool(match) and _writes_a_file(text, match, tool_name)
 
 
-def main(raw=None) -> int:
+def main(raw: str | None = None) -> int:
     """Read the hook event, emit additionalContext when the shape matches. Always exits 0."""
     try:
-        payload = json.loads(raw if raw is not None else sys.stdin.read() or "{}")
+        payload = parse_pre_tool_use(json.loads(raw if raw is not None else sys.stdin.read() or "{}"))
     except (ValueError, TypeError):
         return 0
-    if not isinstance(payload, dict) or not is_shell_tool(payload.get("tool_name")):
+    if payload is None or not is_shell_tool(payload.get("tool_name")):
         return 0
     tool_input = payload.get("tool_input")
     command = tool_input.get("command") if isinstance(tool_input, dict) else None

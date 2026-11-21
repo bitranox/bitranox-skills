@@ -43,6 +43,7 @@ import os
 import re
 import sys
 
+from hook_event import parse_pre_tool_use
 from self_improve_signals import session_state_path
 from shell_text import (
     argv_for_match,
@@ -191,13 +192,13 @@ def notice(command, tool_name="Bash", cwd=None):
 
 def main() -> int:
     try:
-        event = json.load(sys.stdin)
+        event = parse_pre_tool_use(json.load(sys.stdin))
     except Exception:  # noqa: BLE001 - no/invalid stdin: do nothing
         return 0
-    if isinstance(event, dict) and event.get("tool_name") == "AskUserQuestion":
+    if event is not None and event.get("tool_name") == "AskUserQuestion":
         _answer_question(event.get("session_id"))
         return 0
-    if not isinstance(event, dict):
+    if event is None:
         return 0
     tool_name = event.get("tool_name")
     if not is_shell_tool(tool_name):

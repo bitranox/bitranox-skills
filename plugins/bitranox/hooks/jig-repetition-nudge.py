@@ -43,6 +43,7 @@ import sys
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from hook_event import PreToolUseEvent, parse_pre_tool_use
 from shell_text import is_shell_tool, iter_heredocs  # noqa: E402 - shared with the other command guards
 
 SCRIPT_SUFFIXES = {".ps1", ".py", ".sh", ".bash", ".psm1"}
@@ -666,7 +667,7 @@ def build_message(group, entries, nth):
 
 # ----------------------------------------------------------------------------- entry point
 
-def _written_scripts(event):
+def _written_scripts(event: PreToolUseEvent):
     """[(path, content)] of the script files this tool call authors. PURE."""
     tool = event.get("tool_name")
     tool_input = event.get("tool_input") or {}
@@ -684,10 +685,10 @@ def _written_scripts(event):
 
 def main():
     try:
-        event = json.load(sys.stdin)
+        event = parse_pre_tool_use(json.load(sys.stdin))
     except Exception:                                     # noqa: BLE001 - no/invalid stdin: do nothing
         return 0
-    if not isinstance(event, dict):
+    if event is None:
         return 0
     candidates = _written_scripts(event)
     session = event.get("session_id") or ""

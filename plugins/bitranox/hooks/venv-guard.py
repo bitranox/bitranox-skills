@@ -33,6 +33,7 @@ import os
 import sys
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
+from hook_event import parse_pre_tool_use
 from shell_text import (
     argv_for_match,
     basename_for_tool,
@@ -360,8 +361,10 @@ def _same_path(a, b) -> bool:
 
 def main() -> int:
     try:
-        event = json.load(sys.stdin)
+        event = parse_pre_tool_use(json.load(sys.stdin))
     except (json.JSONDecodeError, ValueError):
+        return 0
+    if event is None:
         return 0
     try:
         command = str((event.get("tool_input") or {}).get("command") or "")

@@ -26,6 +26,7 @@ import re
 import sys
 from pathlib import Path
 
+from hook_event import PreToolUseEvent, parse_pre_tool_use
 import shell_text
 
 __all__ = ["assess", "main", "new_stamp_problems"]
@@ -140,7 +141,7 @@ def _bash_writes(command, cwd, os_name=os.name):
     return "\n".join(added), old, path.replace("\\", "/").rsplit("/", 1)[-1]
 
 
-def assess(event, now_local=None, now_utc=None, *, os_name=os.name):
+def assess(event: PreToolUseEvent, now_local=None, now_utc=None, *, os_name=os.name):
     """The nudge text for this PreToolUse event, or None. PURE apart from reading the target.
     `os_name` is the host a Bash command's paths are read for (see `_bash_writes`), a parameter
     so tests reach the Windows reading on any host."""
@@ -173,12 +174,12 @@ def assess(event, now_local=None, now_utc=None, *, os_name=os.name):
     return message % (stamp, name, clock)
 
 
-def main(raw=None):
+def main(raw: str | None = None) -> int:
     try:
-        event = json.loads(raw if raw is not None else sys.stdin.read() or "{}")
+        event = parse_pre_tool_use(json.loads(raw if raw is not None else sys.stdin.read() or "{}"))
     except (ValueError, TypeError):
         return 0
-    if not isinstance(event, dict):
+    if event is None:
         return 0
     text = assess(event)
     if text:

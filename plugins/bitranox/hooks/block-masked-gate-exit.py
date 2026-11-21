@@ -48,6 +48,7 @@ import os
 import re
 import sys
 
+from hook_event import parse_pre_tool_use
 import shell_text
 from shell_text import (
     BACKGROUND_GATE_RE,
@@ -847,8 +848,10 @@ def masks_a_state_change(command: str, tool_name: str = "Bash") -> tuple[str, st
 
 def main() -> int:
     try:
-        data = json.load(sys.stdin)
+        data = parse_pre_tool_use(json.load(sys.stdin))
     except Exception:
+        return 0
+    if data is None:
         return 0
     cmd = (data.get("tool_input") or {}).get("command") or ""
     if not cmd:

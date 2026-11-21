@@ -40,6 +40,7 @@ import re
 import sys
 from pathlib import Path
 
+from hook_event import parse_pre_tool_use
 import shell_text
 import splice_span
 
@@ -112,10 +113,10 @@ def assess(command, tool_name="Bash"):
 
 def main():
     try:
-        event = json.load(sys.stdin)
+        event = parse_pre_tool_use(json.load(sys.stdin))
     except ValueError:                                   # no or invalid stdin: nothing to judge
         return 0
-    if not isinstance(event, dict):
+    if event is None:
         return 0
     command = (event.get("tool_input") or {}).get("command") or ""
     message = assess(command, event.get("tool_name") or "")

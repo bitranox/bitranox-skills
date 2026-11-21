@@ -63,6 +63,7 @@ import json
 import re
 import sys
 
+from hook_event import parse_pre_tool_use
 import shell_text
 from shell_text import (
     argv_for_match,
@@ -513,12 +514,13 @@ def _refusal(found):
     )
 
 
-def main(raw=None):
+def main(raw: str | None = None) -> int:
     """Refuse an unfiltered secret-bearing print. Exit 2 blocks; every other path exits 0."""
     try:
-        event = json.loads(raw if raw is not None else sys.stdin.read() or "{}")
-        tool_input = event.get("tool_input") if isinstance(event, dict) else None
-        command = tool_input.get("command") if isinstance(tool_input, dict) else None
+        event = parse_pre_tool_use(json.loads(raw if raw is not None else sys.stdin.read() or "{}"))
+        if event is None:
+            return 0
+        command = (event.get("tool_input") or {}).get("command")
         tool_name = event.get("tool_name") or "Bash"
         found = secret_prints(command, tool_name)
     except Exception:  # noqa: BLE001 - a broken guard must never wedge a turn

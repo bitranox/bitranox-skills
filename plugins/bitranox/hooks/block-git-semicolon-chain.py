@@ -96,6 +96,7 @@ import re
 import sys
 from typing import NamedTuple
 
+from hook_event import parse_pre_tool_use
 import shell_text
 
 # Shared with the other command-scanning guards. `mask_data_regions` replaces quoted strings,
@@ -809,8 +810,10 @@ def _chained_pair(walked: _Walked) -> list[str] | None:
 
 def main() -> int:
     try:
-        event = json.load(sys.stdin)
+        event = parse_pre_tool_use(json.load(sys.stdin))
     except Exception:
+        return 0
+    if event is None:
         return 0
     command = (event.get("tool_input") or {}).get("command") or ""
     tool_name = event.get("tool_name") or "Bash"

@@ -59,6 +59,7 @@ import sys
 
 # `runs_a_gate` lives in shell_text beside the gate vocabulary, so block-masked-gate-exit reads the
 # program word the same way when it asks whether a piped element is a gate.
+from hook_event import parse_pre_tool_use
 import shell_text
 from shell_text import (
     basename_for_tool,
@@ -152,10 +153,10 @@ def refusal(gate):
 
 def main() -> int:
     try:
-        event = json.load(sys.stdin)
+        event = parse_pre_tool_use(json.load(sys.stdin))
     except Exception:  # noqa: BLE001 - no/invalid stdin: do nothing
         return 0
-    if not isinstance(event, dict):
+    if event is None:
         return 0
     tool_name = event.get("tool_name")
     if not is_shell_tool(tool_name):

@@ -20,6 +20,7 @@ import json
 import os
 import sys
 
+from hook_event import parse_pre_tool_use
 from shell_text import (
     argv_for_match, basename_for_tool, directory_change, is_shell_tool, iter_segments, resolve_path,
     statement_program, strip_heredoc_bodies,
@@ -131,10 +132,10 @@ def _already_nudged(session):
 
 def main() -> int:
     try:
-        event = json.load(sys.stdin)
+        event = parse_pre_tool_use(json.load(sys.stdin))
     except Exception:  # noqa: BLE001 - no/invalid stdin: do nothing
         return 0
-    if not isinstance(event, dict) or not is_shell_tool(event.get("tool_name")):
+    if event is None or not is_shell_tool(event.get("tool_name")):
         return 0
     message = notice((event.get("tool_input") or {}).get("command"), event.get("cwd"),
                      event.get("tool_name"))

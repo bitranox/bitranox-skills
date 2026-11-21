@@ -37,6 +37,7 @@ import re
 import sys
 from pathlib import Path
 
+from hook_event import parse_pre_tool_use
 import shell_text
 
 # Pyright options that consume the following token, so it is a value and not a
@@ -450,8 +451,10 @@ def _excluded_tests(paths: list[str], where: str | None) -> tuple[list[str], Pat
 
 def main() -> int:
     try:
-        data = json.load(sys.stdin)
+        data = parse_pre_tool_use(json.load(sys.stdin))
     except Exception:
+        return 0
+    if data is None:
         return 0
     cmd = (data.get("tool_input") or {}).get("command") or ""
     if not cmd:

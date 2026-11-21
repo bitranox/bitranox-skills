@@ -62,6 +62,7 @@ import sys
 import unicodedata
 from pathlib import PurePath
 
+from hook_event import parse_pre_tool_use
 import shell_text
 
 #: The argument fields each tool WRITES. Anything else (paths, old_string, descriptions) is not
@@ -252,15 +253,15 @@ def block_reason(tool_name: str, tool_input: object) -> str | None:
 
 def main() -> int:
     try:
-        event = json.load(sys.stdin)
+        event = parse_pre_tool_use(json.load(sys.stdin))
     except Exception:  # noqa: BLE001 - no/invalid stdin: do nothing
         return 0
-    if not isinstance(event, dict) or not isinstance(event.get("tool_name"), str):
+    if event is None or (tool_name := event.get("tool_name")) is None:
         return 0
-    refusal = block_reason(event["tool_name"], event.get("tool_input"))
+    refusal = block_reason(tool_name, event.get("tool_input"))
     if refusal:
         return shell_text.refuse(refusal)
-    message = notice(event["tool_name"], event.get("tool_input"))
+    message = notice(tool_name, event.get("tool_input"))
     if message:
         sys.stdout.write(json.dumps({"hookSpecificOutput": {
             "hookEventName": "PreToolUse",

@@ -55,6 +55,7 @@ import os
 import re
 import sys
 
+from hook_event import parse_pre_tool_use
 from shell_text import (
     blank_heredoc_bodies,
     commands_only_aligned,
@@ -243,10 +244,10 @@ def _notice(path, cwd, elsewhere):
 
 def main() -> int:
     try:
-        event = json.load(sys.stdin)
+        event = parse_pre_tool_use(json.load(sys.stdin))
     except Exception:  # noqa: BLE001 - no/invalid stdin: do nothing
         return 0
-    if not isinstance(event, dict):
+    if event is None:
         return 0
     tool_name = event.get("tool_name")
     if not is_shell_tool(tool_name):

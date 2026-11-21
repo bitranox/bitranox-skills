@@ -60,6 +60,7 @@ import json
 import re
 import sys
 
+from hook_event import parse_pre_tool_use
 import shell_text
 from shell_text import (
     argv_for_match,
@@ -358,10 +359,12 @@ def _nudge(leak):
 
 def main() -> int:
     try:
-        event = json.load(sys.stdin)
+        event = parse_pre_tool_use(json.load(sys.stdin))
     except Exception:  # noqa: BLE001 - no/invalid stdin: do nothing
         return 0
-    tool_name = event.get("tool_name") if isinstance(event, dict) else None
+    if event is None:
+        return 0
+    tool_name = event.get("tool_name")
     if not is_shell_tool(tool_name):
         return 0
     command = (event.get("tool_input") or {}).get("command") or ""
