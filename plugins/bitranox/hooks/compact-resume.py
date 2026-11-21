@@ -82,38 +82,14 @@ import os
 import re
 import sys
 import time
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import NamedTuple, Protocol, cast
+from typing import NamedTuple, cast
 
 import checkpoint_names
 import open_work
 import self_improve_signals as sig
 import shell_text
-
-
-class _ShellText(Protocol):
-    """The shell_text readers this hook calls, with the types they hand back.
-
-    shell_text leaves these parameters and returns unannotated, so every call read as partially
-    unknown. `_SHELL` below is the module itself assigned to this protocol: pyright checks each
-    member against the module's own definition, and each call site gets a typed answer.
-    """
-
-    def argv_for_match(self, segment: str, tool_name: str = ...) -> Sequence[str]: ...
-
-    def directory_change(self, statement: str, here: str | None) -> tuple[bool, str | None]: ...
-
-    def iter_heredocs(self, command: str) -> Iterator[tuple[int, object, tuple[int, int]]]: ...
-
-    def is_rooted(self, path: str) -> bool: ...
-
-    def msys_drive_path_for_tool(self, path: str) -> str | None: ...
-
-    def strip_heredoc_bodies(self, command: str) -> str: ...
-
-
-_SHELL: _ShellText = shell_text
 
 #: A filesystem path as the callers hand it in: text or a path object.
 _PathArg = str | os.PathLike[str]
@@ -591,8 +567,8 @@ def bash_targets(command: object, cwd: str | None) -> dict[str, bool]:
     out: dict[str, bool] = {}
     here: str | None = cwd or None
     bases: set[str | None] = set()
-    for statement in _statements(_SHELL.strip_heredoc_bodies(command)):
-        changed, landing = _SHELL.directory_change(statement, here)
+    for statement in _statements(shell_text.strip_heredoc_bodies(command)):
+        changed, landing = shell_text.directory_change(statement, here)
         if changed:
             here = landing
             continue
@@ -600,7 +576,7 @@ def bash_targets(command: object, cwd: str | None) -> dict[str, bool]:
             bases.add(here)
         _collect_targets(statement, here, out, shell=True)
     lines = command.split("\n")
-    for _line, _opener, (start, end) in _SHELL.iter_heredocs(command):
+    for _line, _opener, (start, end) in shell_text.iter_heredocs(command):
         body = "\n".join(lines[start:end])
         for base in bases or {None}:
             _collect_targets(body, base, out, shell=False)
@@ -651,7 +627,7 @@ def _collect_targets(text: str, base: str | None, out: dict[str, bool], *, shell
     if not _BASH_CHANGES.search(text):
         return
     removes = bool(_BASH_REMOVES.search(text))
-    words = _SHELL.argv_for_match(text.strip(), "Bash")
+    words = shell_text.argv_for_match(text.strip(), "Bash")
     program = next((w for w in words if "=" not in w), "")
     raw = shell                      # the text still carries the shell's quotes and escapes
     if os.path.basename(program) in _COPY_PROGRAMS and len(words) > 1:
@@ -668,7 +644,7 @@ def _collect_targets(text: str, base: str | None, out: dict[str, bool], *, shell
         if "$" in token or not checkpoint_names.is_checkpoint_name(os.path.basename(token)):
             continue
         token = os.path.expanduser(token)
-        if not _SHELL.is_rooted(token):
+        if not shell_text.is_rooted(token):
             if not base:
                 continue
             token = os.path.join(base, token)
@@ -689,7 +665,7 @@ def _as_bash_reads(token: str, *, escaped: bool) -> str | None:
     """
     if escaped:
         token = _BASH_ESCAPE.sub(r"\1", token)
-    return _SHELL.msys_drive_path_for_tool(token)
+    return shell_text.msys_drive_path_for_tool(token)
 
 
 def _epoch(stamp: object) -> float | None:

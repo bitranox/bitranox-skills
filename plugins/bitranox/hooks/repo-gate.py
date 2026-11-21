@@ -93,7 +93,7 @@ import sys
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
 from types import ModuleType
-from typing import IO, AbstractSet, Any, Protocol, TypeIs
+from typing import Any, TypeIs
 
 _HOOKS_DIR = Path(__file__).resolve().parent
 if str(_HOOKS_DIR) not in sys.path:
@@ -110,26 +110,7 @@ import skill_frontmatter  # noqa: E402
 # same question for its own reason (a commit is when work concludes, which is when the
 # decision-review nudge fires), and two copies of this regex set would drift silently in both
 # directions. Re-exported here because this module's own tests and callers name it.
-# A typed view of `shell_text`, the one sibling module this gate still reaches through a view:
-# shell_text leaves most parameters and returns unannotated, so a direct call yields Unknown
-# everywhere it flows. The other helpers this gate calls (harness_checks, secret_patterns,
-# skill_frontmatter) declare their own types and are called directly. The view is a Protocol the
-# module object itself is passed as (not a cast): pyright checks the module against it, and a call
-# still resolves on the live module, so nothing is bound at import.
-class _ShellText(Protocol):
-    def iter_segments(self, text: str, tool_name: str | None = None) -> Iterator[tuple[int, str]]: ...
-    def is_git_verb(self, segment: str, verbs: AbstractSet[str], tool_name: str = "Bash") -> bool: ...
-    def split_for_tool(self, command: str, tool_name: str = "Bash", comments: bool = False) -> list[str]: ...
-    def is_gated_command(self, command: str, tool_name: str | None = None) -> bool: ...
-    def git_verb_dir(self, command: str, cwd: str, verbs: AbstractSet[str],
-                     tool_name: str | None = None) -> str | None: ...
-    def is_rooted(self, path: str) -> bool: ...
-    def git_verb_operands(self, tokens: Sequence[str], verbs: AbstractSet[str],
-                          tool_name: str = "Bash") -> list[str] | None: ...
-    def drop_redirections(self, tokens: Sequence[str]) -> list[str]: ...
-    def basename_for_tool(self, token: str, tool_name: str = "Bash") -> str: ...
-    def argv_for_match(self, segment: str, tool_name: str = "Bash") -> Sequence[str]: ...
-    def refuse(self, message: str, stream: IO[str] | None = None) -> int: ...
+is_gated_command = shell_text.is_gated_command
 
 
 def _is_json_object(value: object) -> TypeIs[dict[str, Any]]:
@@ -140,20 +121,6 @@ def _is_json_object(value: object) -> TypeIs[dict[str, Any]]:
 def _is_tuple(value: object) -> TypeIs[tuple[object, ...]]:
     return isinstance(value, tuple)
 
-
-def _typed_views(shell: _ShellText) -> _ShellText:
-    """The module unchanged, typed as its view.
-
-    Passed as a parameter rather than assigned to an annotated name because pyright narrows an
-    annotated module-level name to the assigned module, which would leave the re-export below
-    Unknown; a parameter is checked against the Protocol and returns as it.
-    """
-    return shell
-
-
-_shell = _typed_views(shell_text)
-
-is_gated_command = _shell.is_gated_command
 
 #: A path argument: a str or anything os.fspath turns into one.
 type StrPath = str | os.PathLike[str]
@@ -247,7 +214,8 @@ def hook_landing(event: JsonObject) -> tuple[Path | None, bool]:
     tool_input: JsonObject = event.get("tool_input") or {}
     command: str = tool_input.get("command") or ""
     base = os.path.normpath(event.get("cwd") or os.getcwd())
-    target = _shell.git_verb_dir(command, base, shell_text.GATED_GIT_VERBS, event.get("tool_name"))
+    target = shell_text.git_verb_dir(command, base, shell_text.GATED_GIT_VERBS,
+                                     event.get("tool_name"))
     if target and os.path.normcase(target) == os.path.normcase(base):
         return repo_root(), False
     if not target or not os.path.isdir(target):
@@ -3063,9 +3031,11 @@ def command_publishes(command: str, tool_name: str | None = None) -> bool:
 
     Segmented and anchored like `shell_text.is_gated_command`, heredoc bodies dropped, so a push
     named as DATA does not count."""
-    for _at, seg in _shell.iter_segments(shell_text.strip_heredoc_bodies(command or ""), tool_name):
+    stripped = shell_text.strip_heredoc_bodies(command or "")
+    for _at, seg in shell_text.iter_segments(stripped, tool_name):
         seg = seg.strip().lstrip("(").strip()
-        if _shell.is_git_verb(seg, {"push"}, tool_name or "Bash") or shell_text.PR_RE.match(seg):
+        if (shell_text.is_git_verb(seg, {"push"}, tool_name or "Bash")
+                or shell_text.PR_RE.match(seg)):
             return True
     return False
 
@@ -3081,9 +3051,10 @@ def mirror_stage(command: str, tool_name: str | None = None, cwd: str | None = N
     A commit that takes files from the working tree itself (`-a`, a pathspec, `-i`) gives a
     `CommitSelection` instead; its pathspecs resolve from the directory the commit runs in, which
     `cwd` (where the session sits) leads to. Anything the text cannot settle gives the index."""
-    for _at, seg in _shell.iter_segments(shell_text.strip_heredoc_bodies(command or ""), tool_name):
+    stripped = shell_text.strip_heredoc_bodies(command or "")
+    for _at, seg in shell_text.iter_segments(stripped, tool_name):
         seg = seg.strip().lstrip("(").strip()
-        if _shell.is_git_verb(seg, {"commit"}, tool_name or "Bash"):
+        if shell_text.is_git_verb(seg, {"commit"}, tool_name or "Bash"):
             return _commit_selection(seg, command, tool_name or "Bash", cwd) or STAGE_INDEX
     return STAGE_HEAD
 
@@ -3129,7 +3100,7 @@ def _commit_selection(segment: str, command: str, tool: str, cwd: str | None) ->
     if any(c in _SHELL_REWRITES for c in segment) or not _commit_is_plainly_placed(command, tool):
         return None
     try:
-        tokens = _shell.split_for_tool(segment, tool)
+        tokens = shell_text.split_for_tool(segment, tool)
     except ValueError:
         return None
     operands = _plain_commit_operands(tokens)
@@ -3180,9 +3151,10 @@ def _assignments_resolved(command: str) -> str:
     known: dict[str, str] = {}
     previous, commit_seen = 0, False
     text = shell_text.strip_heredoc_bodies(command or "")
-    for at, segment in _shell.iter_segments(text, "Bash"):
+    for at, segment in shell_text.iter_segments(text, "Bash"):
         separator, previous = text[previous:at], at + len(segment)
-        if not commit_seen and _shell.is_git_verb(segment.strip().lstrip("(").strip(), {"commit"}, "Bash"):
+        if not commit_seen and shell_text.is_git_verb(segment.strip().lstrip("(").strip(),
+                                                      {"commit"}, "Bash"):
             commit_seen = True
         if not commit_seen:
             literal = _literal_assignment(segment)
@@ -3202,7 +3174,7 @@ def _literal_assignment(segment: str) -> tuple[str, str] | None:
     if any(c in _SHELL_REWRITES for c in segment):
         return None
     try:
-        tokens = _shell.split_for_tool(segment, "Bash")
+        tokens = shell_text.split_for_tool(segment, "Bash")
     except ValueError:
         return None
     match = _ASSIGNMENT_WORD.match(tokens[0]) if len(tokens) == 1 else None
@@ -3219,11 +3191,11 @@ def _commit_is_plainly_placed(command: str, tool: str) -> bool:
     (`export GIT_ICASE_PATHSPECS=1`) makes the reading differ from what git commits. Measured by
     adversarial review, 2026-10-24. Statements after the commit run after it and do not matter."""
     commits = 0
-    for _at, seg in _shell.iter_segments(shell_text.strip_heredoc_bodies(command or ""), tool):
+    for _at, seg in shell_text.iter_segments(shell_text.strip_heredoc_bodies(command or ""), tool):
         seg = seg.strip()
         if not seg:
             continue
-        if _shell.is_git_verb(seg.lstrip("(").strip(), {"commit"}, tool):
+        if shell_text.is_git_verb(seg.lstrip("(").strip(), {"commit"}, tool):
             commits += 1
         elif commits == 0 and not _is_plain_cd(seg):
             return False
@@ -3235,10 +3207,10 @@ def _is_plain_cd(segment: str) -> bool:
     if any(c in _SHELL_REWRITES for c in segment):
         return False
     try:
-        tokens = _shell.split_for_tool(segment, "Bash")
+        tokens = shell_text.split_for_tool(segment, "Bash")
     except ValueError:
         return False
-    return (len(tokens) == 2 and tokens[0] == "cd" and _shell.is_rooted(tokens[1])
+    return (len(tokens) == 2 and tokens[0] == "cd" and shell_text.is_rooted(tokens[1])
             and not _climbs(tokens[1]))
 
 
@@ -3250,7 +3222,7 @@ def _climbs(path: str) -> bool:
 
 def _plain_commit_operands(tokens: Sequence[str]) -> Sequence[str] | None:
     """The operands of `git [-C <dir>]... commit ...`, or None for any other prefix."""
-    if not tokens or _shell.basename_for_tool(tokens[0], "Bash") != "git":
+    if not tokens or shell_text.basename_for_tool(tokens[0], "Bash") != "git":
         return None
     at = 1
     while at + 1 < len(tokens) and tokens[at] == "-C":
@@ -3265,7 +3237,7 @@ def _plain_commit_operands(tokens: Sequence[str]) -> Sequence[str] | None:
 def _commit_dir(command: str, cwd: str | None, tool: str) -> str | None:
     if cwd is None:
         return None
-    return _shell.git_verb_dir(command, cwd, {"commit"}, tool)
+    return shell_text.git_verb_dir(command, cwd, {"commit"}, tool)
 
 
 def _parse_commit_operands(operands: Sequence[str]) -> tuple[set[str], list[str]] | None:
@@ -3335,7 +3307,7 @@ def _push_sends_only_tags(operands: Sequence[str], repo: StrPath) -> bool:
     """True when one `git push` statement's operands can send nothing but tags.
 
     The shell's redirections are dropped first: `2>&1` or `> push.log` is not a refspec ([880])."""
-    operands = _shell.drop_redirections(operands)
+    operands = shell_text.drop_redirections(operands)
     positional: list[str] = []
     tags_flag, i = False, 0
     while i < len(operands):
@@ -3376,12 +3348,14 @@ def pushes_only_tags(command: str, repo: StrPath, tool_name: str | None = None) 
     command lands in; a name the tokenizer mangled resolves to nothing and therefore stays gated.
     """
     found_push = False
-    for _at, seg in _shell.iter_segments(shell_text.strip_heredoc_bodies(command or ""), tool_name):
+    stripped = shell_text.strip_heredoc_bodies(command or "")
+    for _at, seg in shell_text.iter_segments(stripped, tool_name):
         seg = seg.strip().lstrip("(").strip()
-        if shell_text.PR_RE.match(seg) or _shell.is_git_verb(seg, {"commit"}, tool_name or "Bash"):
+        if (shell_text.PR_RE.match(seg)
+                or shell_text.is_git_verb(seg, {"commit"}, tool_name or "Bash")):
             return False
-        operands = _shell.git_verb_operands(_shell.argv_for_match(seg, tool_name or "Bash"),
-                                                {"push"}, tool_name or "Bash")
+        operands = shell_text.git_verb_operands(shell_text.argv_for_match(seg, tool_name or "Bash"),
+                                                    {"push"}, tool_name or "Bash")
         if operands is None:
             continue
         if not _push_sends_only_tags(operands, repo):
@@ -3894,7 +3868,7 @@ def gate_tool_repo_mirror(root: Path | None, stage: Stage = STAGE_INDEX, guessed
                      "twin." % root)
     if guessed:
         lines.append(_FALLBACK_NOTE % root)
-    return _shell.refuse("\n".join(lines))
+    return shell_text.refuse("\n".join(lines))
 
 
 def _refusal_to_report(refusals: Sequence[Refusal]) -> Refusal:
@@ -4093,7 +4067,7 @@ def main(parts: GateParts | None = None) -> int:
     fallback = [_FALLBACK_NOTE % root] if guessed else []
     report = "\n".join([header, *failures, *(notices or []), *fallback])
     if not (ci or pre_push):
-        return _shell.refuse(report)  # the PreToolUse block code, whatever kind the failure was
+        return shell_text.refuse(report)  # the PreToolUse block code, whatever kind the failure was
     print(report, file=sys.stderr)
     return COULD_NOT_RUN if is_could_not_run(failures) else 1
 
