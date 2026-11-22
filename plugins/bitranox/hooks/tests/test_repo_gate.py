@@ -5962,17 +5962,38 @@ def test_a_paths_commit_after_a_plain_add_keeps_its_paths_reading(tmp_path):
     assert stage.staged_first == (RG.AddStep(str(tmp_path), ("f",)),)
 
 
-@pytest.mark.parametrize("cmd", [
-    "printf 'msg\\n' > /tmp/repo-gate-msg.txt && git commit -a -F /tmp/repo-gate-msg.txt",
+def _outside(tmp_path):
+    """A directory beside the test repository, never inside it, spelled as this OS's shell reads it.
+
+    Not `/tmp`: under Git Bash on Windows that is a mount whose landing the gate cannot know, so it
+    is refused there (`test_a_message_file_on_a_git_bash_mount_is_refused_on_windows`)."""
+    scratch = tmp_path.parent / (tmp_path.name + "-scratch")
+    scratch.mkdir(exist_ok=True)
+    return scratch.as_posix()
+
+
+@pytest.mark.parametrize("template", [
+    "printf 'msg\\n' > {out}/msg.txt && git commit -a -F {out}/msg.txt",
     "git diff -U0 | grep -c x && git commit -a -F m",
     "grep -c x f.txt && git add f.txt && git commit -F m",
     "echo checked > /dev/null && git commit -F m -- f.txt",
 ])
-def test_a_read_only_statement_before_a_commit_is_not_refused(tmp_path, cmd):
+def test_a_read_only_statement_before_a_commit_is_not_refused(tmp_path, template):
     # Measured over a week of real commits: most refusals of the first cut came from statements
     # that only read (grep, git diff | grep) or write a message file outside the repository.
     _unbumped_edit_on_disk(tmp_path)
+    cmd = template.format(out=_outside(tmp_path))
     assert RG.chained_commit_refusal(cmd, "Bash", str(tmp_path)) is None
+
+
+@pytest.mark.skipif(os.name != "nt", reason="the Git Bash mount reading applies on Windows only")
+def test_a_message_file_on_a_git_bash_mount_is_refused_on_windows(tmp_path):
+    # `/tmp` is a Git Bash mount there: only its mount table says where it lands, possibly inside
+    # the repository, so the gate refuses rather than guess.
+    _unbumped_edit_on_disk(tmp_path)
+    cmd = "printf 'msg\\n' > /tmp/repo-gate-msg.txt && git commit -a -F /tmp/repo-gate-msg.txt"
+    message = RG.chained_commit_refusal(cmd, "Bash", str(tmp_path))
+    assert message is not None and "in its own call first" in message
 
 
 @pytest.mark.parametrize("template", [
@@ -5997,13 +6018,14 @@ def test_a_literal_variable_in_a_chained_add_is_resolved(tmp_path):
     assert any("still 1.0.0" in f for f in RG.check_version_bumped(tmp_path, stage=stage))
 
 
-@pytest.mark.parametrize("cmd", [
-    "S=/tmp/repo-gate-scratch && printf 'msg\\n' > $S/m.txt && git commit -a -F $S/m.txt",
-    'S=/tmp/repo-gate-scratch; mkdir -p "$S" && git commit -a -F m',
+@pytest.mark.parametrize("template", [
+    "S={out} && printf 'msg\\n' > $S/m.txt && git commit -a -F $S/m.txt",
+    'S={out}; mkdir -p "$S" && git commit -a -F m',
     "LC_ALL=C grep -c x f.txt && git commit -a -F m",
 ])
-def test_a_resolved_read_only_statement_is_not_refused(tmp_path, cmd):
+def test_a_resolved_read_only_statement_is_not_refused(tmp_path, template):
     _unbumped_edit_on_disk(tmp_path)
+    cmd = template.format(out=_outside(tmp_path))
     assert RG.chained_commit_refusal(cmd, "Bash", str(tmp_path)) is None
 
 

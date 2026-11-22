@@ -30,6 +30,12 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.22.3]
+
+### Fixed
+
+- Two tests of the 11.22.2 commit-gate change wrote their message file under `/tmp`, which Git Bash on Windows maps through a mount the gate cannot see through, so the gate refused there as designed and the Windows CI cell failed. The tests now write beside the test repository, a path every OS resolves, and a Windows-only test pins that a message file on a Git Bash mount such as `/tmp` is refused with the route named (run that statement in its own call first, then commit).
+
 ## [11.22.2]
 
 ### Fixed
