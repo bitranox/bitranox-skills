@@ -5910,6 +5910,27 @@ def test_a_chained_add_after_an_absolute_cd_resolves_its_directory(tmp_path):
     assert any("still 1.0.0" in f for f in RG.check_version_bumped(repo, stage=stage))
 
 
+@pytest.mark.parametrize("cmd", [f"git add {_X} && git commit -F m", "git commit -a -F m"])
+def test_a_racily_clean_edit_is_still_seen_in_the_throwaway_index(tmp_path, cmd):
+    # git judges a file unchanged by its stat data, and trusts that only while the entry's mtime
+    # is older than the index file's own mtime ("racy git"). A build that compares whole seconds
+    # (macOS git) misses a same-size edit made in the second of the last commit unless the index
+    # copy keeps the real index's mtime. checkStat=minimal plus trustctime=false emulates that
+    # build on any host. The file and the index are backdated to one past instant, so the entry
+    # is racy in the real index while a copy stamped "now" would call it clean.
+    git_repo_with_origin(tmp_path, {_PJ: '{"version": "1.0.0"}\n', _X: "x = 1\n"})
+    for key, value in (("core.checkStat", "minimal"), ("core.trustctime", "false")):
+        subprocess.run(["git", "config", key, value], cwd=tmp_path, check=True)
+    past = time.time_ns() - 10 * 10**9
+    os.utime(tmp_path / _X, ns=(past, past))
+    subprocess.run(["git", "update-index", "-q", "--refresh"], cwd=tmp_path, check=True)
+    (tmp_path / _X).write_text("x = 2\n", encoding="utf-8")
+    os.utime(tmp_path / _X, ns=(past, past))
+    os.utime(tmp_path / ".git" / "index", ns=(past, past))
+    stage = RG.mirror_stage(cmd, "Bash", str(tmp_path))
+    assert any("still 1.0.0" in f for f in RG.check_version_bumped(tmp_path, stage=stage))
+
+
 def test_a_plain_commit_after_a_non_git_statement_keeps_the_index_reading(tmp_path):
     _unbumped_edit_on_disk(tmp_path)
     assert RG.mirror_stage("make test && git commit -F m", "Bash", str(tmp_path)) == RG.STAGE_INDEX

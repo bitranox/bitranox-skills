@@ -30,6 +30,12 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.22.4]
+
+### Fixed
+
+- The commit gate built its throwaway index from a copy of the real one that did not keep the index file's modification time. git trusts a file's stat data only while the index is newer than the file ("racy git"), so on a git build that compares whole seconds (macOS) a same-size edit made in the second of the last commit looked unchanged: the gate's replay of a chained `git add`, and its reading of `git commit -a`, did not stage it, and a missing version bump could pass. The copy now keeps the timestamp. This also made `test_a_chained_add_after_an_absolute_cd_resolves_its_directory` fail intermittently on macOS CI.
+
 ## [11.22.3]
 
 ### Fixed

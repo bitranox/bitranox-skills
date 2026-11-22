@@ -2142,7 +2142,11 @@ def _stage_selection(selection: CommitSelection, top: str, real_index: str, temp
         return not named or _git(top, "update-index", "--add", "--remove", "--", *named, env=env)[0] == 0
     if not os.path.isfile(real_index):
         return False
-    shutil.copyfile(real_index, temp_index)
+    # copy2, not copyfile: git trusts an entry's stat data only while the index file's own mtime
+    # is newer than the entry ("racy git"). A copy stamped now makes a same-size edit from the
+    # second of the last commit look clean to a whole-second build (macOS git), so the add and
+    # -a below would not stage it.
+    shutil.copy2(real_index, temp_index)
     if not _replay_adds(selection.staged_first, top, env):
         return False
     if selection.mode == "index":
