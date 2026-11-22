@@ -30,6 +30,12 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.23.1]
+
+### Changed
+
+- `infra-proxmox-bindsnap` follows pve-bindsnap 1.10.0: a clone carries a bind/device mount point only for `root@pam` (a root API token counts as another user), and any other user's clone is refused unless every bind/device mount is excluded with `BINDSNAP-EXCLUDE`. A container whose rootfs is a bind/device mount is never cloned. A `--snapname` clone reads the directive frozen into that snapshot, not the current Notes, and leaves out a managed volume that snapshot excluded. `devN` lines are copied by stock code and cannot be excluded. Section 7 says to delete or roll back bind-CT snapshots before uninstalling. Troubleshooting tells the new refusals apart from the bare "unable to clone mountpoint" of an inactive clone override.
+
 ## [11.23.0]
 
 ### Changed
