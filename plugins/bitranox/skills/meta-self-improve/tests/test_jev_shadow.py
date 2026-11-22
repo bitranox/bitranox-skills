@@ -192,15 +192,15 @@ PRUNE_ITEMS = [
 PRUNE_VERDICTS = [
     {
         "id": "slug-alpha",
-        "verdict": {"untestable_negative": True, "unlabelled_unsolved": False},
+        "verdict": {"untestable_negative": True, "version_bound": False},
         "note": "claims a tool fails, no version",
     },
     {"id": "slug-beta", "verdict": {"untestable_negative": True}},
 ]
 PRUNE_ROWS = {
-    "slug-alpha": {"untestable_negative": noul(0.9), "unlabelled_unsolved": noul(0.7)},
-    "slug-beta": {"untestable_negative": noul(0.2), "unlabelled_unsolved": noul(0.1)},
-    "slug-gamma": {"untestable_negative": noul(0.4), "unlabelled_unsolved": noul(0.6)},
+    "slug-alpha": {"untestable_negative": noul(0.9), "version_bound": noul(0.7)},
+    "slug-beta": {"untestable_negative": noul(0.2), "version_bound": noul(0.1)},
+    "slug-gamma": {"untestable_negative": noul(0.4), "version_bound": noul(0.6)},
 }
 
 
@@ -343,19 +343,16 @@ def test_happy_path_logs_one_record_per_item_and_pairs_the_judged_ones(
     # noul compared at 0.5: agent True vs 0.9 agrees, agent False vs 0.7 does not
     assert recs["slug-alpha"]["agree"] == {
         "untestable_negative": True,
-        "unlabelled_unsolved": False,
-        "version_bound": None,
+        "version_bound": False,
     }
     # a question the agent left out is null, not a disagreement
     assert recs["slug-beta"]["agree"] == {
         "untestable_negative": False,
-        "unlabelled_unsolved": None,
         "version_bound": None,
     }
     assert recs["slug-gamma"]["agent"] is None
     assert recs["slug-gamma"]["agree"] == {
         "untestable_negative": None,
-        "unlabelled_unsolved": None,
         "version_bound": None,
     }
     assert recs["slug-alpha"]["agent_note"] == "claims a tool fails, no version"
@@ -441,7 +438,6 @@ def test_a_failed_jev_row_is_still_logged_with_its_reason(tmp_path, fake, home):
     assert beta["agent"] == {"untestable_negative": True}
     assert beta["agree"] == {
         "untestable_negative": None,
-        "unlabelled_unsolved": None,
         "version_bound": None,
     }
 
@@ -519,41 +515,24 @@ def test_a_choice_agrees_by_key(tmp_path, fake, home, agent, jev, agree):
     assert read_jsonl(shadow_logs(home)[0])[0]["agree"] == {"cause": agree}
 
 
-@posix_only
+# No shipped site asks a score question since dream-placement was retired (OPEN-WORK [96]), so
+# the score branch of `agrees` is pinned on a question object directly; a future score site goes
+# through the same function.
+SCORE_QUESTION = {"id": "fit", "type": "score", "criteria": ["no", "partly", "yes"]}
+
+
 @pytest.mark.parametrize(
-    ("agent", "jev", "agree"), [(2, 1.6, True), (0, 1.4, False), (1, 1.4, True)]
+    ("agent", "jev", "agree"),
+    [(2, 1.6, True), (0, 1.4, False), (1, 1.4, True), (2, 2.6, True), (0, -0.4, True)],
 )
-def test_a_score_agrees_by_index(tmp_path, fake, home, agent, jev, agree):
-    knob(home)
-    state = {"hook": "h", "body": "b", "level_scope": "s"}
+def test_a_score_agrees_by_index(agent, jev, agree):
     answer = {
         "type": "score",
         "value": jev,
         "probabilities": {"0": 0.1, "1": 0.5, "2": 0.4},
         "confidence": 0.5,
     }
-    fake["rows"].write_text(
-        json.dumps({"s|.": {"fits_level": answer}}), encoding="utf-8"
-    )
-    items = write_jsonl(tmp_path / "items.jsonl", [{"id": "s|.", "state": state}])
-    vpath = write_jsonl(
-        tmp_path / "verdicts.jsonl", [{"id": "s|.", "verdict": {"fits_level": agent}}]
-    )
-    assert (
-        js.main(
-            [
-                "run",
-                "--site",
-                "dream-placement",
-                "--items",
-                str(items),
-                "--verdicts",
-                str(vpath),
-            ]
-        )
-        == 0
-    )
-    assert read_jsonl(shadow_logs(home)[0])[0]["agree"] == {"fits_level": agree}
+    assert slog.agrees(SCORE_QUESTION, agent, answer) is agree
 
 
 # ---- retention ------------------------------------------------------------------------------
@@ -698,7 +677,7 @@ def _two_question_fixture(home):
     q2_agent = [False, False, True, True, True, True]
     for i in range(6):
         r1 = _rec(f"i{i}", i < 5, 0.9)
-        r2 = _rec(f"i{i}", q2_agent[i], q2_values[i], qid="unlabelled_unsolved")
+        r2 = _rec(f"i{i}", q2_agent[i], q2_values[i], qid="version_bound")
         jev, other_jev, agent, other_agent = r1["jev"], r2["jev"], r1["agent"], r2["agent"]
         # every row here has a Jev value and an agent answer; an absent one is a broken fixture
         assert jev is not None and other_jev is not None
@@ -717,7 +696,7 @@ def test_report_counts_agreement_band_and_flags_only_the_flat_question(home, cap
     env = json.loads(capsys.readouterr().out)
     assert rc == 0 and env["ok"] is True and env["command"] == "report"
     q = env["data"]["sites"]["dream-prune"]["shas"]["x"]["questions"]
-    q1, q2 = q["untestable_negative"], q["unlabelled_unsolved"]
+    q1, q2 = q["untestable_negative"], q["version_bound"]
     assert q1["n"] == 6 and q1["paired"] == 6
     assert q1["agreement_pct"] == pytest.approx(500 / 6, abs=0.1)
     assert q1["flat"] is True
@@ -770,7 +749,6 @@ EXPECTED_SITES = {
     "dream-prune",
     "dream-firing",
     "crosstree-misplaced",
-    "dream-placement",
     "consolidate-cause",
     "collect-relevance",
 }
@@ -782,7 +760,17 @@ def test_there_is_one_site_file_per_site():
 
 # Dropped under the pre-registered decide rule: its question left too many answers undecided and
 # agreed too rarely with the agent's verdict outside the band, even after the one allowed rewrite.
-RETIRED_SITES = ("data-arch-dict",)
+RETIRED_SITES = ("data-arch-dict", "dream-placement")
+
+
+def test_dream_prune_keeps_only_the_questions_that_survived_the_rewrite():
+    """OPEN-WORK [96]: unlabelled_unsolved went flat after its one rewrite and was dropped;
+    untestable_negative kept its rewritten wording; version_bound was never rewritten."""
+    site = sites.load_site("dream-prune")
+    assert site.version == 3
+    assert list(site.types()) == ["untestable_negative", "version_bound"]
+    assert "usage trap together with the working way" in site.question(
+        "untestable_negative")["instructions"]
 
 
 @pytest.mark.parametrize("site", RETIRED_SITES)
@@ -808,9 +796,33 @@ def test_every_site_a_shipped_doc_runs_has_a_site_file():
             continue
         for m in _SITE_ARG.finditer(doc.read_text(encoding="utf-8")):
             named.setdefault(m.group(1), []).append(doc.parent.name)
-    assert len(named) >= 9, "the scan found too few --site uses to mean anything"
+    assert len(named) >= len(EXPECTED_SITES), "the scan found too few --site uses to mean anything"
     unknown = {name: docs for name, docs in named.items() if name not in sites.site_names()}
     assert unknown == {}
+
+
+# A step's verdict example shows the agent which keys to write; `run` refuses a key that is not a
+# question of the site, so an example naming a dropped question is a step that can only fail.
+_VERDICT_EXAMPLE = re.compile(r'"verdict":\s*\{([^}]*)\}')
+_VERDICT_KEY = re.compile(r'"([A-Za-z_][A-Za-z0-9_]*)"\s*:')
+
+
+def test_every_verdict_example_names_exactly_its_sites_questions():
+    checked = {}
+    for doc in sorted(SKILL_DIR.parent.rglob("*.md")):
+        if ".skillwriter" in doc.parts:
+            continue
+        text = doc.read_text(encoding="utf-8")
+        for m in _VERDICT_EXAMPLE.finditer(text):
+            keys = set(_VERDICT_KEY.findall(m.group(1)))
+            site_m = _SITE_ARG.search(text, m.end(), m.end() + 600)
+            if not keys or site_m is None:
+                continue  # the generic `"<question id>"` form in the reference, which names none
+            site = site_m.group(1)
+            assert site in sites.site_names(), (doc, site)
+            assert keys == set(sites.load_site(site).types()), (doc.parent.name, site, keys)
+            checked[site] = doc.parent.name
+    assert len(checked) >= 7, f"the scan matched too few verdict examples: {checked}"
 
 
 def test_report_still_reads_the_logged_rows_of_a_retired_site(home, capsys):
@@ -934,26 +946,6 @@ def test_items_dream_prune_yields_one_item_per_fact_with_hook_and_body(
     }
 
 
-def test_items_dream_placement_pairs_each_fact_with_its_levels(store, tmp_path, home):
-    out = tmp_path / "items.jsonl"
-    assert (
-        js.main(
-            [
-                "items",
-                "--site",
-                "dream-placement",
-                "--anchor",
-                str(store["anchor"]),
-                "--out",
-                str(out),
-            ]
-        )
-        == 0
-    )
-    ids = {i["id"] for i in read_jsonl(out)}
-    assert {"proj-rule|.", "proj-rule|proj", "top-rule|.", "top-rule|proj"} <= ids
-
-
 def test_items_crosstree_misplaced_yields_only_the_candidate(store, tmp_path, home):
     out = tmp_path / "items.jsonl"
     assert (
@@ -1024,7 +1016,6 @@ def test_items_guard_firing_reads_the_firings_file(tmp_path, home):
     [
         "dream-prune",
         "dream-firing",
-        "dream-placement",
         "crosstree-misplaced",
         "guard-firing",
     ],
@@ -1251,7 +1242,8 @@ def test_report_flat_fires_on_a_constant_score_and_not_on_a_varied_one(home, cap
 
 
 def test_report_confusion_uses_the_same_clamped_score_index_as_agree(home, capsys):
-    site = sites.load_site("dream-placement")
+    """The retired dream-placement site's logged rows: with no site file, the level count comes
+    from the answers' own probabilities, and the clamp still lands 2.6 on the top level."""
     probs = {"0": 0.0, "1": 0.4, "2": 0.6}
     rec = _record(
         "s|.",
@@ -1260,13 +1252,13 @@ def test_report_confusion_uses_the_same_clamped_score_index_as_agree(home, capsy
         2,
         True,
         site="dream-placement",
-        sha=site.questions_sha,
+        sha="logged",
         probabilities=probs,
         confidence=0.6,
     )
     _write_log(home, [rec])
     _rc, env = _report_json(capsys)
-    q = env["data"]["sites"]["dream-placement"]["shas"][site.questions_sha]["questions"]
+    q = env["data"]["sites"]["dream-placement"]["shas"]["logged"]["questions"]
     assert q["fits_level"]["confusion"] == {"agent=2/jev=2": 1}
 
 
@@ -1305,7 +1297,7 @@ def test_line_separator_characters_survive_items_run_log_and_report(
             {
                 "sep-fact": {
                     "untestable_negative": noul(0.1),
-                    "unlabelled_unsolved": noul(0.1),
+                    "version_bound": noul(0.1),
                 }
             }
         ),
@@ -1634,7 +1626,7 @@ def test_a_malformed_jev_value_is_no_answer_and_every_record_is_still_logged(
         **PRUNE_ROWS,
         "slug-alpha": {
             "untestable_negative": {"type": "noul", "value": bad},
-            "unlabelled_unsolved": noul(0.7),
+            "version_bound": noul(0.7),
         },
     }
     assert run_prune(tmp_path, fake, rows=rows) == 0
@@ -1642,27 +1634,12 @@ def test_a_malformed_jev_value_is_no_answer_and_every_record_is_still_logged(
     assert set(recs) == {"slug-alpha", "slug-beta", "slug-gamma"}
     assert recs["slug-alpha"]["agree"] == {
         "untestable_negative": None,
-        "unlabelled_unsolved": False,
-        "version_bound": None,
+        "version_bound": False,
     }
 
 
-@posix_only
-def test_a_malformed_score_value_is_no_answer(tmp_path, fake, home):
-    knob(home)
-    item = {"id": "a|.", "state": {"hook": "h", "body": "b", "level_scope": "s"}}
-    items = write_jsonl(tmp_path / "items.jsonl", [item])
-    vpath = write_jsonl(
-        tmp_path / "verdicts.jsonl", [{"id": "a|.", "verdict": {"fits_level": 2}}]
-    )
-    fake["rows"].write_text(
-        json.dumps({"a|.": {"fits_level": {"type": "score", "value": "two"}}}),
-        encoding="utf-8",
-    )
-    argv = ["run", "--site", "dream-placement", "--items", str(items)]
-    assert js.main([*argv, "--verdicts", str(vpath)]) == 0
-    rec = read_jsonl(shadow_logs(home)[0])[0]
-    assert rec["agree"] == {"fits_level": None}
+def test_a_malformed_score_value_is_no_answer():
+    assert slog.agrees(SCORE_QUESTION, 2, {"type": "score", "value": "two"}) is None
 
 
 @posix_only

@@ -11,9 +11,9 @@ Usage (cwd defaults to the current directory):
                                           record that a dream just completed (silences the nudge).
                                           A TREE dream passes the id it tagged its Jev shadow runs
                                           with; with shadow on, done refuses (exit 1, nothing
-                                          marked) until each tree site (dream-placement,
-                                          dream-firing, dream-prune) has rows for that dream or a
-                                          --jev-skip reason. A nap has no Jev sites.
+                                          marked) until each tree site (dream-firing,
+                                          dream-prune) has rows for that dream or a --jev-skip
+                                          reason. A nap has no Jev sites.
   dream_state.py mode [cwd]               print the dream mode: off | auto | propose
   dream_state.py saw-promotable  S [proj] record that PROJ sighted tree-top-promotion candidate S;
                                           print its dwell (how many DISTINCT projects have sighted
@@ -142,8 +142,10 @@ _PROMOTE_CMDS = ("saw-promotable", "should-promote", "promoted")
 # The candidate sources self_improve_signals.should_promote distinguishes; the first is the default.
 _SOURCES = ("inferred", "user")
 _KINDS = ("nap", "tree")
-# The Jev shadow sites a tree dream feeds (meta-dream-tree steps 5-7). A nap has none.
-TREE_SITES = ("dream-placement", "dream-firing", "dream-prune")
+# The Jev shadow sites a tree dream feeds (meta-dream-tree steps 6 and 7). A nap has none.
+# dream-placement (step 5) was retired under OPEN-WORK [96]'s pre-registered decide rule, so a
+# tree dream no longer owes it rows.
+TREE_SITES = ("dream-firing", "dream-prune")
 _DONE_FLAGS = ("--kind", "--dream", "--jev-skip")
 # The most OFFSET --to accepts is the file size; a negative or non-numeric one is a usage error.
 _PROJ_CMDS = ("due", "done", "mode", "session-review", "session-reviewed", "nap-decline")

@@ -5,7 +5,7 @@ a file `jev_sites/<site>.json` holding `{"site", "version", "questions", "state_
 jev-judge question objects, and the exact named fields every item's state carries. A question
 refers to a field only as a backticked name, and every backticked name is a state field.
 
-Five sites build their items here from a source the skill step already has: the curated memory
+Four sites build their items here from a source the skill step already has: the curated memory
 store under an anchor, or a `guard_replay.py --firings` file. The other four are agent-built: the
 step's agent writes the items itself, and `jev_shadow.py run` checks their fields against the site
 file. It also holds the small JSON helpers the log writer and the report reader share, so neither
@@ -15,7 +15,7 @@ meta-self-improve/.
 
 import hashlib
 import json
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NamedTuple, cast
@@ -194,34 +194,6 @@ def _hook_body(req: BuildRequest) -> list[ShadowItem]:
     return list(items.values())
 
 
-def _level_label(anchor: Path, level: str) -> str:
-    rel = Path(level).resolve().relative_to(anchor).as_posix()
-    return rel or "."
-
-
-def _candidate_levels(level: str, levels: Iterable[str]) -> list[str]:
-    """The fact's own level, its curated ancestors, and its curated descendants (up AND down)."""
-    here = Path(level).resolve()
-    out: list[str] = []
-    for other in levels:
-        o = Path(other).resolve()
-        if o == here or o in here.parents or here in o.parents:
-            out.append(other)
-    return out
-
-
-def _placement(req: BuildRequest) -> list[ShadowItem]:
-    """dream-placement: one item per (fact, candidate level), id `slug|<level relative to anchor>`."""
-    anchor = _require_anchor(req)
-    facts, scopes = _facts(anchor)
-    items: list[ShadowItem] = []
-    for f in facts:
-        for lvl in _candidate_levels(f.level, scopes):
-            state = {"hook": f.hook, "body": f.body, "level_scope": scopes[lvl]}
-            items.append(ShadowItem(f"{f.slug}|{_level_label(anchor, lvl)}", state))
-    return items
-
-
 def _misplaced(req: BuildRequest) -> list[ShadowItem]:
     """crosstree-misplaced: one item per misplaced fact, id = slug.
 
@@ -319,7 +291,6 @@ BUILDERS: dict[str, Callable[[BuildRequest], list[ShadowItem]]] = {
     "guard-firing": _guard_firings,
     "dream-prune": _hook_body,
     "dream-firing": _hook_body,
-    "dream-placement": _placement,
     "crosstree-misplaced": _misplaced,
 }
 

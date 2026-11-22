@@ -757,7 +757,7 @@ def test_the_offer_is_bounded_and_says_how_many_it_left_out(home, capsys):
 # The tree dream's Jev shadow step was prose a session could skip, and nothing noticed: one site
 # was fed once in two weeks and another never. `done --kind tree` now runs the receipt first.
 
-TREE_SITES = ("dream-placement", "dream-firing", "dream-prune")
+TREE_SITES = ("dream-firing", "dream-prune")
 FAKE_UVX = (
     "import sys\n"
     "args = sys.argv[1:]\n"
@@ -891,11 +891,23 @@ def test_a_tree_dream_that_fed_no_site_is_not_marked_done(shadow_on, capsys):
 @posix_only
 def test_a_tree_dream_that_fed_or_skipped_every_site_is_marked_done(shadow_on, capsys):
     _mem()
-    _shadow_rows(shadow_on, "d1", ["dream-placement", "dream-prune"])
+    _shadow_rows(shadow_on, "d1", ["dream-prune"])
     _shadow_rows(shadow_on, "other-dream", ["dream-firing"])
     rc = D.main(["done", "/p/x", "--kind", "tree", "--dream", "d1",
                  "--jev-skip", "dream-firing=no hook was rewritten this dream"])
     assert rc == 0, capsys.readouterr().err
+    assert _due(capsys, "/p/x") == "not-due"
+
+
+@posix_only
+def test_a_tree_dream_owes_no_rows_to_the_retired_placement_site(shadow_on, capsys):
+    """dream-placement was retired under OPEN-WORK [96]; a dream that fed the two live sites is
+    done without a dream-placement row or a --jev-skip for it."""
+    assert "dream-placement" not in D.TREE_SITES
+    _mem()
+    _shadow_rows(shadow_on, "d2", ["dream-firing", "dream-prune"])
+    assert D.main(["done", "/p/x", "--kind", "tree", "--dream", "d2"]) == 0, (
+        capsys.readouterr().err)
     assert _due(capsys, "/p/x") == "not-due"
 
 

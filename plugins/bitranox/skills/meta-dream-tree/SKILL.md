@@ -195,13 +195,13 @@ the success line, abort-and-show on a miss).
     Also run `jev_shadow.py status` HERE, once (home `<plugin>/skills/meta-self-improve/`, launch
     via `hooks/run-python.sh`; exit 0 is on), and keep the result for the whole run. Name this
     dream now, `tree-<YYYYMMDD-HHMM>` from the time you start, and use that id wherever a step
-    below says `<dream id>`. When shadow is on, three sites shadow a SAMPLE of 40 items each,
-    drawn by `items --sample 40 --seed <dream id>`: `dream-placement` (step 5), `dream-firing`
-    (step 6) and `dream-prune` (step 7). The pass itself still covers every fact; only the shadow
-    is sampled. Judge the sampled items while the pass is under way, in the format of that step's
-    shadow bullet, and tag each `run` with `--dream <dream id>`. Step 11's `done` refuses to mark
-    the dream done until each of the three sites has logged rows for that id, or you named why not
-    with `--jev-skip SITE=REASON`.
+    below says `<dream id>`. When shadow is on, two sites shadow a SAMPLE of 40 items each,
+    drawn by `items --sample 40 --seed <dream id>`: `dream-firing` (step 6) and `dream-prune`
+    (step 7). The pass itself still covers every fact; only the shadow is sampled. Judge the
+    sampled items while the pass is under way, in the format of that step's shadow bullet, and
+    tag each `run` with `--dream <dream id>`. Step 11's `done` refuses to mark the dream done until
+    each of the two sites has logged rows for that id, or you named why not with
+    `--jev-skip SITE=REASON`.
 
 1. **Capture first (unconditional on a manual dream).** Enumerate this session's durable learnings
    and capture via `bitranox:meta-self-improve` BEFORE consolidating, so the dream works on a
@@ -376,24 +376,6 @@ the success line, abort-and-show on a miss).
    - **Most moves going to the tree top is not by itself a router defect** - in a tree whose
      top-level children are non-nested siblings it is the expected reading. Before calling the
      router biased, run the check in references/dream-core.md, "Reading a high tree-top share".
-   - **Jev shadow on placement** (only when step 0c found `jev_shadow.py status` on; home
-     `<plugin>/skills/meta-self-improve/`, launch via `hooks/run-python.sh`; procedure in its
-     `references/jev-shadow.md`; both files in a fresh `D=$(mktemp -d -p <backup dir>)`, outside any
-     repo, since they hold unredacted fact text), in this order: (1) `jev_shadow.py items --site
-     dream-placement --anchor <anchor> --sample 40 --seed <dream id> --out "$D/items.jsonl"`, 40
-     lines drawn from every pairing of a fact with a level on its chain (id `<slug>|<level>`, the
-     level relative to the anchor, `.` for the anchor). Each line pairs the fact with ONE level of
-     its chain, usually not the one holding its pointer, so most lines score 0, and a 0 says only
-     that THIS level is wrong for the fact, never that the fact is misplaced where it sits. Before
-     reading any 0, or a report built on these lines, as a misplacement, find the level that holds
-     the fact's pointer (`find <anchor> -name CLAUDE.local.md -exec grep -l "mem:<slug>" {} +`) and
-     route the fact from there with the routing prompt above: that routing decides, never the 0; (2)
-     YOU route every fact, as above; (3)
-     write YOUR score for every sampled line to `$D/verdicts.jsonl` (`{"id": "<slug>|<level>",
-     "verdict": {"fits_level": 2}}`: 2 belongs here, 1 could live here but is narrower or broader,
-     0 does not belong; none left out); (4) `jev_shadow.py run --site dream-placement --dream
-     <dream id> --items "$D/items.jsonl" --verdicts "$D/verdicts.jsonl"`, then `rm -rf "$D"`. `run`
-     prints counts only. Move by your own routing, whatever `run` printed or exited with.
 
    **A rule about a stack or tool is tagged, not moved (only when `topics-show` exits 0).**
    When the routing answers with TOPICS instead of a level (references/dream-core.md, the
@@ -471,8 +453,10 @@ the success line, abort-and-show on a miss).
    title-derived slug mints a duplicate when the fact was retitled, and any other level is refused
    as a collision), propose-diff, apply.
    Bodies missing the frame or the **Why:**/**How to apply:** sections get the same treatment.
-   - **Jev shadow on the firing check** (only when step 0c found `jev_shadow.py status` on; home, launch and
-     procedure as in step 5's shadow bullet; a fresh `D=$(mktemp -d -p <backup dir>)` of its own):
+   - **Jev shadow on the firing check** (only when step 0c found `jev_shadow.py status` on; home
+     `<plugin>/skills/meta-self-improve/`, launch via `hooks/run-python.sh`; procedure in its
+     `references/jev-shadow.md`; both files, `items.jsonl` and `verdicts.jsonl`, in a fresh
+     `D=$(mktemp -d -p <backup dir>)`, outside any repo, since they hold unredacted fact text):
      `jev_shadow.py items --site dream-firing --anchor <anchor> --sample 40 --seed <dream id> --out
      "$D/items.jsonl"` writes 40 facts of the tree. YOU judge every hook in the store, as above;
      write YOUR verdict for every sampled fact to `$D/verdicts.jsonl` FIRST (`{"id": "<slug>",
@@ -525,13 +509,15 @@ the success line, abort-and-show on a miss).
       true on the version it names), a version given only as an example, and a Python boundary
       ("before Python 3.14") that the supported range still spans.
 
-   - **Jev shadow on those three questions** (only when step 0c found `jev_shadow.py status` on;
-     home, launch and procedure as in step 5's shadow bullet; a fresh `D=$(mktemp -d -p <backup
-     dir>)` of its own): `jev_shadow.py items --site dream-prune --anchor <anchor> --sample 40
-     --seed <dream id> --out "$D/items.jsonl"` writes 40 facts of the tree. YOU answer all three
-     questions for every sampled fact; write YOUR answers to `$D/verdicts.jsonl` FIRST (`{"id":
-     "<slug>", "verdict": {"untestable_negative": false, "unlabelled_unsolved": false,
-     "version_bound": false}}`, `true` for each question the fact trips; none left out), then
+   - **Jev shadow on questions 1 and 3** (only when step 0c found `jev_shadow.py status` on;
+     home, launch and procedure as in step 6's shadow bullet; a fresh
+     `D=$(mktemp -d -p <backup dir>)` of its own; question 2 is not shadowed, you still ask it of
+     every fact):
+     `jev_shadow.py items --site dream-prune --anchor <anchor> --sample 40 --seed <dream id> --out
+     "$D/items.jsonl"` writes 40 facts of the tree. YOU answer questions 1 and 3 for every
+     sampled fact; write YOUR answers to `$D/verdicts.jsonl` FIRST
+     (`{"id": "<slug>", "verdict": {"untestable_negative": false, "version_bound": false}}`,
+     `true` for each question the fact trips; none left out), then
      `jev_shadow.py run --site dream-prune --dream <dream id> --items "$D/items.jsonl" --verdicts
      "$D/verdicts.jsonl"`, then `rm -rf "$D"`. `run` prints counts only. Act by your own answers,
      whatever `run` printed or exited with.

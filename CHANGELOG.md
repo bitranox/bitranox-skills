@@ -30,6 +30,18 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.23.0]
+
+### Changed
+
+- Jev shadow sites, after the pre-registered decide rule's one rewrite: the `dream-placement`
+  site is retired (its rewritten question failed again, band 52.7%, agreement outside it 54.0%),
+  so meta-dream-tree step 5 runs no shadow and `dream_state.py done` owes it no rows; the
+  `dream-prune` site drops `unlabelled_unsolved` (its rewrite answered flat) and asks a rewritten
+  `untestable_negative` (site version 3). Logged rows of the retired site stay readable by
+  `jev_shadow.py report`.
+- A test now checks that every verdict example a skill shows names exactly its site's questions.
+
 ## [11.22.4]
 
 ### Fixed
