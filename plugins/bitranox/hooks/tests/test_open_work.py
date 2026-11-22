@@ -474,3 +474,68 @@ def test_add_refuses_the_rank_a_line_without_a_date_holds(tmp_path):
     p = _backlog(tmp_path, _DATELESS)
     with pytest.raises(ow.BacklogError):
         _add(p, 84)
+
+
+# --- an item is the item line plus its continuation lines --------------------------------------
+# Measured 2026-11-21 over the tree's 102 OPEN-WORK.md files: 2576 indented continuation lines, 9
+# sub-bullets and 21 unindented ("lazy") continuations follow item lines, some carrying the fields
+# themselves. Read as one physical line, such an item listed empty size/open/next, a close left its
+# continuation lines behind as orphans, and an add after it split it in two.
+
+_WRAPPED_10 = ["- [ ] (2026-10-01) [10] USER: first item that wraps",
+               "  onto a second line | size: 2 | open: waits on",
+               "  the third line | next: do it"]
+_WRAPPED_20 = ["- [ ] (2026-10-02) [20] FOUND: second item",
+               "  - a sub-bullet that belongs to it",
+               "| size: 1 | open: o | next: n"]
+
+
+def test_fields_on_continuation_lines_belong_to_the_item(tmp_path):
+    p = _backlog(tmp_path, *_WRAPPED_10, *_WRAPPED_20)
+    first, second = ow.list_items(p)
+    assert (first.what, first.size, first.open, first.next) == (
+        "first item that wraps onto a second line", "2", "waits on the third line", "do it")
+    assert second.what == "second item - a sub-bullet that belongs to it"
+    assert (second.size, second.open, second.next) == ("1", "o", "n")
+
+
+@pytest.mark.parametrize("ender", ["", "## A heading", "- [ ] (2026-10-03) [30] USER: next item",
+                                   "- a plain list item", "```"])
+def test_a_blank_line_heading_list_item_or_fence_ends_an_item(tmp_path, ender):
+    p = _backlog(tmp_path, "- [ ] (2026-10-01) [10] USER: w | size: 1 | open: o | next: n",
+                 ender, "  not part of item 10 | size: 9", "```" if ender == "```" else "")
+    (item, *_rest) = ow.list_items(p)
+    assert item.rank == 10 and item.size == "1" and "not part" not in (item.next or "")
+
+
+def test_close_deletes_the_whole_item_and_nothing_else(tmp_path):
+    p = _backlog(tmp_path, *_WRAPPED_10, *_WRAPPED_20)
+    before = p.read_text(encoding="utf-8")
+    out = ow.close_item(p, 10, "done")
+    assert out.line == "\n".join(_WRAPPED_10)
+    assert p.read_text(encoding="utf-8") == before.replace("\n".join(_WRAPPED_10) + "\n", "", 1)
+    assert [it.rank for it in ow.list_items(p, state="all")] == [20]
+
+
+def test_add_between_two_wrapped_items_goes_after_the_whole_first_one(tmp_path):
+    p = _backlog(tmp_path, *_WRAPPED_10, *_WRAPPED_20)
+    added = _add(p, 15)
+    lines = _lines(p)
+    at = lines.index(added.line)
+    assert lines[at - len(_WRAPPED_10):at] == _WRAPPED_10
+    assert lines[at + 1:at + 1 + len(_WRAPPED_20)] == _WRAPPED_20
+    assert [it.rank for it in ow.list_items(p)] == [10, 15, 20]
+
+
+def test_unranked_lines_report_the_whole_item(tmp_path):
+    p = tmp_path / "OPEN-WORK.md"
+    p.write_text("- [ ] (2026-10-01) USER: no rank here\n  wrapped | size: 1\n", encoding="utf-8")
+    assert ow.unranked_lines(p) == ["- [ ] (2026-10-01) USER: no rank here wrapped | size: 1"]
+
+
+def test_an_indented_ranked_checkbox_stays_an_item_of_its_own(tmp_path):
+    # Before items spanned lines, a nested `  - [ ] ... [20] ...` line was an item; a sub-bullet
+    # rule that swallowed it would make rank 20 vanish from every listing and from close.
+    p = _backlog(tmp_path, "- [ ] (2026-10-01) [10] USER: parent | size: 1 | open: o | next: n",
+                 "  - [ ] (2026-10-02) [20] FOUND: nested | size: 2 | open: o | next: n")
+    assert [(it.rank, it.size) for it in ow.list_items(p)] == [(10, "1"), (20, "2")]

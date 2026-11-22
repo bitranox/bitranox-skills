@@ -30,6 +30,13 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.22.2]
+
+### Fixed
+
+- The commit gate (`repo-gate.py` in hook mode) judged `git add <files> && git commit` on the index as it stood before the add, so a commit of an unbumped `plugins/` change in that shape passed the version check and every other stage check. It now replays each plain `git add` before the commit in a throwaway index and judges what the commit really ships; literal variables set earlier in the command (`H=plugins/bitranox/hooks && git add $H/x.py`) are resolved first. A command whose earlier statements the gate cannot replay is refused with the statement named and the route that works (run it in its own call first, then commit): a git statement that changes the index (`git rm`, `git reset`, `git apply`, `git restore --staged`, an interactive add), any statement that may write files before a `git add` (`bump_version.py && git add ...`), and one that may write files before a commit taking files from disk (`-a`, paths). Read-only statements (`grep`, `git diff | grep`, a `printf` of the message to a file outside the repository) are not refused. Replayed over a week of real bitranox-skills commits: 58 of 496 are now judged after their add, 29 are refused.
+- `backlog_list` and the other OPEN-WORK tools read each item as its first line only: a wrapped item came back with `size`, `open` and `next` empty, closing it left its continuation lines behind as orphans, and a new item could land between an item's lines. An item now runs from its checkbox line up to the first blank line, heading, fence, next checkbox line or list marker no deeper than its own indent, so its fields on continuation lines are read, a close removes the whole entry, and an add goes after the whole preceding entry. Over the 102 live `OPEN-WORK.md` files the item counts and ranks are unchanged. `meta-context-watcher` describes the new reading.
+
 ## [11.22.1]
 
 ### Fixed

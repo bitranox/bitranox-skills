@@ -2653,7 +2653,6 @@ def test_mirror_stage_reads_the_files_a_commit_names(tmp_path, command, mode, pa
     "git --work-tree=/x commit -qam x",
     "sudo git commit -qm x -- f",
     "git commit -m 'fix [x]' -- f",                         # a rewrite character anywhere is enough
-    "git add f && git commit -m x -- a",                    # an earlier statement may write a file
     "git restore . && git commit -qam x",
     "export GIT_ICASE_PATHSPECS=1 && git commit -qm x -- d/skill.md",
     "cd sub && git commit -qm x -- a",                      # relative: an inherited CDPATH may move it
@@ -5581,7 +5580,7 @@ def test_a_tool_repo_commit_matched_by_a_marketplace_worktree_says_stage_not_reg
     err = capsys.readouterr().err
     assert "UNSTAGED " in err and "modified but not staged" in err
     assert "Regenerate" not in err and "bump" not in err, err
-    assert "earlier" in err, "the gate judges the whole command first, so git add must run before it"
+    assert "git add it, then commit again" in err, err
 
 
 def test_a_tool_repo_commit_no_checkout_matches_on_disk_keeps_the_regenerate_advice(
@@ -5871,3 +5870,156 @@ def test_failure_report_memory_does_not_grow_with_the_report(tmp_path):
     # Growth ratio, not a byte limit: 8x the testcases must not cost anywhere near 8x the memory.
     small, large = _peak_report_memory(tmp_path, 5000), _peak_report_memory(tmp_path, 40000)
     assert large < 2 * small, (small, large)
+
+
+# --- a commit chained after `git add` in the same command -------------------------------------
+# The hook judges the whole command before any of it runs, so a `git add X && git commit` read on
+# the index saw the state before the add: an unbumped plugins/ change passed the version check.
+
+_PJ = "plugins/bitranox/.claude-plugin/plugin.json"
+_X = "plugins/bitranox/hooks/x.py"
+
+
+def _unbumped_edit_on_disk(root):
+    git_repo_with_origin(root, {_PJ: '{"version": "1.0.0"}\n', _X: "x = 1\n"})
+    (root / _X).write_text("x = 2\n", encoding="utf-8")
+
+
+def test_a_chained_add_then_commit_is_judged_on_what_the_add_stages(tmp_path):
+    _unbumped_edit_on_disk(tmp_path)
+    stage = RG.mirror_stage(f"git add {_X} && git commit -F m", "Bash", str(tmp_path))
+    assert any("still 1.0.0" in f for f in RG.check_version_bumped(tmp_path, stage=stage))
+    assert RG.chained_commit_refusal(f"git add {_X} && git commit -F m", "Bash", str(tmp_path)) is None
+
+
+def test_a_chained_add_carrying_the_bump_passes(tmp_path):
+    _unbumped_edit_on_disk(tmp_path)
+    (tmp_path / _PJ).write_text('{"version": "1.0.1"}\n', encoding="utf-8")
+    stage = RG.mirror_stage(f"git add {_X} {_PJ} && git commit -F m", "Bash", str(tmp_path))
+    assert RG.check_version_bumped(tmp_path, stage=stage) == []
+
+
+def test_a_chained_add_after_an_absolute_cd_resolves_its_directory(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _unbumped_edit_on_disk(repo)
+    session = tmp_path / "elsewhere"
+    session.mkdir()
+    cmd = f"cd {_sh(repo)} && git add {_X} && git commit -F m"
+    stage = RG.mirror_stage(cmd, "Bash", str(session))
+    assert any("still 1.0.0" in f for f in RG.check_version_bumped(repo, stage=stage))
+
+
+def test_a_plain_commit_after_a_non_git_statement_keeps_the_index_reading(tmp_path):
+    _unbumped_edit_on_disk(tmp_path)
+    assert RG.mirror_stage("make test && git commit -F m", "Bash", str(tmp_path)) == RG.STAGE_INDEX
+    assert RG.chained_commit_refusal("make test && git commit -F m", "Bash", str(tmp_path)) is None
+
+
+@pytest.mark.parametrize("cmd", [
+    "git add -p && git commit -F m",
+    "git add --interactive && git commit -F m",
+    "git rm -q f.txt && git commit -F m",
+    "git restore --staged f.txt && git commit -F m",
+    "git stash && git commit -F m",
+    "git add *.py && git commit -F m",
+    "sed -i s/a/b/ f.txt && git commit -a -F m",
+    "sed -i s/a/b/ f.txt && git commit -F m -- f.txt",
+    "sed -i s/a/b/ f.txt && git add f.txt && git commit -F m",
+])
+def test_a_statement_the_gate_cannot_replay_before_a_commit_is_refused(tmp_path, cmd):
+    _unbumped_edit_on_disk(tmp_path)
+    message = RG.chained_commit_refusal(cmd, "Bash", str(tmp_path))
+    assert message is not None and "in its own call first" in message
+
+
+@pytest.mark.parametrize("cmd", [
+    "git add -A && git commit -F m",
+    "git status && git commit -a -F m",
+    "git add f.txt && make test && git commit -F m",
+    "git commit -F m && git push",
+    "git commit -a -F m",
+])
+def test_a_replayable_or_harmless_prelude_is_not_refused(tmp_path, cmd):
+    _unbumped_edit_on_disk(tmp_path)
+    assert RG.chained_commit_refusal(cmd, "Bash", str(tmp_path)) is None
+
+
+def test_the_hook_refuses_an_unreplayable_prelude_and_names_the_route(tmp_path, monkeypatch, capsys):
+    target = _init_git(make_repo(tmp_path / "bitranox-skills"))
+    _hook_event(monkeypatch, target, "git rm -q x.txt && git commit -m x")
+    assert RG.main(parts=_parts()) == 2
+    err = capsys.readouterr().err
+    assert "git rm -q x.txt" in err and "in its own call first" in err
+
+
+def test_a_paths_commit_after_a_plain_add_keeps_its_paths_reading(tmp_path):
+    # `git add` writes no working-tree file, and a `<paths>` commit starts from HEAD, so the add
+    # changes nothing this commit ships; it is carried, not refused.
+    stage = RG.mirror_stage("git add f && git commit -m x -- a", "Bash", str(tmp_path))
+    assert isinstance(stage, RG.CommitSelection)
+    assert (stage.mode, stage.pathspecs) == ("only", ("a",))
+    assert stage.staged_first == (RG.AddStep(str(tmp_path), ("f",)),)
+
+
+@pytest.mark.parametrize("cmd", [
+    "printf 'msg\\n' > /tmp/repo-gate-msg.txt && git commit -a -F /tmp/repo-gate-msg.txt",
+    "git diff -U0 | grep -c x && git commit -a -F m",
+    "grep -c x f.txt && git add f.txt && git commit -F m",
+    "echo checked > /dev/null && git commit -F m -- f.txt",
+])
+def test_a_read_only_statement_before_a_commit_is_not_refused(tmp_path, cmd):
+    # Measured over a week of real commits: most refusals of the first cut came from statements
+    # that only read (grep, git diff | grep) or write a message file outside the repository.
+    _unbumped_edit_on_disk(tmp_path)
+    assert RG.chained_commit_refusal(cmd, "Bash", str(tmp_path)) is None
+
+
+@pytest.mark.parametrize("template", [
+    "printf x > f.txt && git commit -a -F m",
+    "printf x > {repo}/f.txt && git commit -a -F m",
+    "printf x >> f.txt && git add f.txt && git commit -F m",
+    "cat $F && git commit -a -F m",
+    "tee f.txt < /dev/null && git commit -a -F m",
+])
+def test_a_statement_that_may_write_into_the_repo_is_still_refused(tmp_path, template):
+    _unbumped_edit_on_disk(tmp_path)
+    cmd = template.format(repo=_sh(tmp_path))
+    message = RG.chained_commit_refusal(cmd, "Bash", str(tmp_path))
+    assert message is not None and "in its own call first" in message
+
+
+def test_a_literal_variable_in_a_chained_add_is_resolved(tmp_path):
+    _unbumped_edit_on_disk(tmp_path)
+    cmd = "H=plugins/bitranox/hooks && git add $H/x.py && git commit -F m"
+    assert RG.chained_commit_refusal(cmd, "Bash", str(tmp_path)) is None
+    stage = RG.mirror_stage(cmd, "Bash", str(tmp_path))
+    assert any("still 1.0.0" in f for f in RG.check_version_bumped(tmp_path, stage=stage))
+
+
+@pytest.mark.parametrize("cmd", [
+    "S=/tmp/repo-gate-scratch && printf 'msg\\n' > $S/m.txt && git commit -a -F $S/m.txt",
+    'S=/tmp/repo-gate-scratch; mkdir -p "$S" && git commit -a -F m',
+    "LC_ALL=C grep -c x f.txt && git commit -a -F m",
+])
+def test_a_resolved_read_only_statement_is_not_refused(tmp_path, cmd):
+    _unbumped_edit_on_disk(tmp_path)
+    assert RG.chained_commit_refusal(cmd, "Bash", str(tmp_path)) is None
+
+
+@pytest.mark.parametrize("cmd", [
+    "H=plugins; read H; git add $H/x.py && git commit -F m",     # a name the command reassigns
+    "S=. && printf x > $S/f.txt && git commit -a -F m",          # resolves into the repository
+    "GIT_DIR=x grep -c y f.txt && git commit -a -F m",
+])
+def test_an_unsafe_variable_or_prefix_still_refuses(tmp_path, cmd):
+    _unbumped_edit_on_disk(tmp_path)
+    assert RG.chained_commit_refusal(cmd, "Bash", str(tmp_path)) is not None
+
+
+def test_a_literal_built_from_an_earlier_literal_is_resolved(tmp_path):
+    _unbumped_edit_on_disk(tmp_path)
+    cmd = "P=plugins/bitranox; H=$P/hooks && git add $H/x.py && git commit -F m"
+    assert RG.chained_commit_refusal(cmd, "Bash", str(tmp_path)) is None
+    stage = RG.mirror_stage(cmd, "Bash", str(tmp_path))
+    assert any("still 1.0.0" in f for f in RG.check_version_bumped(tmp_path, stage=stage))

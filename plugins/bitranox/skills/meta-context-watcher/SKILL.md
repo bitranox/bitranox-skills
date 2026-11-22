@@ -77,11 +77,12 @@ refuse a rank any line already holds or cites as `[N]`, and `backlog_add` refuse
 ranked above an open `USER:` item, but the rank itself is still YOURS to choose by the rules
 below. A checkbox line with no `[rank]` (an older format) is not an item: `backlog_list` returns
 it under `unranked` with a `note`, so read those before concluding the backlog is empty.
-`backlog_list` reads each item's FIRST line only. An item wrapped onto indented continuation lines
-comes back as that line alone under `unranked`, or as an item with `size`, `open` and `next` empty,
-so a field missing from the tool's output is no evidence the item lacks it: read the item's
-continuation lines in the file before saying a field is missing or quoting its state. The tools
-can sit in the deferred-tool list: load the schema first with ToolSearch
+`backlog_list` returns each item with its wrapped lines joined to it, fields written on those lines
+included. The tool ends an item at the first blank line, heading, fence, next checkbox line, or
+list marker no deeper than the item's own indent, so a field its author wrote further down (an
+indented `| next:` after a blank line, say) comes back empty: a field missing from the tool's
+output is no evidence the item lacks it, so read the item in the file before saying a field is
+missing. The tools can sit in the deferred-tool list: load the schema first with ToolSearch
 (`select:mcp__bitranox__backlog_add`). They take no path, so an item that belongs in ANOTHER
 repo's backlog (see below) is a hand edit there. A session without them (the plugin's mod needs
 Claude Code 2.1.259 or newer) edits the file by hand under the same rules.
@@ -526,8 +527,8 @@ classification, not an afterthought to it:
    segment at its end says where it stands now (fixed, waiting on someone, nothing owed). Quote
    that last segment as the item's state, never the opening lines or a compaction summary's
    paraphrase of them, and live-check any external state it names (`gh pr view`, the release).
-   Read it in the file: `backlog_list` returns an item's first line only, not its continuation
-   lines.
+   `backlog_list` returns the wrapped entry joined, the last segment at the end of its last field;
+   read the entry in the file when it goes on past a blank line, where the tool cuts it.
 3. **Check the line is not already done.** Before listing an item as workable, search the history
    since its first-raised date for its distinctive text (with `00:00`: git reads a bare date as
    that day at the current time of day, so it drops the day's earlier commits):

@@ -91,6 +91,7 @@ import traceback
 import xml.etree.ElementTree as ET
 import sys
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
 from typing import Any, TypeIs
@@ -2048,35 +2049,53 @@ def _checked_out_bytes(directory: StrPath, commit: str, rel: str, env: Env = Non
 STAGE_INDEX, STAGE_HEAD = "index", "HEAD"
 
 
-class CommitSelection:
-    """A `git commit` that takes files from the WORKING TREE itself: `-a`, `-i <paths>` or `<paths>`.
+@dataclass(frozen=True, slots=True)
+class AddStep:
+    """One plain `git add` that runs in the same command before its commit: the directory it runs
+    in and its operands, replayed by `_stage_selection` exactly as written."""
 
-    Such a commit stages what it names only when it runs, so the index a PreToolUse gate reads
+    where: str
+    operands: tuple[str, ...]
+
+
+class CommitSelection:
+    """A `git commit` whose shipped files the index read before the command does not show.
+
+    Such a commit stages files only when the command runs, so the index a PreToolUse gate reads
     beforehand is not what it ships. Measured 2026-10-24: `git commit -F msg -- <paths>` with no
-    `git add` was refused as DRIFT quoting the old SKILL.md while the files on disk were in sync.
-    Git defines the selection, and `_selected_files` has git build it:
+    `git add` was refused as DRIFT quoting the old SKILL.md while the files on disk were in sync;
+    measured 2026-11-21: `git add <files> && git commit` passed with an unbumped plugin version,
+    because the index read before the add held none of the change. Git defines the selection, and
+    `_selection_index` has git build it:
 
     * ``all`` (`-a`): the index, with every tracked file re-staged from disk.
     * ``only`` (`<paths>`, `-o`): HEAD, with the named paths staged from disk, so a change staged
       elsewhere is NOT in this commit.
     * ``include`` (`-i <paths>`): the index, with the named files re-staged from disk.
+    * ``index`` (a plain commit after `git add` statements): the index as those adds leave it.
 
     ``where`` is the directory the commit runs in, which the pathspecs are relative to.
+    ``staged_first`` are the plain `git add` statements before the commit, replayed on a copy of
+    the index first (an ``only`` commit ignores them: it starts from HEAD).
 
     Not seen by any PreToolUse reading, this one or the index: a `pre-commit` hook that edits and
-    stages files, and environment the command's git gets but this hook does not (a `GIT_*`
-    variable or `GIT_CONFIG_*` injected into the shell from outside the command text).
+    stages files, a script that stages files itself, and environment the command's git gets but
+    this hook does not (a `GIT_*` variable or `GIT_CONFIG_*` injected into the shell from outside
+    the command text).
     """
 
-    __slots__ = ("mode", "pathspecs", "where")
+    __slots__ = ("mode", "pathspecs", "staged_first", "where")
 
-    def __init__(self, mode: str, pathspecs: Iterable[str] = (), where: StrPath | None = None) -> None:
+    def __init__(self, mode: str, pathspecs: Iterable[str] = (), where: StrPath | None = None,
+                 staged_first: Iterable[AddStep] = ()) -> None:
         self.mode = mode
         self.pathspecs: tuple[str, ...] = tuple(pathspecs)
         self.where = where
+        self.staged_first: tuple[AddStep, ...] = tuple(staged_first)
 
     def __repr__(self) -> str:
-        return "CommitSelection(%r, %r, %r)" % (self.mode, self.pathspecs, self.where)
+        return "CommitSelection(%r, %r, %r, %r)" % (self.mode, self.pathspecs, self.where,
+                                                    self.staged_first)
 
 
 #: What a gated command ships from the side being committed: `STAGE_INDEX`, `STAGE_HEAD`, or a
@@ -2124,8 +2143,29 @@ def _stage_selection(selection: CommitSelection, top: str, real_index: str, temp
     if not os.path.isfile(real_index):
         return False
     shutil.copyfile(real_index, temp_index)
+    if not _replay_adds(selection.staged_first, top, env):
+        return False
+    if selection.mode == "index":
+        return True
     specs = ("--", ":/") if selection.mode == "all" else ("--", *selection.pathspecs)
     return _git(where, "add", "-u", *specs, env=env)[0] == 0
+
+
+def _replay_adds(adds: Sequence[AddStep], top: str, env: Mapping[str, str]) -> bool:
+    """Run each `git add` of the command into the temp index ``env`` names; False if one fails.
+
+    An add whose directory lies in another repository stages nothing here and is skipped. One that
+    fails (a missing path, an ignored file) stops the real command at that add too, so the reading
+    falls back rather than guessing what a half-run command ships."""
+    for step in adds:
+        rc, step_top, _ = _git(step.where, "rev-parse", "--show-toplevel")
+        if rc:
+            return False
+        if os.path.normcase(step_top.strip()) != os.path.normcase(top):
+            continue
+        if _git(step.where, "add", *step.operands, env=env)[0]:
+            return False
+    return True
 
 
 @contextlib.contextmanager
@@ -2463,10 +2503,8 @@ _UNSTAGED_MARK = "is modified but not staged"
 def _unstaged_message(name: str, skill_dir: Path, differing: Sequence[str], stage: Stage) -> str:
     """The refusal for a commit whose mirror fix is on disk but not in what the commit takes."""
     named = isinstance(stage, CommitSelection) and stage.mode in ("only", "include")
-    # "Earlier" because the gate judges the whole command before any of it runs: a `git add` in
-    # the same command as the commit is not in the index the gate reads.
     remedy = ("name it among the commit's paths too - this commit takes only the paths it names"
-              if named else "git add it in an earlier, separate command, then commit again")
+              if named else "git add it, then commit again")
     return ("skills/%s: %s %s in %s - the file on disk already matches its twin, but what this "
             "commit takes does not. Nothing needs regenerating: %s."
             % (name, ", ".join(differing[:6]), _UNSTAGED_MARK, skill_dir, remedy))
@@ -3048,9 +3086,11 @@ def mirror_stage(command: str, tool_name: str | None = None, cwd: str | None = N
     alone publishes HEAD. Segmented exactly like `shell_text.is_gated_command`, heredoc bodies
     dropped, so a commit named as DATA does not count.
 
-    A commit that takes files from the working tree itself (`-a`, a pathspec, `-i`) gives a
-    `CommitSelection` instead; its pathspecs resolve from the directory the commit runs in, which
-    `cwd` (where the session sits) leads to. Anything the text cannot settle gives the index."""
+    A commit that takes files from the working tree itself (`-a`, a pathspec, `-i`), or that plain
+    `git add` statements before it change, gives a `CommitSelection` instead; its pathspecs resolve
+    from the directory the commit runs in, which `cwd` (where the session sits) leads to. Anything
+    the text cannot settle gives the index; where that index would not be what the commit ships,
+    `chained_commit_refusal` refuses the command instead."""
     stripped = shell_text.strip_heredoc_bodies(command or "")
     for _at, seg in shell_text.iter_segments(stripped, tool_name):
         seg = seg.strip().lstrip("(").strip()
@@ -3090,14 +3130,25 @@ def _commit_selection(segment: str, command: str, tool: str, cwd: str | None) ->
     <options> [--] <paths>` with no leading assignment or launcher, no other global option (`git
     --icase-pathspecs` and `GIT_*_PATHSPECS=` change pathspec matching), no character the shell
     rewrites (`_SHELL_REWRITES`), and the only `git commit` in the command (a second one commits
-    the index), with nothing before it but `cd <absolute dir>` (`_commit_is_plainly_placed`). Also
-    None for `-p`/`--interactive`, `--pathspec-from-file`, an option this reader does not know, `-a`
-    with paths (git refuses it), a `..` in a `-C` or `cd` path, or no readable directory. None is
-    the old reading, so not knowing is never laxer."""
+    the index). Before it, `_commit_prelude` allows `cd <absolute dir>`, plain `git add`
+    statements (replayed as ``staged_first``) and git statements that change neither index nor
+    files; a commit taking files from disk also allows nothing else. Also None for
+    `-p`/`--interactive`, `--pathspec-from-file`, an option this reader does not know, `-a` with
+    paths (git refuses it), a `..` in a `-C` or `cd` path, or no readable directory.
+
+    None is the index reading, which is LAXER than the truth wherever a statement before the
+    commit changes what it ships: `chained_commit_refusal` refuses exactly those commands, so the
+    hook never judges them on the index."""
     if tool != "Bash":
         return None
-    segment, command = _without_output_redirections(segment), _assignments_resolved(command)
-    if any(c in _SHELL_REWRITES for c in segment) or not _commit_is_plainly_placed(command, tool):
+    resolved = _assignments_resolved(command)
+    prelude = _commit_prelude(command, tool, cwd)
+    if prelude is None or prelude.refusal is not None or _commit_count(resolved, tool) != 1:
+        return None
+    # The prelude's copy of the statement carries the command's literal variables expanded.
+    segment = _without_output_redirections(prelude.commit or segment)
+    rewrites = any(c in _SHELL_REWRITES for c in segment)
+    if rewrites and not prelude.adds:
         return None
     try:
         tokens = shell_text.split_for_tool(segment, tool)
@@ -3108,12 +3159,18 @@ def _commit_selection(segment: str, command: str, tool: str, cwd: str | None) ->
     if parsed is None:
         return None
     flags, pathspecs = parsed
-    where = _commit_dir(command, cwd, tool)
-    if where is None or ("a" in flags and pathspecs) or not ("a" in flags or pathspecs):
+    where = _commit_dir(resolved, cwd, tool)
+    if where is None or ("a" in flags and pathspecs):
+        return None
+    if not ("a" in flags or pathspecs):
+        # A quoted message may hold a character the shell rewrites; with no pathspec and no `-a`
+        # this commit takes the index whatever the message says.
+        return CommitSelection("index", (), where, prelude.adds) if prelude.adds else None
+    if rewrites or not prelude.only_cd_and_add:
         return None
     if "a" in flags:
-        return CommitSelection("all", (), where)
-    return CommitSelection("include" if "i" in flags else "only", pathspecs, where)
+        return CommitSelection("all", (), where, prelude.adds)
+    return CommitSelection("include" if "i" in flags else "only", pathspecs, where, prelude.adds)
 
 
 # An OUTPUT redirection on the commit statement (`> log`, `>> $S/log`, `2>&1`, `&> log`): it moves
@@ -3146,7 +3203,7 @@ def _assignments_resolved(command: str) -> str:
     common shape. Only a statement that is ONE `NAME=value` word with no character the shell
     rewrites, NAME not `GIT_*` (a `GIT_*` shell variable is not exported, but reading one as
     harmless is the kind of guess the plain reading refuses), is folded; anything else is kept as
-    written, so `_commit_is_plainly_placed` still refuses it."""
+    written, so `_commit_prelude` still counts it as a statement it cannot read past."""
     pieces: list[tuple[str, str]] = []
     known: dict[str, str] = {}
     previous, commit_seen = 0, False
@@ -3183,23 +3240,288 @@ def _literal_assignment(segment: str) -> tuple[str, str] | None:
     return match.group(1), match.group(2)
 
 
-def _commit_is_plainly_placed(command: str, tool: str) -> bool:
-    """True when the command holds exactly one `git commit` and only `cd <absolute dir>` runs before it.
+def _commit_count(command: str, tool: str) -> int:
+    """How many `git commit` statements ``command`` holds, heredoc bodies dropped."""
+    return sum(1 for _at, seg in shell_text.iter_segments(
+        shell_text.strip_heredoc_bodies(command or ""), tool)
+        if shell_text.is_git_verb(seg.strip().lstrip("(").strip(), {"commit"}, tool))
+
+
+#: git verbs that change the index or the files a later commit takes. Before a commit, every one
+#: but a plain `git add` (which the gate replays) gives a refusal.
+_INDEX_CHANGING_VERBS = frozenset({
+    "add", "rm", "mv", "restore", "reset", "update-index", "apply", "checkout", "switch", "stash",
+    "read-tree", "merge", "pull", "rebase", "cherry-pick", "revert", "am", "clean",
+    "checkout-index", "sparse-checkout"})
+#: `git add` options the replay reproduces as written: none asks a question, opens an editor or
+#: reads a pathspec file. `--chmod=` is accepted by its prefix.
+_ADD_FLAG_OPTS = frozenset({
+    "-A", "--all", "--no-all", "-u", "--update", "-f", "--force", "-N", "--intent-to-add", "-v",
+    "--verbose", "-n", "--dry-run", "--ignore-removal", "--no-ignore-removal", "--renormalize",
+    "--ignore-errors", "--ignore-missing", "--sparse"})
+_ADD_SHORT_FLAGS = frozenset("AufNvn")
+
+
+@dataclass(frozen=True, slots=True)
+class Prelude:
+    """What runs before a command's first `git commit`, as far as what the commit ships goes.
+
+    ``adds`` are the plain `git add` statements, in order. ``only_cd_and_add`` is False once any
+    statement but `cd <absolute dir>`, a plain add or a git statement that changes neither index
+    nor files ran (`make test`, `sed -i`). ``first_other`` is the first such statement.
+    ``refusal`` is set when the gate cannot replay what runs before the commit. ``commit`` is the
+    commit statement itself, with the same literal variables expanded."""
+
+    adds: tuple[AddStep, ...]
+    only_cd_and_add: bool
+    first_other: str
+    refusal: str | None
+    commit: str = ""
+
+
+def _prelude_refusal(statement: str, why: str) -> str:
+    """The refusal for ``statement`` before a commit, naming the route that works."""
+    return ("repo-gate: this command runs `%s` before its `git commit`, and %s. The gate reads what "
+            "a commit ships before any statement of the command runs, so it cannot see what that "
+            "statement changes: run `%s` in its own call first, then commit."
+            % (statement, why, statement))
+
+
+def _commit_prelude(command: str, tool: str, cwd: str | None) -> Prelude | None:
+    """Read the statements before ``command``'s first `git commit`; None when it has none.
 
     The hook reads the disk BEFORE any statement runs, so a statement ahead of the commit that
     writes a file (`git restore`, `cp`, `sed -i`, a formatter) or changes how git matches a pathspec
     (`export GIT_ICASE_PATHSPECS=1`) makes the reading differ from what git commits. Measured by
-    adversarial review, 2026-10-24. Statements after the commit run after it and do not matter."""
-    commits = 0
-    for _at, seg in shell_text.iter_segments(shell_text.strip_heredoc_bodies(command or ""), tool):
-        seg = seg.strip()
+    adversarial review, 2026-10-24. A plain `git add` is replayed instead (`_plain_add`), since
+    git can stage it again in a throwaway index; any other statement that changes the index, and
+    any statement at all before an add, is a refusal. Statements after the commit run after it
+    and do not matter. None for a non-Bash tool or an unknown cwd: no reading, no refusal."""
+    if tool != "Bash" or cwd is None:
+        return None
+    text = shell_text.strip_heredoc_bodies(command or "")
+    here, adds, first_other = cwd, [], ""
+    known: dict[str, str] = {}
+    for _at, raw in shell_text.iter_segments(text, tool):
+        whole = _expand_known(raw.strip(), known)
+        literal = _literal_assignment(whole)         # `S=$P/skills` once P is known
+        if literal is not None:
+            known[literal[0]] = literal[1]
+            continue
+        seg = whole.lstrip("(").strip()
         if not seg:
             continue
-        if shell_text.is_git_verb(seg.lstrip("(").strip(), {"commit"}, tool):
-            commits += 1
-        elif commits == 0 and not _is_plain_cd(seg):
+        if shell_text.is_git_verb(seg, {"commit"}, tool):
+            return Prelude(tuple(adds), not first_other, first_other, None, seg)
+        if _is_plain_cd(whole):
+            landing = shell_text.resolve_path(shell_text.split_for_tool(whole, tool)[1], here, tool)
+            if landing is not None:
+                here = os.path.normpath(landing)
+                continue
+            first_other = first_other or seg         # a Git Bash mount: where it lands is unknown
+            continue
+        if shell_text.is_git_verb(seg, {"add"}, tool):
+            refusal = _add_refusal(seg, here, first_other, adds)
+            if refusal is not None:
+                return Prelude(tuple(adds), False, first_other or seg, refusal)
+            continue
+        if shell_text.is_git_verb(seg, _INDEX_CHANGING_VERBS, tool):
+            why = "that changes the index or the files the commit takes"
+            return Prelude(tuple(adds), False, seg, _prelude_refusal(seg, why))
+        if not _is_git_statement(seg) and not _is_read_only(whole, here):
+            first_other = first_other or seg
+    return None
+
+
+#: Programs that write no file themselves; their output redirections are judged separately.
+#: Measured over a week of real bitranox-skills commits: before this list, 47 of 65 refusals came
+#: from such statements (a `printf` writing the commit message to a temp file, a `grep` check).
+_READ_ONLY_PROGRAMS = frozenset({
+    "grep", "egrep", "fgrep", "wc", "head", "tail", "cat", "echo", "printf", "test", "[", "true",
+    "false", "ls", "pwd", "date", "sort", "uniq", "cut", "tr", "diff", "cmp", "stat",
+    "mkdir"})                                        # git tracks no directory, only files
+
+
+def _is_read_only(segment: str, here: str) -> bool:
+    """True when ``segment`` runs a `_READ_ONLY_PROGRAMS` program with no expansion, and every
+    output redirection targets /dev/null or a path (resolved from ``here``) outside the
+    repository ``here`` lies in. A `$`, a backquote or a `(` outside quotes can expand into anything, so it is not."""
+    masked = shell_text.mask_data_regions(segment, tool_name="Bash")
+    if any(c in masked for c in "$`("):
+        return False
+    try:
+        tokens = shell_text.split_for_tool(_without_output_redirections(segment), "Bash")
+    except ValueError:
+        return False
+    while tokens and (prefix := _ASSIGNMENT_WORD.match(tokens[0])) is not None:
+        if prefix.group(1).upper().startswith("GIT_"):
+            return False                             # changes what git reads or matches
+        tokens = tokens[1:]                          # `LC_ALL=C grep ...`: the program is grep
+    if not tokens or shell_text.basename_for_tool(tokens[0], "Bash") not in _READ_ONLY_PROGRAMS:
+        return False
+    top: str | None = None
+    for match in _OUTPUT_REDIRECTION.finditer(masked):
+        text = segment[match.start():match.end()].strip()
+        if re.fullmatch(r"\d*>&\d+-?", text):
+            continue                                 # `2>&1` moves a stream, writes no file
+        try:
+            target = shlex.split(re.sub(r"\A(?:\d*|&)>>?[ \t]*", "", text))[0]
+        except (ValueError, IndexError):
             return False
-    return commits == 1
+        if target == "/dev/null":
+            continue
+        landing = shell_text.resolve_path(target, here, "Bash")
+        if landing is None:
+            return False                             # a Git Bash mount whose landing is unknown
+        if top is None:
+            rc, out, _ = _git(here, "rev-parse", "--show-toplevel")
+            top = "" if rc else os.path.normcase(out.strip())
+        if top and os.path.normcase(os.path.normpath(landing)).startswith(top + os.sep):
+            return False
+    return True
+
+
+_VARIABLE_REF = re.compile(r"\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))")
+
+
+def _expand_known(segment: str, known: dict[str, str]) -> str:
+    """``segment`` with each `$NAME` / `${NAME}` of a ``known`` literal replaced by its value.
+
+    The values come from plain `NAME=value` statements earlier in the command
+    (`_literal_assignment`: no character the shell rewrites, never `GIT_*`), so textual
+    replacement splits words exactly as the shell's expansion does. A reference inside single
+    quotes is left alone, as the shell leaves it. A name the segment also uses as a bare word
+    (`read H`, `for H in`) is forgotten first: its value from then on is not the literal one."""
+    try:
+        words = set(shell_text.split_for_tool(segment, "Bash"))
+    except ValueError:
+        words = set()
+    for name in words & known.keys():
+        del known[name]
+    out, quote, at = [], "", 0
+    while at < len(segment):
+        char = segment[at]
+        if char in "'\"" and quote in ("", char) and not (quote == '"' and char == "'"):
+            quote = "" if quote == char else char
+        elif char == "$" and quote != "'":
+            match = _VARIABLE_REF.match(segment, at)
+            name = match and (match.group(1) or match.group(2))
+            if match and name in known:
+                out.append(known[name])
+                at = match.end()
+                continue
+        out.append(char)
+        at += 1
+    return "".join(out)
+
+
+def _add_refusal(segment: str, here: str, first_other: str, adds: list[AddStep]) -> str | None:
+    """Append ``segment``'s `AddStep` to ``adds``; the refusal when the gate cannot replay it."""
+    if first_other:
+        why = "that can change the files the `git add` after it stages"
+        return _prelude_refusal(first_other, why)
+    step = _plain_add(segment, here)
+    if step is None:
+        why = ("the gate cannot replay that `git add` (an interactive option, a pathspec file, an "
+               "option it does not know, or a character the shell rewrites)")
+        return _prelude_refusal(segment, why)
+    adds.append(step)
+    return None
+
+
+def _is_git_statement(segment: str) -> bool:
+    """True when ``segment`` runs git itself (`git status`, `git -C d log`)."""
+    try:
+        tokens = shell_text.split_for_tool(segment, "Bash")
+    except ValueError:
+        return False
+    return bool(tokens) and shell_text.basename_for_tool(tokens[0], "Bash") == "git"
+
+
+def _plain_add(segment: str, here: str) -> AddStep | None:
+    """The `AddStep` of a `git [-C <dir>]... add <options> [--] <paths>` statement run from
+    ``here``, or None for any shape the replay would not reproduce: a character the shell rewrites
+    (an unquoted glob is expanded by the shell, a quoted one by git), a leading assignment or
+    launcher, a `..` in a `-C` path, or an option outside `_ADD_FLAG_OPTS`."""
+    segment = _without_output_redirections(segment)
+    if any(c in _SHELL_REWRITES for c in segment):
+        return None
+    try:
+        tokens = shell_text.split_for_tool(segment, "Bash")
+    except ValueError:
+        return None
+    if not tokens or shell_text.basename_for_tool(tokens[0], "Bash") != "git":
+        return None
+    at, where = 1, here
+    while at + 1 < len(tokens) and tokens[at] == "-C":
+        if _climbs(tokens[at + 1]):
+            return None
+        landing = shell_text.resolve_path(tokens[at + 1], where, "Bash")
+        if landing is None:
+            return None
+        where = os.path.normpath(landing)
+        at += 2
+    if at >= len(tokens) or tokens[at] != "add":
+        return None
+    operands = tuple(str(t) for t in tokens[at + 1:])
+    return AddStep(where, operands) if _add_options_known(operands) else None
+
+
+def _add_options_known(operands: Sequence[str]) -> bool:
+    """True when every option before `--` among ``operands`` is one the replay reproduces."""
+    for token in operands:
+        if token == "--":
+            return True
+        if token.startswith("--"):
+            if token not in _ADD_FLAG_OPTS and not token.startswith("--chmod="):
+                return False
+        elif token.startswith("-") and token != "-":
+            if not all(letter in _ADD_SHORT_FLAGS for letter in token[1:]):
+                return False
+    return True
+
+
+def chained_commit_refusal(command: str, tool: str | None, cwd: str | None) -> str | None:
+    """Why the hook must refuse ``command`` instead of judging its commit, or None.
+
+    The hook judges a commit before any statement of its command runs. A plain `git add` before
+    the commit is replayed (`CommitSelection.staged_first`); a refusal is the answer when the
+    gate cannot know what the commit will ship: a git statement before it that changes the index
+    (`git rm`, `git restore --staged`, an interactive add), any statement before a `git add`, any
+    statement but a cd or a plain add before a commit that takes files from disk (`-a`, paths),
+    and a commit after a `git add` whose own statement the gate cannot read. A plain commit after
+    a statement that is not git (`make test && git commit`) still takes the index and is judged on
+    it."""
+    tool = tool or "Bash"
+    prelude = _commit_prelude(command, tool, cwd)
+    if prelude is None:
+        return None
+    if prelude.refusal is not None:
+        return prelude.refusal
+    segment = prelude.commit
+    if prelude.adds and _commit_selection(segment, command, tool, cwd) is None:
+        why = "the gate cannot read this commit's statement well enough to replay the add before it"
+        return _prelude_refusal(_shown(prelude.adds), why)
+    if not prelude.only_cd_and_add and _commit_takes_from_disk(segment):
+        why = "that can change the files this commit takes from disk"
+        return _prelude_refusal(prelude.first_other, why)
+    return None
+
+
+def _shown(adds: Sequence[AddStep]) -> str:
+    """The `git add` statements of ``adds`` as one line, for a refusal."""
+    return " && ".join("git add " + shlex.join(step.operands) for step in adds)
+
+
+def _commit_takes_from_disk(segment: str) -> bool:
+    """True when the commit statement ``segment`` names paths or `-a` (as far as its words show)."""
+    try:
+        tokens = shell_text.split_for_tool(_without_output_redirections(segment), "Bash")
+    except ValueError:
+        return False
+    operands = _plain_commit_operands(tokens)
+    parsed = None if operands is None else _parse_commit_operands(operands)
+    return parsed is not None and ("a" in parsed[0] or bool(parsed[1]))
 
 
 def _is_plain_cd(segment: str) -> bool:
@@ -4006,6 +4328,7 @@ def main(parts: GateParts | None = None) -> int:
     # reached in hook mode alone.
     event: Mapping[str, Any] = {}
     command = ""
+    prelude_refusal: str | None = None
     if hook_mode:
         # A real git pre-push hook receives REF LINES on stdin, never a Claude Code event, so only
         # hook mode parses it - read that way, a pre-push would fail the parse and pass by accident
@@ -4020,7 +4343,9 @@ def main(parts: GateParts | None = None) -> int:
         if not is_gated_command(command, event.get("tool_name")):
             return 0
         root, guessed = hook_landing(event)
-        stage = mirror_stage(command, event.get("tool_name"), os.path.normpath(event.get("cwd") or os.getcwd()))
+        session_cwd = os.path.normpath(event.get("cwd") or os.getcwd())
+        stage = mirror_stage(command, event.get("tool_name"), session_cwd)
+        prelude_refusal = chained_commit_refusal(command, event.get("tool_name"), session_cwd)
         publishes = command_publishes(command, event.get("tool_name"))
     else:
         root, guessed = repo_root(), False
@@ -4043,7 +4368,12 @@ def main(parts: GateParts | None = None) -> int:
                               "not checked - a tag ships no SKILL.md to installers. Sync the twin "
                               "before pushing the branch."])
             return 0
+        if prelude_refusal is not None and root is not None and _tool_repo_twins(root, parts.mirrors)[1]:
+            return shell_text.refuse(prelude_refusal)
         return gate_tool_repo_mirror(root, stage, guessed, publishes, parts.mirrors)
+
+    if prelude_refusal is not None:
+        return shell_text.refuse(prelude_refusal)
 
     if mirrors:
         # The full sweep the commit gate deliberately does not do: it reports every pair,
