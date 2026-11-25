@@ -76,3 +76,25 @@ def test_a_companion_cites_only_review_sources_the_generic_skill_numbers(compani
         cited.update(range(int(first), int(last or first) + 1))
     assert cited, f"{companion}: cites no numbered source, so this check examined nothing"
     assert cited <= pairings, f"{companion} cites sources {sorted(cited - pairings)} the generic skill lacks"
+
+
+def _rule_five():
+    text = _text(GENERIC)
+    start = text.index("\n5. **")
+    return " ".join(text[start:text.index("\n6. **", start)].split())
+
+
+def test_rule_five_allows_an_added_condition_only_as_a_stated_departure():
+    rule = _rule_five()
+    assert "You may add one when you judge it sensible." in rule
+    assert "in the commit message AND in your hand-over" in rule
+    for part in ("what the condition is", "why you added it", "what the user sees differently"):
+        assert part in rule, f"rule 5 lost the statement part {part!r}"
+    assert "SUPPRESSES an output the spec promised" in rule
+    assert "is a defect" in rule
+
+
+def test_the_review_separates_a_stated_added_condition_from_a_silent_one():
+    text = " ".join(_text(GENERIC).split())
+    assert "An `ADDED (silent)` row is a defect." in text
+    assert "An `ADDED (stated)` row is not: list it under \"departures for the owner's decision\"" in text
