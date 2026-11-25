@@ -30,6 +30,21 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.24.0]
+
+### Added
+
+- **Three skills for the consistency lens of a change.** `coding-consistency` is the
+  language-neutral one: seven pairings to put side by side (sibling paths, the halves of one
+  figure, figures and rules that go together, a literal and the value it stands for, code and the
+  spec's fixed points, code and its own prose, an interface and its contract), the four axes a
+  pair is compared on (set, rule, window, unit), rules for whoever writes the change, and a review
+  procedure that returns a pair table with a verdict per row. `coding-python-consistency` and
+  `coding-rust-consistency` add, for their language, a measured table of spellings that read as
+  equivalent and return different results, shapes that leave one place to write, what the
+  toolchain does not report (an attribute or field that is assigned and never read), and the
+  searches that feed the review.
+
 ## [11.23.1]
 
 ### Changed
