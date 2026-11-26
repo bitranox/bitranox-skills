@@ -188,13 +188,41 @@ how good its code is: an arm that stops early scores low whatever it wrote. Repo
 `last_text`), and let the judges rate quality. The pairwise comparison is the checklist of step 2
 read across the arms.
 
-1. **One blind judge per arm** (`opus`, the diff and the spec only, arms relabelled) reports each
-   requirement as met, partly or not, with the code lines, plus spec defects the arm found and
-   corrected, plus bugs.
+1. **One blind judge per arm** (`opus`; the diff, the spec and the arm's statements, nothing else;
+   arms relabelled) reports each requirement as met, partly or not, with the code lines, plus
+   spec defects the arm found and corrected, plus bugs.
 2. **One shared checklist** built from the union of those findings. Each item is a SINGLE property,
-   scored FIXED or PRESENT (the defect it names), NA or PARTLY; split a compound item in two.
-   Measured over 3 arms: two judges agreed on 58 of 60 cells and both disputes were compound items.
-3. **Two independent `opus` judges with different arm order**, diffs only, run the checklist. They
-   are new judges, not the ones from step 1. You settle each disagreement by reading the code,
-   never by averaging.
-4. **A defect hunt per arm** (`opus`, the diff only) covers what the checklist lacks.
+   scored FIXED or PRESENT (the defect it names), NA or PARTLY, or SOUND-DEPARTURE under the rule
+   below; split a compound item in two. Measured over 3 arms: two judges agreed on 58 of 60 cells
+   and both disputes were compound items.
+3. **Two independent `opus` judges with different arm order** (the diffs, the spec and the arms'
+   statements only) run the checklist. They are new judges, not the ones from step 1. You settle
+   each disagreement by reading the code, never by averaging.
+4. **A defect hunt per arm** (`opus`; the diff, the spec and the arm's statements only) covers
+   what the checklist lacks.
+
+**A stated departure from the spec whose reason holds is no defect.** The arm's statements are
+its commit messages (`git log` of its branch) and its hand-over (the session's last model text in
+`stream.jsonl`, in full). Hand both to every judge, verifier and hunter beside the diff,
+relabelled like the diff and with every line that names the arm, its skill or its variant
+removed. They show only THAT a departure was stated and why; what the code does is read from the
+diff. Where an arm's code departs from the spec (a changed number, set, order or signature, or a
+condition the spec does not carry), the judge rules on two questions and quotes the lines for
+each:
+
+- Is it stated: does a commit message or the hand-over (one of them is enough) name the
+  departure (what the spec says there, or that it says nothing; what the code does instead)
+  and give a reason? A statement that names another value or effect than the diff shows does
+  not state this departure.
+- Does the reason hold against the spec text: the spec is unclear, incomplete or contradicts
+  itself on that point, or its version would break something the judge can name with an input?
+  The judge rules on the reason the arm gave, never on one the judge could supply for it, and
+  where the arm chose between two contradicting lines, on whether the rest of the spec speaks
+  against the side it chose.
+
+Both yes scores SOUND-DEPARTURE: it counts as no defect in every tally and is listed apart, per
+arm, with the statement and the judge's ruling, for the spec's owner. A silent departure, or one
+whose stated reason does not hold, is scored PRESENT and counted like any other defect; the judge
+says which of the two it is. A departure that breaks a caller outside the arm's change is PRESENT
+whatever its reason. Two arms that depart soundly from one spec point in different directions
+are a finding about the spec, reported with the comparison.

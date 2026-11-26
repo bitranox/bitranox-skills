@@ -98,3 +98,36 @@ def test_the_review_separates_a_stated_added_condition_from_a_silent_one():
     text = " ".join(_text(GENERIC).split())
     assert "An `ADDED (silent)` row is a defect." in text
     assert "An `ADDED (stated)` row is not: list it under \"departures for the owner's decision\"" in text
+
+
+def _rule_four():
+    text = _text(GENERIC)
+    start = text.index("\n4. **")
+    return " ".join(text[start:text.index("\n5. **", start)].split())
+
+
+def test_rule_four_allows_a_changed_fixed_point_only_as_a_stated_departure_with_a_reason():
+    rule = _rule_four()
+    assert "You may change one when you judge it sensible," in rule
+    assert "unclear, incomplete or contradicts itself" in rule
+    assert "in the commit message AND in your hand-over" in rule
+    for part in ("what the spec says", "what the code does instead", "why",
+                 "what a user or caller sees differently"):
+        assert part in rule, f"rule 4 lost the statement part {part!r}"
+    assert "or with a reason that does not hold against the spec text, is a defect" in rule
+    assert "your doubt goes to the spec's owner as a question" in rule
+
+
+def test_a_departure_never_covers_breaking_a_caller_outside_the_change():
+    text = " ".join(_text(GENERIC).split())
+    assert "the statement reaches the spec's owner, never a caller you cannot see" in text
+    assert "A departure that breaks a caller outside the change is `DISAGREE` whatever its reason." in text
+
+
+def test_the_review_separates_a_sound_stated_departure_from_a_silent_or_unsound_one():
+    text = " ".join(_text(GENERIC).split())
+    assert "Judge the reason the statement gives, never one you could supply for it" in text
+    assert "or with a reason that does not hold, is `DISAGREE`" in text
+    assert "A `DEPARTED (stated)` row is no defect either: list it there too" in text
+    assert "A `DEPARTED (stated)` row carries no rating either" in text
+    assert "is not `AGREE`, `ADDED (stated)` or `DEPARTED (stated)`" in text
