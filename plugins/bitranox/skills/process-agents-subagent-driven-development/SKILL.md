@@ -20,7 +20,7 @@ bolted on. See `bitranox:meta-self-improve` ("Pathfinder discipline").
 **Narration:** between tool calls, narrate at most one short line  -  the
 ledger and the tool results carry the record.
 
-**Continuous execution:** Do not pause to check in with your human partner between tasks. Execute all tasks from the plan without stopping. The only reasons to stop are: BLOCKED status you cannot resolve, ambiguity that genuinely prevents progress, or all tasks complete. "Should I continue?" prompts and progress summaries waste their time  -  they asked you to execute the plan, so execute it. The one exception is Attended Mode below, which your human partner has to ask for.
+**Continuous execution:** Do not pause to check in with your human partner between tasks. Execute all tasks from the plan without stopping. The only reasons to stop are: BLOCKED status you cannot resolve, ambiguity that genuinely prevents progress, a decision that is your human partner's once every task that does not depend on it is done (see "Park and Carry On" below), or all tasks complete. "Should I continue?" prompts and progress summaries waste their time  -  they asked you to execute the plan, so execute it. The one exception is Attended Mode below, which your human partner has to ask for.
 
 ## When to Use
 
@@ -142,9 +142,10 @@ that contradict each other always changes the plan text, so it is never
 yours. Present the rest, the findings whose fix changes what the plan TEXT
 requires, to your human partner as one batched question  -  each finding
 beside the plan text that mandates it, asking which governs  -  before
-execution begins, not one interrupt per discovery mid-plan. In a headless run
-nobody can answer that question: route those findings by "When No Human Can
-Answer" below instead. If the scan is clean, proceed without comment. The
+execution begins, not one interrupt per discovery mid-plan. In a run marked
+"no human" or "full automatic" nobody answers that question: route those
+findings by "When No Human Can Answer" below instead. If the scan is clean,
+proceed without comment. The
 review loop remains the net for conflicts that only emerge from
 implementation.
 
@@ -212,13 +213,45 @@ bump, wiped the other writer's uncommitted step, and that writer's gate then ran
 
 ## When No Human Can Answer
 
-Every rule here that sends a decision to your human partner assumes someone will answer. A run
-started with nobody to ask - `claude -p` or an SDK node launched from a script, an A/B arm, a
-brief saying no one is watching - has no one, and a question that ends the turn there reads as the
-run finishing: measured, a controller asked one after 3 of 14 tasks and the run exited as a
-success. So in a headless run, route each finding whose fix changes what the plan TEXT requires
-(found in the pre-flight scan, in the review loop, or behind a BLOCKED report that the plan is
-wrong) by one test: does the fix change behaviour a release already ships?
+Every rule here that sends a decision to your human partner means: ask, and end the turn on the
+question. That holds however the run was started. Never conclude that nobody will answer from the
+launch: a `claude -p` session, an SDK node, a script that started you or a long silence does not
+say so.
+
+**Park and Carry On: a decision that comes up mid-run does not stop the independent tasks.** Park
+the task that holds the decision and every task that depends on the answer, execute every task
+that does not, reviews included, and only then end the turn, once, on all open questions together.
+A task depends on the answer when it touches the same files, the same interface or the same
+behaviour the decision is about, or when the plan orders it after a parked task (the plan names
+that task as its prerequisite, or it builds on that task's output). When you are unsure whether a
+task depends, park it. A parked task is not done: leave its commit in place, dispatch no fix for
+the open finding, and count it with the unfinished tasks. Where a rule above says a decision goes
+to your human partner "at once", that means it becomes an open question at once, never a ledger
+line; the turn still ends on it only after the independent tasks. The final whole-branch review
+waits until nothing is parked. Two cases keep their own rule: the pre-flight question is put
+before execution begins, and Attended Mode stops and asks as its section says.
+
+**The message that ends the turn on a question must not read as the run finishing.** Measured: a
+controller asked one after 3 of 14 tasks and the run exited as a success, because a caller that
+reads only the end of a run cannot tell a question from a report. So begin that final message
+with `QUESTION - RUN NOT FINISHED:`, then the tasks done (N of M), then each parked task with the
+reason it is parked, then every open question, and end the message on the questions themselves.
+Nothing in the message may read as completion.
+
+**Only a run marked as having no human does not ask.** The mark is the words "no human" or "full
+automatic" in the prompt, a brief or the plan, said of this run. Five variants are the mark as
+well: "no humans", "full auto", "fully automatic", and the German "kein Mensch" and
+"vollautomatisch". Capitals, a hyphen and a line break between two words make no difference, and
+the words count inside a longer sentence ("There is no human in this session", "run the plan
+full auto", "den Plan vollautomatisch ausfuehren"). Nothing else is the mark: not the way the run
+was launched, not "unattended", "headless" or "autonomous" without those words, not a human who
+is slow to answer, away or not watching, and not the words denied ("this is not a no-human
+run", "not a full auto run"). Any other wording you are unsure about is not the mark: ask.
+
+In a run so marked a question is never answered and nothing is parked, so route each finding
+whose fix changes what the plan TEXT requires (found in the pre-flight scan, in the review loop,
+or behind a BLOCKED report that the plan is wrong) by one test: does the fix change behaviour a
+release already ships?
 
 - **It does** - the code before this plan did it for callers outside the branch, and a tag or a
   published package or plugin version carries it. Stop the run UNFINISHED: dispatch neither the
@@ -234,7 +267,7 @@ wrong) by one test: does the fix change behaviour a release already ships?
   in the final message.
 - **You cannot tell** whether a release ships it: treat it as shipped and stop.
 
-A run with a human present is unchanged: ask, as the rules above say.
+A run without the mark is unchanged: ask, as the rules above say.
 
 ## Model Selection
 
@@ -416,7 +449,7 @@ against it found a real defect.
 1. If it's a context problem, provide more context and re-dispatch with the same model
 2. If the task requires more reasoning, re-dispatch with a more capable model
 3. If the task is too large, break it into smaller pieces
-4. If the plan itself is wrong, decide it as for a plan-mandated finding (see the review loop): escalate to the human when the fix changes what the plan text requires (in a headless run, see "When No Human Can Answer")
+4. If the plan itself is wrong, decide it as for a plan-mandated finding (see the review loop): escalate to the human when the fix changes what the plan text requires (in a run marked "no human" or "full automatic", see "When No Human Can Answer")
 
 **Never** ignore an escalation or force the same model to retry without changes. If the implementer said it's stuck, something needs to change.
 
@@ -523,8 +556,8 @@ final whole-branch review. When you fill a reviewer template:
   that is how one task reached ten fix rounds. Two kinds of finding never
   go to the ledger, whatever severity they carry. One that conflicts with
   a user decision, a Minor or a note in a log, goes to your human partner
-  at once as a decision (in a headless run, "When No Human Can Answer"
-  decides it). One labeled plan-mandated in security (an input path
+  at once as a decision (in a run marked "no human" or "full automatic",
+  "When No Human Can Answer" decides it). One labeled plan-mandated in security (an input path
   outside an origin or auth check), layering (an inner layer naming an
   adapter library's type) or test coverage (no real-dependency test of a
   new write path) is routed by the plan-mandated rule below before the
@@ -538,8 +571,8 @@ final whole-branch review. When you fill a reviewer template:
   after all. Any other fix, one that changes what the plan TEXT requires
   the task to do, is the human's decision: present the finding and the
   plan text, ask which governs, and do not dispatch that fix without
-  asking (in a headless run, "When No Human Can Answer" decides it
-  instead). Never dismiss a finding because the plan mandates it.
+  asking (in a run marked "no human" or "full automatic", "When No
+  Human Can Answer" decides it instead). Never dismiss a finding because the plan mandates it.
 - Before dispatching any fix, check the remedy it prescribes against what your human partner
   asked for in this feature: the request or backlog line the work came from, and
   `USER-DECISIONS.jsonl` at the main checkout's root. A remedy that removes, suppresses or changes

@@ -30,6 +30,31 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.27.0]
+
+### Changed
+
+- **`process-agents-subagent-driven-development`: the plan executor asks unless the run is marked
+  "no human" or "full automatic".** It ends its turn on a question whenever a decision is the
+  user's, however the run was launched, and no longer concludes from a `claude -p` session, an SDK
+  node or a script launch that nobody will answer. The no-human routing (released-behaviour test,
+  `UNFINISHED:` stop, logged deviation) applies only when the prompt, a brief or the plan says
+  "no human" or "full automatic" of that run, or one of the variants "no humans", "full auto",
+  "fully automatic", "kein Mensch" and "vollautomatisch": any capitals, also inside a longer
+  sentence; "unattended" or "headless" without those words and the words denied are not the mark. A question that ends the turn
+  begins `QUESTION - RUN NOT FINISHED:` with the tasks done, so a caller reading only the end of
+  the run does not take it for success.
+- **`process-agents-subagent-driven-development`: a decision that is the user's parks only what
+  depends on it.** The executor parks the task that holds the decision and every task that
+  depends on the answer (same files, interface or behaviour, or ordered after a parked task by
+  the plan; unsure means parked), executes the independent tasks, and ends the turn once with the
+  tasks done, the tasks parked and why, and all open questions together. The pre-flight question,
+  Attended Mode and a run marked as having no human keep their own rules.
+- **`meta-skill-ab-test`: the `unattended_note` must hold "no human", "full automatic" or one of
+  those variants** for an
+  arm that executes a plan under the plan-executor skill to take its no-human routing; a note
+  without those words leaves the arm free to end its turn on a question.
+
 ## [11.26.0]
 
 ### Added

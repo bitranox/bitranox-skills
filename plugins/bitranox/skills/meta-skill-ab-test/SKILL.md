@@ -142,8 +142,13 @@ them. The paid arm is started by the user in their own terminal, never from a to
   `[run] unattended_note = "..."` before `seal` (`abtest.toml` is frozen there, so a note
   forgotten then needs a new run dir): `run` appends that one text to every arm's prompt alike,
   after a blank line, the bare arm's too (so it must not name the skill under test, or the bare
-  arm is pointed at it), and each journal row and `result.json` carry the note's own sha256 as
-  `unattended_note_sha256` (`null` without a note). `score` reads the session's last model text
+  arm is pointed at it). An arm that executes a plan under
+  `bitranox:process-agents-subagent-driven-development` takes its no-human routing only when the
+  note holds the words "no human" or "full automatic" ("There is no human in this session" does)
+  or one of the variants that skill lists; a note without them leaves that arm free to end its
+  turn on a question. Each journal row and
+  `result.json` carry the note's own sha256 as `unattended_note_sha256` (`null` without a note).
+  `score` reads the session's last model text
   from `stream.jsonl` into `last_text` (one line) and sets `ended_with_question` true when its
   last character is `?`, else false; an earlier question does not count, and both are `null`
   when the stream is missing or holds no text. A true one is a FLAG on the arm's line
