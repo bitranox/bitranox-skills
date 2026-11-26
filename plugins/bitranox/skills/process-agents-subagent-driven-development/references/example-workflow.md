@@ -63,6 +63,10 @@ Task reviewer: Spec OK. Task quality: Approved.
 [Dispatch final code-reviewer]
 Final reviewer: All requirements met, ready to merge
 
+[Dispatch failure-modes reviewer over the whole branch]
+Failure-modes reviewer: variant table (path), one finding rated Medium
+[Run the finding's input: the code handles it, nothing to fix; named in the final message]
+
 Done!
 ```
 

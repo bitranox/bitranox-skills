@@ -30,6 +30,18 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.28.0]
+
+### Added
+
+- `process-agents-subagent-driven-development`: every plan run now ends with one more `opus`
+  reviewer that follows only the reviewer side of `coding-failure-modes` over the whole branch,
+  after the final whole-branch review and its fix round. A per-task review and the broad final
+  review do not meet a variant that needs the pieces of several tasks; this reviewer starts from
+  the required behaviours and does. Its ratings are checked against the code before a fix is
+  dispatched. Attended Mode dispatches it at its Finish step. Its cost inside a plan run is not
+  measured.
+
 ## [11.27.0]
 
 ### Changed

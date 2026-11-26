@@ -7,11 +7,14 @@ description: Use when executing a written implementation plan, in this session o
 
 > Adapted from the superpowers plugin (MIT).
 
-Execute plan by dispatching a fresh implementer subagent per task, a task review (spec compliance + code quality) after each, and a broad whole-branch review at the end.
+Execute plan by dispatching a fresh implementer subagent per task, a task review (spec compliance +
+code quality) after each, a broad whole-branch review at the end, and one failure-modes review of
+the whole branch after it.
 
 **Why subagents:** You delegate tasks to specialized agents with isolated context. By precisely crafting their instructions and context, you ensure they stay focused and succeed at their task. They should never inherit your session's context or history  -  you construct exactly what they need. This also preserves your own context for coordination work.
 
-**Core principle:** Fresh subagent per task + task review (spec + quality) + broad final review = high quality, fast iteration
+**Core principle:** Fresh subagent per task + task review (spec + quality) + broad final review +
+failure-modes review = high quality, fast iteration
 
 **Pathfinder:** instruct each implementer to leave files better than found and accept no technical debt;
 an out-of-scope fix a subagent spots goes in its own worktree (`bitranox:git-worktrees`), surfaced not
@@ -73,7 +76,12 @@ feedback takes the place of the task and final reviews.
 4. **Continue.** Apply the feedback, execute the next batch, repeat. Go back to step 1 when your
    partner updates the plan or the approach needs rethinking.
 5. **Finish.** Confirm every task is completed and the full test suite is green with pristine
-   output (no errors or warnings), then disarm the gate:
+   output (no errors or warnings). Then dispatch the one reviewer of "Failure-Modes Review" below
+   over the whole branch: your partner's feedback does not take its place, because a reading
+   batch by batch sees no more of a variant that spans tasks than a task review does. Check its
+   ratings against the code as that section says, show your partner the findings you confirmed
+   and the ones you did not, say "Ready for feedback." and wait as in step 3, and make the fixes
+   they ask for yourself. Then disarm the gate:
 
        bash "$CLAUDE_PLUGIN_ROOT/hooks/run-python.sh" "$CLAUDE_PLUGIN_ROOT/hooks/skill_receipt.py" end plan-execution
 
@@ -106,6 +114,7 @@ digraph process {
     "Read plan, note context and global constraints, create todos" [shape=box];
     "More tasks remain?" [shape=diamond];
     "Dispatch final code reviewer subagent (../process-review-requesting-code-review/code-reviewer.md)" [shape=box];
+    "Dispatch failure-modes reviewer subagent (bitranox:coding-failure-modes, reviewer side only)" [shape=box];
     "Use bitranox:process-ship-finishing-development-branch" [shape=box style=filled fillcolor=lightgreen];
 
     "Read plan, note context and global constraints, create todos" -> "Dispatch implementer subagent (./implementer-prompt.md)";
@@ -121,7 +130,8 @@ digraph process {
     "Mark task complete in todo list and progress ledger" -> "More tasks remain?";
     "More tasks remain?" -> "Dispatch implementer subagent (./implementer-prompt.md)" [label="yes"];
     "More tasks remain?" -> "Dispatch final code reviewer subagent (../process-review-requesting-code-review/code-reviewer.md)" [label="no"];
-    "Dispatch final code reviewer subagent (../process-review-requesting-code-review/code-reviewer.md)" -> "Use bitranox:process-ship-finishing-development-branch";
+    "Dispatch final code reviewer subagent (../process-review-requesting-code-review/code-reviewer.md)" -> "Dispatch failure-modes reviewer subagent (bitranox:coding-failure-modes, reviewer side only)";
+    "Dispatch failure-modes reviewer subagent (bitranox:coding-failure-modes, reviewer side only)" -> "Use bitranox:process-ship-finishing-development-branch";
 }
 ```
 
@@ -293,7 +303,8 @@ just documented: **arm the model gate before dispatching Task 1** -
 While that `plan-execution` receipt is fresh, the PreToolUse
 `subagent-model-gate` hook DENIES any `Task`/`Agent` dispatch that omits
 `model` (a `fork` stays exempt - it legitimately inherits the parent model).
-When the plan is complete (after the final review), DISARM it -
+When the plan is complete (after the final review, the failure-modes review and its fix
+round), DISARM it -
 
     bash "$CLAUDE_PLUGIN_ROOT/hooks/run-python.sh" "$CLAUDE_PLUGIN_ROOT/hooks/skill_receipt.py" end plan-execution
 
@@ -306,6 +317,7 @@ and expires 8 hours after its latest `start`: a session that resumes a plan afte
 
 Every dispatch whose job is to JUDGE work or a verdict already produced runs on `model: "opus"`
 with `effort: "medium"`: the per-task reviewer and its re-reviews, the final whole-branch review,
+the failure-modes review after it,
 code review, skeptic and adversarial lenses, verify passes, adjudicators, quote-back checks, audit
 reviewers and judge panels. A fan-out of such reviewers (one per file, dimension or store) is a
 review too; a scanner that judges raw material nobody has produced a result from yet (log lines,
@@ -716,6 +728,67 @@ must fail with that defect put back. A defect the fix would resolve by changing 
 requires goes through the plan-mandated rule above. The PLAN CHANGES list goes, unchanged, into the
 final message to the user, after the result.
 
+## Failure-Modes Review
+
+**Every run ends with one more reviewer, which does nothing but the failure-modes review of the
+whole branch.** It follows the reviewer side of `bitranox:coding-failure-modes`: a table of
+variants built from the design first, then each variant checked against the code of the whole
+branch. Dispatch it once per run, to a fresh `opus` agent at effort `medium`, after the final
+whole-branch review and after that review's fix subagent has committed (straight after the review
+when it left nothing to fix). It is one reviewer, also where the final review was split by system.
+No run drops it: not a small plan, not one whose implementers ran on `haiku`, not one asked to be
+cheap, and a run marked "no human" or "full automatic" dispatches it like any other. A run that
+stops before its end (an `UNFINISHED:` stop, a turn ended on a question while tasks are parked) has
+not reached this step: the review runs when the run is taken up again and completed. Attended Mode
+has no final whole-branch review; there, step 5 of that section says when to dispatch this reviewer
+and what happens with its findings.
+
+It is a separate reviewer because the other reviews are built to miss what it looks for. A per-task
+reviewer sees one task's diff, so a variant that needs the pieces of several tasks is in none of
+its diffs. The final whole-branch review reads the whole branch for many things at once and starts
+from the code and the plan, so it meets the cases the plan pictured. This reviewer starts from the
+required behaviours and asks what the environment supplies for each, so it meets a case in which
+every task's piece is right and the delivered behaviour is still wrong. Measured in one comparison
+of plan runs: the task reviews, the broad final review and four rounds of blind defect hunts split
+by lens all missed a defect made of three pieces from three tasks, each correct alone, and two
+reviewers that ran only this procedure over the whole branch both found it.
+
+Its inputs, each by path: a review package of MERGE_BASE to the current HEAD (run
+`review_package.py` again when a fix landed after the final review's package was written), the
+source design, and the plan at HEAD. If the plan names no source design, say so in the dispatch;
+the plan is then the only source of the required behaviours. Its instructions, in the dispatch:
+
+1. Load `bitranox:coding-failure-modes` and follow its section "When you review the change", all
+   six steps, and nothing else. Name the file
+   `$CLAUDE_PLUGIN_ROOT/skills/coding-failure-modes/SKILL.md` as well, for a reviewer that cannot
+   load a skill by name. Code quality, style and plan alignment are not its job; the other reviews
+   did them.
+2. The change under review is the whole branch, and the required behaviours come from the source
+   design and the whole plan, not from one task. Build the variant table from those two documents
+   before opening the review package.
+3. The implementer template asks for no author's table, so none is handed in: say so and go on
+   from your own table, as that section's step 3 says.
+4. Write the table to a file in a directory you created with `mktemp -d` outside the worktree,
+   and report its path with the findings. Every finding names the required behaviour and its
+   line in the design or plan, the concrete input, what the code does with it, what the user or
+   operator sees, and the axis number.
+
+In the subagent flow, handle its findings as you handle the final review's DEFECTS: the same
+confirmation before any fix, ONE fix subagent with the confirmed list under the same
+regression-test rule, and the same routing for a fix that changes what the plan text requires or an
+output your human partner asked for (the plan-mandated rule and the user-requirement check above;
+in a run marked "no human" or "full automatic", "When No Human Can Answer" decides it). It rates
+findings High, Medium or Low. **Its rating is a claim until you have checked it against the code:**
+run the finding's concrete input, or read the code path far enough to see what the code does with
+it and what is shown, and rate it yourself from that. In the measurement above both reviewers also
+rated two findings higher than the code supported. A finding you confirm as High or Medium goes to
+the fix subagent, like a Critical or Important defect. One you confirm as Low, and one that does
+not confirm, is not fixed: name it in the final message with what you found. The reviewer is not
+dispatched a second time after its fix round.
+
+Its cost inside a plan run is not measured. The two reviewers in the measurement ran after the
+run had ended, and the usage counter read 390k to 465k tokens for each.
+
 ## File Handoffs
 
 Everything you paste into a dispatch prompt  -  and everything a subagent
@@ -1031,6 +1104,7 @@ signal to run the standard loop.
 - **bitranox:git-worktrees** - Ensures isolated workspace (creates one or verifies existing)
 - **bitranox:process-plan-writing-plans** - Creates the plan this skill executes
 - **bitranox:process-review-requesting-code-review** - Code review template for the final whole-branch review
+- **bitranox:coding-failure-modes** - The reviewer procedure the failure-modes review follows
 - **bitranox:process-ship-finishing-development-branch** - Complete development after all tasks
 
 **Subagents should use:**

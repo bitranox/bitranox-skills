@@ -74,7 +74,7 @@ def test_no_sentence_of_the_skill_routes_by_a_headless_run():
 def test_every_pointer_to_the_section_names_the_mark():
     flat = _flat(_executor())
     pointers = [m.start() for m in re.finditer(re.escape('"When No Human Can Answer"'), flat)]
-    assert len(pointers) == 4
+    assert len(pointers) == 5
     for at in pointers:
         assert MARK_PHRASE in flat[at - 120:at], flat[at - 120:at + 30]
 
