@@ -60,11 +60,29 @@ everything past their first ~5k tokens.
 ### 3.1 Path-scoped rules for the memory index
 
 Move facts whose trigger is a file type (most of the Python facts, for one) out of the
-always-loaded index into `.claude/rules/*.md` files with `paths:`. Unverified, so a scripted probe
-comes first: does a `.claude/rules` directory at an ANCESTOR level of the cwd load at all, and
-does a path-scoped rule load when the matching file lies in a nested repo? The doc says a
-symlinked rule with `paths` does not load. The memory engine writes the index, so this is an
-engine change, not a hand edit.
+always-loaded index into `.claude/rules/*.md` files with `paths:`. The memory engine writes the
+index, so this is an engine change, not a hand edit. The doc says a symlinked rule with `paths`
+does not load, so each level needs real files.
+
+**Probe result (2026-11-26, Claude Code 2.1.332, haiku, `--setting-sources project,local`).**
+Tree: a non-git ancestor `T`, the cwd `T/proj` (a git repo), a nested git repo `T/proj/nested`;
+each `CLAUDE.md` and rule file holds a unique token, and the evidence is the captured request
+body, never the model's answer. Probe: `docs/plans/probes/2026-11-26-rules-loading/`.
+
+| Scenario                         | Loaded with it                                                         |
+|----------------------------------|------------------------------------------------------------------------|
+| launch, no file touched          | both `CLAUDE.md`, both always-on rules (ancestor one too), no `paths:` |
+| Read `src/a.py`                  | adds the ancestor's AND the project's `**/*.py` rule                   |
+| Bash `cat src/a.py`              | same as Read: the rule arrives beside the Bash result                  |
+| Grep in `src/` (a directory)     | nothing added                                                          |
+| Read `nested/b.py` (nested repo) | adds nested `CLAUDE.md`, nested rules, ancestor and project `*.py`     |
+
+So a level can carry a path-scoped rule file that fires for any matching file below it, nested
+repos included, on Read and on a Bash command naming the file, but not on Grep. A rule arrives as
+a `system-reminder` next to the tool result that triggered it. Not yet measured: whether a rule
+is sent again on a second matching read, whether it survives a compaction, and more than one
+ancestor level. A tree under Claude Code's own temp dir (`/tmp/claude-<uid>`) loads no
+`CLAUDE.md` and no rule at all, so the probe refuses one.
 
 ### 3.2 Split oversized SKILL.md files into `references/`
 
