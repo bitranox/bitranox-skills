@@ -30,6 +30,28 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.26.0]
+
+### Added
+
+- **`coding-failure-modes`, a skill for the failure modes of a required behaviour, in any
+  language.** It covers the defect with three parts: a behaviour the spec requires, a way the
+  environment varies that nobody wrote down, and a failure nobody sees because the behaviour
+  simply does not happen. The author walks ten numbered axes for each required behaviour
+  (quantity, the samples behind a span or a share, order and repetition, timing and in-progress
+  input, concurrency, interruption and leftovers, first run and long absence, the same thing in
+  another representation, locale and convention, platform and configuration) and gives every
+  variant one of four verdicts: `HANDLED` with its line and test, `REFUSED` with a signal
+  somebody reads, `ASSUMED` with a statement, who confirms it and what the user sees if it is
+  false, or `NONE` with the reason. Silent outcomes are made visible: unmatched items are
+  reported, a precondition is checked at start, "no data" is not returned as a plain `False`,
+  and a refusal ends one item and not the run. The reviewer builds an own variant table from
+  the spec before reading the author's. Measured on planted tasks with headless probes: opus
+  implementers and reviewers of both tiers already found the variants without the skill, so
+  the text claims no gain there; a haiku implementer left out whole axes in 1 of 2 runs of one
+  task and the sample count behind a "for the last 3 minutes" rule in 2 of 2 runs of another,
+  and carried both with the skill.
+
 ## [11.25.0]
 
 ### Changed

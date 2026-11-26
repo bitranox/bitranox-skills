@@ -87,6 +87,24 @@
   "type-safe",
   "coding-rust-data-architecture"
  ],
+ "coding-failure-modes": [
+  "failure",
+  "modes",
+  "edge",
+  "cases",
+  "environment",
+  "variants",
+  "required",
+  "behaviour",
+  "found",
+  "they",
+  "fail",
+  "silently",
+  "author",
+  "reviewer",
+  "half-written",
+  "hand-over"
+ ],
  "coding-input-sanitization": [
   "handling",
   "untrusted",
