@@ -578,16 +578,16 @@ purpose, for testing failure paths.
 
 ## Common mistakes
 
-| Mistake                                                                              | Fix                                                                                                                                                                                                                               |
-|--------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Env prefix with a single/double underscore (`MY_APP_...`)                            | The prefix ends in a **triple** underscore: `MY_APP___`. Run `env-prefix`.                                                                                                                                                        |
-| Forgetting the `defaults` layer or the `env`-wins ordering                           | Precedence is `defaults -> app -> host -> user -> dotenv -> env`.                                                                                                                                                                 |
-| Slugifying vendor/app for macOS/Windows paths                                        | `vendor`/`app` are used verbatim (spaces kept). `slug` is never rewritten either: one with a space or other unsafe character is refused (`ValidationError`). Only the env prefix reshapes it (upper case, dashes to underscores). |
-| Hunting for "why is this value X" by hand                                            | Use `config.origin(key)` or `read-json` - provenance is built in.                                                                                                                                                                 |
-| Committing a `.env` with secrets                                                     | `.env` is for local secrets only; never commit it; keep mode `0o600`.                                                                                                                                                             |
-| Writing `user_file = 640` (a TOML int is decimal)                                    | Quote it: `user_file = "0o640"`; deploy refuses a bare integer and any group-writable, world-writable mode, or an execute bit on a file.                                                                                          |
-| Reaching for `--no-permissions` when deploy refuses a broken config                  | Give both `--dir-mode` and `--file-mode`; `--no-permissions` leaves a secrets file to the umask.                                                                                                                                  |
-| Building `permissions=` from the application's `read_config(...)` to carry a `--set` | Pass `permission_overrides={"user_file": "0o640"}`: the application's read includes `.env` and the deployed files, which deploy leaves out on purpose.                                                                            |
+| Mistake | Fix |
+|---|---|
+| Env prefix with a single/double underscore (`MY_APP_...`) | The prefix ends in a **triple** underscore: `MY_APP___`. Run `env-prefix`. |
+| Forgetting the `defaults` layer or the `env`-wins ordering | Precedence is `defaults -> app -> host -> user -> dotenv -> env`. |
+| Slugifying vendor/app for macOS/Windows paths | `vendor`/`app` are used verbatim (spaces kept). `slug` is never rewritten either: one with a space or other unsafe character is refused (`ValidationError`). Only the env prefix reshapes it (upper case, dashes to underscores). |
+| Hunting for "why is this value X" by hand | Use `config.origin(key)` or `read-json` - provenance is built in. |
+| Committing a `.env` with secrets | `.env` is for local secrets only; never commit it; keep mode `0o600`. |
+| Writing `user_file = 640` (a TOML int is decimal) | Quote it: `user_file = "0o640"`; deploy refuses a bare integer and any group-writable, world-writable mode, or an execute bit on a file. |
+| Reaching for `--no-permissions` when deploy refuses a broken config | Give both `--dir-mode` and `--file-mode`; `--no-permissions` leaves a secrets file to the umask. |
+| Building `permissions=` from the application's `read_config(...)` to carry a `--set` | Pass `permission_overrides={"user_file": "0o640"}`: the application's read includes `.env` and the deployed files, which deploy leaves out on purpose. |
 
 ## Full detail
 

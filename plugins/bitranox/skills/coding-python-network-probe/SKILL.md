@@ -427,12 +427,12 @@ everything else in this skill runs unprivileged. Without the privilege each rais
 `IPScoutUnsupportedError` instead: a SYN scan on Windows, where no privilege helps, and
 traceroute on unprivileged macOS, whose message says to run as root:
 
-| Operation                                     | Needs                                                                                                                                                                                                                                                                                                              |
-|-----------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `scan_ports(..., method=ScanMethod.SYN)`      | root / `CAP_NET_RAW`, IPv4 only. Unavailable on Windows at any privilege level: Windows blocks raw TCP sends                                                                                                                                                                                                       |
-| `lookup_mac(ip, active=True)`                 | root / `CAP_NET_RAW` on Linux and macOS. Windows IPv4 needs none (`SendARP`); Windows IPv6 needs Administrator                                                                                                                                                                                                     |
-| Traceroute on macOS                           | a raw socket, so root. Unprivileged macOS does not surface Time Exceeded at all, so it raises `IPScoutUnsupportedError`. Linux and Windows need none                                                                                                                                                               |
-| `observe_dhcp(...)` and its session           | root / `CAP_NET_RAW` on Linux, root on macOS (`/dev/bpf`), Administrator on Windows (`SIO_RCVALL`, no driver)                                                                                                                                                                                                      |
+| Operation | Needs |
+|---|---|
+| `scan_ports(..., method=ScanMethod.SYN)` | root / `CAP_NET_RAW`, IPv4 only. Unavailable on Windows at any privilege level: Windows blocks raw TCP sends |
+| `lookup_mac(ip, active=True)` | root / `CAP_NET_RAW` on Linux and macOS. Windows IPv4 needs none (`SendARP`); Windows IPv6 needs Administrator |
+| Traceroute on macOS | a raw socket, so root. Unprivileged macOS does not surface Time Exceeded at all, so it raises `IPScoutUnsupportedError`. Linux and Windows need none |
+| `observe_dhcp(...)` and its session | root / `CAP_NET_RAW` on Linux, root on macOS (`/dev/bpf`), Administrator on Windows (`SIO_RCVALL`, no driver) |
 | `set_neighbour(...)`, `remove_neighbour(...)` | root / `CAP_NET_ADMIN` on Linux, root on macOS (routing socket; its write, replace and remove round trip passed as root on a macOS runner VM), Administrator on Windows. `remove_neighbour` without `interface=` reads the cache first and, on every platform, answers `False` unprivileged when nothing is listed |
 
 The rules these follow, worth relying on:
@@ -492,13 +492,13 @@ The rules these follow, worth relying on:
 
 ## Do not reach for these instead
 
-| Instead of                             | Why it fails the no-admin requirement                                                                                                                                                                                                                                 |
-|----------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `icmplib` with `privileged=False`      | Unprivileged on Linux, but **not on Windows**. Its `sockets.py` reads `self._privileged = privileged or PLATFORM_WINDOWS`, then opens `SOCK_RAW` - Windows forces raw sockets and needs Administrator whatever you pass. Check the source before believing otherwise. |
-| `scapy` `arping()` / `sr1()`           | Raw sockets: root, or npcap-with-admin on Windows.                                                                                                                                                                                                                    |
-| `subprocess` around `ping` / `tracert` | A process per probe, and output that shifts with locale and distro.                                                                                                                                                                                                   |
-| `python-nmap`                          | The useful scan modes want raw-socket privilege, and it shells out to `nmap`.                                                                                                                                                                                         |
-| `netifaces`                            | Long unmaintained and needs a C build; `local_interfaces()` and `subnet_info()` cover it with no build step.                                                                                                                                                          |
+| Instead of | Why it fails the no-admin requirement |
+|---|---|
+| `icmplib` with `privileged=False` | Unprivileged on Linux, but **not on Windows**. Its `sockets.py` reads `self._privileged = privileged or PLATFORM_WINDOWS`, then opens `SOCK_RAW` - Windows forces raw sockets and needs Administrator whatever you pass. Check the source before believing otherwise. |
+| `scapy` `arping()` / `sr1()` | Raw sockets: root, or npcap-with-admin on Windows. |
+| `subprocess` around `ping` / `tracert` | A process per probe, and output that shifts with locale and distro. |
+| `python-nmap` | The useful scan modes want raw-socket privilege, and it shells out to `nmap`. |
+| `netifaces` | Long unmaintained and needs a C build; `local_interfaces()` and `subnet_info()` cover it with no build step. |
 
 ## For machine consumers
 

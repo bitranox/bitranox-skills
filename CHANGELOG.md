@@ -30,6 +30,15 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.29.3]
+
+### Changed
+
+- Five skills mirrored from tool repos (`coding-python-layered-config`, `coding-python-logging`,
+  `coding-python-network-probe`, `coding-python-pwshpy`, `devops-bmk`) are re-padded with the
+  300-column table cap of 11.29.0, together with their twins in the tool repos. A
+  whitespace-only change. `infra-proxmox-bindsnap` follows with the next `pve-bindsnap` release.
+
 ## [11.29.2]
 
 ### Changed
