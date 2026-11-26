@@ -201,28 +201,29 @@ read across the arms.
 4. **A defect hunt per arm** (`opus`; the diff, the spec and the arm's statements only) covers
    what the checklist lacks.
 
-**A stated departure from the spec whose reason holds is no defect.** The arm's statements are
-its commit messages (`git log` of its branch) and its hand-over (the session's last model text in
-`stream.jsonl`, in full). Hand both to every judge, verifier and hunter beside the diff,
-relabelled like the diff and with every line that names the arm, its skill or its variant
-removed. They show only THAT a departure was stated and why; what the code does is read from the
-diff. Where an arm's code departs from the spec (a changed number, set, order or signature, or a
-condition the spec does not carry), the judge rules on two questions and quotes the lines for
-each:
+**A departure from the spec that is sound on its merit is no defect, stated or not.** Where an
+arm's code departs from the spec (a changed number, set, order or signature, or a condition the
+spec does not carry), the judge rules on the departure itself and quotes the lines for each
+question:
 
-- Is it stated: does a commit message or the hand-over (one of them is enough) name the
-  departure (what the spec says there, or that it says nothing; what the code does instead)
-  and give a reason? A statement that names another value or effect than the diff shows does
-  not state this departure.
-- Does the reason hold against the spec text: the spec is unclear, incomplete or contradicts
-  itself on that point, or its version would break something the judge can name with an input?
-  The judge rules on the reason the arm gave, never on one the judge could supply for it, and
-  where the arm chose between two contradicting lines, on whether the rest of the spec speaks
-  against the side it chose.
+- Is there a ground in the spec text: the spec is unclear, incomplete or contradicts itself on
+  that point, or its version would break something the judge can name with an input?
+- Does the change resolve it without creating a defect of its own? Where the arm chose between
+  two contradicting lines, the judge checks whether the rest of the spec speaks against the
+  side it chose.
 
 Both yes scores SOUND-DEPARTURE: it counts as no defect in every tally and is listed apart, per
-arm, with the statement and the judge's ruling, for the spec's owner. A silent departure, or one
-whose stated reason does not hold, is scored PRESENT and counted like any other defect; the judge
-says which of the two it is. A departure that breaks a caller outside the arm's change is PRESENT
-whatever its reason. Two arms that depart soundly from one spec point in different directions
-are a finding about the spec, reported with the comparison.
+arm, with the judge's ruling, for the spec's owner. Otherwise the departure is scored PRESENT and
+counted like any other defect. A departure that breaks a caller outside the arm's change is
+PRESENT whatever its ground. Two arms that depart soundly from one spec point in different
+directions are a finding about the spec, reported with the comparison.
+
+The arm's statements are its commit messages (`git log` of its branch) and its hand-over (the
+session's last model text in `stream.jsonl`, in full). Hand both to every judge, verifier and
+hunter beside the diff, relabelled like the diff and with every line that names the arm, its
+skill or its variant removed. They help the judge find the ground for a departure; what the code
+does is read from the diff, and the judge rules on the merit whether or not the arm gave a
+reason, so a run judged without statements scores the same way. For each departure the judge
+also records a flag, `stated` (a commit message or the hand-over names it) or `silent`, and the
+flag is reported beside the SOUND-DEPARTURE list and never counted. Where the judges were given
+no statements, the flag is `silent` and the report says the statements were not seen.

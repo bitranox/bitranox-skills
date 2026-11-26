@@ -114,20 +114,25 @@ def test_rule_four_allows_a_changed_fixed_point_only_as_a_stated_departure_with_
     for part in ("what the spec says", "what the code does instead", "why",
                  "what a user or caller sees differently"):
         assert part in rule, f"rule 4 lost the statement part {part!r}"
-    assert "or with a reason that does not hold against the spec text, is a defect" in rule
+    assert "changed with no such ground in the spec text is a defect, stated or not" in rule
+    assert "comes back from the review as a missing note for you to add" in rule
     assert "your doubt goes to the spec's owner as a question" in rule
 
 
 def test_a_departure_never_covers_breaking_a_caller_outside_the_change():
     text = " ".join(_text(GENERIC).split())
     assert "the statement reaches the spec's owner, never a caller you cannot see" in text
-    assert "A departure that breaks a caller outside the change is `DISAGREE` whatever its reason." in text
+    assert "A departure that breaks a caller outside the change is `DISAGREE` whatever its ground." in text
 
 
-def test_the_review_separates_a_sound_stated_departure_from_a_silent_or_unsound_one():
+def test_the_review_rules_on_a_departure_by_its_merit_and_flags_stated_or_silent():
     text = " ".join(_text(GENERIC).split())
-    assert "Judge the reason the statement gives, never one you could supply for it" in text
-    assert "or with a reason that does not hold, is `DISAGREE`" in text
-    assert "A `DEPARTED (stated)` row is no defect either: list it there too" in text
-    assert "A `DEPARTED (stated)` row carries no rating either" in text
-    assert "is not `AGREE`, `ADDED (stated)` or `DEPARTED (stated)`" in text
+    assert "the change is sound on its merit" in text
+    assert "you rule on the merit whether or not one was given" in text
+    assert "never one you could supply for it" not in text
+    assert "Add the flag `stated`" in text and "else `silent`" in text
+    assert "A changed fixed point that is not sound is `DISAGREE`" in text
+    assert "A `DEPARTED (sound)` row is no defect either: list it there too" in text
+    assert "list of missing notes for the author to add, which is not a rated defect" in text
+    assert "A `DEPARTED (sound)` row carries no rating either, `stated` or `silent`" in text
+    assert "is not `AGREE`, `ADDED (stated)` or `DEPARTED (sound)`" in text

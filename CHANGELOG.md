@@ -38,13 +38,17 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   set, an order, a signature) when it is sensible, above all where the spec is unclear,
   incomplete or contradicts itself. The change is a stated departure in the commit message and
   the hand-over: what the spec says, what the code does instead, why, and what a user or caller
-  sees differently. Silent, or with a reason that does not hold against the spec text, it is a
-  defect. A review marks a sound one `DEPARTED (stated)`, unrated, and lists it for the owner's
-  decision. A departure never covers breaking a caller outside the change.
+  sees differently. A review rules on the departure's merit against the spec text: a sound one
+  is `DEPARTED (sound)`, unrated, flagged `stated` or `silent` and listed for the owner's
+  decision, a silent sound one is also reported as a missing note for the author, and one with
+  no ground in the spec is a defect. A departure never covers breaking a caller outside the
+  change.
 - `meta-skill-ab-test`: judges, verifiers and hunters receive the spec and the arm's commit
-  messages and hand-over beside the diff. A departure the arm stated, whose reason holds against
-  the spec text, is scored SOUND-DEPARTURE, counts as no defect and is listed apart; a silent or
-  unsound one is scored PRESENT.
+  messages and hand-over beside the diff. A departure that is sound on its merit (the spec is
+  unclear, incomplete or contradictory there, or its version breaks something, and the change
+  resolves it without a defect of its own) is scored SOUND-DEPARTURE, counts as no defect and is
+  listed apart; any other departure is scored PRESENT. Whether the arm stated the departure is a
+  flag reported beside that list, never counted.
 
 ## [11.24.0]
 
