@@ -4,12 +4,12 @@
 
 Choosing `prompt` or `agent` on an event that does not support it is a silent no-op. The full split:
 
-| Support                                                     | Events                                                                                                                                                                                                                                                                                                        |
-|-------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| all five (`command`, `http`, `mcp_tool`, `prompt`, `agent`) | `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PostToolBatch`, `PermissionDenied`, `Stop`, `SubagentStop`, `TaskCreated`, `TaskCompleted`, `TeammateIdle`, `UserPromptSubmit`, `UserPromptExpansion`                                                                                                     |
-| `command`, `http`, `mcp_tool`, `prompt` (no `agent`)        | `PermissionRequest` - an `agent` hook here is skipped and the permission flow proceeds unchanged                                                                                                                                                                                                              |
-| `command`, `http`, `mcp_tool` only                          | `ConfigChange`, `CwdChanged`, `DirectoryAdded`, `Elicitation`, `ElicitationResult`, `FileChanged`, `InstructionsLoaded`, `MessageDisplay`, `Notification`, `PostCompact`, `PostModelSwitch`, `PreCompact`, `PreModelSwitch`, `SessionEnd`, `StopFailure`, `SubagentStart`, `WorktreeCreate`, `WorktreeRemove` |
-| `command` and `mcp_tool` only                               | `SessionStart`, `Setup` - but their `mcp_tool` hooks are skipped whenever MCP servers are not yet available: always on `Setup`, and at launch on `SessionStart`                                                                                                                                               |
+| Support | Events |
+|---|---|
+| all five (`command`, `http`, `mcp_tool`, `prompt`, `agent`) | `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PostToolBatch`, `PermissionDenied`, `Stop`, `SubagentStop`, `TaskCreated`, `TaskCompleted`, `TeammateIdle`, `UserPromptSubmit`, `UserPromptExpansion` |
+| `command`, `http`, `mcp_tool`, `prompt` (no `agent`) | `PermissionRequest` - an `agent` hook here is skipped and the permission flow proceeds unchanged |
+| `command`, `http`, `mcp_tool` only | `ConfigChange`, `CwdChanged`, `DirectoryAdded`, `Elicitation`, `ElicitationResult`, `FileChanged`, `InstructionsLoaded`, `MessageDisplay`, `Notification`, `PostCompact`, `PostModelSwitch`, `PreCompact`, `PreModelSwitch`, `SessionEnd`, `StopFailure`, `SubagentStart`, `WorktreeCreate`, `WorktreeRemove` |
+| `command` and `mcp_tool` only | `SessionStart`, `Setup` - but their `mcp_tool` hooks are skipped whenever MCP servers are not yet available: always on `Setup`, and at launch on `SessionStart` |
 
 12 + 1 + 18 + 2 = 33.
 

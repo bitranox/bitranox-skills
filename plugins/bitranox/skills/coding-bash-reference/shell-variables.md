@@ -729,11 +729,11 @@ An array variable containing the list of groups of which the current user is a m
 
 The two or three characters which control history expansion, quick substitution, and tokenization:
 
-| Position       | Name                         | Default | Description                                                                                                                                                                                                                                                       |
-|----------------|------------------------------|---------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| 1st            | History expansion character  | `!`     | Begins a history expansion                                                                                                                                                                                                                                        |
-| 2nd            | Quick substitution character | `^`     | When appearing as the first character on the line, repeats the previous command replacing one string with another                                                                                                                                                 |
-| 3rd (optional) | History comment character    | `#`     | Indicates that the remainder of the line is a comment when it appears as the first character of a word. Disables history substitution for the remaining words on the line. Does not necessarily cause the shell parser to treat the rest of the line as a comment |
+| Position | Name | Default | Description |
+|---|---|---|---|
+| 1st | History expansion character | `!` | Begins a history expansion |
+| 2nd | Quick substitution character | `^` | When appearing as the first character on the line, repeats the previous command replacing one string with another |
+| 3rd (optional) | History comment character | `#` | Indicates that the remainder of the line is a comment when it appears as the first character of a word. Disables history substitution for the remaining words on the line. Does not necessarily cause the shell parser to treat the rest of the line as a comment |
 
 ---
 
@@ -1315,10 +1315,10 @@ The value of this parameter is used as a format string specifying how the timing
 
 **Optional modifiers:**
 
-| Modifier    | Description                                                                                                                                                                                                                                                                                                        |
-|-------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Modifier | Description |
+|---|---|
 | `P` (digit) | Precision: the number of fractional digits after a decimal point. A value of 0 causes no decimal point or fraction to be output. `time` prints at most six digits after the decimal point; values of P greater than 6 are changed to 6. If P is not specified, `time` prints three digits after the decimal point. |
-| `l`         | Longer format, including minutes, of the form `MMmSS.FFs`. The value of P determines whether the fraction is included.                                                                                                                                                                                             |
+| `l` | Longer format, including minutes, of the form `MMmSS.FFs`. The value of P determines whether the fraction is included. |
 
 If this variable is not set, Bash acts as if it had the value `$'\nreal\t%3lR\nuser\t%3lU\nsys\t%3lS'`. If the value is null, Bash does not display any timing information. A trailing newline is added when the format string is displayed.
 

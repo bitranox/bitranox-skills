@@ -39,7 +39,15 @@ from typing import NamedTuple
 # One column-width rule and one fence scanner for both tools: the reformat hook realigns whatever
 # tablekit renders, so two definitions of "width" would make every CJK or emoji table churn between
 # them, and two fence scanners would number the tables differently.
-from reformat_tables import TEXT, classify_lines, display_width, is_indented_code, strip_blockquote
+from reformat_tables import (
+    TEXT,
+    classify_lines,
+    display_width,
+    is_indented_code,
+    render_compact,
+    strip_blockquote,
+    too_wide_to_align,
+)
 
 # A delimiter cell: optional leading colon, one or more dashes, optional trailing colon.
 _DELIM_CELL = re.compile(r"^:?-+:?$")
@@ -251,6 +259,11 @@ def render_table(table: dict) -> str:
     ncol = len(headers)
     aligns = (list(table.get("alignments") or []) + ["none"] * ncol)[:ncol]
     rows = [([_escape(c) for c in row] + [""] * ncol)[:ncol] for row in table.get("rows") or []]
+    # The same width cap as reformat_tables, in its own compact form: the hook would rewrite any
+    # other shape of a wide table straight after a replace.
+    if too_wide_to_align([headers, *rows]):
+        pairs = [(a in ("left", "center"), a in ("right", "center")) for a in aligns]
+        return "\n".join(render_compact([headers, *rows], pairs))
     # Column width is the widest cell/header, floored at 3 so the delimiter always has room.
     widths = []
     for col in range(ncol):

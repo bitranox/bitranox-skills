@@ -811,3 +811,78 @@ def test_tablekit_does_not_count_a_table_in_a_quoted_fence():
     """tablekit is the second consumer of classify_lines, so it must agree."""
     assert tablekit.parse_tables("> ```\n" + QUOTED + "> ```\n") == []
     assert len(tablekit.parse_tables(QUOTED)) == 1
+
+
+# --------------------------------------------------------------------------
+# Width cap: a table too wide to align is written compact
+# --------------------------------------------------------------------------
+
+
+def _table_with_cell(width):
+    """A 2-column table whose second header cell is `width` characters wide."""
+    return f"| a | {'x' * width} |\n|---|---|\n| b | c |"
+
+
+def _aligned_width(width):
+    # "| a | " + cell + " |": two columns, widths 1 and `width`
+    return 1 + 3 * 2 + 1 + width
+
+
+def test_a_table_exactly_at_the_cap_stays_aligned():
+    width = R.MAX_ALIGNED_WIDTH - _aligned_width(0)
+    out = fmt(_table_with_cell(width))
+    assert out[2] == "| b | c" + " " * (width - 1) + " |"
+    assert max(len(line) for line in out) == R.MAX_ALIGNED_WIDTH
+
+
+def test_a_table_one_column_past_the_cap_is_written_compact():
+    width = R.MAX_ALIGNED_WIDTH - _aligned_width(0) + 1
+    out = fmt(_table_with_cell(width))
+    assert out == [f"| a | {'x' * width} |", "|---|---|", "| b | c |"]
+
+
+def test_compact_form_keeps_alignment_markers():
+    text = f"| a | b | c | d |\n|:-|-:|:-:|-|\n| 1 | 2 | 3 | {'y' * 400} |"
+    assert fmt(text)[1] == "|:---|---:|:---:|---|"
+
+
+def test_compact_form_drops_existing_padding():
+    padded = (
+        f"| a     | {'x' * 400} |\n"
+        f"|-------|{'-' * 402}|\n"
+        f"| b     | c{' ' * 399} |"
+    )
+    assert fmt(padded) == [f"| a | {'x' * 400} |", "|---|---|", "| b | c |"]
+
+
+def test_compact_form_is_stable():
+    once = fmt(_table_with_cell(500))
+    assert R.reformat_table(once) == once
+
+
+def test_compact_form_keeps_an_empty_cell_and_an_escaped_pipe():
+    text = f"| a | b | c |\n|---|---|---|\n|  | x \\| y | {'z' * 400} |"
+    assert fmt(text)[2] == f"|  | x \\| y | {'z' * 400} |"
+
+
+def test_the_cap_is_measured_in_display_columns():
+    # 150 wide characters take 300 columns, so the aligned row is 308 wide: over the cap, while a
+    # count of code points (150 + 8) would call it 158 and keep it aligned
+    wide = chr(0x4E2D) * 150
+    out = fmt(f"| a | {wide} |\n|---|---|\n| b | c |")
+    assert out[2] == "| b | c |"
+
+
+def test_check_reports_a_padded_wide_table_and_passes_its_compact_form(tmp_path):
+    f = tmp_path / "t.md"
+    f.write_text(f"| a | {'x' * 400} |\n|---|{'-' * 402}|\n| b | c{' ' * 399} |\n", encoding="utf-8")
+    assert R.reformat_file(f, check_only=True) is True
+    assert R.reformat_file(f) is True
+    assert R.reformat_file(f, check_only=True) is False
+
+
+def test_tablekit_renders_a_wide_table_in_the_compact_form_the_hook_keeps():
+    table = {"headers": ["a", "x" * 400], "alignments": ["left", "none"], "rows": [["b", "c"]]}
+    rendered = tablekit.render_table(table).split("\n")
+    assert rendered == [f"| a | {'x' * 400} |", "|:---|---|", "| b | c |"]
+    assert R.reformat_table(rendered) == rendered

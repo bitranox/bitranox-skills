@@ -254,10 +254,10 @@ DELIMITER
 
 **Expansion Rules:**
 
-| WORD Quoting                                         | DELIMITER                       | Here-document body expansion                                                                                                                                                                                                       |
-|------------------------------------------------------|---------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **Any part quoted** (e.g., `'EOF'`, `"EOF"`, `\EOF`) | Result of quote removal on WORD | **No expansion** -- lines are literal                                                                                                                                                                                              |
-| **Unquoted**                                         | WORD itself                     | Treated like a double-quoted string: parameter expansion, command substitution, arithmetic expansion are performed. `\newline` is literal. `\` must be used to quote `\`, `$`, and `` ` ``. Double quotes have no special meaning. |
+| WORD Quoting | DELIMITER | Here-document body expansion |
+|---|---|---|
+| **Any part quoted** (e.g., `'EOF'`, `"EOF"`, `\EOF`) | Result of quote removal on WORD | **No expansion** -- lines are literal |
+| **Unquoted** | WORD itself | Treated like a double-quoted string: parameter expansion, command substitution, arithmetic expansion are performed. `\newline` is literal. `\` must be used to quote `\`, `$`, and `` ` ``. Double quotes have no special meaning. |
 
 **Tab stripping with `<<-`:**
 
@@ -525,15 +525,15 @@ When the shell executes a simple command, it performs the following expansions, 
 
 After a command has been split into words, if it results in a simple command and an optional list of arguments, the shell performs the following actions:
 
-| Step | Condition                                                | Action                                                                                                                                                                                                                                                                                                   |
-|------|----------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| 1    | Command name contains **no slashes**                     | Shell attempts to locate the command. If a **shell function** exists by that name, the function is invoked.                                                                                                                                                                                              |
-| 2    | Name does not match a function                           | Shell searches the list of **shell builtins**. If a match is found, that builtin is invoked.                                                                                                                                                                                                             |
-| 3    | Name is not a function or builtin, contains no slashes   | Bash searches each element of `$PATH` for a directory containing an executable file by that name. Uses a **hash table** to cache full pathnames (see `hash` builtin). Full `$PATH` search only if not found in hash table.                                                                               |
-| 3a   | `$PATH` search unsuccessful                              | Shell searches for a function named `command_not_found_handle`. If found, it is invoked in a separate execution environment with the original command and arguments. The function's exit status becomes the subshell's exit status. If not found, shell prints an error and returns exit status **127**. |
-| 4    | Search successful, or name contains slashes              | Shell executes the named program in a separate execution environment. Argument 0 is the command name; remaining arguments are passed as supplied.                                                                                                                                                        |
-| 5    | Execution fails (not executable format, not a directory) | File is assumed to be a **shell script** and executed as described in Shell Scripts.                                                                                                                                                                                                                     |
-| 6    | Command not begun asynchronously                         | Shell **waits** for the command to complete and collects its exit status.                                                                                                                                                                                                                                |
+| Step | Condition | Action |
+|---|---|---|
+| 1 | Command name contains **no slashes** | Shell attempts to locate the command. If a **shell function** exists by that name, the function is invoked. |
+| 2 | Name does not match a function | Shell searches the list of **shell builtins**. If a match is found, that builtin is invoked. |
+| 3 | Name is not a function or builtin, contains no slashes | Bash searches each element of `$PATH` for a directory containing an executable file by that name. Uses a **hash table** to cache full pathnames (see `hash` builtin). Full `$PATH` search only if not found in hash table. |
+| 3a | `$PATH` search unsuccessful | Shell searches for a function named `command_not_found_handle`. If found, it is invoked in a separate execution environment with the original command and arguments. The function's exit status becomes the subshell's exit status. If not found, shell prints an error and returns exit status **127**. |
+| 4 | Search successful, or name contains slashes | Shell executes the named program in a separate execution environment. Argument 0 is the command name; remaining arguments are passed as supplied. |
+| 5 | Execution fails (not executable format, not a directory) | File is assumed to be a **shell script** and executed as described in Shell Scripts. |
+| 6 | Command not begun asynchronously | Shell **waits** for the command to complete and collects its exit status. |
 
 ---
 

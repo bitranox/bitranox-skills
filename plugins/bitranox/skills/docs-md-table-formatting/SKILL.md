@@ -18,9 +18,10 @@ Read of a row fails with "String to replace not found". Read the file (or its ro
 
 ## Rules
 
-### 1. Pad all cells to column width
+### 1. Pad all cells to column width (up to 300 columns a row)
 
-Every cell in a column must be padded with trailing spaces to match the widest content in that column.
+Every cell in a column must be padded with trailing spaces to match the widest content in that
+column, unless the aligned rows would exceed 300 display columns (the exception below).
 
 ```txt
 # BAD  -  unpadded
@@ -34,6 +35,21 @@ Every cell in a column must be padded with trailing spaces to match the widest c
 |-------|-------------------------------|
 | Type  | Settable                      |
 | Value | String (colon-separated list) |
+```
+
+**Exception: a table too wide to align is written compact.** The decision is per table: when its
+widest row, padded per rule 1 and counting pipes and spaces, would run past 300 display columns,
+write every content row with one space either side of each cell and no padding, and every
+separator cell as `---` touching its pipes, alignment colons kept: `|:---|---:|:---:|---|`.
+Padding to one long cell repeats that width on every row: one 6,382-character cell made a
+47-row table about 300 KB of spaces. `reformat_tables.py` and `tablekit.py` apply this
+themselves; rule 1's padding and rule 2's dash count hold for every table at or under the cap.
+
+```txt
+# GOOD  -  aligned rows would exceed 300 columns, so compact
+| Tool | Use it when ... (a cell of several hundred characters) |
+|:---|---|
+| `gate` | short cell |
 ```
 
 ### 2. Separator dashes touch the pipes

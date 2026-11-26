@@ -42,17 +42,17 @@ All single-character options used with the `set` builtin can also be used at inv
 
 These options are available at invocation but not with the `set` builtin:
 
-| Option                 | Description                                                                                                                                                                                                                                                                                                             |
-|------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `-c`                   | Read and execute commands from the first non-option argument COMMAND_STRING, then exit. If there are arguments after COMMAND_STRING, the first is assigned to `$0` and remaining arguments are assigned to positional parameters. The assignment to `$0` sets the name of the shell used in warning and error messages. |
-| `-i`                   | Force the shell to run interactively.                                                                                                                                                                                                                                                                                   |
-| `-l`                   | Make this shell act as if directly invoked by login. When interactive, equivalent to `exec -l bash`. When non-interactive, reads and executes login shell startup files. `exec bash -l` or `exec bash --login` replaces the current shell with a Bash login shell.                                                      |
-| `-r`                   | Make the shell a restricted shell.                                                                                                                                                                                                                                                                                      |
-| `-s`                   | If present, or if no arguments remain after option processing, Bash reads commands from stdin. Allows positional parameters to be set when invoking an interactive shell or reading input through a pipe.                                                                                                               |
-| `-D`                   | Print all double-quoted strings preceded by `$` on stdout. These strings are subject to language translation when the current locale is not `C` or `POSIX`. Implies `-n`; no commands are executed.                                                                                                                     |
-| `[-+]O [SHOPT_OPTION]` | SHOPT_OPTION is a shell option accepted by `shopt`. `-O` sets the value; `+O` unsets it. Without SHOPT_OPTION, prints names and values. With `+O`, output is in a format reusable as input.                                                                                                                             |
-| `--`                   | Signals the end of options and disables further option processing. Arguments after `--` are treated as a script filename and arguments.                                                                                                                                                                                 |
-| `-`                    | Equivalent to `--`.                                                                                                                                                                                                                                                                                                     |
+| Option | Description |
+|---|---|
+| `-c` | Read and execute commands from the first non-option argument COMMAND_STRING, then exit. If there are arguments after COMMAND_STRING, the first is assigned to `$0` and remaining arguments are assigned to positional parameters. The assignment to `$0` sets the name of the shell used in warning and error messages. |
+| `-i` | Force the shell to run interactively. |
+| `-l` | Make this shell act as if directly invoked by login. When interactive, equivalent to `exec -l bash`. When non-interactive, reads and executes login shell startup files. `exec bash -l` or `exec bash --login` replaces the current shell with a Bash login shell. |
+| `-r` | Make the shell a restricted shell. |
+| `-s` | If present, or if no arguments remain after option processing, Bash reads commands from stdin. Allows positional parameters to be set when invoking an interactive shell or reading input through a pipe. |
+| `-D` | Print all double-quoted strings preceded by `$` on stdout. These strings are subject to language translation when the current locale is not `C` or `POSIX`. Implies `-n`; no commands are executed. |
+| `[-+]O [SHOPT_OPTION]` | SHOPT_OPTION is a shell option accepted by `shopt`. `-O` sets the value; `+O` unsets it. Without SHOPT_OPTION, prints names and values. With `+O`, output is in a format reusable as input. |
+| `--` | Signals the end of options and disables further option processing. Arguments after `--` are treated as a script filename and arguments. |
+| `-` | Equivalent to `--`. |
 
 ### Key Definitions
 

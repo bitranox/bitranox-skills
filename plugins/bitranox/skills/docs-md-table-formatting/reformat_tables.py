@@ -4,6 +4,9 @@
 Rules applied:
 - Cells padded to widest content per column, measured in DISPLAY columns (a CJK character
   counts two, a combining mark none), so the source stays aligned in a terminal or editor
+- A table whose aligned rows would exceed MAX_ALIGNED_WIDTH (300) display columns is written
+  compact instead: one space either side of each cell, no padding, separator cells `---` with
+  their colons kept
 - Separator dashes touch pipes (no spaces)
 - Content cells have exactly one space padding
 - Consistent column count per table
@@ -62,6 +65,12 @@ EXIT_ERROR = 2
 _FENCE_RX = re.compile(r"^(`{3,}|~{3,})(.*)$")
 # A list item marker and the whitespace after it; group(0) ends where the item's content starts.
 _LIST_ITEM_RX = re.compile(r"^[ \t]*(?:[-*+]|\d{1,9}[.)])(?:[ \t]+|$)")
+# Widest aligned row, in display columns, a table is padded to. Past it a table is written compact:
+# padding a column to one long cell repeats that width on every row, and rows that already
+# overflow any editor line gain nothing from lining up. Measured on this plugin's skills, padding
+# made up 308 of compuse-toolbox's 409 KB (19.3k of its 54.8k tokens on opus), from one table
+# whose widest cell held 6,382 characters. 300 keeps every table that fits a wide editor aligned.
+MAX_ALIGNED_WIDTH = 300
 # CommonMark: four columns of indentation beyond the enclosing block's content make a code block.
 _CODE_INDENT = 4
 _TAB_WIDTH = 4
@@ -184,8 +193,49 @@ def table_column_mismatches(lines):
     return [(i, len(row)) for i, row in enumerate(rows) if len(row) != expected]
 
 
+def column_widths(rows):
+    """Widest cell per column in DISPLAY columns, floored at 1, over the content rows given."""
+    widths = [1] * max((len(row) for row in rows), default=0)
+    for row in rows:
+        for j, cell in enumerate(row):
+            widths[j] = max(widths[j], display_width(cell))
+    return widths
+
+
+def too_wide_to_align(rows):
+    """True when the aligned form of these content rows would exceed MAX_ALIGNED_WIDTH.
+
+    A row is `| cell | cell |`: each column takes its width plus three characters, and the
+    closing pipe one more. Shared with tablekit so both tools pick the same form.
+    """
+    widths = column_widths(rows)
+    return sum(widths) + 3 * len(widths) + 1 > MAX_ALIGNED_WIDTH
+
+
+def compact_separator_cell(left_align, right_align):
+    """A separator cell for the compact form: three dashes, colons kept."""
+    return (":" if left_align else "") + "---" + (":" if right_align else "")
+
+
+def render_compact(rows, alignments):
+    """The compact form: one space either side of each cell, no padding.
+
+    `rows` are the content rows (header first), `alignments` one (left, right) pair per column;
+    the separator goes after the header.
+    """
+    def line(cells):
+        return "| " + " | ".join(cells) + " |"
+
+    separator = "|" + "|".join(compact_separator_cell(*a) for a in alignments) + "|"
+    return [line(rows[0]), separator, *(line(row) for row in rows[1:])]
+
+
 def reformat_table(lines):
-    """Reformat a markdown table. Returns lines unchanged if structure is invalid."""
+    """Reformat a markdown table. Returns lines unchanged if structure is invalid.
+
+    A table whose aligned rows would run past MAX_ALIGNED_WIDTH display columns is written in the
+    compact form instead (see render_compact).
+    """
     if len(lines) < 2:
         return lines
 
@@ -208,16 +258,12 @@ def reformat_table(lines):
         left, right, _ = parse_separator_cell(cell)
         alignments.append((left, right))
 
-    # Calculate max width per column (skip separator row)
-    col_widths = [0] * num_cols
-    for i, row in enumerate(rows):
-        if i == 1:
-            continue
-        for j, cell in enumerate(row):
-            col_widths[j] = max(col_widths[j], display_width(cell))
+    content = [rows[0], *rows[2:]]
+    if too_wide_to_align(content):
+        return render_compact(content, alignments)
 
     # Minimum width of 1 so separator is at least "---"
-    col_widths = [max(w, 1) for w in col_widths]
+    col_widths = column_widths(content)
 
     result = []
     for i, row in enumerate(rows):

@@ -30,6 +30,20 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.29.0]
+
+### Changed
+
+- The markdown table formatter (`docs-md-table-formatting`, and the `reformat-md-tables` hook
+  that runs it) writes a table compact when its aligned rows would exceed 300 display columns:
+  one space either side of each cell, no padding, separator cells `---` with their colons kept.
+  Narrower tables stay aligned. `tablekit.py render` and `replace` produce the same form.
+  Padding a column to one very long cell repeated that width on every row: in `compuse-toolbox`
+  it was 308 of the SKILL.md's 409 KB, 19.3k of its 54.8k tokens per invocation (measured on
+  opus), and 653 KB across all skills.
+- Every tracked Markdown file in the marketplace is re-padded to the new form, except the six
+  skills mirrored from tool repos, which follow once both copies can change together.
+
 ## [11.28.0]
 
 ### Added

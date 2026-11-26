@@ -961,16 +961,16 @@ If word designator supplied without event specification, previous command is use
 
 After the optional word designator, add one or more modifiers each preceded by `:`.
 
-| Modifier     | Effect                                                                                                                                                                                                                                                                                                                        |
-|--------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `h`          | Remove trailing filename component (head: like `dirname`)                                                                                                                                                                                                                                                                     |
-| `t`          | Remove all leading filename components (tail: like `basename`)                                                                                                                                                                                                                                                                |
-| `r`          | Remove trailing `.SUFFIX` (root/basename without extension)                                                                                                                                                                                                                                                                   |
-| `e`          | Remove all but trailing suffix (extension only)                                                                                                                                                                                                                                                                               |
-| `p`          | Print but do not execute                                                                                                                                                                                                                                                                                                      |
-| `q`          | Quote substituted words, escaping further substitutions                                                                                                                                                                                                                                                                       |
-| `x`          | Quote like `q` but break into words at spaces/tabs/newlines. `q` and `x` are mutually exclusive; last one supplied wins                                                                                                                                                                                                       |
+| Modifier | Effect |
+|---|---|
+| `h` | Remove trailing filename component (head: like `dirname`) |
+| `t` | Remove all leading filename components (tail: like `basename`) |
+| `r` | Remove trailing `.SUFFIX` (root/basename without extension) |
+| `e` | Remove all but trailing suffix (extension only) |
+| `p` | Print but do not execute |
+| `q` | Quote substituted words, escaping further substitutions |
+| `x` | Quote like `q` but break into words at spaces/tabs/newlines. `q` and `x` are mutually exclusive; last one supplied wins |
 | `s/OLD/NEW/` | Substitute NEW for first occurrence of OLD. Any delimiter may replace `/`. Delimiter can be escaped with `\` in OLD and NEW. `&` in NEW replaced with OLD (escape with `\`). Null OLD = last OLD substituted or last `!?string?` search string. Null NEW = delete matching OLD. Final delimiter optional if last char on line |
-| `&`          | Repeat previous substitution                                                                                                                                                                                                                                                                                                  |
-| `g` or `a`   | Apply `s` or `&` over entire event line (e.g., `gs/OLD/NEW/`)                                                                                                                                                                                                                                                                 |
-| `G`          | Apply following `s` or `&` once to each word in the event                                                                                                                                                                                                                                                                     |
+| `&` | Repeat previous substitution |
+| `g` or `a` | Apply `s` or `&` over entire event line (e.g., `gs/OLD/NEW/`) |
+| `G` | Apply following `s` or `&` once to each word in the event |

@@ -951,6 +951,6 @@ infer the type from the annotation.
 
 The generic table is in bitranox:coding-data-architecture. The Python-only row:
 
-| Excuse                                                        | Reality                                                                                                                                                                                                                                                                                                                        |
-|---------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Excuse | Reality |
+|---|---|
 | "A StrEnum on the wire is risky - keep a shim accepting both" | StrEnum members ARE str: the wire bytes are identical. The shim adds no safety, silently swallows stray raw strings, and becomes permanent. Pin the wire value with a test instead. (True for `enum.StrEnum`. The `class X(str, Enum)` fallback formats as `C.A` on 3.11+ when interpolated - use `.value` there, not a shim.) |

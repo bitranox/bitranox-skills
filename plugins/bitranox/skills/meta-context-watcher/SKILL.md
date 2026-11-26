@@ -279,13 +279,13 @@ goes for `size`: `size: unknown` is a usable line, an invented count is not.
 
 ## What does NOT belong
 
-| Excuse for including it                 | Why it is wrong                                                                                                                                                                                                                                                                                                                                                      |
-|-----------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| "The conventions are important"         | CLAUDE.md loads automatically. Restating it wastes the handover.                                                                                                                                                                                                                                                                                                     |
-| "Recent commits give context"           | `git log` re-derives that in one command. Say what is UNCOMMITTED.                                                                                                                                                                                                                                                                                                   |
-| "Explain how this file was produced"    | Provenance is narrative. The reader needs state, not a session story.                                                                                                                                                                                                                                                                                                |
+| Excuse for including it | Why it is wrong |
+|---|---|
+| "The conventions are important" | CLAUDE.md loads automatically. Restating it wastes the handover. |
+| "Recent commits give context" | `git log` re-derives that in one command. Say what is UNCOMMITTED. |
+| "Explain how this file was produced" | Provenance is narrative. The reader needs state, not a session story. |
 | "Capture the lessons into memory first" | A lesson is ONE LINE under `## Lessons for the next nap`, and the nap captures it. An engine call at the end of a full session is where the tool gets fixed instead of the work: measured over three weeks of transcripts, that capture was the bridge from every handover into an engine fix and a plugin release shipped from whatever project the session was in. |
-| "Summarise everything, to be safe"      | A handover nobody finishes reading is a handover that failed.                                                                                                                                                                                                                                                                                                        |
+| "Summarise everything, to be safe" | A handover nobody finishes reading is a handover that failed. |
 
 ## Procedure
 

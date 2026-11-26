@@ -259,14 +259,14 @@ violation.
 
 ## Rationalizations (these do not fly)
 
-| Excuse                                                                 | Reality                                                                                                                                                                                                                                                                |
-|------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| "While I'm here, that sibling duplicate is one quick merge"            | Out of scope by design - the sibling snapshot assertion fails and the nap becomes a slow dream.                                                                                                                                                                        |
-| "No time even for a nap - skip consolidation"                          | The nap exists precisely for this budget; capture + chain dedup is minutes.                                                                                                                                                                                            |
-| "I'll just cherry-pick the full dream's steps"                         | That is the silent-partial trap the nap replaces: run the nap, get the DEFERRED list stated.                                                                                                                                                                           |
-| "The nap ran, so consolidation is done"                                | A nap is partial by design; the consolidation-due nudge still means the full dream.                                                                                                                                                                                    |
-| "The toolbox pass is deferred, so skip the list"                       | Deferred means the CONSOLIDATE half. The READ is step 2b and guards steps 3-5. One command.                                                                                                                                                                            |
-| "A quick regex is faster than finding the right tool"                  | Measured twice: the hand-rolled scan missed state the tool persists, and its clean result read as reassurance.                                                                                                                                                         |
+| Excuse | Reality |
+|---|---|
+| "While I'm here, that sibling duplicate is one quick merge" | Out of scope by design - the sibling snapshot assertion fails and the nap becomes a slow dream. |
+| "No time even for a nap - skip consolidation" | The nap exists precisely for this budget; capture + chain dedup is minutes. |
+| "I'll just cherry-pick the full dream's steps" | That is the silent-partial trap the nap replaces: run the nap, get the DEFERRED list stated. |
+| "The nap ran, so consolidation is done" | A nap is partial by design; the consolidation-due nudge still means the full dream. |
+| "The toolbox pass is deferred, so skip the list" | Deferred means the CONSOLIDATE half. The READ is step 2b and guards steps 3-5. One command. |
+| "A quick regex is faster than finding the right tool" | Measured twice: the hand-rolled scan missed state the tool persists, and its clean result read as reassurance. |
 | "The anchor is on the chain, so moving a fact there is chain-internal" | It is, and it is the one chain move the mode decides: the anchor's block loads in every session of the tree. In propose mode (and under `off`) list it with its cost for the user's approval and leave the fact where it is; in auto mode apply it and print its cost. |
 
 ## Common mistakes
