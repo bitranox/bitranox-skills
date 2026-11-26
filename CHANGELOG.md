@@ -43,6 +43,11 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   decision, a silent sound one is also reported as a missing note for the author, and one with
   no ground in the spec is a defect. A departure never covers breaking a caller outside the
   change.
+- `coding-consistency`: a condition the spec does not carry (rule 5) is reviewed the same way.
+  One that is sound on its merit (something nameable goes wrong without it, or it fills a gap
+  in the spec, and it holds back no more output than that takes) is `ADDED (sound)`, unrated,
+  flagged `stated` or `silent`; any other is `ADDED (unsound)`, a rated defect whether stated
+  or not. These replace `ADDED (stated)` and `ADDED (silent)`.
 - `meta-skill-ab-test`: judges, verifiers and hunters receive the spec and the arm's commit
   messages and hand-over beside the diff. A departure that is sound on its merit (the spec is
   unclear, incomplete or contradictory there, or its version breaks something, and the change

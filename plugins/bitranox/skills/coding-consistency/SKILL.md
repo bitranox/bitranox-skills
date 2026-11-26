@@ -100,17 +100,22 @@ Two limits on what counts as a pair:
    to the spec's owner as a question. Where you hand back files and write no commit, the
    statement stands under its own heading at the top of the hand-over. An interface that code
    outside the change calls is bound by rule 7 as well.
-5. **A condition the spec does not carry goes in only as a stated departure.** A minimum
-   sample size, a sustain timer, a cooldown, a rounding step or a fallback that nobody
-   specified changes when the user sees something, and it usually SUPPRESSES an output the spec
-   promised. You may add one when you judge it sensible. Then state it as a deliberate
-   departure in the commit message AND in your hand-over, in three parts: what the condition is
-   (with its value), why you added it, and what the user sees differently because of it, which
-   is the promised output it holds back and when. The statement is what lets the reviewer check
-   the condition and the spec's owner reverse it. A condition added without that statement, or
-   stated only in notes nobody else reads, is a defect. Where you hand back files and write no
-   commit, the statement stands under its own heading at the top of the hand-over. This covers
-   a condition you ADD; a fixed point you would change stays under rule 4.
+5. **A condition the spec does not carry goes in only as a stated departure with a reason that
+   holds.** A minimum sample size, a sustain timer, a cooldown, a rounding step or a fallback
+   that nobody specified changes when the user sees something, and it usually SUPPRESSES an
+   output the spec promised. You may add one when you judge it sensible. Then state it as a
+   deliberate departure in the commit message AND in your hand-over, in three parts: what the
+   condition is (with its value), why you added it, and what the user sees differently because
+   of it, which is the promised output it holds back and when. The why names what goes wrong
+   without the condition, on an input you can give, or the gap in the spec it fills; "safer",
+   "usual practice" and "I prefer it" name neither. The statement is what lets the reviewer
+   find your reason and the spec's owner reverse the condition. A condition added with no such
+   ground is a defect, stated or not. A sound one you left unstated, or stated only in notes
+   nobody else reads, comes back from the review as a missing note for you to add. When you
+   cannot give such a reason, leave the condition out and send your doubt to the spec's owner
+   as a question. Where you hand back files and write no commit, the statement stands under
+   its own heading at the top of the hand-over. This covers a condition you ADD; a fixed point
+   you would change stays under rule 4.
 6. **Write prose last, from the code.** For every sentence in a comment, docstring or notes file
    that says what the code does, point at the line that does it. Stored state that is kept "for"
    something has a reader in this change, or it is not stored.
@@ -151,11 +156,17 @@ review that lists findings without it has not shown what was compared.
    - `ONE-SIDED` - side B does not exist: a use the prose claims and no code performs, a spec
      point nothing implements, a stored value nothing reads.
    - `ADDED` - the code has a condition, threshold or step with no counterpart in the spec.
-     Write `ADDED (stated)` when the commit message and the hand-over state it as a departure
-     with all three parts (what, why, what the user sees differently), and `ADDED (silent)`
-     when they do not. A change that has no commit carries the statement in its hand-over
-     alone. Where you were given neither text, ask for them; without them the row is `ADDED
-     (silent)` and the finding says the two texts were not seen.
+     Rule on the addition itself, as for a changed fixed point: without the condition
+     something goes wrong that you can name with an input (a figure over too few samples, an
+     alert that flaps), or the spec is unclear, incomplete or contradictory on the point the
+     condition decides (quote the lines); and the condition resolves that without creating a
+     defect of its own, which here means it holds back no more of the promised output than
+     that takes. Both yes is `ADDED (sound)`, anything else `ADDED (unsound)`. The author's
+     statement, where there is one, helps you find the ground; you rule on the merit of the
+     addition whether or not one was given. Add the flag `stated` or `silent` to a sound
+     row, by the same test as for `DEPARTED (sound)` below. Where you were given neither
+     text, ask for them; without them the flag is `silent` and the row says the two texts
+     were not seen.
    - `DEPARTED (sound)` - the code changes a fixed point of the spec (pairing 5 or 7) and the
      change is sound on its merit. Rule on the departure itself, against the spec text: the
      spec is unclear, incomplete or contradictory on that point (quote the lines), or its
@@ -170,7 +181,7 @@ review that lists findings without it has not shown what was compared.
      the two texts were not seen. A changed fixed point that is not sound is `DISAGREE`,
      rated like any other by what a user or caller sees. A departure that breaks a caller
      outside the change is `DISAGREE` whatever its ground.
-3. **Write one finding per row that is not `AGREE`, `ADDED (stated)` or `DEPARTED (sound)`:**
+3. **Write one finding per row that is not `AGREE`, `ADDED (sound)` or `DEPARTED (sound)`:**
    - both locations;
    - a concrete input on which the two sides give different results, with the two results
      (`subject "Outages in hall 2": urgent by form, not urgent by import`). A difference you
@@ -178,18 +189,19 @@ review that lists findings without it has not shown what was compared.
    - which side the spec supports, quoting its line, or "the spec is silent", or "the spec
      reads both ways". Two sides that disagree are a finding in all three cases. A single side
      on a point the spec leaves open is not a finding of this lens, with one exception: an
-     `ADDED (silent)` row, because it changes an output the spec did describe and says so
-     nowhere;
-   - what the user, operator or caller sees because of it. For `ADDED (silent)`: what output
-     it holds back, and where the addition is stated (commit message, hand-over, the author's
-     own notes, nowhere).
+     `ADDED (unsound)` row, because it changes an output the spec did describe and nothing
+     grounds the change;
+   - what the user, operator or caller sees because of it. For `ADDED (unsound)`: what output
+     it holds back, why the ground is missing or the condition holds back too much, and
+     whether the addition was stated.
 
-   An `ADDED (silent)` row is a defect. An `ADDED (stated)` row is not: list it under
-   "departures for the owner's decision" with the author's statement and your check of it
-   against the code. A `DEPARTED (sound)` row is no defect either: list it there too, with the
-   spec lines your ruling rests on, the author's statement where there is one, and its flag.
-   A `silent` one also goes in a list of missing notes for the author to add, which is not a
-   rated defect. A statement that names another value or another effect than the code has is
+   An `ADDED (unsound)` row is a defect, stated or not. An `ADDED (sound)` row is not: list it
+   under "departures for the owner's decision" with what goes wrong without the condition or
+   the spec lines your ruling rests on, the author's statement where there is one, and its
+   flag. A `DEPARTED (sound)` row is no defect either: list it there too, with the spec lines
+   your ruling rests on, the author's statement where there is one, and its flag. A `silent`
+   row of either kind also goes in a list of missing notes for the author to add, which is
+   not a rated defect. A statement that names another value or another effect than the code has is
    a pairing-6 `DISAGREE` row of its own.
 
    Prose claims that restate one code row (a notes line and a docstring saying the same false
@@ -204,8 +216,9 @@ review that lists findings without it has not shown what was compared.
      with every caller updated). Where no outside caller is known, the finding says that
      callers outside the tree were not checked.
 
-   An `ADDED (silent)` row is rated by what it holds back, on the same scale. An
-   `ADDED (stated)` row carries no rating; its entry says what it holds back. A
+   An `ADDED (unsound)` row is rated by what it holds back, on the same scale. An
+   `ADDED (sound)` row carries no rating, `stated` or `silent`; its entry says what it holds
+   back. A
    `DEPARTED (sound)` row carries no rating either, `stated` or `silent`; its entry says what
    a user or caller sees differently.
 5. **Then read the change once more for rows you did not collect.** The sources in step 1 are
@@ -218,17 +231,17 @@ lists source 7.
 
 ## Rationalizations (these do not fly)
 
-| Excuse                                                                 | Reality                                                                                                                                                                                            |
-|------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| "The spec is silent on a minimum, so adding one is within the spec"    | The spec says when the output appears, and the condition holds it back. Add it if it is sensible, as a departure you state, not as something the spec allowed.                                     |
-| "I flagged it in my notes, so it is a stated departure"                | Notes nobody else reads reach neither the reviewer nor the owner. The statement goes in the commit message and in the hand-over.                                                                   |
-| "Set the constant to 1 to restore the literal rule"                    | A switch does not replace the statement: the shipped default still departs. Say what it is, why, and which output the user no longer sees.                                                         |
-| "The spec is plainly wrong here, so I quietly did the right thing"     | Do it, and state it: the spec line, what the code does instead, why, what is seen differently. Unstated, the reviewer must find your reason alone and the owner may never learn the spec is wrong. |
-| "I stated the departure, so the change is covered"                     | Only with a reason that holds against the spec text: a gap, an ambiguity, a contradiction, or something the spec's version breaks. A preference stated is still a defect.                          |
-| "It is the same three lines, copying is simpler than a shared home"    | They are the same today. The second copy is the place the next edit misses, and no test compares the two.                                                                                          |
-| "Both versions satisfy the sentence in the spec"                       | Then the spec has two readings and the change picked both. Two paths must give one answer; which reading is right is a question, and the pair is a finding either way.                             |
-| "Every caller in the tree is updated, so the signature change is safe" | The callers you cannot see are the reason the spec listed the signature. Report it; the owner decides.                                                                                             |
-| "The comment is only slightly ahead of the code"                       | A comment that names a use the code does not have sends the next reader to defend dead state. Point at the line or delete the sentence.                                                            |
+| Excuse                                                                 | Reality                                                                                                                                                                                                                         |
+|------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| "The spec is silent on a minimum, so adding one is within the spec"    | The spec says when the output appears, and the condition holds it back. Add it if it is sensible, as a departure you state with what goes wrong without it, not as something the spec allowed.                                  |
+| "I flagged it in my notes, so it is a stated departure"                | Notes nobody else reads reach neither the reviewer nor the owner. The statement goes in the commit message and in the hand-over.                                                                                                |
+| "Set the constant to 1 to restore the literal rule"                    | A switch does not replace the statement: the shipped default still departs. Say what it is, why, and which output the user no longer sees.                                                                                      |
+| "The spec is plainly wrong here, so I quietly did the right thing"     | Do it, and state it: the spec line, what the code does instead, why, what is seen differently. Unstated, the reviewer must find your reason alone and the owner may never learn the spec is wrong.                              |
+| "I stated the departure, so the change is covered"                     | Only with a reason that holds against the spec text: a gap, an ambiguity, a contradiction, or something the spec's version breaks. A preference stated is still a defect, for a changed point and for an added condition alike. |
+| "It is the same three lines, copying is simpler than a shared home"    | They are the same today. The second copy is the place the next edit misses, and no test compares the two.                                                                                                                       |
+| "Both versions satisfy the sentence in the spec"                       | Then the spec has two readings and the change picked both. Two paths must give one answer; which reading is right is a question, and the pair is a finding either way.                                                          |
+| "Every caller in the tree is updated, so the signature change is safe" | The callers you cannot see are the reason the spec listed the signature. Report it; the owner decides.                                                                                                                          |
+| "The comment is only slightly ahead of the code"                       | A comment that names a use the code does not have sends the next reader to defend dead state. Point at the line or delete the sentence.                                                                                         |
 
 ## Execution Summary
 
@@ -236,15 +249,17 @@ lists source 7.
 WRITING:   find the first path and call it -> one population, one window -> read held values
            -> spec's fixed points as written, a changed one only as a stated departure whose
            reason holds (spec line, what the code does instead, why, what is seen differently)
-           -> an unspecified condition only as a stated departure (what, why, what the user
-           sees differently) -> both statements in the commit message and the hand-over
+           -> an unspecified condition only as a stated departure whose reason holds (what,
+           why, what the user sees differently) -> both statements in the commit message and
+           the hand-over
            -> prose last, each claim pointed at a line -> an interface outside callers use
            keeps working
 REVIEWING: collect rows from the seven sources -> fill set / rule / window / unit per row
-           -> verdict per row, ADDED as (stated) or (silent), a changed fixed point as
-           DEPARTED (sound) when it is sound on its merit against the spec text, flagged
-           stated or silent -> one finding per row that is not AGREE, ADDED (stated) or
-           DEPARTED (sound), with a concrete input, the spec line and what is seen
+           -> verdict per row, an added condition as ADDED (sound) or (unsound) and a
+           changed fixed point as DEPARTED (sound) or DISAGREE, each ruled on its merit, a
+           sound one flagged stated or silent -> one finding per row that is not AGREE,
+           ADDED (sound) or DEPARTED (sound), with a concrete input, the spec line and what
+           is seen
            -> second read for uncollected rows
 RETURN:    the pair table, the findings, the departures for the owner's decision, the
            missing notes for the author, the suspicions without an input

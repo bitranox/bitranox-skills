@@ -91,13 +91,20 @@ def test_rule_five_allows_an_added_condition_only_as_a_stated_departure():
     for part in ("what the condition is", "why you added it", "what the user sees differently"):
         assert part in rule, f"rule 5 lost the statement part {part!r}"
     assert "SUPPRESSES an output the spec promised" in rule
-    assert "is a defect" in rule
+    assert "A condition added with no such ground is a defect, stated or not." in rule
+    assert "comes back from the review as a missing note for you to add" in rule
+    assert "names what goes wrong without the condition" in rule
 
 
-def test_the_review_separates_a_stated_added_condition_from_a_silent_one():
+def test_the_review_rules_on_an_added_condition_by_its_merit():
     text = " ".join(_text(GENERIC).split())
-    assert "An `ADDED (silent)` row is a defect." in text
-    assert "An `ADDED (stated)` row is not: list it under \"departures for the owner's decision\"" in text
+    assert "ADDED (stated)" not in text and "ADDED (silent)" not in text
+    assert "Both yes is `ADDED (sound)`, anything else `ADDED (unsound)`." in text
+    assert "you rule on the merit of the addition whether or not one was given" in text
+    assert "An `ADDED (unsound)` row is a defect, stated or not." in text
+    assert "An `ADDED (sound)` row is not: list it under \"departures for the owner's decision\"" in text
+    assert "A `silent` row of either kind also goes in a list of missing notes" in text
+    assert "An `ADDED (sound)` row carries no rating, `stated` or `silent`" in text
 
 
 def _rule_four():
@@ -135,4 +142,4 @@ def test_the_review_rules_on_a_departure_by_its_merit_and_flags_stated_or_silent
     assert "A `DEPARTED (sound)` row is no defect either: list it there too" in text
     assert "list of missing notes for the author to add, which is not a rated defect" in text
     assert "A `DEPARTED (sound)` row carries no rating either, `stated` or `silent`" in text
-    assert "is not `AGREE`, `ADDED (stated)` or `DEPARTED (sound)`" in text
+    assert "is not `AGREE`, `ADDED (sound)` or `DEPARTED (sound)`" in text
