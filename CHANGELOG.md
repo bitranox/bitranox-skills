@@ -41,8 +41,11 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   sees differently. A review rules on the departure's merit against the spec text: a sound one
   is `DEPARTED (sound)`, unrated, flagged `stated` or `silent` and listed for the owner's
   decision, a silent sound one is also reported as a missing note for the author, and one with
-  no ground in the spec is a defect. A departure never covers breaking a caller outside the
-  change.
+  no ground in the spec is a defect.
+- `coding-consistency`: a breaking change to an interface the spec names or outside code calls
+  (rule 7) is a departure like any other, reviewed on its merit. Its statement names the callers
+  it breaks, and the review lists them for the owner. `meta-skill-ab-test` scores it the same
+  way.
 - `coding-consistency`: a condition the spec does not carry (rule 5) is reviewed the same way.
   One that is sound on its merit (something nameable goes wrong without it, or it fills a gap
   in the spec, and it holds back no more output than that takes) is `ADDED (sound)`, unrated,

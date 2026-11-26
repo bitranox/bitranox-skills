@@ -28,6 +28,8 @@ def test_stated_or_silent_is_a_reported_flag_and_never_counted():
     assert "or `silent`" in section
     assert "flag is reported beside the SOUND-DEPARTURE list and never counted" in section
     assert "never on one the judge could supply" not in section
+    assert "PRESENT whatever its ground" not in section
+    assert "is ruled on the same way, and its entry names the callers it breaks" in section
     assert "Is it stated:" not in section
 
 

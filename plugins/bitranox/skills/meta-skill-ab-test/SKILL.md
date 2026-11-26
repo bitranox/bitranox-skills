@@ -215,8 +215,9 @@ question:
 Both yes scores SOUND-DEPARTURE: it counts as no defect in every tally and is listed apart, per
 arm, with the judge's ruling, for the spec's owner. Otherwise the departure is scored PRESENT and
 counted like any other defect. A departure that breaks a caller outside the arm's change is
-PRESENT whatever its ground. Two arms that depart soundly from one spec point in different
-directions are a finding about the spec, reported with the comparison.
+ruled on the same way, and its entry names the callers it breaks where the judge knows them. Two
+arms that depart soundly from one spec point in different directions are a finding about the
+spec, reported with the comparison.
 
 The arm's statements are its commit messages (`git log` of its branch) and its hand-over (the
 session's last model text in `stream.jsonl`, in full). Hand both to every judge, verifier and

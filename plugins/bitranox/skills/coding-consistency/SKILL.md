@@ -98,8 +98,8 @@ Two limits on what counts as a pair:
    review as a missing note for you to add: the reviewer then had to find your reason alone.
    When you cannot give such a reason, the code does what the spec says and your doubt goes
    to the spec's owner as a question. Where you hand back files and write no commit, the
-   statement stands under its own heading at the top of the hand-over. An interface that code
-   outside the change calls is bound by rule 7 as well.
+   statement stands under its own heading at the top of the hand-over. For an interface that
+   code outside the change calls, rule 7 says what the statement adds.
 5. **A condition the spec does not carry goes in only as a stated departure with a reason that
    holds.** A minimum sample size, a sustain timer, a cooldown, a rounding step or a fallback
    that nobody specified changes when the user sees something, and it usually SUPPRESSES an
@@ -120,11 +120,14 @@ Two limits on what counts as a pair:
    that says what the code does, point at the line that does it. Stored state that is kept "for"
    something has a reader in this change, or it is not stored.
 7. **A listed interface is a contract.** A signature, column name or message the spec names, or
-   that code outside the change calls, keeps its exact form. Changing one the spec names is a
-   rule-4 departure, stated with its reason, and where code outside the change calls it, the
-   existing form keeps working (a new parameter has a default, nothing is removed, renamed or
-   retyped): the statement reaches the spec's owner, never a caller you cannot see. A change
-   that would break such a caller is a question for the interface's owner, whatever the reason.
+   that code outside the change calls, keeps its exact form unless you change it as a rule-4
+   departure. A breaking change (a new required parameter, something removed, renamed or
+   retyped) is a departure like any other: it needs the same ground, and it is reviewed on
+   its merit. State it in the four parts of rule 4, and in the fourth name the callers it
+   breaks: those you know, and which callers outside the tree you could not check. That part
+   carries the cost, because the statement reaches the spec's owner and not a caller you
+   cannot see: such a caller breaks without your reason, and in a published library the
+   change ships as a broken release.
 
 ## When you review the change
 
@@ -179,8 +182,10 @@ review that lists findings without it has not shown what was compared.
      departure (a change that has no commit carries the statement in its hand-over alone),
      else `silent`; where you were given neither text, the flag is `silent` and the row says
      the two texts were not seen. A changed fixed point that is not sound is `DISAGREE`,
-     rated like any other by what a user or caller sees. A departure that breaks a caller
-     outside the change is `DISAGREE` whatever its ground.
+     rated like any other by what a user or caller sees. A change that breaks a caller
+     outside the change is ruled on the same way: sound, it is `DEPARTED (sound)` and its
+     row names the callers it breaks where known and says whether callers outside the tree
+     were checked.
 3. **Write one finding per row that is not `AGREE`, `ADDED (sound)` or `DEPARTED (sound)`:**
    - both locations;
    - a concrete input on which the two sides give different results, with the two results
@@ -199,17 +204,18 @@ review that lists findings without it has not shown what was compared.
    under "departures for the owner's decision" with what goes wrong without the condition or
    the spec lines your ruling rests on, the author's statement where there is one, and its
    flag. A `DEPARTED (sound)` row is no defect either: list it there too, with the spec lines
-   your ruling rests on, the author's statement where there is one, and its flag. A `silent`
-   row of either kind also goes in a list of missing notes for the author to add, which is
-   not a rated defect. A statement that names another value or another effect than the code has is
-   a pairing-6 `DISAGREE` row of its own.
+   your ruling rests on, the author's statement where there is one, its flag and, for a
+   breaking interface change, the callers it breaks where known. A `silent` row of either
+   kind also goes in a list of missing notes for the author to add, which is not a rated
+   defect. A statement that names another value or another effect than the code has is a
+   pairing-6 `DISAGREE` row of its own.
 
    Prose claims that restate one code row (a notes line and a docstring saying the same false
    thing) share that row's finding instead of repeating it.
 4. **Rate by what is seen, and take the higher level when two fit:**
    - high: a path the spec requires behaves differently from its sibling or from the spec in
-     ordinary use, or a caller outside the change breaks. A spec that names outside callers of
-     a changed interface is such a caller;
+     ordinary use, or a caller outside the change breaks on a change that is not sound. A
+     spec that names outside callers of a changed interface is such a caller;
    - medium: a value that is displayed, stored or sent, a message or an alert is wrong under a
      condition that can occur;
    - low: nothing a user sees, stores or configures changes (prose only, an interface drift
@@ -218,9 +224,8 @@ review that lists findings without it has not shown what was compared.
 
    An `ADDED (unsound)` row is rated by what it holds back, on the same scale. An
    `ADDED (sound)` row carries no rating, `stated` or `silent`; its entry says what it holds
-   back. A
-   `DEPARTED (sound)` row carries no rating either, `stated` or `silent`; its entry says what
-   a user or caller sees differently.
+   back. A `DEPARTED (sound)` row carries no rating either, `stated` or `silent`; its entry
+   says what a user or caller sees differently.
 5. **Then read the change once more for rows you did not collect.** The sources in step 1 are
    where pairs usually are, not a complete list.
 
@@ -240,7 +245,7 @@ lists source 7.
 | "I stated the departure, so the change is covered"                     | Only with a reason that holds against the spec text: a gap, an ambiguity, a contradiction, or something the spec's version breaks. A preference stated is still a defect, for a changed point and for an added condition alike. |
 | "It is the same three lines, copying is simpler than a shared home"    | They are the same today. The second copy is the place the next edit misses, and no test compares the two.                                                                                                                       |
 | "Both versions satisfy the sentence in the spec"                       | Then the spec has two readings and the change picked both. Two paths must give one answer; which reading is right is a question, and the pair is a finding either way.                                                          |
-| "Every caller in the tree is updated, so the signature change is safe" | The callers you cannot see are the reason the spec listed the signature. Report it; the owner decides.                                                                                                                          |
+| "Every caller in the tree is updated, so the signature change is safe" | The callers you cannot see break without seeing your reason. Change it only on a ground that holds, state it, and name the callers it breaks; the owner decides.                                                                |
 | "The comment is only slightly ahead of the code"                       | A comment that names a use the code does not have sends the next reader to defend dead state. Point at the line or delete the sentence.                                                                                         |
 
 ## Execution Summary
@@ -251,9 +256,9 @@ WRITING:   find the first path and call it -> one population, one window -> read
            reason holds (spec line, what the code does instead, why, what is seen differently)
            -> an unspecified condition only as a stated departure whose reason holds (what,
            why, what the user sees differently) -> both statements in the commit message and
-           the hand-over
-           -> prose last, each claim pointed at a line -> an interface outside callers use
-           keeps working
+           the hand-over -> prose last, each claim pointed at a line -> an interface
+           outside callers use breaks only as such a departure, with the callers it breaks
+           named
 REVIEWING: collect rows from the seven sources -> fill set / rule / window / unit per row
            -> verdict per row, an added condition as ADDED (sound) or (unsound) and a
            changed fixed point as DEPARTED (sound) or DISAGREE, each ruled on its merit, a

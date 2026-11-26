@@ -126,10 +126,14 @@ def test_rule_four_allows_a_changed_fixed_point_only_as_a_stated_departure_with_
     assert "your doubt goes to the spec's owner as a question" in rule
 
 
-def test_a_departure_never_covers_breaking_a_caller_outside_the_change():
+def test_a_breaking_interface_change_is_a_departure_that_names_the_callers_it_breaks():
     text = " ".join(_text(GENERIC).split())
-    assert "the statement reaches the spec's owner, never a caller you cannot see" in text
-    assert "A departure that breaks a caller outside the change is `DISAGREE` whatever its ground." in text
+    assert "is a departure like any other: it needs the same ground" in text
+    assert "in the fourth name the callers it breaks" in text
+    assert "in a published library the change ships as a broken release" in text
+    assert "row names the callers it breaks where known and says whether callers outside the tree were checked" in text
+    assert "whatever its ground" not in text and "whatever the reason" not in text
+    assert "the existing form keeps working" not in text
 
 
 def test_the_review_rules_on_a_departure_by_its_merit_and_flags_stated_or_silent():
