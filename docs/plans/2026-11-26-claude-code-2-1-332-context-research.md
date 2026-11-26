@@ -79,9 +79,21 @@ body, never the model's answer. Probe: `docs/plans/probes/2026-11-26-rules-loadi
 
 So a level can carry a path-scoped rule file that fires for any matching file below it, nested
 repos included, on Read and on a Bash command naming the file, but not on Grep. A rule arrives as
-a `system-reminder` next to the tool result that triggered it. Not yet measured: whether a rule
-is sent again on a second matching read, whether it survives a compaction, and more than one
-ancestor level. A tree under Claude Code's own temp dir (`/tmp/claude-<uid>`) loads no
+a `system-reminder` next to the tool result that triggered it.
+
+Follow-up probes, same harness (one session across resumed `claude -p` turns, `--resume`):
+
+| Chain step                                   | `proj-py` rule attachments in the request          |
+|----------------------------------------------|----------------------------------------------------|
+| read `a.py`, then `c.py`, then `a.py` again  | 1 throughout: attached once per session            |
+| three reads batched in ONE turn              | 1                                                  |
+| first request after `/compact`               | 0: not re-attached (only the summary may quote it) |
+| next matching read after `/compact` (`c.py`) | 1: attached again                                  |
+
+So a moved fact costs its bytes once per session (and once more after each compaction, on the next
+matching file), never once per read. After a compaction it is absent until a matching file is
+touched again; `CLAUDE.md` and always-on rules are re-injected at once. Not yet measured: more
+than one ancestor level. A tree under Claude Code's own temp dir (`/tmp/claude-<uid>`) loads no
 `CLAUDE.md` and no rule at all, so the probe refuses one.
 
 ### 3.2 Split oversized SKILL.md files into `references/`

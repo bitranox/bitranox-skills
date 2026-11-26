@@ -1,45 +1,49 @@
-# STALE - read 2026-11-19 13:04 CET, work continued (11.13.1 to 11.13.3 released since)
+# Handover - 2026-11-26 15:55 CET (watcher checkpoint, session "skill-research")
 
-## In flight
+## In flight (read first)
 
-- Release 11.13.0 from branch `fix/sweep-1119` (worktree `.claude/worktrees/sweep-1119`): all
-  fixer work for [25], [100], [150], [180], [190], [195], [200], [210] plus the second-round
-  typed engine reports, doc rows and the quadratic-regex fixes. Being pushed to master in the
-  commit after this handover; check with `git log origin/master` and `ci_wait.py --ref HEAD`
-  (compuse-toolbox) from that worktree.
-- A peer session ("dream", cwd projects/public/libs/lib_layered_config) holds an UNPUSHED
-  bitranox-skills commit on `dream/crosstree-deep-20261119` (bump 11.12.1). It repeats the
-  process-test-design fake rules this release ships; it was told to drop that hunk when it
-  rebases. Do not touch that branch.
+Working the Claude Code 2.1.33x research list, top item [55] (path-scoped `.claude/rules` for the
+memory index). Work lives in the worktree `.claude/worktrees/research-cc-2-1-332` (branch
+`research-cc-2-1-332`, pushed as `HEAD:master`).
+
+- Pushed and CI green: "Record the Claude Code 2.1.33x context research and its backlog items"
+  (research note `docs/plans/2026-11-26-claude-code-2-1-332-context-research.md`, items [55]-[85]).
+- Push RUNNING in the background when this was written: "Probe how .claude/rules load: ancestor
+  paths: rules fire on Read and Bash cat" (probe in `docs/plans/probes/2026-11-26-rules-loading/`,
+  section 3.1 result table). Check with `git fetch && git log origin/master --oneline -3`.
+- UNCOMMITTED in the worktree: the [55] line's sizing update in `OPEN-WORK.md` (keyword estimate:
+  ~140 KB of 409 KB pointer index for this cwd chain could move behind `paths:`, Python 116 KB) and
+  this `handover.md`. Commit both with the next change.
+- Two private repos with skills of their own got their part of the research as backlog items
+  and a note there, committed locally, NOT pushed (named in the session, not here: this file is
+  public).
 
 ## Decided, and why
 
-In EXECUTION-USER-REVIEW.md (main checkout root, gitignored), section "2026-11-19 03:37 CET
-overnight sweep": the private project-family name is scrubbed from every shipped file;
-mutation_arm refuses an unwritable journal dir; a plan-mode checkpoint goes into the plan file;
-[195] G4 FU-b closed without a cache; a bare `type:` keeps the stored kind; the named-teammate
-probe entry stays closed (covered by process-agents-dispatching-parallel "Waited-for probes").
+- The research note is split: this public repo holds sections 1-4; material about private
+  projects stays in those private repos.
+- [55]-[85] are USER items ranked after the existing USER items [45]-[50], biggest first.
+- Probe evidence = captured request bodies via an ANTHROPIC_BASE_URL proxy, never the model's answer.
 
-## Still open
+## Still open, untouched
 
-See OPEN-WORK.md: [25] residue, [100] re-measure after a week on 11.13.0, [150] 11 items with
-#1 a user question, [195] 4 items plus follow-ups, new [215] (finder misses two shapes) and
-[220] (`<key>-<ts>` undefined).
+- See `OPEN-WORK.md` [55]-[85] in this repo (and the two private repos' own backlogs).
 
-## Next action
+## Exact next action
 
-After CI is green: ship the four remaining queue entries of b76cc15ac35f308a with
-`contrib_queue.py ship --match`, run `skill_receipt.py end meta-skill-writer`, remove the
-fixer worktrees by exact path, and fold the mutation_arm change into the tree-top memory fact
-feedback-a-worker-reports-finished-never-quiet-measure-the-tree-before-you-gate-it.
+Both follow-up probes for [55] are done (re-send: once per session; compaction drops the rule,
+next matching read re-attaches it; section 3.1 tables). Next: brainstorm the [55] engine design
+with the user (bitranox:process-plan-brainstorming): which fact categories move behind `paths:`,
+the rule-file layout per level, and how the move stays reversible.
+
+## How to verify
+
+- `python3 docs/plans/probes/2026-11-26-rules-loading/run_probe.py` (S0 shows TOKEN_PROJ_CLAUDEMD = live)
+- CI: `python3 <plugin>/skills/compuse-toolbox/scripts/ci_wait.py --ref HEAD`
 
 ## Lessons for the next nap
 
-- When a brief lets a background agent dispatch its own probes, copy the "Waited-for probes"
-  line of process-agents-dispatching-parallel into it, or the probes' reports land in main.
-- When a measurement agent finds a regression in the item it measures, dispatch the fixer in
-  the same sweep: ask the measurement brief for the recommended fix with code lines.
-- When fixers run in parallel on one file, confine each to named functions; the cherry-picks
-  then merge clean.
-- Before a release push to this repo, list the other sessions' unpushed branches on it
-  (`git branch -a`, contrib_queue shipped notes): a peer can ship the same queued entry.
+- (captured already) When a claude -p probe tree sits under /tmp/claude-<uid>, no CLAUDE.md or rule loads.
+
+> Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not
+> delete it - if this session ends badly it is the only record of where things stood.

@@ -34,6 +34,7 @@ FILES = {
     "proj/.claude/rules/proj-always.md": "Probe marker TOKEN_PROJ_ALWAYS.\n",
     "proj/.claude/rules/proj-py.md": '---\npaths:\n  - "**/*.py"\n---\nProbe marker TOKEN_PROJ_PY.\n',
     "proj/src/a.py": "x = 1\n",
+    "proj/src/c.py": "z = 3\n",
     "proj/nested/.claude/rules/nested-always.md": "Probe marker TOKEN_NESTED_ALWAYS.\n",
     "proj/nested/.claude/rules/nested-py.md": '---\npaths:\n  - "**/*.py"\n---\nProbe marker TOKEN_NESTED_PY.\n',
     "proj/nested/CLAUDE.md": "Probe marker TOKEN_NESTED_CLAUDEMD.\n",
@@ -46,7 +47,27 @@ SCENARIOS = {
     "S1_read_proj_py": "Call the Read tool on src/a.py, then reply with the exact first line of that file and nothing else.",
     "S3_bash_cat_py": "Run the Bash command `cat src/a.py` (do not use the Read tool), then reply with its output and nothing else.",
     "S4_grep_py": "Use the Grep tool (not Read, not Bash) to search for the pattern \"x =\" in the src directory with output mode content, then reply with the matching line and nothing else.",
+    "S5_three_reads_py": "Call the Read tool on src/a.py, then on src/c.py, then on src/a.py again (three separate Read calls), then reply with the first line of each read, one per line.",
     "S2_read_nested_py": "Call the Read tool on nested/b.py, then reply with the exact first line of that file and nothing else.",
+}
+
+# A chain is one session across several claude -p calls (--resume); C1 asks whether a paths: rule
+# loaded before a /compact is still in the request after it.
+CHAINS = {
+    "C1_compact": [
+        "Call the Read tool on src/a.py, then reply with the exact first line of that file and nothing else.",
+        "/compact",
+        "Reply with the single word OK and nothing else. Do not use any tool.",
+    ],
+    # C2: one read per resumed turn, so re-send is measured across turns (a single turn batches
+    # the reads), then whether the rule comes back on the first matching read after a /compact.
+    "C2_resend_then_compact": [
+        "Call the Read tool on src/a.py, then reply with the exact first line of that file and nothing else.",
+        "Call the Read tool on src/c.py, then reply with the exact first line of that file and nothing else.",
+        "Call the Read tool on src/a.py again, then reply with the exact first line of that file and nothing else.",
+        "/compact",
+        "Call the Read tool on src/c.py, then reply with the exact first line of that file and nothing else.",
+    ],
 }
 
 
@@ -65,7 +86,7 @@ def free_port() -> int:
         return s.getsockname()[1]
 
 
-def run(name: str, prompt: str, tree: Path, out: Path) -> dict[str, object]:
+def run(name: str, prompt: str, tree: Path, out: Path, resume: str | None = None) -> dict[str, object]:
     cap = out / name
     port = free_port()
     proxy = subprocess.Popen([sys.executable, str(HERE / "capture_proxy.py"), str(port), str(cap)])
@@ -75,6 +96,7 @@ def run(name: str, prompt: str, tree: Path, out: Path) -> dict[str, object]:
     try:
         res = subprocess.run(
             ["claude", "-p", "--model", "haiku", *os.environ.get("PROBE_ARGS", "--setting-sources project,local").split(),
+             *(["--resume", resume] if resume else []),
              "--allowedTools", "Read", "Bash(cat:*)", "Grep", "--output-format", "json", prompt],
             cwd=tree / "proj", env=env, capture_output=True, text=True, timeout=300,
         )
@@ -82,9 +104,10 @@ def run(name: str, prompt: str, tree: Path, out: Path) -> dict[str, object]:
         proxy.terminate()
         proxy.wait()
     try:
-        answer = json.loads(res.stdout).get("result")
+        doc_out = json.loads(res.stdout)
+        answer, session = doc_out.get("result"), doc_out.get("session_id")
     except json.JSONDecodeError:
-        answer = f"rc={res.returncode} stdout={res.stdout[:200]!r} stderr={res.stderr[:300]!r}"
+        answer, session = f"rc={res.returncode} stdout={res.stdout[:200]!r} stderr={res.stderr[:300]!r}", None
     requests = []
     for body in sorted(cap.glob("*.json")):
         text = body.read_text(encoding="utf-8", errors="replace")
@@ -94,8 +117,19 @@ def run(name: str, prompt: str, tree: Path, out: Path) -> dict[str, object]:
         except json.JSONDecodeError:
             kind = "non-json"
         requests.append({"req": body.stem, "path": (cap / f"{body.stem}.path").read_text(), "kind": kind,
-                         "tokens": [t for t in TOKENS if t in text]})
-    return {"scenario": name, "answer": answer, "requests": requests}
+                         "tokens": {t: text.count(t) for t in TOKENS if t in text},
+                         "rule_attachments": text.count("rules/proj-py.md")})
+    return {"scenario": name, "answer": answer, "session": session, "requests": requests}
+
+
+def run_chain(name: str, prompts: list[str], tree: Path, out: Path) -> list[dict[str, object]]:
+    """Run prompts as ONE session: the first starts it, each later one resumes it."""
+    steps, session = [], None
+    for i, prompt in enumerate(prompts):
+        step = run(f"{name}_step{i}", prompt, tree, out, resume=session)
+        session = step["session"] or session
+        steps.append(step)
+    return steps
 
 
 def main() -> None:
@@ -111,11 +145,14 @@ def main() -> None:
     build(tree)
     only = os.environ.get("PROBE_ONLY")
     report = [run(n, p, tree, out) for n, p in SCENARIOS.items() if not only or n == only]
+    for n, prompts in CHAINS.items():
+        if not only or n == only:
+            report.extend(run_chain(n, prompts, tree, out))
     (work / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     for r in report:
         print(f"== {r['scenario']}: answer={r['answer']!r}")
         for q in r["requests"]:
-            print(f"   {q['req']} {q['path']} {q['kind']}\n      {q['tokens']}")
+            print(f"   {q['req']} {q['path']} {q['kind']} proj-py attachments={q['rule_attachments']}\n      {q['tokens']}")
 
 
 if __name__ == "__main__":
