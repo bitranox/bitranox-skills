@@ -42,6 +42,14 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   dispatched. Attended Mode dispatches it at its Finish step. Its cost inside a plan run is not
   measured.
 
+### Changed
+
+- `process-agents-subagent-driven-development`: a run marked "no human" or "full automatic" that
+  meets a finding whose fix changes released behaviour finishes its independent tasks before it
+  stops. It parks the task holding the finding and every task that depends on it, by the same
+  rule as a run that asks, and then ends once with `UNFINISHED:`, listing the tasks done, each
+  parked task with its reason and every open finding.
+
 ## [11.27.0]
 
 ### Changed

@@ -113,8 +113,60 @@ def test_the_marked_run_keeps_its_routing():
     section = _section()
     assert "does the fix change behaviour a release already ships?" in section
     assert "begin the final message with `UNFINISHED:`" in section
-    assert "a question is never answered and nothing is parked" in section
+    assert "In a run so marked a question is never answered, so route each finding" in section
     assert "A run without the mark is unchanged: ask, as the rules above say." in section
+
+
+def _released_case():
+    section = _section()
+    start = section.index("- **It does** - ")
+    return section[start:section.index("- **It does not** - ")]
+
+
+def test_a_released_behaviour_finding_parks_and_carries_on_in_a_marked_run():
+    case = _released_case()
+    assert "Dispatch no fix, and do not stop yet: park and carry on, by the rule above." in case
+    assert ("Park the task whose review holds the finding (for a pre-flight finding, every task "
+            "it names) and every task that depends on it, by the same dependence test") in case
+    assert "a task whose dependence you are unsure of is parked too" in case
+    assert "Execute every task that does not depend on it, reviews included" in case
+    assert "dispatch neither the fix nor the next task" not in case
+    assert "nothing is parked, so route" not in _section()
+
+
+def test_the_marked_run_stops_once_and_lists_what_it_parked():
+    case = _released_case()
+    assert ("Then stop the run UNFINISHED, once: begin the final message with `UNFINISHED:`, "
+            "then the tasks done (N of M), then each parked task with the reason it is parked, "
+            "then every open finding with its question.") in case
+    assert "Nothing in that message may read as completion." in case
+    assert case.index("Execute every task that does not") < case.index("Then stop the run")
+
+
+def test_each_parked_finding_is_logged_at_once():
+    case = _released_case()
+    assert ("Append the finding, the plan text that mandates it and the question to "
+            "`EXECUTION-USER-REVIEW.md` at once.") in case
+    assert "a further finding of this kind parks its tasks the same way" in case
+
+
+def test_a_marked_run_that_parked_ends_without_the_two_whole_branch_reviews():
+    case = _released_case()
+    assert ("A run that parked a task ends without the final whole-branch review and the "
+            "failure-modes review: both wait until nothing is parked.") in case
+    assert "has no task left to carry on with" in case
+
+
+def test_the_cannot_tell_case_parks_too():
+    section = _section()
+    assert ("treat it as shipped, so park and carry on as the first case says.") in section
+    assert "treat it as shipped and stop" not in section
+
+
+def test_park_and_carry_on_names_the_marked_run_as_following_it():
+    section = _section()
+    assert ("A run marked as having no human parks and carries on by this same rule and ends on "
+            "`UNFINISHED:` in place of a question") in section
 
 
 def test_the_ab_test_skill_says_the_note_must_carry_the_mark():

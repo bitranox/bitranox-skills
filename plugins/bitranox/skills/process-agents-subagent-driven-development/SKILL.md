@@ -239,7 +239,9 @@ the open finding, and count it with the unfinished tasks. Where a rule above say
 to your human partner "at once", that means it becomes an open question at once, never a ledger
 line; the turn still ends on it only after the independent tasks. The final whole-branch review
 waits until nothing is parked. Two cases keep their own rule: the pre-flight question is put
-before execution begins, and Attended Mode stops and asks as its section says.
+before execution begins, and Attended Mode stops and asks as its section says. A run marked as
+having no human parks and carries on by this same rule and ends on `UNFINISHED:` in place of a
+question, as the end of this section says.
 
 **The message that ends the turn on a question must not read as the run finishing.** Measured: a
 controller asked one after 3 of 14 tasks and the run exited as a success, because a caller that
@@ -258,24 +260,34 @@ was launched, not "unattended", "headless" or "autonomous" without those words, 
 is slow to answer, away or not watching, and not the words denied ("this is not a no-human
 run", "not a full auto run"). Any other wording you are unsure about is not the mark: ask.
 
-In a run so marked a question is never answered and nothing is parked, so route each finding
-whose fix changes what the plan TEXT requires (found in the pre-flight scan, in the review loop,
-or behind a BLOCKED report that the plan is wrong) by one test: does the fix change behaviour a
-release already ships?
+In a run so marked a question is never answered, so route each finding whose fix changes what the
+plan TEXT requires (found in the pre-flight scan, in the review loop, or behind a BLOCKED report
+that the plan is wrong) by one test: does the fix change behaviour a release already ships?
 
 - **It does** - the code before this plan did it for callers outside the branch, and a tag or a
-  published package or plugin version carries it. Stop the run UNFINISHED: dispatch neither the
-  fix nor the next task. The task whose review holds the finding is not done: leave its
+  published package or plugin version carries it. Dispatch no fix, and do not stop yet: park and
+  carry on, by the rule above. Only this finding goes unfixed: another finding of the same review
+  that needs no decision gets its fix round as usual. Park the task whose review holds the
+  finding (for a pre-flight finding, every task it names) and every task that depends on it, by
+  the same dependence test;
+  a task whose dependence you are unsure of is parked too. A parked task is not done: leave its
   plan-conforming commit in place and count it with the unfinished tasks. Append the finding, the
-  plan text that mandates it and the question to `EXECUTION-USER-REVIEW.md`, and begin the final
-  message with `UNFINISHED:`, then the tasks done (N of M), the finding, and the question. Nothing
-  in that message may read as completion.
+  plan text that mandates it and the question to `EXECUTION-USER-REVIEW.md` at once. Execute every
+  task that does not depend on it, reviews included; a further finding of this kind parks its
+  tasks the same way and is logged the same way. Then stop the run UNFINISHED, once: begin the
+  final message with `UNFINISHED:`, then the tasks done (N of M), then each parked task with the
+  reason it is parked, then every open finding with its question. Nothing in that message may
+  read as completion. A run that parked a task ends without the final whole-branch review and
+  the failure-modes review: both wait until nothing is parked. A finding of this kind that comes
+  from one of those two reviews has no task left to carry on with: dispatch the fixes that need
+  no decision, then stop UNFINISHED with it the same way.
 - **It does not** - the fix touches only what this plan adds, or behaviour no release has shipped.
   Do not ask. Dispatch the fix as a commit of its own, apart from the task's plan-conforming work,
   so one revert restores what the plan text says. Log it in `EXECUTION-USER-REVIEW.md` with that
   commit and a reopen-if line, continue with the next task, and name the deviation and its revert
   in the final message.
-- **You cannot tell** whether a release ships it: treat it as shipped and stop.
+- **You cannot tell** whether a release ships it: treat it as shipped, so park and carry on as the
+  first case says.
 
 A run without the mark is unchanged: ask, as the rules above say.
 
@@ -738,10 +750,11 @@ whole-branch review and after that review's fix subagent has committed (straight
 when it left nothing to fix). It is one reviewer, also where the final review was split by system.
 No run drops it: not a small plan, not one whose implementers ran on `haiku`, not one asked to be
 cheap, and a run marked "no human" or "full automatic" dispatches it like any other. A run that
-stops before its end (an `UNFINISHED:` stop, a turn ended on a question while tasks are parked) has
-not reached this step: the review runs when the run is taken up again and completed. Attended Mode
-has no final whole-branch review; there, step 5 of that section says when to dispatch this reviewer
-and what happens with its findings.
+has parked a task (it ends on a question, or on `UNFINISHED:` in a marked run) has not reached
+this step: like the final whole-branch review, this review waits until nothing is parked, and
+runs when the run is taken up again and completed. Attended Mode has no final whole-branch
+review; there, step 5 of that section says when to dispatch this reviewer and what happens with
+its findings.
 
 It is a separate reviewer because the other reviews are built to miss what it looks for. A per-task
 reviewer sees one task's diff, so a variant that needs the pieces of several tasks is in none of

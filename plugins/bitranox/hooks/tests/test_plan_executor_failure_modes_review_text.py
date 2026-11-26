@@ -65,8 +65,9 @@ def test_no_kind_of_run_drops_it():
 
 def test_a_run_that_stops_before_its_end_has_not_reached_the_step():
     section = _section()
-    assert "A run that stops before its end" in section
+    assert "A run that has parked a task" in section
     assert "has not reached this step" in section
+    assert "this review waits until nothing is parked" in section
 
 
 def test_it_stays_one_reviewer_where_the_final_review_was_split():
