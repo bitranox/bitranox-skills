@@ -30,6 +30,16 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.29.2]
+
+### Changed
+
+- `coding-python-gitignore`: a new section on spaces, backslashes and comments in a rule line,
+  matching igittigitt 2.4.3: only the final run of unescaped spaces is cut, leading spaces and
+  tabs stay, only a `#` in the first column starts a comment (so an indented `!` is no negation),
+  a line ending in a lone backslash matches nothing, rule files end a line only at `\n`, and
+  `add_rule` takes one line that is never stripped. Release-history notes were removed.
+
 ## [11.29.1]
 
 ### Changed
