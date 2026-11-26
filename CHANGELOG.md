@@ -30,6 +30,17 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.29.1]
+
+### Changed
+
+- `compuse-toolbox`: the Tools table keeps a one-line summary and the launch command per tool;
+  each tool's full entry (what the hand-rolled version gets wrong, what the tool reports, its
+  exit codes and refusals) moved verbatim to `references/tools.md`. Invoking the skill now costs
+  20.9k tokens instead of 34.1k (measured on opus), so more of it survives a compaction, which
+  keeps the first ~5k tokens of a skill. A test keeps the table and the page listing the same
+  tools.
+
 ## [11.29.0]
 
 ### Changed

@@ -48,7 +48,7 @@ also ship skills are tracked in those projects' own backlogs.
 | largest single memory-index level            | 179 KB             | the tree top                                     |
 | skill listing, 92 descriptions               | 40.5 KB (~10k tok) | already sized by `hooks/skill-listing-budget.py` |
 | skill bodies when invoked                    | median 18.9 KB     | 44 of 92 over ~5k tok, 27 over ~10k, 6 over ~20k |
-| `compuse-toolbox/SKILL.md`                   | 409 KB (~100k tok) | 469 lines, so a 500-line rule passes it          |
+| `compuse-toolbox/SKILL.md`                   | 409 KB (54.8k tok) | 308 KB of it table padding; see section 3.2      |
 | SessionStart: `meta-using-bitranox-skills`   | 9.2 KB             | injected whole every session                     |
 | frontmatter beyond `name` and `description`  | none               | in all 92 skills                                 |
 
@@ -107,9 +107,17 @@ quarter, or if Claude Code gains a cheaper per-topic loading mechanism.
 
 ### 3.2 Split oversized SKILL.md files into `references/`
 
-Start with `compuse-toolbox` (409 KB). Invoking it loads ~100k tokens, and after a compaction only
-its first ~5k survive. Then the other skills over ~20 KB, putting each skill's must-hold rules in
-its first ~5k tokens.
+Start with `compuse-toolbox` (409 KB). After a compaction only its first ~5k tokens survive. Then
+the other skills over ~20 KB, putting each skill's must-hold rules in their first ~5k tokens.
+
+**Measured 2026-11-26: most of that size was table padding, not content.** 308 of the 409 KB
+were spaces aligning one 47-row table to its widest cell (6,382 characters). In tokens, read from
+`claude -p` request usage on opus: 54.8k per invocation padded, 35.4k with the padding removed
+(haiku: the same figures), so the 4-characters-per-token estimate in section 2 (~100k) was about
+twice too high. Across all 91 skills, padding was 653 KB of 3.07 MB. Decision (user,
+2026-11-26): cap the formatter, then split `compuse-toolbox`. 11.29.0 writes a table compact
+when its widest aligned row would pass 300 display columns and re-pads the marketplace's
+Markdown (`compuse-toolbox/SKILL.md`: 92.7 KB); the six mirrored skills follow with their twins.
 
 ### 3.3 Plugin split with `optionalDependencies`
 
