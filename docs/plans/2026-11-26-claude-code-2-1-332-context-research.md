@@ -92,9 +92,18 @@ Follow-up probes, same harness (one session across resumed `claude -p` turns, `-
 
 So a moved fact costs its bytes once per session (and once more after each compaction, on the next
 matching file), never once per read. After a compaction it is absent until a matching file is
-touched again; `CLAUDE.md` and always-on rules are re-injected at once. Not yet measured: more
-than one ancestor level. A tree under Claude Code's own temp dir (`/tmp/claude-<uid>`) loads no
+touched again; `CLAUDE.md` and always-on rules are re-injected at once. Not measured: more than
+one ancestor level. A tree under Claude Code's own temp dir (`/tmp/claude-<uid>`) loads no
 `CLAUDE.md` and no rule at all, so the probe refuses one.
+
+**Decision (user, 2026-11-26): not built.** The saving holds only in sessions that touch no
+matching file. Over the 185 main-session transcripts of the last 30 days whose cwd lay in a
+project tree, 14% (by a `.py` path in Read/Edit/Write or a Bash command) to 26% (Read/Edit/Write
+only) never touched a `.py` file, so moving the Python facts (a keyword estimate of 116 KB of
+this cwd's 409 KB index) saves about 16-30 KB per session on average, 4-7% of the index. Against
+that stand an engine change, facts arriving only after the first matching read, and a gap after
+every compaction. Reopen if the share of sessions without a matching file grows well past a
+quarter, or if Claude Code gains a cheaper per-topic loading mechanism.
 
 ### 3.2 Split oversized SKILL.md files into `references/`
 

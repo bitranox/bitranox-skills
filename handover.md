@@ -1,40 +1,38 @@
-# Handover - 2026-11-26 15:55 CET (watcher checkpoint, session "skill-research")
+# Handover - 2026-11-26 17:11 CET (session "skill-research")
 
 ## In flight (read first)
 
-Working the Claude Code 2.1.33x research list, top item [55] (path-scoped `.claude/rules` for the
-memory index). Work lives in the worktree `.claude/worktrees/research-cc-2-1-332` (branch
-`research-cc-2-1-332`, pushed as `HEAD:master`).
+Working the Claude Code 2.1.33x research list (`docs/plans/2026-11-26-claude-code-2-1-332-context-research.md`,
+backlog items [60]-[85]). Work lives in the worktree `.claude/worktrees/research-cc-2-1-332`
+(branch `research-cc-2-1-332`, pushed as `HEAD:master`).
 
-- Pushed and CI green: "Record the Claude Code 2.1.33x context research and its backlog items"
-  (research note `docs/plans/2026-11-26-claude-code-2-1-332-context-research.md`, items [55]-[85]).
-- Push RUNNING in the background when this was written: "Probe how .claude/rules load: ancestor
-  paths: rules fire on Read and Bash cat" (probe in `docs/plans/probes/2026-11-26-rules-loading/`,
-  section 3.1 result table). Check with `git fetch && git log origin/master --oneline -3`.
-- UNCOMMITTED in the worktree: the [55] line's sizing update in `OPEN-WORK.md` (keyword estimate:
-  ~140 KB of 409 KB pointer index for this cwd chain could move behind `paths:`, Python 116 KB) and
-  this `handover.md`. Commit both with the next change.
-- Two private repos with skills of their own got their part of the research as backlog items
-  and a note there, committed locally, NOT pushed (named in the session, not here: this file is
-  public).
+- [55] (path-scoped `.claude/rules` for the memory index) is CLOSED by the user's decision: not
+  built. The measurement and the reopen condition are in section 3.1 of the research note.
+- The commit closing [55] is being pushed; check with `git fetch && git log origin/master --oneline -3`.
+- A CI watch on the earlier probe commit may still report into this session; it needs no action
+  unless it reports a failure.
+- Two private repos with skills of their own got their part of the research as backlog items and
+  a note there, committed locally, NOT pushed (named in the session, not here: this file is public).
 
 ## Decided, and why
 
+- [55] not built (user, 2026-11-26): only 14-26% of recent project sessions touch no `.py` file,
+  so the average saving is 4-7% of the index, against an engine change and a fact gap after every
+  compaction.
 - The research note is split: this public repo holds sections 1-4; material about private
   projects stays in those private repos.
-- [55]-[85] are USER items ranked after the existing USER items [45]-[50], biggest first.
 - Probe evidence = captured request bodies via an ANTHROPIC_BASE_URL proxy, never the model's answer.
 
 ## Still open, untouched
 
-- See `OPEN-WORK.md` [55]-[85] in this repo (and the two private repos' own backlogs).
+- `OPEN-WORK.md` [60]-[85] in this repo (and the two private repos' own backlogs).
 
 ## Exact next action
 
-Both follow-up probes for [55] are done (re-send: once per session; compaction drops the rule,
-next matching read re-attaches it; section 3.1 tables). Next: brainstorm the [55] engine design
-with the user (bitranox:process-plan-brainstorming): which fact categories move behind `paths:`,
-the rule-file layout per level, and how the move stays reversible.
+Ask the user whether to start [60] (split oversized SKILL.md files into `references/`,
+`compuse-toolbox` first, 409 KB). That skill is a mirrored or plain bitranox skill: check
+`repo-gate.py --mirrors` and its decisions ledger (`hooks/skill_decisions.py show compuse-toolbox`)
+before editing it.
 
 ## How to verify
 
@@ -44,6 +42,7 @@ the rule-file layout per level, and how the move stays reversible.
 ## Lessons for the next nap
 
 - (captured already) When a claude -p probe tree sits under /tmp/claude-<uid>, no CLAUDE.md or rule loads.
+- (queued for meta-context-watcher) When a checkpoint goes into a tracked file of a public repo, name no private repo, project or org.
 
 > Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not
 > delete it - if this session ends badly it is the only record of where things stood.
