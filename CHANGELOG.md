@@ -30,6 +30,14 @@ a hole nobody has drawn a line under is one that gets rediscovered and half-fill
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 
+## [11.29.4] - 2026-11-27
+
+### Changed
+
+- `coding-python-pwshpy` documents `invoke_cim_method`, pwshpy 1.13.0's read-only `Invoke-CimMethod`:
+  values WMI exposes only as method results (BitLocker conversion and lock status, key protector
+  types, TPM readiness), with the fixed allowlist that keeps it read-only. Mirrored from pwshpy.
+
 ## [11.29.3]
 
 ### Changed

@@ -104,6 +104,7 @@ UTF-16/BOM, and localized `Administrators` / SID (records key on SID / uid, not 
 | `Get-LocalUser` | `ps.get_local_user()` | `pwshpy get_local_user` |
 | `Get-ScheduledTask` | `ps.get_scheduled_task()` | `pwshpy get_scheduled_task` |
 | `Get-CimInstance C` | `ps.get_cim_instance("C")` | `pwshpy get_cim_instance C` |
+| `Get-CimInstance C -Namespace NS \| Invoke-CimMethod -MethodName M` (read-only methods only) | `ps.invoke_cim_method("C", "M", namespace="NS", arguments={...})` | `pwshpy invoke_cim_method C M --namespace NS --arg NAME=VALUE` |
 | `Test-Connection H` | `ps.test_connection("H")` | `pwshpy test_connection H` |
 | `Resolve-DnsName N` | `ps.resolve_dns_name("N")` | `pwshpy resolve_dns_name N` |
 | `Invoke-WebRequest U` | `ps.invoke_web_request("U")` | `pwshpy invoke_web_request U` |
@@ -197,6 +198,56 @@ arguments 32767, description / working directory / icon 260); an env-prefixed ta
 *expansion* passes 259 is refused by Windows itself (`NativeCallError` 0x80004005, nothing written).
 An existing file needs `force=True`; no directory is created.
 
+### Read-only CIM methods (`invoke_cim_method`, Windows)
+
+Some WMI values exist only as method results (BitLocker conversion and lock status, key protectors,
+TPM readiness). `ps.invoke_cim_method(class_name, method_name, *, where=None, namespace="root/cimv2",
+arguments=None)` calls the method on each instance `where` selects (a static method such as
+`StdRegProv.GetStringValue` runs once, on the class) and streams one `CimMethodResult` per instance:
+`class_name`, `method_name`, `instance_path` (the WMI relative path), `return_value` and
+`out_parameters` (unsigned integers reported unsigned).
+
+- Read-only by construction: only methods on `pwshpy.domain.cim_methods.READ_ONLY_CIM_METHODS` run -
+  `Win32_EncryptableVolume` (`root/cimv2/Security/MicrosoftVolumeEncryption`): `GetConversionStatus`,
+  `GetLockStatus`, `GetKeyProtectors`, `GetKeyProtectorType`, `GetProtectionStatus`,
+  `GetEncryptionMethod`, `GetVersion`; `Win32_Tpm` (`root/cimv2/Security/MicrosoftTpm`): `IsReady`,
+  `IsOwned`, `IsActivated`, `IsEnabled`, `IsEndorsementKeyPairPresent`, `GetDictionaryAttackParameters`,
+  `GetCapLockoutInfo`; `Win32_Process`: `GetOwner`, `GetOwnerSid`; `StdRegProv` (`root/default`):
+  `GetStringValue`, `GetDWORDValue`, `EnumKey`, `EnumValues`. Anything else raises
+  `CimMethodNotAllowedError` at the call, with no bypass; readers of secrets (the recovery password,
+  `GetOwnerAuth`) are deliberately absent. Names match in any case.
+- A non-zero `return_value` is DATA, not an exception: it is the method's answer for that instance
+  (e.g. `0x80310008` FVE_E_NOT_ACTIVATED from `GetKeyProtectorType` on an unencrypted volume), so one
+  locked volume does not hide the others. Check `r.return_value == 0` before reading `out_parameters`.
+- `arguments` values are `str`, `int` or `bool`, typed from the method's schema (a decimal `str` fits an
+  integer, `"true"`/`"false"` a boolean). No error message repeats an argument value.
+- BitLocker needs an elevated process (`NativeAccessDeniedError` otherwise).
+
+```python
+from pwshpy import ps
+
+BL = "root/cimv2/Security/MicrosoftVolumeEncryption"
+for r in ps.invoke_cim_method("Win32_EncryptableVolume", "GetConversionStatus", namespace=BL):
+    if r.return_value == 0:
+        print(r.instance_path, r.out_parameters["ConversionStatus"], r.out_parameters["EncryptionPercentage"])
+# A protector ID belongs to one volume: select that volume (WQL doubles each backslash).
+for vol in ps.get_cim_instance("Win32_EncryptableVolume", namespace=BL):
+    one = "DeviceID = '{}'".format(vol.properties["DeviceID"].replace("\\", "\\\\"))
+    found = ps.invoke_cim_method("Win32_EncryptableVolume", "GetKeyProtectors", namespace=BL, where=one).first()
+    if found is None or found.return_value != 0:
+        continue
+    for pid in found.out_parameters.get("VolumeKeyProtectorID") or []:
+        kind = ps.invoke_cim_method(
+            "Win32_EncryptableVolume",
+            "GetKeyProtectorType",
+            namespace=BL,
+            where=one,
+            arguments={"VolumeKeyProtectorID": pid},
+        ).first()
+        print(vol.properties["DriveLetter"], kind.out_parameters.get("KeyProtectorType") if kind else None)
+ready = ps.invoke_cim_method("Win32_Tpm", "IsReady", namespace="root/cimv2/Security/MicrosoftTpm").first()
+```
+
 ## Errors, timeouts and exit codes
 
 Every failure raises a `PwshPyError` subclass, except a bad argument (`ValueError`, CLI exit 22, 87 on Windows);
@@ -251,7 +302,9 @@ catch a subclass before its parent:
 - `ElevationRequiredError` (`require_elevation()`), `PlatformUnsupportedError` (no analog on this OS),
   `ConfigurationError`, `PowerShellError` / `FeatureUnavailableError` (.NET, `[full]`; `run`, `cmdlet`
   and the module wrappers `get_ad_user`, `get_ad_group`, `get_ad_computer`, `get_mailbox`, `get_az_vm`
-  and `get_az_resource_group` raise `PowerShellError` past their `timeout`, default none), `PackError`.
+  and `get_az_resource_group` raise `PowerShellError` past their `timeout`, default none), `PackError`,
+  `CimMethodNotAllowedError` (`invoke_cim_method` with a method outside the read-only allowlist, raised by the
+  call itself, before WMI is contacted).
   `test_connection` returns `reachable=False` past its `timeout`; `elevate(wait=True)` has no limit.
 - An HTTP answer urllib does not follow (a refused 3xx such as a redirect loop, 304, 4xx, 5xx)
   makes `invoke_web_request` and `invoke_rest_method` raise `NativeCallError` naming the status and
@@ -455,7 +508,8 @@ and `config-generate-examples` hyphens), by area:
   `add_acl_ace`, `remove_acl_ace`, `set_owner`
 - known folders and shortcuts: `get_known_folder` (any OS), `get_shortcut`, `new_shortcut` (Windows)
 - registry and CIM (Windows): `get_item_property`, `registry_keys`, `set_item_property`,
-  `remove_item_property`, `new_registry_key`, `remove_registry_key`, `get_cim_instance`
+  `remove_item_property`, `new_registry_key`, `remove_registry_key`, `get_cim_instance`,
+  `invoke_cim_method` (read-only methods only)
 - credentials and elevation: `save_credential`, `load_credential`, `delete_credential`, `is-elevated`,
   the global `--elevate`
 - running things: `exec`, `pack`, `unpack`; .NET (`[full]`): `run`, `cmdlet`, `get_command`,
